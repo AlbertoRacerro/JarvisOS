@@ -66,6 +66,8 @@ def test_every_page_gets_the_rail_with_the_way_back_to_the_home_project() -> Non
 def test_design_stage_addendum_follows_the_stage_query() -> None:
     cfd = app_map_for_route("/design/project?stage=cfd")
     assert "design.stage.cfd" in cfd and "design.tree.node.results" in cfd and "design.field.run" in cfd
+    assert "visible C1-CFD component row" in cfd and "C1-horizontal is different" in cfd
+    assert "visible 'Back to <project>' button" in cfd
     assert "NOT where simulation results are" in cfd  # the Library is not results
     assert "Solver console" in app_map_for_route("/design/project") and "Solver console" in app_map_for_route("/design/project?stage=plant")
     assert "design.dynamic.steps" in app_map_for_route("/design/project?stage=dynamic")
