@@ -118,6 +118,7 @@ def test_every_target_id_in_the_guide_exists_in_the_frontend_registry() -> None:
 def test_pointing_instruction_is_multi_step_first_step_ids_only() -> None:
     text = POINTING_INSTRUCTIONS
     assert "only ids listed above" in text and "never invent an id" in text
+    assert "sees the directive as the item's name" in text  # spec 231: the directive reads as the name
     assert "not on screen yet" in text and "steps in order" in text and "FIRST step" in text
     assert "name the later steps in words" in text
     assert "do not point at Library entries" in text

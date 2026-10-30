@@ -7,12 +7,13 @@ import { BubuPointer } from "./BubuPointer";
 import { captureErrorText, captureTab, openTabStream, type TabStream } from "./captureTab";
 import { latestReply, pickImages, pickedMention, withPicked } from "./bubuExtras";
 import { useBubuConversation, type BubuExtras } from "./conversationStore";
-import { collectPageContext, type UiTarget } from "./pageContext";
-import { parsePointDirectives, type PointDirective } from "./pointerDirectives";
+import { collectPageContext, targetName, type UiTarget } from "./pageContext";
+import { parsePointDirectives, readablePointText, type PointDirective } from "./pointerDirectives";
 import { useDictation } from "./useDictation";
 import { useUserPointer } from "./useUserPointer";
 
-const replyText = (text: string): ReactNode => <JarvisMessageText text={parsePointDirectives(text).text} />;
+// Each directive reads as the target's visible name (or its label); the pointer itself is drawn by BubuPointer.
+const replyText = (text: string): ReactNode => <JarvisMessageText marks text={readablePointText(text, targetName)} />;
 
 /**
  * BUBU-2 wiring: the page is always described (DOM-first); screenshots only when asked; dictation fills the draft;

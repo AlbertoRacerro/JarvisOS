@@ -92,7 +92,12 @@ const srcs = (text) => spans(text).map((m) => m.src);
   assert.match(math, /import\("katex"\)/, "KaTeX JS is lazy");
   assert.doesNotMatch(view + math, /^import [^\n]*["']katex/m, "no static KaTeX import keeps it out of the main chunk");
   assert.doesNotMatch(view + math, /https?:\/\/[^"'\s]*katex/i, "fonts/CSS are bundled, no CDN");
-  assert.match(bubu, /<JarvisMessageText text=\{parsePointDirectives\(text\)\.text\} \/>/);
+  assert.match(bubu, /<JarvisMessageText marks text=\{readablePointText\(text, targetName\)\} \/>/);
+  // Spec 231: target-name marks are opt-in, split out before Markdown/LaTeX and rendered as React text only.
+  assert.match(view, /parse\(marks \? text : stripMarks\(text\)\)/, "other callers never render marks");
+  assert.match(view, /className="jarvis-message-text__target">\{match\[1\]\}<\/strong>/);
+  assert.match(view, /className="jarvis-message-text__note">\{match\[2\]\}<\/span>/);
+  assert.match(view, /<code>\{stripMarks\(block\.lines\.join/, "code blocks show no marks");
   const pkg = JSON.parse(read("package.json"));
   assert.match(pkg.dependencies.katex, /^0\.16\.\d+$/, "katex is pinned exactly");
 }

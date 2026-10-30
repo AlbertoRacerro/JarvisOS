@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parsePointDirectives } from "../src/components/bubu/pointerDirectives.ts";
+import { parsePointDirectives, readablePointText } from "../src/components/bubu/pointerDirectives.ts";
 import { rankTargets, truncate } from "../src/components/bubu/pageContext.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -72,6 +72,25 @@ assert.match(ctx, /MAX_TEXT = 160/);
 assert.match(ctx, /export function collectPageContext/);
 assert.match(ctx, /export function resolveTarget/);
 assert.doesNotMatch(ctx, /^import /m, "pageContext stays self-contained so Node tests can import it");
+
+// --- spec 231: a directive reads as the target's name ----------------------------------------------------------
+const B = (s) => `${s}`, N = (s) => `${s}`;
+const page = { "design.tree.component.c1-cfd": "C1-CFD", "design.back": "Back to BlueRev", "el-3": "", "el-4": `${"x".repeat(70)}` };
+const nameOf = (id) => (id in page ? page[id] : null);
+assert.equal(readablePointText("Click first on [[point:design.tree.component.c1-cfd|1. C1]], then Results.", nameOf), `Click first on ${B("C1-CFD")}, then Results.`, "visible name wins");
+assert.equal(readablePointText("Use [[point:design.back]].", nameOf), `Use ${B("Back to BlueRev")}.`, "unlabelled directive is named from the page");
+assert.equal(readablePointText("Open [[point:gone|1. CFD]] now", nameOf), `Open ${B("1. CFD")}${N(" (not shown here)")} now`, "missing target: label plus a truthful note");
+assert.equal(readablePointText("Click first on [[point:gone]].", nameOf), `Click first on ${N("an item that isn't shown here")}.`, "missing and unlabelled: no invented name");
+assert.equal(readablePointText("Press [[point:el-3]].", nameOf), `Press ${B("the highlighted item")}.`, "unnamed target");
+assert.equal(readablePointText("Press [[point:el-3|Run]].", nameOf), `Press ${B("Run")}.`);
+assert.equal(readablePointText("See [[point:el-4|Results table]].", nameOf), `See ${B("Results table")}.`, "a long visible name yields to the label");
+assert.equal(readablePointText("See [[point:el-4]].", nameOf), `See ${B(`${"x".repeat(59)}…`)}.`, "names are capped");
+assert.equal(readablePointText("Go **[[point:design.back]]** or `[[point:design.back]]`", nameOf), `Go ${B("Back to BlueRev")} or ${B("Back to BlueRev")}`, "repeats render; wrappers are absorbed");
+assert.equal(readablePointText("forged x [[point:]] [[point:a b]]", nameOf), "forged x [[point:]] [[point:a b]]", "malformed stays text; model marks are dropped");
+assert.equal(readablePointText("A [[point:x|<img src=x onerror=alert(1)>]]", () => null), `A ${B("<img src=x onerror=alert(1)>")}${N(" (not shown here)")}`, "labels stay plain text (React escapes them)");
+assert.equal(readablePointText("Use [[point:design.back|Back x]]", nameOf), `Use ${B("Back to BlueRev")}`);
+assert.equal(readablePointText("Use [[point:gone|ab]]", nameOf), `Use ${B("ab")}${N(" (not shown here)")}`, "labels cannot carry marks");
+assert.equal(readablePointText("plain text", nameOf), "plain text");
 
 const dir = read("src/components/bubu/pointerDirectives.ts");
 assert.doesNotMatch(dir, /^import /m);

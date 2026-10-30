@@ -176,3 +176,9 @@ export function resolveTarget(id: string, root: ParentNode = document): Element 
   const found = Array.from(root.querySelectorAll(`${attrSelector(TARGET_ATTR, id)}, ${attrSelector(REF_ATTR, id)}`)).filter((el) => !isBubuUi(el));
   return found.find(isRenderable) ?? found[0] ?? null;
 }
+
+/** Spec 231: the current name of a pointable target; null when it is not rendered on the page, "" when it has none. */
+export function targetName(id: string, root: ParentNode = document): string | null {
+  const el = resolveTarget(id, root);
+  return el && isRenderable(el) ? accessibleName(el) : null;
+}
