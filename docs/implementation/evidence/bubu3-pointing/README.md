@@ -3,9 +3,10 @@
 Question: does the local model (Gemma 4 12B, llama.cpp, the server the app uses) point at the right first target when
 the answer is a multi-step path through the app?
 
-- `scenarios.py` — 11 hand-built page snapshots (`ui_context`, target names only) and questions, with the ids that count
+- `scenarios.py` — 12 hand-built page snapshots (`ui_context`, target names only) and questions, with the ids that count
   as correct / plausible as the FIRST `[[point:...]]` directive. `--ids old` renders Components-tree rows as on master
-  (ephemeral `el-<n>`), `--ids new` as this change does (`design.tree.component.<slug>`).
+  (ephemeral `el-<n>`), `--ids new` as this change does (`design.tree.component.<slug>`). The spec 231 case includes
+  C1-CFD and C1-horizontal as separate component rows; compare the old/new ids on the same twelve questions.
 - `pointing_eval.py` — renders each prompt through the backend's own `render_visible_page_block` + `assemble_prompt`
   (plus the Jarvis system envelope), POSTs it to the running llama-server (temperature 0, `max_tokens` 220), scores the
   first directive. Read-only for the app: it only requests completions. The server wants the operator's token; pass it

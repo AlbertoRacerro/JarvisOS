@@ -48,7 +48,7 @@ STAGES = [("plant", "Plant"), ("dynamic", "Dynamic"), ("cad", "CAD"), ("mechanic
           ("cfd", "CFD"), ("optics", "Optics"), ("reduced-model", "Reduced model")]
 NODES = [("parameters", "Parameters"), ("geometry", "Geometry"), ("materials", "Materials"), ("physics", "Physics"),
          ("mesh", "Mesh"), ("results", "Results"), ("reduced-model", "Reduced model")]
-COMPONENTS = ["C1-CFD", "Photobioreactor loop"]
+COMPONENTS = ["C1-CFD", "C1-horizontal", "Photobioreactor loop"]
 LIBRARY = [("CFD", "Darcy · smooth pipe", "v1"), ("CFD", "Dittus-Boelter · smooth pipe", "v1"), ("Reduced", "Friction factor", "v2")]
 
 
@@ -179,6 +179,8 @@ def build(ids: str) -> list[dict[str, Any]]:
         ["key:row_c1-cfd"], ["design.tree", "design.stage.cfd"])
     add("c1_cfd_pathway_followup", "no, I know there's a specific pathway to see the turbulent CFD results", cfd_none,
         ["key:row_c1-cfd"], ["design.tree", "design.stage.cfd"])
+    add("c1_cfd_vs_horizontal", "Where do I open the CFD results for C1?",
+        cfd_none, ["key:row_c1-cfd"], ["design.tree", "design.stage.cfd"])
     add("c1_cfd_mesh_nothing_selected", "where do I change the mesh?", cfd_none, ["key:row_c1-cfd"], ["design.tree"])
     cfd_results = design_cfd_page(ids, selected="C1-CFD", node="Results")
     add("c1_cfd_mesh_selected", "where do I change the mesh?", cfd_results, ["design.tree.node.mesh"], [])
