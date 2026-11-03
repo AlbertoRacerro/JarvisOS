@@ -416,3 +416,41 @@ def test_read_claude_uses_the_relay_limits_source(monkeypatch: pytest.MonkeyPatc
     assert wr.read_claude().free is None
     monkeypatch.setenv("JARVISOS_AGENT_RELAY_BIN", str(tmp_path / "missing"))
     assert wr.read_claude().free is None
+
+
+def test_read_gemini_reads_quota_and_waits_longer_than_other_readers(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    document = {"status": "SUCCESS", "command": {"data": {"groups": [{"buckets": [
+        {"id": "gemini-weekly", "remaining_fraction": 0.98}, {"id": "gemini-5h", "remaining_fraction": 1}]},
+        {"buckets": [{"id": "3p-weekly", "remaining_fraction": 0}]}]}}}
+    fake = tmp_path / "agy"
+    fake.write_text("#!/bin/sh\n[ \"$1 $2 $3 $4\" = '-p /quota --output-format json' ] || exit 9\ncat <<'EOF'\n"
+                    + json.dumps(document) + "\nEOF\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("JARVISOS_AGY_BIN", str(fake))
+    reading = wr.read_gemini()
+    assert reading.free == pytest.approx(0.98) and reading.windows == {"5h": 1.0, "weekly": 0.98}
+    assert reading.source == "live"
+
+    fake.write_text("#!/bin/sh\nsleep 0.5\ncat <<'EOF'\n" + json.dumps(document) + "\nEOF\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(wr, "READ_TIMEOUT", 0.2)
+    monkeypatch.setattr(wr, "AGY_READ_TIMEOUT", 3)
+    assert wr.read_gemini().free == pytest.approx(0.98)
+
+
+@pytest.mark.parametrize("sleep_after_auth", [False, True])
+def test_read_gemini_reports_auth_required(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                           sleep_after_auth: bool) -> None:
+    fake = tmp_path / "agy"
+    suffix = "sleep 2\n" if sleep_after_auth else "exit 1\n"
+    fake.write_text("#!/bin/sh\necho 'Authentication required. Please visit the URL to log in:'\n" + suffix)
+    fake.chmod(0o755)
+    monkeypatch.setenv("JARVISOS_AGY_BIN", str(fake))
+    if sleep_after_auth:
+        monkeypatch.setattr(wr, "AGY_READ_TIMEOUT", 0.3)
+    assert wr.read_gemini().reason == "auth_required"
+
+
+def test_total_timeout_covers_agy_reader() -> None:
+    assert wr.TOTAL_TIMEOUT > wr.AGY_READ_TIMEOUT

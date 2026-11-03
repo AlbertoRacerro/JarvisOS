@@ -45,8 +45,9 @@ CLAUDE_LOW_NOTE = ("claude_pool_low — keep worker task small; coordinator shou
 # Among equally adequate models the cheaper-to-spend pool goes first; the coordinator's own pool goes last.
 POOL_PRIORITY = ("gemini", "codex", "claude")
 FRESHNESS = 900  # seconds a Claude (agent-relay) reading may be old, as the supervisor's reading_freshness
-READ_TIMEOUT = 15  # each reader; the readers run in parallel and the whole read is bounded by TOTAL_TIMEOUT
-TOTAL_TIMEOUT = 20
+READ_TIMEOUT = 15  # timeout for readers other than agy; all readers run in parallel within TOTAL_TIMEOUT
+AGY_READ_TIMEOUT = 40  # agy /quota is slow, typically ~8 s with spikes over 15 s
+TOTAL_TIMEOUT = AGY_READ_TIMEOUT + 5
 CACHE_TTL = 900  # seconds a summary stays valid inside a long-lived supervisor
 FAILED_CACHE_TTL = 60
 LEVELS = {"low": 1, "medium": 2, "high": 3}
@@ -243,15 +244,24 @@ def read_gemini() -> Pool:
         return unreadable("gemini", "agy_missing")
     try:
         done = subprocess.run([binary, "-p", "/quota", "--output-format", "json"], capture_output=True, text=True,
-                              timeout=READ_TIMEOUT, check=False, cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
+                              timeout=AGY_READ_TIMEOUT, check=False, cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired as exc:
+        if _agy_auth_required(exc.stdout, exc.stderr):
+            return unreadable("gemini", "auth_required")
         return unreadable("gemini", "timeout")
     except OSError:
         return unreadable("gemini", "agy_missing")
+    if _agy_auth_required(done.stdout, done.stderr):
+        return unreadable("gemini", "auth_required")
     reading = _json_document(done.stdout)
     if reading is None or reading.get("status") != "SUCCESS":
         return unreadable("gemini", "no_reading")
     return parse_gemini(reading)
+
+
+def _agy_auth_required(*outputs: str | bytes | None) -> bool:
+    return any("Authentication required" in (output.decode(errors="replace") if isinstance(output, bytes) else output or "")
+               for output in outputs)
 
 
 def read_codex() -> Pool:
