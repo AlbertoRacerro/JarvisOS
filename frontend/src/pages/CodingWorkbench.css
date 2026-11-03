@@ -211,3 +211,8 @@
 .coding-quota-caption em { font-style: normal; color: var(--color-status-warning-text); }
 .coding-quota-na { display: grid; place-items: center; width: 56px; height: 56px; border: 1px dashed var(--fusion-line); border-radius: 50%; color: var(--fusion-muted); font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { .coding-quota-value { transition: none; } }
+
+/* Spec 240 supervisor controls */
+.coding-relay-controls, .coding-relay-questions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-block: 0.75rem; }
+.coding-relay-questions { display: block; }
+.coding-relay-questions > div { margin-block: 0.75rem; }

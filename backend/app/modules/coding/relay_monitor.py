@@ -1,20 +1,16 @@
-"""Read-only Relay owner monitor for Coding → Runtime (spec 206).
-
-A narrow seam over the spec 205 adapter ``scripts/relay_observe.py``: its snapshot and its cursor-paged
-timeline are served unchanged, bounded and checked for secrets here. Nothing in this module takes a lock,
-writes owner, mission, Relay or ledger state, signals a process or calls a provider.
-"""
+"""Bounded Relay snapshot and timeline (spec 206), supervisor controls and answers (spec 240)."""
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Literal
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -48,6 +44,9 @@ def control_root() -> Path:
 
 def relay_repo() -> Path:
     """The main checkout, whose ``.agent-relay`` tree Relay writes, even when this backend runs in a worktree."""
+    override = observe().os.environ.get("JARVIS_RELAY_REPO")
+    if override:
+        return Path(override)
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -111,3 +110,96 @@ def timeline(cursor: str | None, *, start: str = "turn", limit: int = 200) -> di
         return {"state": "unknown", "reason": f"owner_state_unreadable:{type(exc).__name__}", "items": [],
                 "cursor": cursor, "more": False}
     return _checked({"state": "ok", **page})
+
+
+def control_supervisor(action: Literal["pause", "resume", "graceful_restart"], note: str | None = None) -> dict[str, Any]:
+    ro = observe()
+    note = (note or "").strip()
+    if len(note) > 240:
+        return {"state": "refused", "reason": "note_too_long"}
+    if ro.devctx.find_secret(note):
+        return {"state": "refused", "reason": "secret_detected"}
+    rc, root, now = ro.rc, control_root(), datetime.now(UTC)
+    if not root.is_dir():
+        return {"state": "refused", "reason": "owner_state_missing"}
+    if action not in ("pause", "resume", "graceful_restart"):
+        return {"state": "refused", "reason": "action_invalid"}
+    if action == "graceful_restart":
+        store = rc.Store(root)
+        store.root.mkdir(parents=True, exist_ok=True)
+        store.stop_path.write_text(rc.iso(now) or "")
+        rc.missions_journal(root, {"event": "owner_stop_requested", "at": rc.iso(now), "source": "jarvis_ui"})
+    else:
+        lock = rc.roadmap_lock(root, wait=5.0)
+        if lock is None:
+            return {"state": "refused", "reason": "roadmap_busy"}
+        try:
+            road = rc.load_roadmap(root)
+            if road and road.get("corrupt"):
+                return {"state": "refused", "reason": "roadmap_corrupt"}
+            at = rc.iso(now)
+            if action == "pause":
+                if not road or not road.get("enabled"):
+                    return {"state": "refused", "reason": "roadmap_not_enabled"}
+                clean_note = note or "Paused from Jarvis UI"
+                road.update(paused="maintainer_stop", paused_at=at, note=clean_note)
+                rc.write_json_atomic(rc.roadmap_path(root), road)
+                rc.missions_journal(root, {"event": "roadmap_paused", "at": at, "reason": "maintainer_stop", "note": clean_note})
+            else:
+                stop_existed = (root / "STOP").exists()
+                (root / "STOP").unlink(missing_ok=True)
+                resumed_roadmap = False
+                if road and road.get("enabled") and road.get("paused") and not road.get("hostops_wait") and not road.get("job_wait"):
+                    road.update(paused=None, paused_at=None, no_progress=0)
+                    rc.write_json_atomic(rc.roadmap_path(root), road)
+                    rc.missions_journal(root, {"event": "roadmap_started", "at": at, "authority": road.get("authority")})
+                    resumed_roadmap = True
+                if stop_existed and not resumed_roadmap:
+                    rc.missions_journal(root, {"event": "owner_stop_cleared", "at": at, "source": "jarvis_ui"})
+        finally:
+            lock.release()
+    return {"state": "ok", "action": action, "snapshot": snapshot(now=now)}
+
+
+def answer_question(question_id: str, option_index: int | None = None, custom_text: str | None = None) -> dict[str, Any]:
+    if not re.fullmatch(r"L\d{14}-[0-9a-f]{4}", question_id):
+        return {"state": "refused", "reason": "question_id_invalid"}
+    ro, root, repo = observe(), control_root(), relay_repo()
+    if not root.is_dir():
+        return {"state": "refused", "reason": "owner_state_missing"}
+    env = ro.devctx.default_env(repo)
+    question = next((q for q in ro.parse_open_questions(ro._ledger(repo)) if q["id"] == question_id), None)
+    if question is None:
+        return {"state": "refused", "reason": "question_not_open"}
+    custom = (custom_text or "").strip()
+    if len(custom) > 400:
+        return {"state": "refused", "reason": "answer_too_long"}
+    prefix = f"Maintainer answer to question {question_id} (via Jarvis UI): "
+    if option_index is not None:
+        option = next((o for o in question["options"] if o["index"] == option_index), None)
+        if option is None:
+            return {"state": "refused", "reason": "option_invalid"}
+        answer = f"{prefix}option {option_index} ({option['label']})." + (f" Note: {custom}" if custom else "")
+    elif custom:
+        answer = prefix + custom
+    else:
+        return {"state": "refused", "reason": "answer_empty"}
+    if ro.devctx.find_secret(answer):
+        return {"state": "refused", "reason": "secret_detected"}
+    lock = ro.rc.roadmap_lock(root, wait=5.0)
+    if lock is None:
+        return {"state": "refused", "reason": "roadmap_busy"}
+    now = datetime.now(UTC)
+    try:
+        if not any(q["id"] == question_id for q in ro.parse_open_questions(ro._ledger(repo))):
+            return {"state": "refused", "reason": "question_not_open"}
+        entry = ro.devctx.make_entry(env, "decision", answer, status="accepted", supersedes=[question_id], author="maintainer (jarvis-ui)")
+        ro.devctx.append_entry(env, entry)
+        road = ro.rc.load_roadmap(root)
+        if road and not road.get("corrupt") and road.get("paused") == "coordinator_blocked" and not road.get("hostops_wait") and not road.get("job_wait"):
+            road.update(paused=None, paused_at=None, no_progress=0)
+            ro.rc.write_json_atomic(ro.rc.roadmap_path(root), road)
+            ro.rc.missions_journal(root, {"event": "roadmap_question_answered", "at": ro.rc.iso(now), "question_id": question_id})
+    finally:
+        lock.release()
+    return {"state": "ok", "decision_id": entry["id"], "question_id": question_id, "snapshot": snapshot(now=now)}

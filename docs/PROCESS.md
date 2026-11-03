@@ -138,6 +138,8 @@ are away. Operations manual: `docs/implementation/relay-continuity-runbook.md`.
 
 ## 6. Convergence habits
 
+Before building a new capability, look for a mature existing library or tool and prefer depending on it, recording its name, version and licence (spec 239 inventory); keep author and licence attribution on any code copied on purpose, and never copy code of unknown provenance or with a licence incompatible with this all-rights-reserved repository.
+
 Finish rather than keep finding reasons not to finish. Before adding infrastructure, a workflow, a state store, a
 governance rule or a general abstraction, answer: is it needed for the accepted criterion, can the criterion be reached
 without it, and what concrete risk justifies the new surface? If the criterion is reachable without it, do not build it.

@@ -23,6 +23,7 @@ optional pack, not by this repository.
 | `cfd_pipe_walk.mjs` | Smooth-tube CFD path with a real OpenFOAM toolchain (`cfd_operator_registry.py` builds the operator registry) | `node e2e/cfd_pipe_walk.mjs [evidence-dir]` |
 | `grounding_walk.mjs` | Bubu grounding: pointer targets resolved against the real Design screens (uses `frontend/src/app/designTargets.ts`) | `node e2e/grounding_walk.mjs <evidence-dir> <source-data-root>` |
 | `owner_predicate_walk.mjs` | Measures the Process owner surface after operator actions (uses `frontend/src/app/ownerPredicates.ts`) | `node e2e/owner_predicate_walk.mjs <evidence-dir> <source-data-root>` |
+| `coding_supervisor_walk.mjs` | Coding → Runtime supervisor controls (pause, resume, graceful restart) and open maintainer question answers | `node e2e/coding_supervisor_walk.mjs <evidence-dir>` |
 
 Prerequisites: `(cd frontend && VITE_API_BASE_URL= npm run build)`, a backend virtualenv
 (`JARVISOS_PROOF_PYTHON`, default `backend/.venv/bin/python`), and Playwright
