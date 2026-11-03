@@ -220,6 +220,11 @@ export type RelayMonitorPage = Readonly<{
   more?: boolean;
 }>;
 
+export type RelayQuestionOption = Readonly<{ index: number; label: string; recommended?: boolean; consequence?: string | null }>;
+export type RelayOpenQuestion = Readonly<{ id: string; at?: string | null; prompt: string | null; options: readonly RelayQuestionOption[] }>;
+export type RelayControlAction = "pause" | "resume" | "graceful_restart";
+export type RelayControlResult = Readonly<{ state: "ok" | "refused"; reason?: string; action?: RelayControlAction; decision_id?: string; question_id?: string; snapshot?: RelayMonitorSnapshot }>;
+
 export type RelayMonitorSnapshot = Readonly<{
   state: string;
   reason?: string | null;
@@ -231,6 +236,7 @@ export type RelayMonitorSnapshot = Readonly<{
   roadmap?: Readonly<{ enabled: boolean; cycle: number | null; paused: string | null }>;
   focus?: string | null;
   question?: string | null;
+  open_questions?: readonly RelayOpenQuestion[];
   problems?: readonly string[];
   incidents?: readonly string[];
 }>;
@@ -273,4 +279,11 @@ export function readProviderQuotas(repository = CODING_REPOSITORY, refresh = fal
 
 export function readRelayMonitorTimeline(cursor: string | null, repository = CODING_REPOSITORY): Promise<RelayMonitorPage> {
   return requestJson(`/api/coding/relay-monitor/timeline?${query({ repository, cursor: cursor ?? undefined })}`);
+}
+
+export function controlRelaySupervisor(action: RelayControlAction, note?: string, repository = CODING_REPOSITORY): Promise<RelayControlResult> {
+  return requestJson("/api/coding/relay-monitor/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repository, action, note }) });
+}
+export function answerRelayQuestion(questionId: string, payload: { option_index?: number; custom_text?: string }, repository = CODING_REPOSITORY): Promise<RelayControlResult> {
+  return requestJson("/api/coding/relay-monitor/questions/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repository, question_id: questionId, ...payload }) });
 }

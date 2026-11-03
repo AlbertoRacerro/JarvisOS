@@ -1,14 +1,16 @@
 import { type Ref, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   CodingRequestError,
+  controlRelaySupervisor,
+  answerRelayQuestion,
+  type RelayControlAction,
   readRelayMonitor,
   readRelayMonitorTimeline,
   type RelayMonitorItem,
   type RelayMonitorSnapshot,
 } from "../../api/coding";
 
-// Read-only view of the spec 201 mission owner (spec 206). The server reads and scrubs; this panel polls the
-// snapshot and the cursor-paged timeline and never writes, locks or signals anything.
+// The server bounds and checks the owner snapshot, timeline and maintainer actions.
 const POLL_MS = 3000;
 const PAGES_PER_POLL = 5;
 const ITEMS_KEPT = 600;
@@ -40,12 +42,18 @@ function words(code: string): string {
   return code.replace(/[_|]/g, " ");
 }
 
-export function RelayMonitorView({ snapshot, items, error, connected, timelineRef }: Readonly<{
+export function RelayMonitorView({ snapshot, items, error, connected, timelineRef, busyAction, actionFeedback, onControl, onAnswerQuestion, otherDrafts, onOtherDraftChange }: Readonly<{
   snapshot: RelayMonitorSnapshot | null;
   items: readonly RelayMonitorItem[];
   error: string | null;
   connected: boolean;
   timelineRef?: Ref<HTMLOListElement>;
+  busyAction?: string | null;
+  actionFeedback?: string | null;
+  onControl?: (action: RelayControlAction) => void;
+  onAnswerQuestion?: (questionId: string, answer: { option_index?: number; custom_text?: string }) => void;
+  otherDrafts?: Readonly<Record<string, string>>;
+  onOtherDraftChange?: (questionId: string, text: string) => void;
 }>) {
   const state = snapshot?.state ?? "unknown";
   const mission = snapshot?.mission ?? null;
@@ -58,6 +66,18 @@ export function RelayMonitorView({ snapshot, items, error, connected, timelineRe
       {snapshot?.reason ? <span>{words(snapshot.reason)}</span> : null}
       <span>{snapshot?.owner === true ? "owner process alive" : snapshot?.owner === false ? "owner process not running" : "owner liveness unknown"}{connected ? "" : " · reconnecting"}</span>
     </header>
+    {onControl ? <div className="coding-relay-controls" role="group" aria-label="Supervisor controls">
+      <span>{snapshot?.stop ? "Graceful stop requested" : snapshot?.roadmap?.paused ? `Paused (${words(snapshot.roadmap.paused)})` : snapshot?.roadmap?.enabled ? `Roadmap cycle ${snapshot.roadmap.cycle ?? "—"} · active` : "Roadmap unavailable or disabled"}</span>
+      <button type="button" disabled={busyAction != null || !snapshot?.roadmap?.enabled || snapshot.roadmap.paused === "maintainer_stop"} onClick={() => onControl("pause")}>Pause supervisor</button>
+      <button type="button" disabled={busyAction != null || (!snapshot?.roadmap?.paused && !snapshot?.stop)} onClick={() => onControl("resume")}>Resume supervisor</button>
+      <button type="button" disabled={busyAction != null || !snapshot || snapshot.stop === true} onClick={() => onControl("graceful_restart")}>Graceful restart</button>
+      {actionFeedback ? <span role="status">{actionFeedback}</span> : null}
+    </div> : null}
+    {snapshot?.open_questions?.length ? <div className="coding-relay-questions" role="region" aria-label="Open maintainer questions">{snapshot.open_questions.map((question) => <div key={question.id}>
+      <p>{question.prompt}</p>
+      {question.options.map((option) => <div key={option.index}>{onAnswerQuestion ? <button type="button" disabled={busyAction != null} onClick={() => onAnswerQuestion(question.id, { option_index: option.index })}>{option.label}{option.recommended ? " (consigliata)" : ""}</button> : <span>{option.label}</span>}{option.consequence ? <span> · {option.consequence}</span> : null}</div>)}
+      {onAnswerQuestion ? <div><label>Altro <input maxLength={400} value={otherDrafts?.[question.id] ?? ""} onChange={(event) => onOtherDraftChange?.(question.id, event.target.value)} /></label><button type="button" disabled={busyAction != null || !(otherDrafts?.[question.id] ?? "").trim()} onClick={() => onAnswerQuestion(question.id, { custom_text: otherDrafts?.[question.id] })}>Invia</button></div> : null}
+    </div>)}</div> : null}
     {snapshot === null && !error ? <p className="coding-control-note">Reading owner state…</p> : null}
     {error ? <p className="coding-control-empty" role="status">Owner state unavailable: {words(error)}</p> : null}
     {snapshot && state === "unknown" ? <p className="coding-control-empty" role="status">The owner state cannot be determined{snapshot.reason ? ` (${words(snapshot.reason)})` : ""}. Nothing is shown as running.</p> : null}
@@ -83,6 +103,19 @@ export default function RelayMonitorPanel() {
   const [items, setItems] = useState<readonly RelayMonitorItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(true);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [otherDrafts, setOtherDrafts] = useState<Record<string, string>>({});
+  const runAction = async (name: string, call: () => ReturnType<typeof controlRelaySupervisor>) => {
+    setBusyAction(name); setActionFeedback(null);
+    try {
+      const result = await call();
+      if (result.snapshot) setSnapshot(result.snapshot);
+      setActionFeedback(result.state === "ok" ? "Done" : `Refused: ${words(result.reason ?? "unknown")}`);
+    } catch (cause) {
+      setActionFeedback(`Failed: ${cause instanceof CodingRequestError ? words(cause.code) : "unavailable"}`);
+    } finally { setBusyAction(null); }
+  };
   const cursor = useRef<string | null>(null);
   const timeline = useRef<HTMLOListElement>(null);
   const pinned = useRef(true);
@@ -134,5 +167,8 @@ export default function RelayMonitorPanel() {
     return () => { active = false; if (timer) clearTimeout(timer); };
   }, []);
 
-  return <RelayMonitorView snapshot={snapshot} items={items} error={error} connected={connected} timelineRef={timeline} />;
+  return <RelayMonitorView snapshot={snapshot} items={items} error={error} connected={connected} timelineRef={timeline} busyAction={busyAction} actionFeedback={actionFeedback}
+    onControl={(action) => void runAction(action, () => controlRelaySupervisor(action))}
+    onAnswerQuestion={(id, answer) => void runAction(id, () => answerRelayQuestion(id, answer))}
+    otherDrafts={otherDrafts} onOtherDraftChange={(id, text) => setOtherDrafts((drafts) => ({ ...drafts, [id]: text }))} />;
 }

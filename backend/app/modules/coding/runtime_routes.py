@@ -4,6 +4,7 @@ from dataclasses import asdict
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.modules.ai.jarvis_context import (
@@ -471,3 +472,28 @@ def coding_suggest_modification(payload: CodingSuggestModificationRequest) -> di
         ),
     )
     return service.suggest_modification(payload)
+
+
+class RelayControlRequest(BaseModel):
+    repository: str
+    action: Literal["pause", "resume", "graceful_restart"]
+    note: str | None = Field(default=None, max_length=240)
+
+
+class RelayQuestionAnswerRequest(BaseModel):
+    repository: str
+    question_id: str
+    option_index: int | None = None
+    custom_text: str | None = Field(default=None, max_length=400)
+
+
+@router.post("/relay-monitor/control")
+def relay_control(payload: RelayControlRequest):
+    _require_runtime_repository(payload.repository)
+    return relay_monitor.control_supervisor(payload.action, note=payload.note)
+
+
+@router.post("/relay-monitor/questions/answer")
+def relay_answer(payload: RelayQuestionAnswerRequest):
+    _require_runtime_repository(payload.repository)
+    return relay_monitor.answer_question(payload.question_id, option_index=payload.option_index, custom_text=payload.custom_text)

@@ -193,6 +193,39 @@ def _ledger(repo: Path) -> list[dict[str, Any]]:
         return []
 
 
+def parse_open_questions(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract unsettled structured maintainer questions and their bounded, cleaned choices from the ledger."""
+    superseded = {ref for item in entries for ref in item.get("supersedes") or []}
+    result = []
+    for pos, entry in enumerate(entries):
+        qid = entry.get("id")
+        if entry.get("kind") != "question" or not isinstance(qid, str) or qid in superseded:
+            continue
+        if any(item.get("kind") == "decision" and qid in str(item.get("text") or "")
+               for item in entries[pos + 1:]):
+            continue
+        prompt_lines = []
+        options = []
+        for line in str(entry.get("text") or "").splitlines():
+            match = re.match(r"^\s*(\d+)[.)]\s*(.+?)\s*$", line)
+            if not match:
+                if not options and line.strip():
+                    prompt_lines.append(line.strip())
+                continue
+            body = match.group(2)
+            recommended = bool(re.match(r"^\((?:consigliata|recommended)\)\s*", body, re.IGNORECASE))
+            body = re.sub(r"^\((?:consigliata|recommended)\)\s*", "", body, flags=re.IGNORECASE)
+            parts = re.split(r"\s+—\s+|\s+(?:--|-)\s+(?=(?:conseguenza|consequence)\s*:)", body, maxsplit=1, flags=re.IGNORECASE)
+            consequence = re.sub(r"^(?:conseguenza|consequence)\s*:\s*", "", parts[1], flags=re.IGNORECASE) if len(parts) > 1 else ""
+            options.append({"index": int(match.group(1)), "label": clean(parts[0], 200),
+                            "recommended": recommended, "consequence": clean(consequence, 240)})
+        if not options:
+            continue
+        result.append({"id": qid, "at": entry.get("ts"), "prompt": clean(" ".join(prompt_lines), 300),
+                       "options": options})
+    return result
+
+
 def _latest(entries: list[dict[str, Any]], kinds: tuple[str, ...], since: str | None) -> str | None:
     for entry in reversed(entries):
         if entry.get("kind") in kinds and (not since or str(entry.get("ts") or "") >= since):
@@ -206,6 +239,8 @@ def snapshot(root: Path, repo: Path, now: datetime, *, alive: Callable[[Path], b
     snap: dict[str, Any] = {"at": rc.iso(now), "owner": alive(root / "serve.lock"), "stop": (root / "STOP").exists(),
                             "state": "unknown", "mission": None, "reason": None, "turn": {}, "delivered": [],
                             "problems": []}
+    entries = ledger(repo)
+    snap["open_questions"] = parse_open_questions(entries)
     paths = rc.host_ops.Paths(Path.home())
     try:
         stale = any(rc.host_ops.REQUEST_NAME_RE.fullmatch(p.name) and
@@ -283,7 +318,7 @@ def snapshot(root: Path, repo: Path, now: datetime, *, alive: Callable[[Path], b
                 elif snap["owner"] is None:
                     snap["state"] = "unknown"
             else:
-                snap["question"] = _latest(ledger(repo), ("question", "blocker"), last.get("at") if last else None)
+                snap["question"] = _latest(entries, ("question", "blocker"), last.get("at") if last else None)
         return snap
     mission, status, state = active
     state = state or {}
@@ -294,7 +329,6 @@ def snapshot(root: Path, repo: Path, now: datetime, *, alive: Callable[[Path], b
                        "label": _task_label(task.get("text")), "authority": mission.get("authority"),
                        "agent": state.get("agent") if state.get("agent") in rc.AGENTS else None}
     snap["turn"] = _turn_state(repo, live_session(repo, state))
-    entries = ledger(repo)
     snap["focus"] = _latest(entries, ("claim",), mission.get("submitted_at"))
     snap["question"] = _latest(entries, ("question", "blocker"), mission.get("submitted_at"))
     if status in ("held", "waiting") and snap["owner"] is False and not snap["stop"]:

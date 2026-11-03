@@ -70,3 +70,9 @@ assert.ok(api.includes("/api/coding/relay-monitor?") && api.includes("/api/codin
 const panel = read("src/components/coding/RelayMonitorPanel.tsx");
 assert.ok(!/method:\s*"(POST|PUT|DELETE|PATCH)"/.test(panel) && !/#[a-f\d]{3,8}\b/i.test(read("src/pages/CodingWorkbench.css").split("Spec 206")[1]));
 console.log("206 coding relay monitor: PASS");
+
+const controls = render({ snapshot: { state: "paused", stop: false, roadmap: { enabled: true, cycle: 3, paused: "maintainer_stop" }, open_questions: [{ id: "L20261103151937-abcd", prompt: "Proceed?", options: [{ index: 1, label: "Yes", recommended: true, consequence: "Safe" }] }] }, onControl: () => {}, onAnswerQuestion: () => {}, otherDrafts: {} });
+for (const fragment of ["Supervisor controls", "Pause supervisor", "Resume supervisor", "Graceful restart", "Open maintainer questions", "Proceed?", "Yes (consigliata)", "Safe", "Altro"]) {
+  assert.ok(controls.includes(fragment), `controls missing ${fragment}`);
+}
+assert.match(controls, /disabled=""[^>]*>Pause supervisor/);
