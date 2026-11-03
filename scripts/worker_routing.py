@@ -6,11 +6,11 @@ the task and whose subscription pool still has headroom. Required tier = max(dif
 high=3. A model qualifies when its capability is at least that tier and its pool's free fraction (the minimum over
 the pool's 5-hour and weekly windows) is at least the pool's reserve (RESERVES). A pool that is disabled or unreadable is skipped
 (fail-closed per pool). Candidates are ordered by smallest capability surplus (cheapest adequate), then pool priority
-(gemini, codex, claude last), then most free quota, then table order. Nothing qualifying exits 3 with reason `no_worker`: the coordinator then does the work
+(gemini, copilot, codex, claude last), then most free quota, then table order. Nothing qualifying exits 3 with reason `no_worker`: the coordinator then does the work
 itself or waits.
 
 Quota is read without a model turn: Codex through `codex app-server` `account/rateLimits/read`, Gemini through
-`agy -p /quota`, Claude through `agent-relay --json limits --refresh`. This tool only reads quota and prints a decision; it launches nothing, writes nothing and holds no
+`agy -p /quota`, Copilot through `gh api copilot_internal/user`, Claude through `agent-relay --json limits --refresh`. This tool only reads quota and prints a decision; it launches nothing, writes nothing and holds no
 credentials. Stdlib only.
 """
 
@@ -46,12 +46,12 @@ RESERVE = 0.10
 # Per-pool reserve. The Claude pool is also what the coordinator spends: if it is skipped the coordinator would do
 # the work itself at higher cost, so delegating to a cheaper Claude worker beats `no_worker`; it is skipped only
 # when practically exhausted. Below CLAUDE_LOW_FREE a chosen Claude worker carries a warning note.
-RESERVES = {"claude": 0.03, "codex": RESERVE, "gemini": RESERVE}
+RESERVES = {"claude": 0.03, "codex": RESERVE, "copilot": RESERVE, "gemini": RESERVE}
 CLAUDE_LOW_FREE = 0.40
 CLAUDE_LOW_NOTE = ("claude_pool_low — keep worker task small; coordinator should prefer waiting for a cheaper "
                    "pool reset if the task is not urgent")
 # Among equally adequate models the cheaper-to-spend pool goes first; the coordinator's own pool goes last.
-POOL_PRIORITY = ("gemini", "codex", "claude")
+POOL_PRIORITY = ("gemini", "copilot", "codex", "claude")
 FRESHNESS = 900  # seconds a Claude (agent-relay) reading may be old, as the supervisor's reading_freshness
 READ_TIMEOUT = 15  # timeout for readers other than agy; all readers run in parallel within TOTAL_TIMEOUT
 AGY_READ_TIMEOUT = 40  # agy /quota is slow, typically ~8 s with spikes over 15 s
@@ -78,7 +78,7 @@ RISK_GUIDE = ("risk = harm if the worker is wrong: low docs/tests/UI copy; mediu
 @dataclass(frozen=True)
 class Model:
     key: str
-    kind: str  # launch kind: codex | agy
+    kind: str  # launch kind: codex | agy | copilot | claude
     model: str
     pool: str
     capability: int  # 1..3, the highest required tier it may take
@@ -90,8 +90,10 @@ class Model:
 MODELS: tuple[Model, ...] = (
     Model("luna", "codex", "gpt-6-luna", "codex", 1, 1),
     Model("flash", "agy", "gemini-3.8-flash-low", "gemini", 1, 1),
+    Model("copilot-haiku", "copilot", "claude-haiku-4.5", "copilot", 1, 1),
     Model("haiku", "claude", "claude-haiku-5-5", "claude", 1, 2),
     Model("terra", "codex", "gpt-6.1-terra", "codex", 2, 3),
+    Model("copilot-sonnet", "copilot", "claude-sonnet-4.5", "copilot", 2, 3),
     Model("sonnet", "claude", "claude-sonnet-5-5", "claude", 2, 5),
     Model("sol", "codex", "gpt-6-sol", "codex", 3, 8),
 )
@@ -227,6 +229,73 @@ def parse_claude(entry: Any, now: datetime | None = None) -> Pool:
     return Pool("claude", windows, min(windows.values()))
 
 
+def parse_copilot(reading: dict[str, Any] | None) -> Pool:
+    """Premium interactions from GitHub's no-model-turn entitlement endpoint."""
+    if not isinstance(reading, dict):
+        return unreadable("copilot", "no_reading")
+    if reading.get("cli_enabled") is False:
+        return unreadable("copilot", "cli_disabled")
+    snapshots = reading.get("quota_snapshots")
+    prem = snapshots.get("premium_interactions") if isinstance(snapshots, dict) else None
+    if not isinstance(prem, dict):
+        return unreadable("copilot", "bucket_missing")
+    if prem.get("unlimited") is True:
+        return Pool("copilot", {"monthly": 1.0}, 1.0)
+    if prem.get("has_quota") is False:
+        if prem.get("entitlement") in (0, 0.0):
+            return unreadable("copilot", "no_entitlement")
+        return Pool("copilot", {"monthly": 0.0}, 0.0)
+    pct_rem = prem.get("percent_remaining")
+    if (isinstance(pct_rem, bool) or not isinstance(pct_rem, int | float)
+            or not math.isfinite(pct_rem) or not 0 <= pct_rem <= 100):
+        return unreadable("copilot", "invalid_reading")
+    remaining = prem.get("remaining")
+    if remaining is not None and (isinstance(remaining, bool) or not isinstance(remaining, int | float)
+                                  or not math.isfinite(remaining)):
+        return unreadable("copilot", "invalid_reading")
+    fraction = float(pct_rem) / 100.0
+    if remaining is not None and remaining <= 0:
+        fraction = 0.0
+    return Pool("copilot", {"monthly": fraction}, fraction)
+
+
+def read_copilot() -> Pool:
+    """Read entitlement using coordinator credentials; never start a model turn."""
+    binary = os.environ.get("JARVISOS_GH_BIN") or _host_which("gh")
+    if not binary:
+        return unreadable("copilot", "gh_missing")
+    env = os.environ.copy()
+    token = env.get("JARVISOS_COPILOT_GH_TOKEN") or env.get("COPILOT_GITHUB_TOKEN")
+    if not token:
+        try:
+            token = (Path.home() / ".local/share/jarvisos-sandbox/state/copilot/token").read_text().strip()
+        except OSError:
+            pass
+    if token:
+        env["GH_TOKEN"] = token
+    try:
+        done = subprocess.run([binary, "api", "copilot_internal/user"], capture_output=True, text=True,
+                              timeout=READ_TIMEOUT, check=False, cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL,
+                              env=env)
+    except subprocess.TimeoutExpired:
+        return unreadable("copilot", "timeout")
+    except OSError:
+        return unreadable("copilot", "gh_missing")
+    if done.returncode != 0:
+        output = (done.stdout + done.stderr).lower()
+        if any(marker in output for marker in ("401", "bad credentials", "gh auth login", "not logged into", "notsignedin")):
+            return unreadable("copilot", "auth_required")
+        return unreadable("copilot", "no_reading")
+    pool = parse_copilot(_json_document(done.stdout))
+    if pool.free is not None and not (token or
+            (Path.home() / ".local/share/jarvisos-sandbox/state/copilot/copilot-home").is_dir()):
+        return unreadable("copilot", "auth_missing")
+    configured = os.environ.get("JARVISOS_COPILOT_BIN")
+    if pool.free is not None and not (shutil.which(configured) if configured else _host_which("copilot")):
+        return unreadable("copilot", "copilot_missing")
+    return pool
+
+
 def read_claude() -> Pool:
     """Claude windows from the same source the supervisor uses (`agent-relay --json limits --refresh`)."""
     binary = os.environ.get("JARVISOS_AGENT_RELAY_BIN") or _host_which("agent-relay")
@@ -356,7 +425,9 @@ def read_codex() -> Pool:
                     pass
 
 
-READERS: dict[str, Callable[[], Pool]] = {"codex": read_codex, "gemini": read_gemini, "claude": read_claude}
+READERS: dict[str, Callable[[], Pool]] = {
+    "codex": read_codex, "gemini": read_gemini, "copilot": read_copilot, "claude": read_claude,
+}
 
 
 def _iso(moment: datetime) -> str:
@@ -417,7 +488,8 @@ def apply_snapshot(pools: dict[str, Pool], snapshot: dict[str, tuple[datetime, d
     always wins, and a pool the provider reported as disabled never falls back. Older or missing: unchanged."""
     out = dict(pools)
     for name, pool in pools.items():
-        if pool.free is not None or name not in snapshot or (pool.reason or "").endswith("_disabled"):
+        if (name == "copilot" or pool.free is not None or name not in snapshot
+                or (pool.reason or "").endswith("_disabled")):
             continue
         at, windows = snapshot[name]
         if -60 <= (now - at).total_seconds() <= max_age:
@@ -520,6 +592,9 @@ def launch_command(model: Model) -> str:
         # Never bypassPermissions or --dangerously-skip-permissions for a worker.
         return (f'cd "$WORKTREE" && claude -p --model {model.model} --permission-mode acceptEdits '
                 '--permission-prompts none --output-format json < "$TASK_FILE"')
+    if model.kind == "copilot":
+        return (f'python3 scripts/copilot_worker.py run --task-file "$TASK_FILE" '
+                f'--worktree "$WORKTREE" --model {model.key}')
     return 'python3 scripts/agy_worker.py run --task-file "$TASK_FILE" --worktree "$WORKTREE" --model flash'
 
 
