@@ -24,9 +24,9 @@ def pool(name: str, five_hour: float, weekly: float | None = None) -> Any:
     return wr.Pool(name, windows, min(windows.values()))
 
 
-def pools(codex: Any = None, gemini: Any = None, claude: Any = None) -> dict[str, Any]:
+def pools(codex: Any = None, gemini: Any = None, claude: Any = None, copilot: Any = None) -> dict[str, Any]:
     return {"codex": codex or pool("codex", 0.95), "gemini": gemini or pool("gemini", 0.99),
-            "claude": claude or pool("claude", 0.60)}
+            "claude": claude or pool("claude", 0.60), "copilot": copilot or wr.unreadable("copilot", "no_reading")}
 
 
 def test_tier_is_the_maximum_of_difficulty_and_risk() -> None:
@@ -38,12 +38,12 @@ def test_tier_is_the_maximum_of_difficulty_and_risk() -> None:
 
 
 def test_models_table_is_declarative_and_argon_free() -> None:
-    assert [m.key for m in wr.MODELS] == ["luna", "flash", "haiku", "terra", "sonnet", "sol"]
-    assert {m.kind for m in wr.MODELS} == {"codex", "agy", "claude"}
+    assert [m.key for m in wr.MODELS] == ["luna", "flash", "copilot-haiku", "haiku", "terra", "copilot-sonnet", "sonnet", "sol"]
+    assert {m.kind for m in wr.MODELS} == {"codex", "agy", "copilot", "claude"}
     by_key = {m.key: m for m in wr.MODELS}
     assert (by_key["haiku"].model, by_key["haiku"].pool, by_key["haiku"].capability) == ("claude-haiku-5-5", "claude", 1)
     assert (by_key["sonnet"].model, by_key["sonnet"].pool, by_key["sonnet"].capability) == ("claude-sonnet-5-5", "claude", 2)
-    assert wr.RESERVES == {"claude": 0.03, "codex": 0.10, "gemini": 0.10}
+    assert wr.RESERVES == {"claude": 0.03, "codex": 0.10, "copilot": 0.10, "gemini": 0.10}
     assert all(1 <= m.capability <= 3 for m in wr.MODELS)
     assert "argon" not in {m.key for m in wr.MODELS}  # spec 221: Argon is an agy worker only under --coordinator-fallback
 
@@ -144,7 +144,7 @@ def test_codex_parse_uses_primary_as_5h_and_secondary_as_weekly() -> None:
 
 def test_summary_line_formatting() -> None:
     line = wr.summary_line(pools(codex=pool("codex", 1.0, 0.95), gemini=pool("gemini", 1.0, 0.99)))
-    assert line == ("worker quota: codex 95% free (5h 100%) · gemini 99% free (5h 100%) · claude 60% free (5h 60%)"
+    assert line == ("worker quota: codex 95% free (5h 100%) · gemini 99% free (5h 100%) · copilot unavailable (no_reading) · claude 60% free (5h 60%)"
                     " — prefer cheapest adequate pool")
     degraded = wr.summary_line(pools(codex=pool("codex", 0.05), gemini=wr.unreadable("gemini", "timeout")))
     assert "codex 5% free (5h 5%) [below reserve]" in degraded and "gemini unavailable (timeout)" in degraded
@@ -475,3 +475,71 @@ def test_read_gemini_reuses_prepare_login_and_reports_conflict(monkeypatch: pyte
     (tmp_path / ".gemini").unlink()
     (tmp_path / ".gemini").mkdir()
     assert wr.read_gemini().reason == "login_path_conflict"
+
+
+def test_copilot_parse_entitlement_and_overage_boundaries() -> None:
+    def reading(**premium: Any) -> dict[str, Any]:
+        return {"cli_enabled": True, "quota_snapshots": {"premium_interactions": premium}}
+
+    assert wr.parse_copilot(None).reason == "no_reading"
+    assert wr.parse_copilot({"cli_enabled": False}).reason == "cli_disabled"
+    assert wr.parse_copilot({"cli_enabled": True}).reason == "bucket_missing"
+    assert wr.parse_copilot(reading(has_quota=False, entitlement=0)).reason == "no_entitlement"
+    assert wr.parse_copilot(reading(has_quota=False, entitlement=100)).free == 0
+    assert wr.parse_copilot(reading(unlimited=True)).free == 1
+    assert wr.parse_copilot(reading(has_quota=True, percent_remaining=75)).windows == {"monthly": 0.75}
+    assert wr.parse_copilot(reading(has_quota=True, percent_remaining=0, overage_permitted=True)).free == 0
+    assert wr.parse_copilot(reading(has_quota=True, percent_remaining=50, remaining=0,
+                                    overage_permitted=True)).free == 0
+    for bad in (True, -1, 101, "50", float("nan")):
+        assert wr.parse_copilot(reading(has_quota=True, percent_remaining=bad)).reason == "invalid_reading"
+
+
+def test_copilot_routing_priority_and_fourth_column() -> None:
+    available = pools(copilot=wr.Pool("copilot", {"monthly": 0.8}, 0.8))
+    assert wr.decide("low", "low", available)["worker"] == "flash"
+    assert wr.decide("medium", "low", available)["worker"] == "copilot-sonnet"
+    assert wr.launch_command(next(m for m in wr.MODELS if m.key == "copilot-haiku")) == (
+        'python3 scripts/copilot_worker.py run --task-file "$TASK_FILE" '
+        '--worktree "$WORKTREE" --model copilot-haiku')
+    assert "copilot 80% free" in wr.summary_line(available)
+    available["copilot"] = wr.Pool("copilot", {"monthly": 0.09}, 0.09)
+    assert wr.decide("medium", "low", available)["worker"] == "terra"
+
+
+def test_read_copilot_uses_dedicated_token_and_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    script = tmp_path / "gh"
+    script.write_text("#!/usr/bin/env python3\nimport json, os\n"
+                      "assert os.environ.get('GH_TOKEN') == 'dedicated'\n"
+                      "print(json.dumps({'cli_enabled': True, 'quota_snapshots': {'premium_interactions': "
+                      "{'has_quota': True, 'percent_remaining': 80}}}))\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("JARVISOS_GH_BIN", str(script))
+    monkeypatch.setenv("JARVISOS_COPILOT_GH_TOKEN", "dedicated")
+    monkeypatch.setenv("GH_TOKEN", "coordinator")
+    copilot = tmp_path / "copilot"
+    copilot.write_text("#!/bin/sh\nexit 0\n")
+    copilot.chmod(0o755)
+    monkeypatch.setenv("JARVISOS_COPILOT_BIN", str(copilot))
+    assert wr.read_copilot().free == 0.8
+    monkeypatch.delenv("JARVISOS_COPILOT_BIN")
+    monkeypatch.setattr(wr, "_host_which", lambda name: None)
+    assert wr.read_copilot().reason == "copilot_missing"
+    at = datetime.now(UTC)
+    live = {"copilot": wr.unreadable("copilot", "copilot_missing")}
+    assert wr.apply_snapshot(live, {"copilot": (at, {"monthly": 1.0})}, at)["copilot"].free is None
+
+
+def test_read_copilot_requires_worker_auth_even_with_coordinator_gh(tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    script = tmp_path / "gh"
+    script.write_text("#!/usr/bin/env python3\nimport json\n"
+                      "print(json.dumps({'cli_enabled': True, 'quota_snapshots': {'premium_interactions': "
+                      "{'has_quota': True, 'percent_remaining': 80}}}))\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("JARVISOS_GH_BIN", str(script))
+    monkeypatch.setenv("GH_TOKEN", "coordinator")
+    monkeypatch.delenv("JARVISOS_COPILOT_GH_TOKEN", raising=False)
+    monkeypatch.delenv("COPILOT_GITHUB_TOKEN", raising=False)
+    assert wr.read_copilot().reason == "auth_missing"
