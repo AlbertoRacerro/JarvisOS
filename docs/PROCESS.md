@@ -18,8 +18,8 @@ file is fixed in the same change.
 | Durable architecture decisions | `docs/DECISIONS.md` |
 
 READMEs, chat handoffs, old comments, branch names and model summaries are context, not authority. A current explicit
-maintainer directive can order work that is already authorized; it never changes spec state, readiness, scope or
-dependencies.
+maintainer directive sets priorities, goals and process rules; `docs/specs/STATUS.md` remains the live registry of spec
+state, dependencies and implementation PRs.
 
 ## 2. Roles
 
@@ -68,11 +68,15 @@ mechanism is part of the outcome. Start from `docs/specs/SPEC_TEMPLATE.md`.
 
 Rules:
 
-1. Implementation starts only from `ready` with every hard dependency merged (or no longer listed).
+1. **The coordinator owns spec acceptance.** It drafts or takes the spec, reviews it critically against overengineering
+   (section 6: is every part needed for the outcome?), and if it agrees moves the row to `ready` and implements it
+   without a maintainer approval step. Implementation starts only from `ready` with every hard dependency merged (or no
+   longer listed).
 2. The implementation PR carries `**Spec gate:** implementation NNN` in its body; the row must be `in_review` with this
    PR's number. `definition NNN` or `N/A` is used for planning and process work. `scripts/check_spec_status.py` enforces it.
-3. Definition, spec and readiness may be one planning PR. Split them only when destructive authority, credentials,
-   migrations, security boundaries or an unresolved architecture choice make a separate checkpoint worth its cost.
+3. Definition, spec, acceptance (`ready`) and implementation may be combined or split as risk warrants; keep a separate
+   planning checkpoint only when destructive authority, credentials, migrations, security boundaries or an open question
+   to the maintainer (section 7) require it.
 4. Do not open a lifecycle PR that only repeats accepted information. Do not copy spec state into READMEs, specs, chat
    handoffs or prompts.
 5. A coordinator may close a `planned` row without implementing it when fresh evidence shows it adds nothing: it is
@@ -142,15 +146,21 @@ tier that does not require independence, the coordinator review plus the require
 
 ## 7. When to contact the maintainer
 
-Only for these four cases (outside a requested status report):
+Only for these cases (outside a requested status report):
 
 1. real spending is required, or a budget limit is at risk;
 2. a credential, account, repository or human-controlled permission is missing;
 3. a security issue, a secret exposure or a material destructive or data-loss risk needs human awareness;
-4. no two practicable safe routes forward exist.
+4. no two practicable safe routes forward exist;
+5. the maintainer explicitly asked to be shown alternatives to choose from;
+6. the coordinator has a real product doubt that the code and evidence cannot settle.
 
-A technical obstacle opens engineering work; it is not by itself a block. A human answer blocks only the work that depends
-on it: record the question and continue with safe disjoint work.
+**Question format.** Every question to the maintainer is pre-structured so it can be answered with one click or one
+word: one short question, 2 to 4 options with the recommended one first and marked `(consigliata)`, one line per option
+on its consequence, and `altro` always allowed. Write it in Italian, plain language, without internal acronyms. Record
+it with `devctx.py note question` and continue with any authorized work that does not depend on the answer.
+
+A technical obstacle opens engineering work; it is not by itself a block.
 
 ## 8. Changing the rules
 
