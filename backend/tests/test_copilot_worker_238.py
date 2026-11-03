@@ -75,7 +75,7 @@ class Env:
         data.update(changes)
         self.config.write_text(json.dumps(data))
 
-    def run(self, *, model: str = "copilot-haiku", sandbox: bool = True, worktree: Path | None = None,
+    def run(self, *, model: str = "copilot-auto", sandbox: bool = True, worktree: Path | None = None,
             timeout: int = 10) -> dict[str, Any]:
         args = argparse.Namespace(model=model, task_file=str(self.task), worktree=str(worktree or self.wt),
                                   timeout=timeout, evidence_dir=str(self.evidence))
@@ -102,7 +102,7 @@ def test_success_evidence_argv_and_credential_boundary(env: Env, monkeypatch: py
     assert result["status"] == "succeeded" and result["quota"]["remaining_fraction"] == 0.75
     log = json.loads(env.log.read_text())
     argv, child = log["argv"], log["env"]
-    assert argv[:4] == ["-p", "edit a file\n", "--model", worker.HAIKU_MODEL]
+    assert argv[:4] == ["-p", "edit a file\n", "--model", worker.AUTO_MODEL]
     assert argv[4:] == ["--allow-all-tools", "--no-ask-user", "--deny-tool", "shell(gh:*)",
                         "--deny-tool", "shell(git push*)", "--deny-tool", "shell(git remote*)",
                         "--deny-tool", "shell(git config*)"]
@@ -116,7 +116,7 @@ def test_success_evidence_argv_and_credential_boundary(env: Env, monkeypatch: py
     assert "+after" in (env.evidence / "diff.patch").read_text()
 
 
-@pytest.mark.parametrize("model", ["claude-opus", "gpt-6", "unknown"])
+@pytest.mark.parametrize("model", ["claude-opus", "gpt-6", "unknown", "copilot-haiku", "copilot-sonnet"])
 def test_model_refusal(env: Env, model: str) -> None:
     assert reason(env.run(model=model)) == "model_not_allowed"
 
@@ -194,10 +194,11 @@ def test_auth_file_link_and_conflict(tmp_path: Path) -> None:
 
 
 def test_all_allowlisted_model_ids_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert worker.resolve_model("copilot-sonnet") == ("copilot-sonnet", worker.SONNET_MODEL)
-    assert worker.resolve_model("copilot-gpt") == ("copilot-gpt", worker.GPT_MINI_MODEL)
-    monkeypatch.setenv("JARVISOS_COPILOT_HAIKU_MODEL", "claude-haiku-custom")
-    assert worker.resolve_model("copilot-haiku") == ("copilot-haiku", "claude-haiku-custom")
-    with pytest.raises(worker.Refused) as caught:
-        worker.resolve_model("gpt-6")
-    assert caught.value.reason == "model_not_allowed"
+    assert worker.resolve_model("copilot-auto") == ("copilot-auto", worker.AUTO_MODEL)
+    assert worker.resolve_model("auto") == ("copilot-auto", worker.AUTO_MODEL)
+    monkeypatch.setenv("JARVISOS_COPILOT_AUTO_MODEL", "custom-auto")
+    assert worker.resolve_model("copilot-auto") == ("copilot-auto", "custom-auto")
+    for model in ("gpt-6", "copilot-sonnet"):
+        with pytest.raises(worker.Refused) as caught:
+            worker.resolve_model(model)
+        assert caught.value.reason == "model_not_allowed"

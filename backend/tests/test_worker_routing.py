@@ -38,7 +38,7 @@ def test_tier_is_the_maximum_of_difficulty_and_risk() -> None:
 
 
 def test_models_table_is_declarative_and_argon_free() -> None:
-    assert [m.key for m in wr.MODELS] == ["luna", "flash", "copilot-haiku", "haiku", "terra", "copilot-sonnet", "sonnet", "sol"]
+    assert [m.key for m in wr.MODELS] == ["luna", "flash", "copilot-auto", "haiku", "terra", "sonnet", "sol"]
     assert {m.kind for m in wr.MODELS} == {"codex", "agy", "copilot", "claude"}
     by_key = {m.key: m for m in wr.MODELS}
     assert (by_key["haiku"].model, by_key["haiku"].pool, by_key["haiku"].capability) == ("claude-haiku-5-5", "claude", 1)
@@ -467,6 +467,7 @@ def test_read_gemini_reuses_prepare_login_and_reports_conflict(monkeypatch: pyte
     fake.chmod(0o755)
     monkeypatch.setenv("JARVISOS_AGY_BIN", str(fake))
 
+    monkeypatch.setattr(wr.relay_argon, "sandbox", lambda: True)
     reading = wr.read_gemini()
     assert (tmp_path / ".gemini").is_symlink()
     assert (tmp_path / ".gemini").resolve() == target.resolve()
@@ -475,6 +476,9 @@ def test_read_gemini_reuses_prepare_login_and_reports_conflict(monkeypatch: pyte
     (tmp_path / ".gemini").unlink()
     (tmp_path / ".gemini").mkdir()
     assert wr.read_gemini().reason == "login_path_conflict"
+
+    monkeypatch.setattr(wr.relay_argon, "sandbox", lambda: False)
+    assert wr.read_gemini().free == pytest.approx(0.98)
 
 
 def test_copilot_parse_entitlement_and_overage_boundaries() -> None:
@@ -498,10 +502,12 @@ def test_copilot_parse_entitlement_and_overage_boundaries() -> None:
 def test_copilot_routing_priority_and_fourth_column() -> None:
     available = pools(copilot=wr.Pool("copilot", {"monthly": 0.8}, 0.8))
     assert wr.decide("low", "low", available)["worker"] == "flash"
-    assert wr.decide("medium", "low", available)["worker"] == "copilot-sonnet"
-    assert wr.launch_command(next(m for m in wr.MODELS if m.key == "copilot-haiku")) == (
+    available["gemini"] = wr.Pool("gemini", {"5h": 0.05, "weekly": 0.05}, 0.05)
+    assert wr.decide("low", "low", available)["worker"] == "copilot-auto"
+    assert wr.decide("medium", "low", available)["worker"] == "terra"
+    assert wr.launch_command(next(m for m in wr.MODELS if m.key == "copilot-auto")) == (
         'python3 scripts/copilot_worker.py run --task-file "$TASK_FILE" '
-        '--worktree "$WORKTREE" --model copilot-haiku')
+        '--worktree "$WORKTREE" --model copilot-auto')
     assert "copilot 80% free" in wr.summary_line(available)
     available["copilot"] = wr.Pool("copilot", {"monthly": 0.09}, 0.09)
     assert wr.decide("medium", "low", available)["worker"] == "terra"
