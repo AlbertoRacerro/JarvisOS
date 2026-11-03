@@ -90,10 +90,9 @@ class Model:
 MODELS: tuple[Model, ...] = (
     Model("luna", "codex", "gpt-6-luna", "codex", 1, 1),
     Model("flash", "agy", "gemini-3.8-flash-low", "gemini", 1, 1),
-    Model("copilot-haiku", "copilot", "claude-haiku-4.5", "copilot", 1, 1),
+    Model("copilot-auto", "copilot", "auto", "copilot", 1, 1),
     Model("haiku", "claude", "claude-haiku-5-5", "claude", 1, 2),
     Model("terra", "codex", "gpt-6.1-terra", "codex", 2, 3),
-    Model("copilot-sonnet", "copilot", "claude-sonnet-4.5", "copilot", 2, 3),
     Model("sonnet", "claude", "claude-sonnet-5-5", "claude", 2, 5),
     Model("sol", "codex", "gpt-6-sol", "codex", 3, 8),
 )
@@ -316,13 +315,14 @@ def read_claude() -> Pool:
 
 
 def read_gemini() -> Pool:
-    try:
-        relay_argon.prepare_login()
-    except relay_argon.Refused as exc:
-        if str(exc) != "login_state_missing":
-            return unreadable("gemini", str(exc))
-    except OSError:
-        return unreadable("gemini", "login_path_conflict")
+    if relay_argon.sandbox():
+        try:
+            relay_argon.prepare_login()
+        except relay_argon.Refused as exc:
+            if str(exc) != "login_state_missing":
+                return unreadable("gemini", str(exc))
+        except OSError:
+            return unreadable("gemini", "login_path_conflict")
     binary = os.environ.get("JARVISOS_AGY_BIN") or _host_which("agy")
     if not binary:
         return unreadable("gemini", "agy_missing")

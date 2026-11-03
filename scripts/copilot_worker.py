@@ -26,9 +26,7 @@ from typing import Any
 
 SCHEMA = "copilot-worker.v1"
 SANDBOX_HOSTNAME = "jarvis-sandbox"
-HAIKU_MODEL = "claude-haiku-4.5"
-SONNET_MODEL = "claude-sonnet-4.5"
-GPT_MINI_MODEL = "gpt-5-mini"
+AUTO_MODEL = "auto"
 DEFAULT_TIMEOUT = 1800
 MAX_TIMEOUT = 6 * 3600
 QUOTA_TIMEOUT = 30
@@ -62,9 +60,7 @@ def iso(moment: datetime) -> str:
 
 
 def model_ids() -> dict[str, str]:
-    return {"copilot-haiku": os.environ.get("JARVISOS_COPILOT_HAIKU_MODEL", HAIKU_MODEL),
-            "copilot-sonnet": os.environ.get("JARVISOS_COPILOT_SONNET_MODEL", SONNET_MODEL),
-            "copilot-gpt": os.environ.get("JARVISOS_COPILOT_GPT_MODEL", GPT_MINI_MODEL)}
+    return {"copilot-auto": os.environ.get("JARVISOS_COPILOT_AUTO_MODEL", AUTO_MODEL)}
 
 
 def resolve_model(requested: str) -> tuple[str, str]:
@@ -356,7 +352,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="run one headless Copilot CLI worker turn")
     run.add_argument("--task-file", required=True)
     run.add_argument("--worktree", required=True)
-    run.add_argument("--model", default="copilot-haiku")
+    run.add_argument("--model", default="copilot-auto")
     run.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     run.add_argument("--evidence-dir")
     run.set_defaults(func=cmd_run)
