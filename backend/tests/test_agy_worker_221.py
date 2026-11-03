@@ -59,6 +59,8 @@ def git(cwd: Path, *args: str) -> str:
 class Env:
     def __init__(self, tmp: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self.tmp = tmp
+        monkeypatch.setenv("HOME", str(tmp))
+        (tmp / ".local/share/jarvisos-sandbox/state/agy-home").mkdir(parents=True)
         self.main = tmp / "main"
         self.main.mkdir()
         git(self.main, "init", "-q", "-b", "main")
@@ -269,3 +271,22 @@ def test_git_metadata_modification_fails_run(env: Env, plant: str) -> None:
 
 def test_git_metadata_unchanged_on_success(env: Env) -> None:
     assert "git_metadata" not in env.run()
+
+
+def test_prepare_login_links_gemini_and_refuses_missing_or_conflicting_home(env: Env) -> None:
+    target = env.tmp / ".local/share/jarvisos-sandbox/state/agy-home"
+    # Removing agy-home refuses with login_state_missing before touching the worktree
+    target.rmdir()
+    refused(env.run(), "login_state_missing")
+    assert not env.invoked()
+
+    # Re-creating agy-home and replacing .gemini with a directory refuses with login_path_conflict
+    target.mkdir(parents=True)
+    (env.tmp / ".gemini").mkdir()
+    refused(env.run(), "login_path_conflict")
+    assert not env.invoked()
+
+    # Removing the conflicting directory lets prepare_login link .gemini -> agy-home and succeed
+    (env.tmp / ".gemini").rmdir()
+    assert env.run()["status"] == "succeeded"
+    assert (env.tmp / ".gemini").is_symlink() and (env.tmp / ".gemini").resolve() == target.resolve()

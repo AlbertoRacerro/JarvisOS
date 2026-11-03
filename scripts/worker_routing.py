@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import importlib.util
 import json
 import math
 import os
@@ -33,6 +34,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+_ARGON_SPEC = importlib.util.spec_from_file_location("relay_argon", Path(__file__).resolve().parent / "relay_argon.py")
+assert _ARGON_SPEC and _ARGON_SPEC.loader
+relay_argon = sys.modules.get("relay_argon") or importlib.util.module_from_spec(_ARGON_SPEC)
+if "relay_argon" not in sys.modules:
+    sys.modules["relay_argon"] = relay_argon
+    _ARGON_SPEC.loader.exec_module(relay_argon)
 
 RESERVE = 0.10
 # Per-pool reserve. The Claude pool is also what the coordinator spends: if it is skipped the coordinator would do
@@ -239,6 +247,13 @@ def read_claude() -> Pool:
 
 
 def read_gemini() -> Pool:
+    try:
+        relay_argon.prepare_login()
+    except relay_argon.Refused as exc:
+        if str(exc) != "login_state_missing":
+            return unreadable("gemini", str(exc))
+    except OSError:
+        return unreadable("gemini", "login_path_conflict")
     binary = os.environ.get("JARVISOS_AGY_BIN") or _host_which("agy")
     if not binary:
         return unreadable("gemini", "agy_missing")

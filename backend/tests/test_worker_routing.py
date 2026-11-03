@@ -454,3 +454,24 @@ def test_read_gemini_reports_auth_required(monkeypatch: pytest.MonkeyPatch, tmp_
 
 def test_total_timeout_covers_agy_reader() -> None:
     assert wr.TOTAL_TIMEOUT > wr.AGY_READ_TIMEOUT
+
+
+def test_read_gemini_reuses_prepare_login_and_reports_conflict(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / ".local/share/jarvisos-sandbox/state/agy-home"
+    target.mkdir(parents=True)
+    document = {"status": "SUCCESS", "command": {"data": {"groups": [{"buckets": [
+        {"id": "gemini-weekly", "remaining_fraction": 0.98}, {"id": "gemini-5h", "remaining_fraction": 1}]}]}}}
+    fake = tmp_path / "agy"
+    fake.write_text("#!/bin/sh\ncat <<'EOF'\n" + json.dumps(document) + "\nEOF\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("JARVISOS_AGY_BIN", str(fake))
+
+    reading = wr.read_gemini()
+    assert (tmp_path / ".gemini").is_symlink()
+    assert (tmp_path / ".gemini").resolve() == target.resolve()
+    assert reading.free == pytest.approx(0.98) and reading.windows == {"5h": 1.0, "weekly": 0.98}
+
+    (tmp_path / ".gemini").unlink()
+    (tmp_path / ".gemini").mkdir()
+    assert wr.read_gemini().reason == "login_path_conflict"
