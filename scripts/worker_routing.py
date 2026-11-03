@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import importlib.util
 import json
 import math
 import os
@@ -34,6 +35,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+_ARGON_SPEC = importlib.util.spec_from_file_location("relay_argon", Path(__file__).resolve().parent / "relay_argon.py")
+assert _ARGON_SPEC and _ARGON_SPEC.loader
+relay_argon = sys.modules.get("relay_argon") or importlib.util.module_from_spec(_ARGON_SPEC)
+if "relay_argon" not in sys.modules:
+    sys.modules["relay_argon"] = relay_argon
+    _ARGON_SPEC.loader.exec_module(relay_argon)
+
 RESERVE = 0.10
 # Per-pool reserve. The Claude pool is also what the coordinator spends: if it is skipped the coordinator would do
 # the work itself at higher cost, so delegating to a cheaper Claude worker beats `no_worker`; it is skipped only
@@ -45,8 +53,9 @@ CLAUDE_LOW_NOTE = ("claude_pool_low — keep worker task small; coordinator shou
 # Among equally adequate models the cheaper-to-spend pool goes first; the coordinator's own pool goes last.
 POOL_PRIORITY = ("gemini", "codex", "claude")
 FRESHNESS = 900  # seconds a Claude (agent-relay) reading may be old, as the supervisor's reading_freshness
-READ_TIMEOUT = 15  # each reader; the readers run in parallel and the whole read is bounded by TOTAL_TIMEOUT
-TOTAL_TIMEOUT = 20
+READ_TIMEOUT = 15  # timeout for readers other than agy; all readers run in parallel within TOTAL_TIMEOUT
+AGY_READ_TIMEOUT = 40  # agy /quota is slow, typically ~8 s with spikes over 15 s
+TOTAL_TIMEOUT = AGY_READ_TIMEOUT + 5
 CACHE_TTL = 900  # seconds a summary stays valid inside a long-lived supervisor
 FAILED_CACHE_TTL = 60
 LEVELS = {"low": 1, "medium": 2, "high": 3}
@@ -238,20 +247,36 @@ def read_claude() -> Pool:
 
 
 def read_gemini() -> Pool:
+    try:
+        relay_argon.prepare_login()
+    except relay_argon.Refused as exc:
+        if str(exc) != "login_state_missing":
+            return unreadable("gemini", str(exc))
+    except OSError:
+        return unreadable("gemini", "login_path_conflict")
     binary = os.environ.get("JARVISOS_AGY_BIN") or _host_which("agy")
     if not binary:
         return unreadable("gemini", "agy_missing")
     try:
         done = subprocess.run([binary, "-p", "/quota", "--output-format", "json"], capture_output=True, text=True,
-                              timeout=READ_TIMEOUT, check=False, cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
+                              timeout=AGY_READ_TIMEOUT, check=False, cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired as exc:
+        if _agy_auth_required(exc.stdout, exc.stderr):
+            return unreadable("gemini", "auth_required")
         return unreadable("gemini", "timeout")
     except OSError:
         return unreadable("gemini", "agy_missing")
+    if _agy_auth_required(done.stdout, done.stderr):
+        return unreadable("gemini", "auth_required")
     reading = _json_document(done.stdout)
     if reading is None or reading.get("status") != "SUCCESS":
         return unreadable("gemini", "no_reading")
     return parse_gemini(reading)
+
+
+def _agy_auth_required(*outputs: str | bytes | None) -> bool:
+    return any("Authentication required" in (output.decode(errors="replace") if isinstance(output, bytes) else output or "")
+               for output in outputs)
 
 
 def read_codex() -> Pool:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -23,6 +24,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+_ARGON_SPEC = importlib.util.spec_from_file_location("relay_argon", Path(__file__).resolve().parent / "relay_argon.py")
+assert _ARGON_SPEC and _ARGON_SPEC.loader
+relay_argon = sys.modules.get("relay_argon") or importlib.util.module_from_spec(_ARGON_SPEC)
+if "relay_argon" not in sys.modules:
+    sys.modules["relay_argon"] = relay_argon
+    _ARGON_SPEC.loader.exec_module(relay_argon)
 
 SCHEMA = "agy-worker.v1"
 SANDBOX_HOSTNAME = "jarvis-sandbox"
@@ -265,6 +273,10 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     gh_config = evidence / "gh-config-empty"
     gh_config.mkdir(exist_ok=True)
     env = child_env(gh_config=gh_config)
+    try:
+        relay_argon.prepare_login()
+    except relay_argon.Refused as error:
+        raise Refused(str(error)) from error
     result["quota"] = quota_preflight(agy, alias, env)
     argv = run_argv(agy, task, model, args.timeout)
     result["argv"] = [f"<task-file:{args.task_file} {digest}>" if item == task else item for item in argv]
