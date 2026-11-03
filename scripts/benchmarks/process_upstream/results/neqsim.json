@@ -1,0 +1,26 @@
+{
+  "candidate": "neqsim",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "Apache-2.0",
+  "measurements": {
+    "CO2": {
+      "coolprop_density_kg_m3": 1.8079703036340105,
+      "neqsim_density_kg_m3": 1.8081758542409165,
+      "phase": "gas",
+      "phase_count": 1,
+      "relative_difference": 0.00011369136234866476
+    },
+    "water": {
+      "coolprop_density_kg_m3": 997.047636760347,
+      "neqsim_density_kg_m3": 1001.7239051193559,
+      "phase": "aqueous",
+      "phase_count": 1,
+      "relative_difference": 0.004690115282960018
+    }
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "3.20.0",
+  "wall_time_s": 2.153917
+}

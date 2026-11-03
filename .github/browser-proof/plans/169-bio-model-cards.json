@@ -1,0 +1,23 @@
+{
+  "schema": "jarvisos.browser-proof-plan.v1",
+  "id": "169-bio-model-cards",
+  "fixture": "none",
+  "viewport": { "width": 1280, "height": 1000 },
+  "forbidMutatingRequests": false,
+  "steps": [
+    { "op": "navigate", "name": "169:process-stage", "route": "/design/process" },
+    { "op": "click", "name": "169:create-process-draft", "locator": { "kind": "role", "role": "button", "name": "Create process draft", "exact": true } },
+    { "op": "click", "name": "169:open-biology-library", "locator": { "kind": "role", "role": "button", "name": "Biology models…", "exact": true } },
+    { "op": "assert-visible", "name": "169:library-panel", "locator": { "kind": "testid", "testid": "biology-model-library" } },
+    { "op": "assert-visible", "name": "169:haldane-form", "locator": { "kind": "text", "text": "Haldane light response", "exact": true } },
+    { "op": "assert-visible", "name": "169:haldane-equation", "locator": { "kind": "css", "selector": ".bio-equation math mfrac msub" } },
+    { "op": "assert-visible", "name": "169:haldane-symbol-table", "locator": { "kind": "text", "text": "inhibition irradiance", "exact": true } },
+    { "op": "assert-count", "name": "169:parameter-table-omits-operating-inputs", "locator": { "kind": "css", "selector": ".bio-form-card table tbody tr" }, "equals": 2 },
+    { "op": "click", "name": "169:create-empty-parameter-set", "locator": { "kind": "role", "role": "button", "name": "New empty template", "exact": true } },
+    { "op": "assert-visible", "name": "169:parameter-input-separation", "locator": { "kind": "text", "text": "Editable operating point", "exact": true } },
+    { "op": "assert-visible", "name": "169:source-state-badge", "locator": { "kind": "text", "text": "operator assumption", "exact": true } },
+    { "op": "assert-visible", "name": "169:indexed-nutrient-slots", "locator": { "kind": "text", "text": "K_j_0 / S_0 and Q_min_0 / Q_0", "exact": false } },
+    { "op": "assert-body-absent", "name": "169:no-raw-json", "forbidden": ["schema_version", "parameter_set_id", "snapshot_digest", "{\""], "caseInsensitive": false },
+    { "op": "screenshot", "name": "169:biology-library", "file": "biology-library" }
+  ]
+}

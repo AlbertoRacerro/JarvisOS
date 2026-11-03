@@ -1,0 +1,4 @@
+purpose = "Bubu, the assistant that points: chat bubble, pointer overlay, dictation, page-context capture and conversation store."
+status = "live"
+entrypoints = ["BubuBubble.tsx", "useBubuIntegration.tsx", "pointerDirectives.ts"]
+owner = "maintainer"

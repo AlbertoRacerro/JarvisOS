@@ -1,0 +1,75 @@
+{
+  "schema": "jarvisos.browser-proof-plan.v1",
+  "id": "149-process-editor",
+  "fixture": "dwsim-editor-unavailable",
+  "viewport": { "width": 1440, "height": 1000 },
+  "forbidMutatingRequests": true,
+  "steps": [
+    {
+      "op": "run-fixture",
+      "name": "149:seed-workspace",
+      "fixture": "dwsim-editor-unavailable",
+      "phase": "workspace"
+    },
+    {
+      "op": "run-fixture",
+      "name": "149:seed-case-lookup",
+      "fixture": "dwsim-editor-unavailable",
+      "phase": "case"
+    },
+    {
+      "op": "same-origin-get",
+      "name": "149:case-list-truth",
+      "path": "/workspaces/proof-dwsim-editor/process/dwsim/cases",
+      "capture": "dwsimCases"
+    },
+    {
+      "op": "navigate",
+      "name": "149:process-editor",
+      "route": "/design/process"
+    },
+    {
+      "op": "assert-visible",
+      "name": "149:editor-surface",
+      "locator": { "kind": "testid", "testid": "process-editor-surface" }
+    },
+    {
+      "op": "assert-visible",
+      "name": "149:runtime-unavailable",
+      "locator": {
+        "kind": "text",
+        "text": "DWSIM unavailable · DWSIM_MCP_EXECUTABLE_UNAVAILABLE",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "149:unavailable-reason",
+      "locator": {
+        "kind": "text",
+        "text": "DWSIM MCP runtime is unavailable",
+        "exact": false
+      }
+    },
+    {
+      "op": "assert-count",
+      "name": "149:no-enabled-edit-controls-with-unavailable-reason",
+      "locator": {
+        "kind": "css",
+        "selector": "button:not(:disabled)[title*='DWSIM_MCP_EXECUTABLE_UNAVAILABLE'], input:not(:disabled)[title*='DWSIM_MCP_EXECUTABLE_UNAVAILABLE'], select:not(:disabled)[title*='DWSIM_MCP_EXECUTABLE_UNAVAILABLE'], textarea:not(:disabled)[title*='DWSIM_MCP_EXECUTABLE_UNAVAILABLE']"
+      },
+      "equals": 0
+    },
+    {
+      "op": "assert-count",
+      "name": "149:no-fake-graph",
+      "locator": { "kind": "css", "selector": "svg.dwsim-canvas" },
+      "equals": 0
+    },
+    {
+      "op": "screenshot",
+      "name": "149:unavailable-state",
+      "file": "unavailable-state"
+    }
+  ]
+}

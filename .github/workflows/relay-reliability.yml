@@ -1,0 +1,32 @@
+name: Relay reliability
+
+on:
+  pull_request:
+    paths:
+      - scripts/relay_safe.py
+      - scripts/relay_diagnostics.py
+      - tests/relay_reliability/**
+      - .github/workflows/relay-reliability.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  offline-relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # The upstream wheel declares 3.11 but its CLI uses 3.12 f-string syntax.
+          python-version: "3.12"
+      - name: Install isolated Relay test runtime
+        run: python -m pip install agent-relay-tool==0.7.7 pytest==9.1.1 pyte==0.8.2
+      - name: Offline parser, process and terminal regressions
+        run: timeout 120s python -m pytest -q tests/relay_reliability

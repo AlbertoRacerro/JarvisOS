@@ -1,0 +1,16 @@
+{
+  "candidate": "thermosteam",
+  "environment": "bio",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103bio/bin/python",
+  "license": "MIT",
+  "measurements": {
+    "co2_mass_flow_kg_hr": 0.9999999999999999,
+    "mass_flow_kg_hr": 101.0,
+    "phase": "l",
+    "water_mass_flow_kg_hr": 100.0
+  },
+  "numba_disable_jit": true,
+  "status": "succeeded",
+  "version": "0.54.2",
+  "wall_time_s": 8.546282
+}

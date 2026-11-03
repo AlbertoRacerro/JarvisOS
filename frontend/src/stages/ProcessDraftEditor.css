@@ -1,0 +1,627 @@
+.process-mode-tabs {
+  display: flex;
+  gap: var(--space-2, 8px);
+  align-items: center;
+}
+.process-mode-tabs button {
+  min-height: 29px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-default, var(--color-border-default));
+  border-radius: var(--radius-sm, 4px);
+  background: var(--color-bg-surface, var(--color-bg-surface-raised));
+  color: var(--color-text-primary, var(--color-text-primary));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.process-mode-tabs button[aria-selected="true"] {
+  border-color: var(--color-accent-primary, var(--color-accent-border-strong));
+  box-shadow: inset 0 -2px 0 var(--color-accent-primary, #3b6b3a);
+  font-weight: 600;
+}
+.draft-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  height: 100%;
+  color: var(--color-text-primary, var(--color-text-primary));
+  font-size: 12px;
+}
+/* The standalone editor's pointer to Design › Dynamic, where the dynamic simulation lives. */
+.draft-dynamic-link {
+  margin: 4px 12px 12px;
+  color: var(--color-text-secondary);
+}
+.draft-editor--empty,
+.draft-editor--loading {
+  padding: 24px;
+  gap: 12px;
+  align-items: flex-start;
+}
+.draft-editor button,
+.draft-editor select,
+.draft-editor input {
+  min-height: 27px;
+  padding: 3px 7px;
+  border: 1px solid var(--color-border-default, var(--color-border-default));
+  border-radius: var(--radius-sm, 4px);
+  background: var(--color-bg-surface, var(--color-bg-surface-raised));
+  color: var(--color-text-primary, var(--color-text-primary));
+  font: inherit;
+}
+.draft-editor button {
+  cursor: pointer;
+}
+.draft-editor button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.draft-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.draft-run-button {
+  border-color: var(--color-accent-primary, var(--color-accent-border-strong)) !important;
+  font-weight: 600;
+}
+.draft-readiness {
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-weight: 600;
+  background: var(--color-bg-subtle, var(--color-bg-subtle));
+  color: var(--color-text-muted, var(--color-text-secondary));
+}
+.draft-readiness.has-blockers { background: var(--color-bg-subtle); color: var(--color-status-danger-text); }
+.draft-secondary { position: relative; }
+.draft-secondary summary { cursor: pointer; padding: 4px 8px; border: 1px solid var(--color-border-default, var(--color-border-default)); border-radius: 4px; }
+.draft-secondary[open] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.draft-secondary[open] summary { flex-basis: 100%; }
+.draft-revision {
+  color: var(--color-text-muted, var(--color-text-muted));
+}
+.draft-state {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.draft-state--current {
+  background: var(--color-bg-subtle);
+  color: var(--color-status-success-text);
+}
+.draft-state--stale {
+  background: var(--color-status-warning-bg);
+  color: var(--color-status-warning-text);
+}
+.draft-state--none {
+  background: var(--color-bg-subtle, var(--color-bg-subtle));
+  color: var(--color-text-muted, var(--color-text-muted));
+}
+.draft-notice {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+.draft-notice--danger {
+  background: var(--color-bg-subtle);
+  color: var(--color-status-danger-text);
+}
+/* Spec 182: no permanent inspector column. The canvas takes all central width until something is selected;
+   the inspector is a temporary side panel that disappears again on close or deselection. */
+.draft-body {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.draft-body--inspector { grid-template-columns: 140px minmax(0, 1fr) 300px; }
+.draft-inspector {
+  padding: 0 0 0 8px;
+  border-left: 1px solid var(--color-border-default, var(--color-border-default));
+}
+.draft-inspector__close {
+  flex: 0 0 auto;
+  min-width: 27px;
+  font-size: 15px;
+  line-height: 1;
+}
+.draft-canvas:focus-visible { outline: 2px solid var(--color-status-info-text); outline-offset: 1px; }
+.draft-palette,
+.draft-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: auto;
+}
+.draft-palette button {
+  height: auto;
+  min-height: 32px;
+  white-space: normal;
+  line-height: 1.2;
+}
+.draft-palette h3,
+.draft-inspector h3,
+.draft-findings-panel h3,
+.process-proposals h3 {
+  margin: 6px 0 2px;
+  font-size: 12px;
+}
+.draft-unsupported {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--color-text-muted, var(--color-text-muted));
+}
+.draft-canvas-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  overflow: auto;
+}
+.draft-canvas-frame { position: relative; flex: 0 0 auto; }
+/* In the three-column layout the canvas is exactly as tall as its scroll area, so "Fit all" and the
+   pan surface match what is visible; the single-column layout keeps the viewport-based height. */
+@media (min-width: 1101px) {
+  .draft-canvas-wrap { container-type: size; }
+  .draft-canvas-wrap .draft-canvas { height: max(440px, 100cqh); }
+}
+/* Spec 181: the flowsheet is the dominant central area and fills the available height. */
+.draft-canvas {
+  display: block;
+  width: 100%;
+  height: clamp(440px, calc(100vh - 220px), 1600px);
+  cursor: grab;
+  border: 1px solid var(--color-border-default, var(--color-border-default));
+  border-radius: 6px;
+  background: var(--color-bg-subtle, var(--color-bg-surface));
+  touch-action: none;
+  user-select: none;
+}
+.draft-edge {
+  fill: none;
+  stroke: var(--color-border-strong);
+  stroke-width: 1.6;
+}
+.draft-edge--energy { stroke: var(--color-status-warning-text); stroke-dasharray: 5 3; }
+#draft-arrow-energy path { fill: var(--color-status-warning-text); }
+.draft-edge-hit { stroke: transparent; stroke-width: 12; cursor: pointer; }
+.draft-edge-hit.is-row { cursor: ns-resize; }
+.draft-edge-hit.is-col { cursor: ew-resize; }
+.draft-bend { fill: var(--color-bg-surface-raised); stroke: var(--color-status-info-text); cursor: crosshair; }
+.draft-route-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+#draft-arrow path {
+  fill: var(--color-text-muted);
+}
+.draft-node {
+  cursor: grab;
+}
+.draft-node:focus-visible rect { stroke: var(--color-status-info-text); stroke-width: 3; }
+.draft-port { fill: var(--color-text-muted); stroke: var(--color-border-default); stroke-width: 1; }
+.draft-inspector__title { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.draft-inspector__title h3 { min-width: 0; overflow-wrap: anywhere; }
+.draft-dwsim-error { padding: 6px 8px; border-left: 3px solid var(--color-status-danger-text); background: var(--color-bg-subtle); color: var(--color-status-danger-text); overflow-wrap: anywhere; }
+.draft-node rect,
+.draft-node circle {
+  fill: var(--color-bg-surface-raised);
+  stroke: var(--color-border-strong);
+  stroke-width: 1.5;
+}
+.draft-node circle.is-feed {
+  fill: var(--color-bg-subtle);
+}
+.draft-node--stream.is-culture-stream circle { stroke-dasharray: 2 2; stroke-width: 2.2px; }
+.draft-owner-badge { font-size: 6px; font-weight: 700; fill: var(--color-text-muted, var(--color-text-muted)); }
+.draft-owner-line { margin: 2px 0 6px; color: var(--color-text-muted, var(--color-text-muted)); font-size: 11px; }
+.draft-culture-results { max-width: 100%; }
+.draft-node.is-selected rect,
+.draft-node.is-selected circle {
+  stroke: var(--color-status-info-text);
+  stroke-width: 2.5;
+}
+.draft-node.has-findings rect,
+.draft-node.has-findings circle {
+  stroke-dasharray: 4 3;
+}
+.draft-node.is-proposal-target rect,
+.draft-node.is-proposal-target circle {
+  stroke: var(--color-status-warning-text);
+  stroke-width: 3;
+}
+.draft-node__tag {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--color-text-primary);
+}
+.draft-node__type {
+  font-size: 9px;
+  fill: var(--color-text-muted);
+}
+.draft-node__result {
+  font-size: 9px;
+  fill: var(--color-accent-primary);
+}
+.draft-node__result.is-stale {
+  fill: var(--color-status-warning-text);
+  font-style: italic;
+}
+.draft-proposal-badge rect {
+  fill: var(--color-bg-subtle);
+  stroke: var(--color-status-warning-text);
+  stroke-width: 1;
+}
+.draft-proposal-badge text {
+  font-size: 10px;
+  fill: var(--color-status-warning-text);
+}
+.draft-findings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 3px;
+}
+.draft-findings li button:not(.nav-button):not(.bluecad-candidate),
+.draft-findings li button:not(.nav-button):not(.bluecad-candidate):hover:not(:disabled) {
+  width: 100%;
+  min-height: 0;
+  padding: 4px 6px;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: inherit;
+}
+.draft-findings li[data-severity="blocker"] {
+  border-left: 3px solid var(--color-status-danger-text, var(--color-status-danger-text));
+  background: var(--color-status-danger-bg, var(--color-bg-subtle));
+  color: var(--color-status-danger-text, var(--color-status-danger-text));
+}
+.draft-findings li[data-severity="warning"] {
+  border-left: 3px solid var(--color-status-warning-text, var(--color-status-warning-text));
+  background: var(--color-status-warning-bg, var(--color-status-warning-bg));
+  color: var(--color-status-warning-text, var(--color-status-warning-text));
+}
+.draft-run,
+.draft-results,
+.draft-history,
+.process-proposal {
+  border: 1px solid var(--color-border-default, var(--color-border-default));
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--color-bg-surface, var(--color-bg-surface-raised));
+}
+.draft-run header,
+.process-proposal header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.draft-run--materialization_mismatch,
+.draft-run--materialization_failed,
+.draft-run--failed,
+.draft-run--check_failed {
+  border-color: var(--color-status-danger-text);
+}
+.draft-diffs,
+.draft-results table,
+.draft-composition,
+.process-proposal table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.draft-diffs td,
+.draft-diffs th,
+.draft-results td,
+.draft-results th,
+.draft-composition td,
+.draft-composition th,
+.process-proposal td,
+.process-proposal th {
+  padding: 3px 5px;
+  border-bottom: 1px solid var(--color-border-default, var(--color-border-default));
+  text-align: left;
+}
+.draft-results__banner {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.draft-results--stale {
+  border-color: var(--color-status-warning-text);
+}
+.draft-results--stale table {
+  opacity: 0.6;
+}
+.draft-provenance,
+.draft-results-inline,
+.draft-ports {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 4px 10px;
+  margin: 6px 0 0;
+}
+.draft-provenance dt,
+.draft-results-inline dt,
+.draft-ports dt {
+  color: var(--color-text-muted, var(--color-text-muted));
+  font-size: 10px;
+}
+.draft-provenance dd,
+.draft-results-inline dd,
+.draft-ports dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.draft-results-inline.is-stale dd {
+  color: var(--color-status-warning-text);
+  font-style: italic;
+}
+.draft-field {
+  display: grid;
+  gap: 2px;
+}
+.draft-field--inline {
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 6px;
+}
+.draft-field span,
+.draft-quantity > span:first-child {
+  color: var(--color-text-muted, var(--color-text-muted));
+  font-size: 11px;
+}
+.draft-fieldset {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--color-border-default, var(--color-border-default));
+  border-radius: 6px;
+  padding: 8px;
+  margin: 0;
+}
+.draft-outputs { background: var(--color-bg-subtle, var(--color-bg-surface)); }
+.draft-result-props { display: grid; gap: 6px; min-width: 0; }
+.draft-result-props__filter { width: 100%; }
+.draft-result-props__group { min-width: 0; }
+.draft-result-props__group table { width: 100%; table-layout: fixed; font-size: 11px; }
+.draft-result-props__group th { width: 48%; text-align: left; font-weight: 500; overflow-wrap: break-word; }
+.draft-result-props__group td { overflow-wrap: anywhere; vertical-align: top; }
+.draft-result-props__group td:nth-child(2) { width: 22%; font-variant-numeric: tabular-nums; }
+.draft-result-props__group td:nth-child(3) { width: 16%; }
+.draft-result-props__group td:nth-child(4) { width: 14%; }
+.draft-result-props__group th,
+.draft-result-props__group td { padding: 2px 4px 2px 0; }
+.draft-result-props__kind { color: var(--color-text-muted, var(--color-text-muted)); }
+.draft-quantity {
+  display: grid;
+  gap: 2px;
+}
+.draft-quantity__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 74px;
+  gap: 4px;
+}
+.draft-quantity small {
+  color: var(--color-text-muted, var(--color-text-muted));
+  font-size: 10px;
+}
+.draft-composition input {
+  width: 100%;
+}
+.draft-composition .is-invalid {
+  color: var(--color-status-danger-text);
+  font-weight: 600;
+}
+.draft-compounds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 6px;
+}
+.draft-compounds label {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.draft-compounds input {
+  min-height: 0;
+}
+.draft-rename {
+  display: flex;
+  gap: 4px;
+}
+.draft-rename input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.draft-delete {
+  color: var(--color-status-danger-text) !important;
+}
+.draft-hint {
+  color: var(--color-text-muted, var(--color-text-muted));
+  margin: 2px 0;
+}
+.draft-history ol {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+}
+.draft-history li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.process-proposals {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+.process-proposal {
+  border-color: var(--color-status-warning-text);
+  background: var(--color-bg-surface);
+}
+.process-proposal--stale {
+  border-color: var(--color-border-default, var(--color-border-default));
+  background: var(--color-bg-subtle, var(--color-bg-subtle));
+}
+.process-proposal th {
+  white-space: nowrap;
+  font-size: 11px;
+}
+.jarvis-sidecar .process-proposal td,
+.jarvis-sidecar .process-proposal th {
+  padding: 2px 3px;
+}
+.process-proposal__new {
+  font-weight: 600;
+  color: var(--color-status-warning-text);
+}
+.process-proposal__why,
+.process-proposal__note,
+.process-proposal__stale {
+  margin: 4px 0;
+  color: var(--color-text-muted, var(--color-text-muted));
+}
+.process-proposal__actions {
+  display: flex;
+  gap: 6px;
+}
+.process-proposal__actions button {
+  min-height: 27px;
+  padding: 3px 10px;
+  border: 1px solid var(--color-border-default, var(--color-border-default));
+  border-radius: 4px;
+  background: var(--color-bg-surface, var(--color-bg-surface-raised));
+  font: inherit;
+  cursor: pointer;
+}
+.process-proposal__approve {
+  border-color: var(--color-accent-border-strong) !important;
+  font-weight: 600;
+}
+.process-proposal__error {
+  color: var(--color-status-danger-text);
+}
+@media (max-width: 1100px) {
+  .draft-body {
+    grid-template-columns: 1fr;
+  }
+  .draft-inspector { padding: 8px 0 0; border-left: none; border-top: 1px solid var(--color-border-default, var(--color-border-default)); }
+}
+.draft-mixed-summary {
+  min-width: 0;
+  margin: 0.5rem 0;
+  padding: 0.65rem;
+  border: 1px solid var(--border, var(--color-border-default));
+  border-radius: 6px;
+  background: var(--surface-soft, var(--color-bg-surface));
+}
+.draft-mixed-summary > p { margin: 0 0 0.45rem; }
+.draft-convergence-table {
+  max-height: 15rem;
+  max-width: 100%;
+  overflow: auto;
+  margin-top: 0.5rem;
+}
+.draft-convergence-table table { width: 100%; border-collapse: collapse; }
+.draft-convergence-table th,
+.draft-convergence-table td { padding: 0.25rem 0.45rem; border-bottom: 1px solid var(--border, var(--color-border-default)); text-align: left; }
+.draft-segment-list { max-height: 8rem; overflow: auto; overflow-wrap: anywhere; }
+.draft-segment-list p { margin: 0.35rem 0; }
+.draft-owner-badge-label {
+  display: inline-block;
+  padding: 0.1rem 0.35rem;
+  border-radius: 999px;
+  background: var(--color-bg-subtle);
+  color: var(--color-text-primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.draft-body--wide-inspector { grid-template-columns: 140px minmax(0, 1fr) 380px; }
+@media (max-width: 1100px) { .draft-body--wide-inspector { grid-template-columns: 1fr; } }
+.draft-quantity small.draft-quantity__error { color: var(--color-status-danger-text); font-size: 11px; }
+.draft-quantity input[aria-invalid="true"] { border-color: var(--color-status-danger-text); }
+
+/* Spec 183: solver settings and run diagnostics. */
+.draft-field-error { color: var(--color-danger, var(--color-status-danger-text)); font-size: 11px; }
+.draft-field input[aria-invalid="true"] { border-color: var(--color-danger, var(--color-status-danger-text)); }
+.draft-solver-advanced { display: grid; gap: 6px; }
+.draft-solver-advanced > summary { cursor: pointer; font-size: 12px; }
+.draft-solver-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.draft-solver-diagnostics { display: grid; gap: 2px; margin: 6px 0; font-size: 12px; }
+.draft-solver-diagnostics > div { display: flex; gap: 8px; }
+.draft-solver-diagnostics dt { color: var(--color-text-muted, var(--color-text-muted)); min-width: 12em; }
+.draft-solver-diagnostics dd { margin: 0; }
+/* Spec 190 custom Studio units */
+.draft-studio-symbol { pointer-events: none; }
+.draft-port-label { font-size: 6px; fill: var(--color-text-primary); pointer-events: none; }
+.draft-studio-limits-label { font-size: 7px; fill: var(--color-status-warning-text); pointer-events: none; }
+.draft-studio-limits { padding: 4px 6px; border-left: 3px solid var(--color-status-warning-text); background: var(--color-bg-subtle); color: var(--color-status-warning-text); }
+.draft-studio-pin { display: grid; gap: 2px; margin: 4px 0; }
+.draft-studio-pin div { display: flex; justify-content: space-between; gap: 6px; }
+.draft-studio-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.draft-studio-provenance { margin-top: 8px; padding: 6px 8px; border: 1px solid var(--color-border-default); border-radius: 4px; }
+.draft-studio-provenance .is-superseded { border-left: 3px solid var(--color-status-warning-text); padding-left: 6px; }
+
+/* Spec 213: the live solver console is revealed on Run and reachable from the toolbar. */
+.draft-toolbar .draft-console-link { min-height: var(--control-height-compact); padding: 2px 12px; font-size: var(--font-size-label); }
+.draft-console-anchor { scroll-margin-block: 16px; border-radius: 14px; outline: none; }
+.draft-console-anchor:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+
+/* Folded readiness list and unsupported units: the summary line carries the heading. */
+.draft-findings-panel > summary,
+.draft-unsupported-group > summary {
+  cursor: pointer;
+}
+
+.draft-findings-panel > summary h3 {
+  display: inline;
+}
+
+/* The flowsheet box is one screen tall and starts right under the toolbar; palette, canvas and inspector
+   scroll inside it, and the panels below it are reached with ordinary page scrolling. */
+@media (min-width: 1101px) {
+  .draft-body {
+    flex: 0 0 auto;
+    height: clamp(440px, calc(100vh - 140px), 1600px);
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+.draft-below {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 8px;
+}
+
+/* Solver panel: docked under the flowsheet, or floating over the page while a Run is followed. */
+.draft-solver-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  background: var(--color-bg-surface);
+}
+.draft-solver-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.draft-solver-panel__head h3 { margin: 0; font-size: 14px; }
+.draft-solver-panel.is-floating {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 60;
+  width: min(640px, calc(100vw - 48px));
+  max-height: min(80vh, 900px);
+  overflow: auto;
+  background: var(--color-bg-surface-raised, var(--color-bg-surface));
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.25);
+}
+/* The floating panel's portal wrapper only carries the editor's scoped styles; it has no box of its own. */
+.draft-editor.draft-solver-portal { display: contents; }

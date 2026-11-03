@@ -1,0 +1,7 @@
+{
+ "agent_key": "codex",
+ "status": "continue",
+ "turn_number": 1,
+ "kind": "relay_resumable_state",
+ "summary": "Codex couldn't reach the service. Check your connection and try again."
+}

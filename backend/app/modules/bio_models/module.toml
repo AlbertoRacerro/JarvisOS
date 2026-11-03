@@ -1,0 +1,4 @@
+purpose = "Revisioned biological parameter sets, version-pinned growth model forms with their presentation cards, and the cylindrical Beer-Lambert light kernel."
+status = "live"
+entrypoints = ["/workspaces/{id}/bio-models"]
+owner = "maintainer"

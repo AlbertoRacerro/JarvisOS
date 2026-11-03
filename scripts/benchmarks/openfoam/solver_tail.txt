@@ -1,0 +1,35 @@
+Time = 19.996
+
+Courant Number mean: 0.0161484 max: 0.0246129
+smoothSolver:  Solving for Ux, Initial residual = 1.65619e-12, Final residual = 1.65619e-12, No Iterations 0
+smoothSolver:  Solving for Uy, Initial residual = 2.17081e-11, Final residual = 2.17081e-11, No Iterations 0
+DICPCG:  Solving for p, Initial residual = 9.6815e-09, Final residual = 9.6815e-09, No Iterations 0
+time step continuity errors : sum local = 8.29313e-14, global = -4.52582e-14, cumulative = 6.23669e-11
+DICPCG:  Solving for p, Initial residual = 9.6849e-09, Final residual = 9.6849e-09, No Iterations 0
+time step continuity errors : sum local = 8.29605e-14, global = -4.5257e-14, cumulative = 6.23216e-11
+ExecutionTime = 61.62 s  ClockTime = 62 s
+
+Time = 19.998
+
+Courant Number mean: 0.0161484 max: 0.0246129
+smoothSolver:  Solving for Ux, Initial residual = 1.65765e-12, Final residual = 1.65765e-12, No Iterations 0
+smoothSolver:  Solving for Uy, Initial residual = 2.14011e-11, Final residual = 2.14011e-11, No Iterations 0
+DICPCG:  Solving for p, Initial residual = 1.09837e-08, Final residual = 6.8356e-09, No Iterations 1
+time step continuity errors : sum local = 5.85535e-14, global = -4.53286e-14, cumulative = 6.22763e-11
+DICPCG:  Solving for p, Initial residual = 6.84462e-09, Final residual = 6.84462e-09, No Iterations 0
+time step continuity errors : sum local = 5.86307e-14, global = -4.53275e-14, cumulative = 6.2231e-11
+ExecutionTime = 61.63 s  ClockTime = 62 s
+
+Time = 20
+
+Courant Number mean: 0.0161484 max: 0.0246129
+smoothSolver:  Solving for Ux, Initial residual = 2.0594e-12, Final residual = 2.0594e-12, No Iterations 0
+smoothSolver:  Solving for Uy, Initial residual = 3.55572e-11, Final residual = 3.55572e-11, No Iterations 0
+DICPCG:  Solving for p, Initial residual = 1.08611e-08, Final residual = 6.7848e-09, No Iterations 1
+time step continuity errors : sum local = 5.81183e-14, global = -4.54023e-14, cumulative = 6.21856e-11
+DICPCG:  Solving for p, Initial residual = 6.7877e-09, Final residual = 6.7877e-09, No Iterations 0
+time step continuity errors : sum local = 5.81432e-14, global = -4.54013e-14, cumulative = 6.21402e-11
+ExecutionTime = 61.64 s  ClockTime = 62 s
+
+End
+

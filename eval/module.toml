@@ -1,0 +1,4 @@
+purpose = "Local-model re-evaluation: classification and intake quality, latency, llama.cpp qualification and the second-brain retrieval benchmark. Everything here is marked to improve."
+status = "in-development"
+entrypoints = ["local/README.md", "local/llamacpp_qualification.py"]
+owner = "maintainer"

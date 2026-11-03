@@ -1,0 +1,1576 @@
+{
+  "fidelity_order": [
+    "screening",
+    "reduced_order",
+    "steady_state_detailed",
+    "dynamic_detailed",
+    "field_resolved"
+  ],
+  "schemas": {
+    "ProvenanceEntry": {
+      "$defs": {
+        "ConditionValue": {
+          "additionalProperties": false,
+          "description": "One experimental/operating condition under which a source or model holds.",
+          "properties": {
+            "value": {
+              "$ref": "#/$defs/Quantity"
+            },
+            "variable": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Variable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "variable",
+            "value"
+          ],
+          "title": "ConditionValue",
+          "type": "object"
+        },
+        "Quantity": {
+          "additionalProperties": false,
+          "description": "A finite magnitude in a unit understood by the single Pint owner.\n\nCompound units use Pint syntax (``W/(m**2*K)``); compact exponents such as\n``m2`` are accepted only as whole reviewed tokens (``m2``, ``kg/m3``).",
+          "properties": {
+            "basis_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "unit": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Unit",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "number"
+            }
+          },
+          "required": [
+            "value",
+            "unit"
+          ],
+          "title": "Quantity",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Where a parameter, correlation, model or dataset came from.\n\nBiology-specific sources name organism/strain; everything cited carries a\nref or citation. ``synthetic_fixture`` marks test/demo data that can never\nsupport a qualification above ``candidate``.",
+      "properties": {
+        "citation": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Citation"
+        },
+        "conditions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ConditionValue"
+          },
+          "maxItems": 32,
+          "title": "Conditions",
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "literature",
+            "measurement",
+            "vendor_datasheet",
+            "simulation",
+            "expert_estimate",
+            "derived",
+            "synthetic_fixture"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "organism": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Organism"
+        },
+        "source_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "strain": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Strain"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "ProvenanceEntry",
+      "type": "object"
+    },
+    "QualificationBasis": {
+      "$defs": {
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Evidence behind a qualification status and the exact promotion decision, if any.",
+      "properties": {
+        "benchmark_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Benchmark Refs",
+          "type": "array"
+        },
+        "calibration_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Calibration Refs",
+          "type": "array"
+        },
+        "decided_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decided At"
+        },
+        "decided_by": {
+          "anyOf": [
+            {
+              "enum": [
+                "operator",
+                "deterministic_policy"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decided By"
+        },
+        "decision_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "QualificationBasis",
+      "type": "object"
+    },
+    "ScientificQualificationRecord": {
+      "$defs": {
+        "ConditionValue": {
+          "additionalProperties": false,
+          "description": "One experimental/operating condition under which a source or model holds.",
+          "properties": {
+            "value": {
+              "$ref": "#/$defs/Quantity"
+            },
+            "variable": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Variable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "variable",
+            "value"
+          ],
+          "title": "ConditionValue",
+          "type": "object"
+        },
+        "DomainBound": {
+          "additionalProperties": false,
+          "properties": {
+            "lower": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Quantity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "upper": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Quantity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "variable": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Variable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "variable"
+          ],
+          "title": "DomainBound",
+          "type": "object"
+        },
+        "DynamicModelRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "dynamic_model",
+              "default": "dynamic_model",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "DynamicModelRef",
+          "type": "object"
+        },
+        "EvaluationResultRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "evaluation_result",
+              "default": "evaluation_result",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "EvaluationResultRef",
+          "type": "object"
+        },
+        "MaterialStateRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "material_state",
+              "default": "material_state",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "MaterialStateRef",
+          "type": "object"
+        },
+        "PhysicsCaseRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "physics_case",
+              "default": "physics_case",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "PhysicsCaseRef",
+          "type": "object"
+        },
+        "ProcessModelIRRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "process_model_ir",
+              "default": "process_model_ir",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "ProcessModelIRRef",
+          "type": "object"
+        },
+        "PropertyBasisRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "property_basis",
+              "default": "property_basis",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "PropertyBasisRef",
+          "type": "object"
+        },
+        "ProvenanceEntry": {
+          "additionalProperties": false,
+          "description": "Where a parameter, correlation, model or dataset came from.\n\nBiology-specific sources name organism/strain; everything cited carries a\nref or citation. ``synthetic_fixture`` marks test/demo data that can never\nsupport a qualification above ``candidate``.",
+          "properties": {
+            "citation": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Citation"
+            },
+            "conditions": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ConditionValue"
+              },
+              "maxItems": 32,
+              "title": "Conditions",
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "literature",
+                "measurement",
+                "vendor_datasheet",
+                "simulation",
+                "expert_estimate",
+                "derived",
+                "synthetic_fixture"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "note": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Note"
+            },
+            "organism": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Organism"
+            },
+            "source_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "strain": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Strain"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "ProvenanceEntry",
+          "type": "object"
+        },
+        "QualificationBasis": {
+          "additionalProperties": false,
+          "description": "Evidence behind a qualification status and the exact promotion decision, if any.",
+          "properties": {
+            "benchmark_refs": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SourceRef"
+              },
+              "maxItems": 32,
+              "title": "Benchmark Refs",
+              "type": "array"
+            },
+            "calibration_refs": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SourceRef"
+              },
+              "maxItems": 32,
+              "title": "Calibration Refs",
+              "type": "array"
+            },
+            "decided_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decided At"
+            },
+            "decided_by": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "operator",
+                    "deterministic_policy"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Decided By"
+            },
+            "decision_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "title": "QualificationBasis",
+          "type": "object"
+        },
+        "Quantity": {
+          "additionalProperties": false,
+          "description": "A finite magnitude in a unit understood by the single Pint owner.\n\nCompound units use Pint syntax (``W/(m**2*K)``); compact exponents such as\n``m2`` are accepted only as whole reviewed tokens (``m2``, ``kg/m3``).",
+          "properties": {
+            "basis_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "unit": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Unit",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "number"
+            }
+          },
+          "required": [
+            "value",
+            "unit"
+          ],
+          "title": "Quantity",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        },
+        "UncertaintyBound": {
+          "additionalProperties": false,
+          "properties": {
+            "absolute": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Quantity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "confidence_level": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "maximum": 1.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Confidence Level"
+            },
+            "relative": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Relative"
+            },
+            "variable": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Variable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "variable"
+          ],
+          "title": "UncertaintyBound",
+          "type": "object"
+        },
+        "ValidityEnvelopeRef": {
+          "additionalProperties": false,
+          "description": "Where a model/result may be used, how uncertain it is, and its qualification state.\n\nThere is no default status; anything beyond ``candidate`` must cite evidence.\nRecording a status here is metadata, not a qualification decision.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "domain": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/DomainBound"
+              },
+              "maxItems": 32,
+              "title": "Domain",
+              "type": "array"
+            },
+            "evidence_refs": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SourceRef"
+              },
+              "maxItems": 32,
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "validity_envelope",
+              "default": "validity_envelope",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "qualification_status": {
+              "enum": [
+                "unqualified",
+                "candidate",
+                "calibrated",
+                "benchmarked",
+                "qualified"
+              ],
+              "title": "Qualification Status",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "uncertainty": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/UncertaintyBound"
+              },
+              "maxItems": 32,
+              "title": "Uncertainty",
+              "type": "array"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id",
+            "qualification_status"
+          ],
+          "title": "ValidityEnvelopeRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "One qualification-ledger entry for a model, property basis or evaluation result.\n\nRequired content (spec 145 P packet): source, organism/strain, conditions,\nunits (through ``Quantity``), uncertainty, calibration basis, validity\ndomain, benchmark evidence and qualification status.",
+      "properties": {
+        "basis": {
+          "$ref": "#/$defs/QualificationBasis",
+          "default": {
+            "benchmark_refs": [],
+            "calibration_refs": [],
+            "decided_at": null,
+            "decided_by": null,
+            "decision_ref": null
+          }
+        },
+        "fidelity": {
+          "enum": [
+            "screening",
+            "reduced_order",
+            "steady_state_detailed",
+            "dynamic_detailed",
+            "field_resolved"
+          ],
+          "title": "Fidelity",
+          "type": "string"
+        },
+        "provenance": {
+          "items": {
+            "$ref": "#/$defs/ProvenanceEntry"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Provenance",
+          "type": "array"
+        },
+        "record_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Record Id",
+          "type": "string"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "engineering_evidence.v1",
+          "default": "engineering_evidence.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "subject_ref": {
+          "discriminator": {
+            "mapping": {
+              "dynamic_model": "#/$defs/DynamicModelRef",
+              "evaluation_result": "#/$defs/EvaluationResultRef",
+              "material_state": "#/$defs/MaterialStateRef",
+              "physics_case": "#/$defs/PhysicsCaseRef",
+              "process_model_ir": "#/$defs/ProcessModelIRRef",
+              "property_basis": "#/$defs/PropertyBasisRef"
+            },
+            "propertyName": "object_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ProcessModelIRRef"
+            },
+            {
+              "$ref": "#/$defs/DynamicModelRef"
+            },
+            {
+              "$ref": "#/$defs/PropertyBasisRef"
+            },
+            {
+              "$ref": "#/$defs/MaterialStateRef"
+            },
+            {
+              "$ref": "#/$defs/PhysicsCaseRef"
+            },
+            {
+              "$ref": "#/$defs/EvaluationResultRef"
+            }
+          ],
+          "title": "Subject Ref"
+        },
+        "uncertainty": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UncertaintyBound"
+          },
+          "maxItems": 32,
+          "title": "Uncertainty",
+          "type": "array"
+        },
+        "validity": {
+          "$ref": "#/$defs/ValidityEnvelopeRef"
+        }
+      },
+      "required": [
+        "record_id",
+        "subject_ref",
+        "fidelity",
+        "validity",
+        "provenance",
+        "recorded_at"
+      ],
+      "title": "ScientificQualificationRecord",
+      "type": "object"
+    }
+  },
+  "version": "engineering_evidence.v1"
+}

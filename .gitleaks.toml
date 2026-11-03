@@ -1,0 +1,21 @@
+# gitleaks configuration for the leak-guard CI job (scripts: .github/workflows/ci.yml).
+# Default rules plus an allowlist of the exact fake credentials that tests and fixtures use on purpose.
+# The allowlist is by value, not by path, so a real key added to a test file is still caught.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake credentials used by tests and fixtures"
+regexTarget = "secret"
+regexes = [
+  '''^ds-test-secret-1234abcd$''',
+  '''^sk-(test|env|persisted|wrong-shape|persisted-smoke|persisted-fixed-smoke)-secret-[0-9a-z]+$''',
+  '''^sk-persisted-(smoke|fixed-smoke)-secret-[0-9a-z]+$''',
+  '''^sk-wrong-shape-secret-[0-9a-z]+$''',
+  '''^sk-live-1234567890abcdef1234567890$''',
+  '''^sk_live_abcdefghijklmnop$''',
+  '''^sk-proj-1234567890abcdef$''',
+  '''^API_KEY_PLACEHOLDER_12345.?$''',
+  '''^historical-r[0-9]-(reconcile|approve)$''',
+]

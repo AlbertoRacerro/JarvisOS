@@ -1,0 +1,39 @@
+# Tooling configuration for the JarvisOS backend.
+# Run:  python -m ruff check .        (lint)
+#       python -m ruff check . --fix  (auto-fix safe issues)
+#       python -m mypy app            (type check the runtime backend)
+#       python -m pytest              (tests)
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [".venv", "local_eval_reports"]
+
+[tool.ruff.lint]
+# A deliberately moderate rule set: real-bug-catching lints without drowning the
+# project in style noise. Expand later as the codebase stabilizes.
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (undefined names, unused imports, etc.)
+    "I",   # import sorting
+    "B",   # flake8-bugbear (likely bugs)
+    "UP",  # pyupgrade (modernize syntax)
+]
+ignore = [
+    "E501",  # line length is handled by the formatter, not enforced as an error
+]
+
+[tool.mypy]
+python_version = "3.11"
+# Start lenient: surface obvious type bugs in the runtime backend without
+# requiring full annotations everywhere. Tighten incrementally.
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+# Focus on the running backend; the offline local_ai evaluation harness is
+# research scaffolding and is excluded for now, except the frozen 145 shared
+# contracts in local_ai (the directory itself must stay unmatched to be walked).
+exclude = '(^|/)local_ai_eval/|(^|/)local_ai/(?!(decision|resource)_contracts\.py$|(?:decision_service|resource_arbiter|local_router)\.py$|runtime/resource_observation\.py$).+'
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

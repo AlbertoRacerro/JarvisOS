@@ -1,0 +1,4 @@
+purpose = "Typed API client wrappers per backend area, plus the generated contract types (generated/)."
+status = "live"
+entrypoints = ["client.ts", "generated/"]
+owner = "maintainer"

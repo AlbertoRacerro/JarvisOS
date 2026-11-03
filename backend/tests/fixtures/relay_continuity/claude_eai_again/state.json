@@ -1,0 +1,7 @@
+{
+ "agent_key": "claude",
+ "status": "completed",
+ "turn_number": 6,
+ "kind": "relay_resumable_state",
+ "summary": "Claude Code couldn't reach the service. Check your connection and try again."
+}

@@ -1,0 +1,11 @@
+{"subtype": "init", "type": "system"}
+{"subtype": "task_started", "task_id": "bc1syux3w", "tool_use_id": "toolu_01Q3VxWvwATStAFwFA1JBLwF", "type": "system"}
+{"message": {"content": [{"is_error": false, "tool_use_id": "toolu_011BrWkV6pNiacnDYsB559ji", "type": "tool_result"}]}, "type": "user"}
+{"message": {"content": [{"text": "You've hit your session limit \u00b7 resets 4:20pm (Europe/Rome)", "type": "text"}], "model": "<synthetic>"}, "type": "assistant"}
+{"patch": {"end_time": 1790848242429, "error": "Agent terminated early due to an API error: You've hit your session limit \u00b7 resets 4:20pm (Europe/Rome) (error type rate_limit, HTTP 429, request id req_011CfbJvhuLJgRnSstjXfePM, model sent to the API: claude-opus-5-5)", "status": "failed"}, "subtype": "task_updated", "task_id": "a733be6b087d89ad5", "type": "system"}
+{"status": "failed", "subtype": "task_notification", "task_id": "a733be6b087d89ad5", "tool_use_id": "toolu_01Tu1dTRG6mk3mAZxyCUiEMW", "type": "system"}
+{"message": {"content": [{"text": "You've hit your session limit \u00b7 resets 4:20pm (Europe/Rome)", "type": "text"}], "model": "<synthetic>"}, "type": "assistant"}
+{"api_error_status": 429, "is_error": true, "num_turns": 110, "result": "You've hit your session limit \u00b7 resets 4:20pm (Europe/Rome)", "stop_reason": "stop_sequence", "subtype": "success", "terminal_reason": "api_error", "type": "result"}
+{"api_error_status": 429, "is_error": true, "num_turns": 1, "result": "You've hit your session limit \u00b7 resets 4:20pm (Europe/Rome)", "stop_reason": "stop_sequence", "subtype": "success", "terminal_reason": "api_error", "type": "result"}
+{"patch": {"end_time": 1790848249217, "status": "killed"}, "subtype": "task_updated", "task_id": "bd5kom7s8", "type": "system"}
+{"status": "stopped", "subtype": "task_notification", "task_id": "bd5kom7s8", "tool_use_id": "toolu_019iHEdKawQd99SGLzWg4xiU", "type": "system"}

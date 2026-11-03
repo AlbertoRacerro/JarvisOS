@@ -1,0 +1,4 @@
+purpose = "Empty tool registry scaffold with no consumer; implement or delete."
+status = "backlog-candidate"
+entrypoints = ["registry.py"]
+owner = "maintainer"

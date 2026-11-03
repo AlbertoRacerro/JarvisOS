@@ -1,0 +1,10 @@
+.workspace-bootstrap { min-height: 100%; display: grid; place-items: center; padding: var(--space-8); }
+.workspace-bootstrap__card { width: min(100%, 42rem); display: grid; gap: var(--space-4); padding: clamp(var(--space-5), 5vw, var(--space-8)); border: var(--border-width-default) solid var(--color-border-default); border-radius: var(--radius-lg); background: var(--color-bg-surface); box-shadow: var(--shadow-structural); }
+.workspace-bootstrap__card form, .workspace-bootstrap__card label, .workspace-bootstrap__card details { display: grid; gap: var(--space-2); }
+.workspace-bootstrap__card form { gap: var(--space-4); }
+.workspace-bootstrap__card input, .workspace-bootstrap__card textarea { width: 100%; box-sizing: border-box; }
+.workspace-bootstrap__card textarea { min-height: 5rem; resize: vertical; }
+.workspace-bootstrap__eyebrow { margin: 0; color: var(--color-accent-foreground); font-size: var(--font-size-caption); font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.workspace-bootstrap__card h1, .workspace-bootstrap__card p { margin: 0; }
+.workspace-bootstrap__error { padding: var(--space-3); border: var(--border-width-default) solid var(--color-status-danger-border); border-radius: var(--radius-md); background: var(--color-status-danger-bg); color: var(--color-status-danger-text); }
+.workspace-bootstrap__error p { margin-block: var(--space-2); }

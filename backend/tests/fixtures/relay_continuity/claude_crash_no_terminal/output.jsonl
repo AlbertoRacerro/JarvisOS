@@ -1,0 +1,11 @@
+{"subtype": "init", "type": "system"}
+{"message": {"content": [{"id": "toolu_0171XAwx7xZXDoNkDJrZFNnQ", "input": {"command": "cd /home/user/src/JarvisOS && git fetch origin 2>&1 | tail -3; git log --oneline -5 origin/master"}, "name": "Bash", "type": "tool_use"}]}, "type": "assistant"}
+{"message": {"content": [{"is_error": true, "tool_use_id": "toolu_0171XAwx7xZXDoNkDJrZFNnQ", "type": "tool_result"}]}, "type": "user"}
+{"message": {"content": [{"id": "toolu_019Vw6h5P5zxcHdcxZbcjuF4", "input": {"command": "gh pr list --repo AlbertoRacerro/JarvisOS --state all --limit 8"}, "name": "Bash", "type": "tool_use"}]}, "type": "assistant"}
+{"message": {"content": [{"is_error": true, "tool_use_id": "toolu_019Vw6h5P5zxcHdcxZbcjuF4", "type": "tool_result"}]}, "type": "user"}
+{"message": {"content": [{"id": "toolu_01LUA4LWHqi3an9oKxmUdiCm", "input": {"command": "ps -eo pid,etime,cmd --sort=start_time | grep -E 'llama|codex|node|uvicorn|curl|wget|hf ' | grep -v grep | tail -20"}, "name": "Bash", "type": "tool_use"}]}, "type": "assistant"}
+{"message": {"content": [{"is_error": true, "tool_use_id": "toolu_01LUA4LWHqi3an9oKxmUdiCm", "type": "tool_result"}]}, "type": "user"}
+{"message": {"content": [{"id": "toolu_01Cw6agQhokJdMCWEXS33A6i", "input": {"command": "git -C /home/user/src/JarvisOS log --oneline -3 origin/master"}, "name": "Bash", "type": "tool_use"}]}, "type": "assistant"}
+{"message": {"content": [{"is_error": true, "tool_use_id": "toolu_01Cw6agQhokJdMCWEXS33A6i", "type": "tool_result"}]}, "type": "user"}
+{"message": {"content": [{"id": "toolu_01FvVh8wJDBFbBY2hNb2nqeF", "input": {"command": "ps aux"}, "name": "Bash", "type": "tool_use"}]}, "type": "assistant"}
+{"message": {"content": [{"is_error": false, "tool_use_id": "toolu_01FvVh8wJDBFbBY2hNb2nqeF", "type": "tool_result"}]}, "type": "user"}

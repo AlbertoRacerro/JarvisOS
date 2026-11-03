@@ -1,0 +1,28 @@
+{
+  "schema": "jarvisos.browser-proof-plan.v1",
+  "id": "114-literature",
+  "fixture": "literature-knowledge",
+  "steps": [
+    {"op":"run-fixture","name":"114:seed-workspace","fixture":"literature-knowledge","phase":"workspace"},
+    {"op":"navigate","name":"114:literature","route":"/memory/literature"},
+    {"op":"assert-visible","name":"114:empty-state","locator":{"kind":"text","text":"No literature sources yet","exact":true}},
+    {"op":"run-fixture","name":"114:seed-sources","fixture":"literature-knowledge","phase":"sources"},
+    {"op":"reload","name":"114:reload-after-seed"},
+    {"op":"assert-count","name":"114:source-a-once","locator":{"kind":"text","text":"Browser proof literature A","exact":true},"equals":1},
+    {"op":"assert-count","name":"114:source-b-once","locator":{"kind":"text","text":"Browser proof literature B","exact":true},"equals":1},
+    {"op":"capture-mutating-request-count","name":"114:capture-mutation-baseline","capture":"mutationBaseline"},
+    {"op":"click","name":"114:expand-a","locator":{"kind":"within","parent":{"kind":"css","selector":"details[data-source-id='proof-literature-source-a']"},"child":{"kind":"css","selector":"summary"}}},
+    {"op":"click","name":"114:expand-b","locator":{"kind":"within","parent":{"kind":"css","selector":"details[data-source-id='proof-literature-source-b']"},"child":{"kind":"css","selector":"summary"}}},
+    {"op":"assert-visible","name":"114:a-remains-expanded","locator":{"kind":"within","parent":{"kind":"css","selector":"details[data-source-id='proof-literature-source-a']"},"child":{"kind":"text","text":"Heat transfer coefficient increases with superficial velocity.","exact":true}}},
+    {"op":"assert-visible","name":"114:b-remains-expanded","locator":{"kind":"within","parent":{"kind":"css","selector":"details[data-source-id='proof-literature-source-b']"},"child":{"kind":"text","text":"0.42 m/s","exact":true}}},
+    {"op":"assert-visible","name":"114:a-preview","locator":{"kind":"css","selector":"iframe[title='Preview Browser proof literature A']"}},
+    {"op":"assert-visible","name":"114:b-preview","locator":{"kind":"css","selector":"iframe[title='Preview Browser proof literature B']"}},
+    {"op":"assert-count","name":"114:open-source-links","locator":{"kind":"role","role":"link","name":"Open source","exact":true},"equals":2},
+    {"op":"click","name":"114:open-source-a","locator":{"kind":"within","parent":{"kind":"css","selector":"details[data-source-id='proof-literature-source-a']"},"child":{"kind":"role","role":"link","name":"Open source","exact":true}}},
+    {"op":"assert-visible","name":"114:context-neutral-disclosure","locator":{"kind":"text","text":"Browsing does not add Jarvis context.","exact":true}},
+    {"op":"assert-body-absent","name":"114:no-promotion-affordance","forbidden":["add to jarvis context","promote to project basis","accept into project basis","save as parameter","edit project basis"],"caseInsensitive":true},
+    {"op":"capture-mutating-request-count","name":"114:capture-mutation-after-browsing","capture":"mutationAfterBrowsing"},
+    {"op":"assert-value-equals","name":"114:no-new-mutating-requests","left":{"capture":"mutationAfterBrowsing"},"right":{"capture":"mutationBaseline"}},
+    {"op":"screenshot","name":"114:literature-multi-expand","file":"literature-multi-expand"}
+  ]
+}

@@ -1,0 +1,200 @@
+name: BLUECAD Real Tool Proof
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Real Gmsh/CalculiX battery: weekly or by hand. The fast BLUECAD tests run in ci.yml on every PR.
+    - cron: "41 3 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  strict-alpha-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install Python dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run offline regression suite for standalone dispatch
+        id: offline
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: backend
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
+          python -m pytest -q 2>&1 | tee "$RUNNER_TEMP/bluecad-offline-regression.log"
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Install distro-pinned Gmsh and CalculiX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gmsh calculix-ccx
+
+      - name: Build external hash-pinned registry
+        id: registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          GMSH_BIN="$(command -v gmsh)"
+          CCX_BIN="$(command -v ccx || true)"
+          if [ -z "$CCX_BIN" ]; then
+            CCX_BIN="$(dpkg -L calculix-ccx | awk '/\/ccx([_0-9.]*)?$/ {print; exit}')"
+          fi
+          test -x "$GMSH_BIN"
+          test -x "$CCX_BIN"
+          export GMSH_BIN CCX_BIN
+          export GMSH_VERSION="$(dpkg-query -W -f='${Version}' gmsh)"
+          export CCX_VERSION="$(dpkg-query -W -f='${Version}' calculix-ccx)"
+          export REGISTRY_PATH="$RUNNER_TEMP/bluecad-tools.yaml"
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          import yaml
+
+          def digest(path: str) -> str:
+              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+          registry_path = Path(os.environ["REGISTRY_PATH"])
+          gmsh = os.environ["GMSH_BIN"]
+          ccx = os.environ["CCX_BIN"]
+          health_deck = registry_path.with_name("health.inp")
+          health_deck.write_text(
+              """*HEADING
+          BLUECAD CalculiX registry health check
+          *NODE
+          1,0,0,0
+          2,1,0,0
+          3,0,1,0
+          4,0,0,1
+          *ELEMENT, TYPE=C3D4, ELSET=BODY
+          1,1,2,3,4
+          *MATERIAL, NAME=STEEL
+          *ELASTIC
+          200000.,0.3
+          *SOLID SECTION, ELSET=BODY, MATERIAL=STEEL
+          *BOUNDARY
+          1,1,3,0
+          2,2,3,0
+          3,3,3,0
+          *STEP
+          *STATIC
+          *CLOAD
+          4,1,1.
+          *NODE FILE
+          U
+          *EL FILE
+          S
+          *END STEP
+          """,
+              encoding="utf-8",
+          )
+          payload = {
+              "registry_version": "bluecad_tool_registry_v0_1",
+              "tools": [
+                  {
+                      "id": "gmsh",
+                      "kind": "mesher",
+                      "integration_mode": "subprocess",
+                      "version_pin": os.environ["GMSH_VERSION"],
+                      "license": {"spdx": "GPL-2.0-or-later", "boundary": "C", "verified_date": "2026-07-10"},
+                      "enabled": True,
+                      "entrypoint": gmsh,
+                      "binary_sha256": digest(gmsh),
+                      "provenance_url": "https://packages.ubuntu.com/noble/gmsh",
+                      "capabilities": ["step_import", "tet_mesh", "physical_groups", "inp_export"],
+                      "health_check": f"{gmsh} -version",
+                  },
+                  {
+                      "id": "calculix",
+                      "kind": "fem_solver",
+                      "integration_mode": "subprocess",
+                      "version_pin": os.environ["CCX_VERSION"],
+                      "license": {"spdx": "GPL-2.0", "boundary": "C", "verified_date": "2026-07-10"},
+                      "enabled": True,
+                      "entrypoint": ccx,
+                      "binary_sha256": digest(ccx),
+                      "provenance_url": "https://packages.ubuntu.com/noble/calculix-ccx",
+                      "capabilities": ["static"],
+                      "health_check": f"{ccx} health",
+                  },
+              ],
+          }
+          registry_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+          PY
+          echo "path=$REGISTRY_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Verify external registry
+        working-directory: backend
+        env:
+          JARVISOS_BLUECAD_TOOL_REGISTRY: ${{ steps.registry.outputs.path }}
+        run: python -m app.modules.bluecad.registry check
+
+      - name: Run strict full-chain proof
+        id: strict
+        working-directory: backend
+        shell: bash
+        env:
+          JARVISOS_BLUECAD_TOOL_REGISTRY: ${{ steps.registry.outputs.path }}
+          JARVISOS_BLUECAD_PROOF_JSON: ${{ runner.temp }}/bluecad-alpha-proof.json
+          JARVISOS_BLUECAD_FEM_BATTERY_JSON: ${{ runner.temp }}/bluecad-fem-verification-battery.json
+          JARVISOS_BLUECAD_PROOF_DEBUG_DIR: ${{ runner.temp }}/bluecad-proof-debug
+          JARVISOS_BLUECAD_PROOF_GIT_SHA: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          set +e
+          python -m pytest -q \
+            tests/bluecad/test_alpha_real_tools.py \
+            tests/bluecad/test_fem_verification_real_tools.py \
+            tests/bluecad/test_fem_verification_battery_real_tools.py \
+            --require-bluecad-real-tools \
+            2>&1 | tee "$RUNNER_TEMP/bluecad-alpha-proof.log"
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload bounded proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bluecad-alpha-real-tool-proof
+          path: |
+            ${{ runner.temp }}/bluecad-offline-regression.log
+            ${{ runner.temp }}/bluecad-alpha-proof.log
+            ${{ runner.temp }}/bluecad-alpha-proof.json
+            ${{ runner.temp }}/bluecad-fem-verification-battery.json
+            ${{ runner.temp }}/bluecad-proof-debug
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce offline and strict proof gates
+        if: always()
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            test "${{ steps.offline.outputs.status }}" = "0"
+          fi
+          test "${{ steps.strict.outputs.status }}" = "0"

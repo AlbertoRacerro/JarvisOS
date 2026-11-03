@@ -1,0 +1,4 @@
+purpose = "Re-evaluation harnesses for local models (classification budget, fast intake, routing). Written for earlier model generations and to be improved; not reachable from the app."
+status = "in-development"
+entrypoints = ["classification_budget_probe.py", "fast_intake_probe.py", "routing_eval.py"]
+owner = "maintainer"

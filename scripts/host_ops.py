@@ -1,0 +1,1366 @@
+#!/usr/bin/env python3
+"""JarvisOS host operations (spec 207): typed host actions requested from jarvis-sandbox, signed host receipts.
+
+An agent inside the sandbox writes a structured request into the spool. The host executor (a copy of this file
+installed from a merged master revision, outside every path the sandbox can write) validates it against the
+host-only policy, performs one narrow typed action and writes an Ed25519-signed receipt. Anyone can verify a
+receipt with the published public key; nobody without the host-only private key can forge one.
+
+    host_ops.py request OP [--args JSON] [--sha SHA] [--wait SECONDS]   (sandbox or host)
+    host_ops.py verify ID [--op OP] [--sha SHA]                          (sandbox or host)
+    host_ops.py cancel ID                                               (sandbox or host)
+    host_ops.py status                                                   (sandbox or host)
+    host_ops.py serve                                                    (host executor; systemd unit)
+    host_ops.py install --sha SHA [--with-watch]                           (host; maintainer/host session only)
+    host_ops.py health                                                   (host)
+
+Stdlib only: the installed copy must not import anything from a checkout an agent can write.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import io
+import json
+import os
+import re
+import secrets
+import signal
+import socket
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+REQUEST_SCHEMA = "jarvisos.hostops.request.v1"
+RECEIPT_SCHEMA = "jarvisos.hostops.receipt.v1"
+POLICY_SCHEMA = "jarvisos.hostops.policy.v1"
+SIGNER = "jarvisos-hostops"
+SIG_NAMESPACE = "jarvisos-hostops-receipt"
+REPO = "AlbertoRacerro/JarvisOS"
+REPO_URL = f"https://github.com/{REPO}"
+UNIT = "jarvisos-hostops.service"
+
+ID_RE = re.compile(r"^[0-9a-f]{32}$")
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+REQUEST_NAME_RE = re.compile(r"^([0-9a-f]{32})\.json$")
+MAX_REQUEST_BYTES = 64 * 1024
+MAX_REQUEST_AGE = timedelta(hours=1)
+MAX_CLOCK_SKEW = timedelta(minutes=5)
+OUTCOMES = ("ok", "failed", "refused", "cancelled", "interrupted", "timeout")
+
+
+def now_utc() -> datetime:
+    return datetime.now(UTC).replace(microsecond=0)
+
+
+def iso(ts: datetime) -> str:
+    return ts.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_ts(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def canonical(data: dict[str, Any]) -> bytes:
+    return (json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
+
+
+@dataclass(frozen=True)
+class Paths:
+    """Every location derives from one home, so tests run on a temporary one."""
+
+    home: Path
+
+    @property
+    def spool(self) -> Path:  # sandbox read-write
+        return self.home / "jarvis-control" / "work" / "hostops"
+
+    @property
+    def requests(self) -> Path:
+        return self.spool / "requests"
+
+    @property
+    def receipts(self) -> Path:
+        return self.spool / "receipts"
+
+    @property
+    def outbox(self) -> Path:
+        return self.spool / "outbox"
+
+    @property
+    def heartbeat(self) -> Path:
+        return self.spool / "heartbeat.json"
+
+    @property
+    def config(self) -> Path:  # host only: the sandbox has its own ~/.config
+        return self.home / ".config" / "jarvisos-hostops"
+
+    @property
+    def policy(self) -> Path:
+        return self.config / "policy.json"
+
+    @property
+    def key(self) -> Path:
+        return self.config / "receipt_ed25519"
+
+    @property
+    def webhook(self) -> Path:
+        return self.home / ".config" / "jarvis" / "slack_webhook_url"
+
+    @property
+    def units(self) -> Path:
+        return self.home / ".config" / "systemd" / "user"
+
+    @property
+    def install(self) -> Path:  # host only: not mounted in the sandbox at all
+        return self.home / ".local" / "share" / "jarvisos-hostops"
+
+    @property
+    def state(self) -> Path:
+        return self.install / "state"
+
+    @property
+    def published(self) -> Path:  # read-only inside the sandbox
+        return self.home / ".local" / "share" / "jarvisos" / "hostops"
+
+    @property
+    def allowed_signers(self) -> Path:
+        return self.published / "allowed_signers"
+
+
+# ---------------------------------------------------------------------------
+# Filesystem access that never follows a symlink planted in the agent-writable spool
+
+
+def open_dir(path: Path, *, create: bool = False) -> int:
+    """A directory fd reached component by component without following symlinks."""
+    if not path.is_absolute():
+        raise ValueError("absolute path required")
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.parts[1:]:
+            try:
+                nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, 0o755, dir_fd=fd)
+                nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def read_regular(dir_fd: int, name: str, limit: int) -> bytes:
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+    try:
+        st = os.fstat(fd)
+        if not (st.st_mode & 0o170000 == 0o100000) or st.st_size > limit:
+            raise ValueError("not a bounded regular file")
+        chunks, total = [], 0
+        while chunk := os.read(fd, 65536):
+            total += len(chunk)
+            if total > limit:
+                raise ValueError("file grew past its limit")
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def write_at(dir_fd: int, name: str, data: bytes, mode: int = 0o644) -> None:
+    """Atomic write: a fresh O_EXCL temporary renamed over `name`, so a planted symlink is replaced, never followed."""
+    tmp = f".{name}.{secrets.token_hex(6)}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=dir_fd)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+
+
+def unlink_at(dir_fd: int, name: str) -> None:
+    try:
+        os.unlink(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        pass
+
+
+def exists_at(dir_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Text that may leave the host (Slack) or be echoed into receipts
+
+
+_SECRET_RE = re.compile(
+    r"(gh[opsur]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}"
+    r"|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|hooks\.slack\.com|[A-Za-z0-9+/]{48,}={0,2})")
+_SLACK_LINK_RE = re.compile(r"<([^<>]*)>")
+_ALLOWED_LINK_RE = re.compile(re.escape(REPO_URL) + r"/(?:issues|pull)/\d{1,6}(?:\|[^<>|]{1,80})?")
+_BARE_URL_RE = re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]{1,15}://|www\.|mailto:)")
+
+
+def message_problem(text: Any) -> str | None:
+    """Why a Slack message body is refused, or None."""
+    if not isinstance(text, str) or not 1 <= len(text) <= 3000:
+        return "text must be 1-3000 characters"
+    if re.search(r"[\x00-\x09\x0b-\x1f\x7f]", text):
+        return "control characters"
+    if _SECRET_RE.search(text):
+        return "matches a secret pattern"
+    for inner in _SLACK_LINK_RE.findall(text):
+        if not _ALLOWED_LINK_RE.fullmatch(inner):
+            return "Slack markup other than links to this repository's issues/PRs"
+    if _BARE_URL_RE.search(_SLACK_LINK_RE.sub("", text)):
+        return "links are allowed only as <repository issue/PR link|label>"
+    return None
+
+
+def scrub(text: str, limit: int = 2000) -> str:
+    """Bounded diagnostic output for a receipt: secrets and host paths removed."""
+    text = _SECRET_RE.sub("[redacted]", text.replace("\r", ""))
+    text = re.sub(r"/home/[^/\s]+/\.(?:config|ssh|claude|codex)\S*", "[path]", text)
+    return text[-limit:]
+
+
+# ---------------------------------------------------------------------------
+# Signing and verification
+
+
+def sign(key: Path, data: bytes) -> bytes:
+    proc = subprocess.run(["ssh-keygen", "-Y", "sign", "-q", "-f", str(key), "-n", SIG_NAMESPACE], input=data,
+                          capture_output=True, timeout=30, check=False)
+    if proc.returncode != 0 or b"BEGIN SSH SIGNATURE" not in proc.stdout:
+        raise RuntimeError("receipt signing failed")
+    return proc.stdout
+
+
+def verify_signature(allowed_signers: Path, data: bytes, signature: bytes) -> bool:
+    with tempfile.TemporaryDirectory(prefix="hostops-verify-") as tmp:
+        sig = Path(tmp) / "receipt.sig"
+        sig.write_bytes(signature)
+        proc = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", str(allowed_signers), "-I", SIGNER,
+                               "-n", SIG_NAMESPACE, "-s", str(sig)], input=data, capture_output=True, timeout=30,
+                              check=False)
+    return proc.returncode == 0
+
+
+def load_receipt(paths: Paths, request_id: str) -> tuple[dict[str, Any] | None, str]:
+    """A receipt whose signature verifies against the published host key, or (None, why)."""
+    if not ID_RE.fullmatch(request_id):
+        return None, "bad request id"
+    try:
+        fd = open_dir(paths.receipts)
+    except OSError:
+        return None, "no receipts directory"
+    try:
+        data = read_regular(fd, f"{request_id}.json", 1 << 20)
+        signature = read_regular(fd, f"{request_id}.json.sig", 16 << 10)
+    except (OSError, ValueError):
+        return None, "no receipt yet"
+    finally:
+        os.close(fd)
+    if not paths.allowed_signers.is_file():
+        return None, "host public key is not published"
+    if not verify_signature(paths.allowed_signers, data, signature):
+        return None, "signature does not verify"
+    try:
+        receipt = json.loads(data)
+    except json.JSONDecodeError:
+        return None, "unparseable receipt"
+    if not isinstance(receipt, dict) or receipt.get("schema") != RECEIPT_SCHEMA or receipt.get("request_id") != request_id:
+        return None, "receipt is for another request"
+    return receipt, ""
+
+
+def receipt_problem(receipt: dict[str, Any], *, op: str | None = None, sha: str | None = None) -> str | None:
+    if op is not None and receipt.get("op") != op:
+        return f"receipt is for {receipt.get('op')}, not {op}"
+    if sha is not None and receipt.get("sha") != sha:
+        return f"receipt is for {receipt.get('sha')}, not {sha}"
+    if receipt.get("outcome") != "ok":
+        return f"outcome {receipt.get('outcome')}: {receipt.get('error') or 'no detail'}"
+    return None
+
+
+def find_ok_receipt(paths: Paths, op: str, sha: str | None = None) -> dict[str, Any] | None:
+    """Newest verified `ok` receipt for `op` (and `sha`): what a deterministic completion check consumes."""
+    try:
+        names = sorted(p.name for p in paths.receipts.iterdir() if REQUEST_NAME_RE.fullmatch(p.name))
+    except OSError:
+        return None
+    best = None
+    for name in names:
+        receipt, _ = load_receipt(paths, name[:-5])
+        if receipt and receipt_problem(receipt, op=op, sha=sha) is None:
+            if best is None or str(receipt.get("finished_at")) > str(best.get("finished_at")):
+                best = receipt
+    return best
+
+
+# ---------------------------------------------------------------------------
+# Requests (sandbox side)
+
+
+def make_request(op: str, args: dict[str, Any], sha: str | None, requester: str, now: datetime) -> dict[str, Any]:
+    return {"schema": REQUEST_SCHEMA, "id": secrets.token_hex(16), "op": op, "args": args, "sha": sha,
+            "requested_at": iso(now), "requester": requester[:120]}
+
+
+def submit(paths: Paths, request: dict[str, Any]) -> str:
+    fd = open_dir(paths.requests, create=True)
+    try:
+        write_at(fd, f"{request['id']}.json", canonical(request))
+    finally:
+        os.close(fd)
+    return request["id"]
+
+
+def request_problem(request: Any, now: datetime) -> str | None:
+    if not isinstance(request, dict) or request.get("schema") != REQUEST_SCHEMA:
+        return "unknown schema"
+    if set(request) - {"schema", "id", "op", "args", "sha", "requested_at", "requester"}:
+        return "unknown fields"
+    if not ID_RE.fullmatch(str(request.get("id"))):
+        return "bad id"
+    if not isinstance(request.get("op"), str) or request["op"] not in OPERATIONS:
+        return "unknown operation"
+    if not isinstance(request.get("args"), dict):
+        return "args must be an object"
+    if request.get("sha") is not None and not SHA_RE.fullmatch(str(request["sha"])):
+        return "sha must be a full 40-hex commit id"
+    at = parse_ts(request.get("requested_at"))
+    if at is None or now - at > MAX_REQUEST_AGE or at - now > MAX_CLOCK_SKEW:
+        return "requested_at missing, too old or in the future (replay protection)"
+    if not isinstance(request.get("requester"), str) or len(request["requester"]) > 120:
+        return "bad requester"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Operations. Each validates its own arguments against the host policy, then acts.
+
+
+class Refused(Exception):
+    """The request is outside the policy: fail closed, nothing was done."""
+
+
+class Failed(Exception):
+    """The action ran and did not succeed."""
+
+    def __init__(self, message, detail=None):
+        super().__init__(message)
+        self.detail = detail or {}
+
+
+@dataclass
+class Context:
+    paths: Paths
+    policy: dict[str, Any]
+    request: dict[str, Any]
+    run: Callable[..., subprocess.CompletedProcess]
+    post: Callable[[str, bytes], int]
+    now: Callable[[], datetime]
+    cancelled: Callable[[], bool]
+    journal: list[dict[str, Any]]
+    restart_required: bool = False
+
+    def conf(self, op: str) -> dict[str, Any]:
+        conf = (self.policy.get("ops") or {}).get(op)
+        if not isinstance(conf, dict):
+            raise Refused(f"{op} is not enabled in the host policy")
+        return conf
+
+
+def _args(ctx: Context, allowed: set[str]) -> dict[str, Any]:
+    args = ctx.request["args"]
+    if set(args) - allowed:
+        raise Refused(f"unknown arguments: {sorted(set(args) - allowed)}")
+    return args
+
+
+def _systemctl(ctx: Context, *argv: str, timeout: float = 60) -> subprocess.CompletedProcess:
+    return ctx.run(["systemctl", "--user", *argv], timeout=timeout)
+
+
+def _unit_state(ctx: Context, unit: str) -> dict[str, str]:
+    props = "ActiveState,SubState,UnitFileState,MainPID,NRestarts,ExecMainStatus,ActiveEnterTimestamp"
+    out = _systemctl(ctx, "show", unit, "-p", props, timeout=30).stdout
+    return {k: v for k, _, v in (line.partition("=") for line in str(out).splitlines()) if k}
+
+
+def _unit_arg(ctx: Context, args: dict[str, Any], allowed: Any) -> str:
+    unit = args.get("unit")
+    if not isinstance(allowed, list) or unit not in allowed:
+        raise Refused(f"unit {unit!r} is not allowed by the host policy")
+    return unit
+
+
+def op_slack_deliver(ctx: Context) -> dict[str, Any]:
+    conf = ctx.conf("slack.deliver")
+    args = _args(ctx, {"text"})
+    if problem := message_problem(args.get("text")):
+        raise Refused(problem)
+    hour_ago = iso(ctx.now() - timedelta(hours=1))
+    recent = sum(1 for e in ctx.journal if e.get("op") == "slack.deliver" and e.get("outcome") == "ok"
+                 and str(e.get("finished_at")) >= hour_ago)
+    if recent >= int(conf.get("max_per_hour", 6)):
+        raise Refused("slack.deliver rate limit reached")
+    sha = ctx.request.get("sha")
+    header = f":wrench: *host-ops* `{ctx.request['id'][:8]}`" + (f" · `{sha[:8]}`" if sha else "")
+    text = f"{header}\n{args['text']}"
+    status = ctx.post(text, b"")
+    detail = {"http_status": status, "text_sha256": hashlib.sha256(text.encode()).hexdigest(), "chars": len(text),
+              "proves": "the Slack incoming webhook accepted the message (HTTP 2xx); not channel visibility"}
+    if not 200 <= status < 300:
+        raise Failed(f"webhook answered HTTP {status}", detail)
+    return detail
+
+
+def op_service_status(ctx: Context) -> dict[str, Any]:
+    conf = ctx.conf("service.status")
+    unit = _unit_arg(ctx, _args(ctx, {"unit"}), conf.get("units"))
+    return {"unit": unit, "state": _unit_state(ctx, unit)}
+
+
+OWNER_ACTIONS = {"jarvisos-mission-owner.service": ["start"]}
+
+
+def op_service_control(ctx: Context) -> dict[str, Any]:
+    conf = ctx.conf("service.control")
+    args = _args(ctx, {"unit", "action"})
+    unit = _unit_arg(ctx, args, conf.get("units"))
+    action = args.get("action")
+    if action not in ("start", "stop", "restart"):
+        raise Refused("action must be start, stop or restart")
+    # Stopping or restarting the mission owner kills a running provider turn; the graceful path is its STOP file.
+    limited = conf.get("actions") if isinstance(conf.get("actions"), dict) else OWNER_ACTIONS
+    if unit in limited and action not in (limited[unit] or []):
+        raise Refused(f"{action} of {unit} is not allowed by the host policy")
+    proc = _systemctl(ctx, action, unit)
+    want = "inactive" if action == "stop" else "active"
+    state: dict[str, str] = {}
+    for _ in range(10):
+        state = _unit_state(ctx, unit)
+        if state.get("ActiveState") == want:
+            break
+        time.sleep(1)
+    detail = {"unit": unit, "action": action, "returncode": proc.returncode, "state": state}
+    if proc.returncode != 0 or state.get("ActiveState") != want:
+        raise Failed(f"{unit} is {state.get('ActiveState')} after {action}", detail)
+    return detail
+
+
+UNIT_TEMPLATES = {
+    "jarvisos-relay-watch": (
+        "[Unit]\nDescription=JarvisOS Relay observer: Slack digest and incident alerts (spec 205)\n"
+        "[Service]\nWorkingDirectory=%h/src/JarvisOS\n"
+        "ExecStart=/usr/bin/python3 -I %h/.local/share/jarvisos-hostops/current/scripts/relay_continuity.py watch --digest-hours 2\n"
+        "Restart=on-failure\nRestartPreventExitStatus=2 3\nRestartSec=60\n"
+        "[Install]\nWantedBy=default.target\n"),
+}
+
+
+def op_service_install(ctx: Context) -> dict[str, Any]:
+    conf = ctx.conf("service.install")
+    args = _args(ctx, {"template"})
+    name = args.get("template")
+    if not isinstance(name, str) or name not in UNIT_TEMPLATES or name not in (conf.get("templates") or []):
+        raise Refused(f"template {name!r} is not allowed by the host policy")
+    unit = f"{name}.service"
+    body = UNIT_TEMPLATES[name].encode()
+    fd = open_dir(ctx.paths.units, create=True)
+    try:
+        try:
+            current = read_regular(fd, unit, 1 << 16)
+        except FileNotFoundError:
+            current = None
+        if current is not None and current != body:
+            sfd = open_dir(ctx.paths.state / "unit-backups", create=True)
+            try:
+                write_at(sfd, f"{unit}.{ctx.request['id'][:8]}", current)
+            finally:
+                os.close(sfd)
+        if current != body:
+            write_at(fd, unit, body)
+    finally:
+        os.close(fd)
+    reload = _systemctl(ctx, "daemon-reload")
+    enable = _systemctl(ctx, "enable", "--now", unit)
+    time.sleep(3)
+    state = _unit_state(ctx, unit)
+    detail = {"unit": unit, "unit_sha256": hashlib.sha256(body).hexdigest(), "changed": current != body,
+              "returncodes": [reload.returncode, enable.returncode], "state": state}
+    if reload.returncode != 0 or enable.returncode != 0 or state.get("ActiveState") != "active":
+        raise Failed(f"{unit} is {state.get('ActiveState')} after install", detail)
+    return detail
+
+
+_WIN_PATH_RE = re.compile(r"^[A-Za-z]:\\[A-Za-z0-9 ._\\-]{1,240}$")
+_EXPLORER = "/mnt/c/Windows/explorer.exe"
+_POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+
+
+def _windows_path(ctx: Context, path: Path) -> str:
+    proc = ctx.run(["wslpath", "-w", str(path)], timeout=10)
+    value = str(proc.stdout).strip()
+    if proc.returncode != 0 or not _WIN_PATH_RE.fullmatch(value):
+        raise Failed("wslpath returned an unusable Windows path", {})
+    return value
+
+
+def _handoff_dir(ctx: Context, conf: dict[str, Any]) -> Path:
+    raw = conf.get("dir")
+    if not isinstance(raw, str) or not re.fullmatch(r"/mnt/[a-z]/[A-Za-z0-9 ._/-]+", raw) or ".." in raw:
+        raise Refused("wsl.handoff has no valid /mnt/<drive> directory in the host policy")
+    return Path(raw)
+
+
+def op_wsl_probe(ctx: Context) -> dict[str, Any]:
+    conf = ctx.conf("wsl.probe")
+    _args(ctx, set())
+    detail: dict[str, Any] = {}
+    try:
+        detail["wsl_kernel"] = "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        detail["wsl_kernel"] = False
+    detail["interop_registered"] = Path("/proc/sys/fs/binfmt_misc/WSLInterop").exists() or \
+        Path("/proc/sys/fs/binfmt_misc/WSLInterop-late").exists()
+    detail["explorer_present"] = Path(_EXPLORER).is_file()
+    ver = ctx.run(["/mnt/c/Windows/System32/cmd.exe", "/d", "/c", "ver"], timeout=20, cwd="/mnt/c")
+    detail["windows_version"] = scrub(str(ver.stdout).strip(), 120) if ver.returncode == 0 else None
+    if (handoff := (ctx.policy.get("ops") or {}).get("wsl.handoff")) and isinstance(handoff, dict):
+        target = _handoff_dir(ctx, handoff)
+        detail["handoff_dir_exists"] = target.is_dir()
+        if target.is_dir():
+            detail["handoff_windows_path"] = _windows_path(ctx, target)
+    del conf
+    if not (detail["wsl_kernel"] and detail["interop_registered"] and detail["windows_version"]):
+        raise Failed("WSL interop is not usable", detail)
+    return detail
+
+
+def op_wsl_handoff(ctx: Context) -> dict[str, Any]:
+    conf = ctx.conf("wsl.handoff")
+    args = _args(ctx, {"file", "sha256", "open"})
+    name, want = args.get("file"), args.get("sha256")
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", name):
+        raise Refused("file must be a plain outbox file name")
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in (conf.get("extensions") or []):
+        raise Refused(f"extension {ext!r} is not allowed by the host policy")
+    if not isinstance(want, str) or not re.fullmatch(r"[0-9a-f]{64}", want):
+        raise Refused("sha256 must be 64 lowercase hex characters")
+    if "open" in args and not isinstance(args["open"], bool):
+        raise Refused("open must be a boolean")
+    if args.get("open") and not conf.get("open"):
+        raise Refused("opening handed-off files is not enabled in the host policy")
+    target_dir = _handoff_dir(ctx, conf)
+    limit = int(conf.get("max_bytes", 200 << 20))
+    sfd = open_dir(ctx.paths.outbox)
+    try:
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=sfd)
+        except OSError:
+            raise Refused("outbox file must be a regular file, never a symlink") from None
+    finally:
+        os.close(sfd)
+    out_name = f"{want[:12]}-{ctx.request['id'][:8]}{ext}"
+    try:
+        tfd = open_dir(target_dir, create=True)
+    except BaseException:
+        os.close(fd)
+        raise
+    tmp = f".{out_name}.{secrets.token_hex(4)}.tmp"
+    digest, size = hashlib.sha256(), 0
+    try:
+        st = os.fstat(fd)
+        if not st.st_mode & 0o170000 == 0o100000 or st.st_size > limit:
+            raise Refused("outbox file is not a regular file within the size limit")
+        ofd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=tfd)
+        try:
+            while chunk := os.read(fd, 1 << 20):
+                size += len(chunk)
+                if size > limit:
+                    raise Refused("outbox file grew past the size limit")
+                digest.update(chunk)
+                os.write(ofd, chunk)
+        finally:
+            os.close(ofd)
+        if digest.hexdigest() != want:
+            raise Refused("outbox file does not match the requested sha256")
+        os.replace(tmp, out_name, src_dir_fd=tfd, dst_dir_fd=tfd)
+        tmp = ""
+    finally:
+        os.close(fd)
+        if tmp:
+            unlink_at(tfd, tmp)
+        os.close(tfd)
+    dest = target_dir / out_name
+    detail: dict[str, Any] = {"handoff_path": str(dest), "sha256": want, "bytes": size,
+                              "windows_path": _windows_path(ctx, dest), "opened": False}
+    if args.get("open"):
+        started = ctx.now()
+        try:
+            ctx.run([_EXPLORER, detail["windows_path"]], timeout=15, cwd="/mnt/c")
+        except subprocess.TimeoutExpired:
+            raise Failed("explorer.exe did not return within 15 s", detail) from None
+        detail["opened"] = "handed to explorer.exe (association decides the program)"
+        seconds = int((ctx.now() - started).total_seconds()) + 5
+        script = (f"Get-Process | Where-Object {{ $_.StartTime -ge (Get-Date).AddSeconds(-{seconds}) }} | "
+                  "Select-Object -ExpandProperty ProcessName")
+        procs = ctx.run([_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script], timeout=40, cwd="/mnt/c")
+        names = sorted({n.strip() for n in str(procs.stdout).splitlines() if re.fullmatch(r"[A-Za-z0-9._ -]{1,60}", n.strip())})
+        detail["windows_processes_started"] = names[:30]
+    return detail
+
+
+_LOCAL_URL_RE = re.compile(r"^http://(?:127\.0\.0\.1|localhost):(\d{2,5})(/[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]*)?$")
+VIEWPORTS = {"wide": (1440, 900), "narrow": (390, 844)}
+
+
+def op_browser_screenshot(ctx: Context) -> dict[str, Any]:
+    conf = ctx.conf("browser.screenshot")
+    args = _args(ctx, {"url", "viewport", "scheme", "wait_ms"})
+    url = args.get("url")
+    match = _LOCAL_URL_RE.fullmatch(url) if isinstance(url, str) else None
+    if not match or not 1024 <= int(match.group(1)) <= 65535:
+        raise Refused("url must be http://127.0.0.1:<port>/... (or localhost) with an unprivileged port")
+    viewport = args.get("viewport", "wide")
+    scheme = args.get("scheme", "light")
+    wait = args.get("wait_ms", 3000)
+    if not isinstance(viewport, str) or viewport not in VIEWPORTS or scheme not in ("light", "dark") or not isinstance(wait, int) \
+            or isinstance(wait, bool) or not 0 <= wait <= 15000:
+        raise Refused("viewport wide|narrow, scheme light|dark, wait_ms 0-15000")
+    chrome = conf.get("chrome")
+    if not isinstance(chrome, str) or not Path(chrome).is_file():
+        raise Refused("no Chromium binary configured in the host policy")
+    width, height = VIEWPORTS[viewport]
+    with tempfile.TemporaryDirectory(dir=ctx.paths.spool, prefix="shot-") as tmp:
+        shot = Path(tmp) / "shot.png"
+        os.close(open_dir(ctx.paths.receipts, create=True))
+        argv = [chrome, "--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-gpu",
+                "--disable-extensions", "--disable-sync", "--hide-scrollbars",
+                f"--user-data-dir={tmp}/profile", f"--window-size={width},{height}", f"--virtual-time-budget={wait}",
+                f"--blink-settings=preferredColorScheme={0 if scheme == 'dark' else 1}",
+                f"--screenshot={shot}", url]
+        launcher = str(conf.get("launcher") or ctx.paths.home / ".local/bin/jarvis-sandbox")
+        proc = ctx.run([launcher, *argv], timeout=90, cwd=str(ctx.paths.home / "src/JarvisOS"))
+        if not shot.is_file() or shot.stat().st_size == 0:
+            raise Failed("Chromium wrote no screenshot", {"returncode": proc.returncode,
+                                                           "stderr": scrub(str(proc.stderr), 600)})
+        shot_fd = open_dir(Path(tmp))
+        try:
+            data = read_regular(shot_fd, "shot.png", 32 << 20)
+            unlink_at(shot_fd, "shot.png")  # through the verified descriptor: the spool path may be swapped
+        finally:
+            os.close(shot_fd)
+    fd = open_dir(ctx.paths.receipts, create=True)
+    try:
+        write_at(fd, f"{ctx.request['id']}.png", data)
+    finally:
+        os.close(fd)
+    return {"url": url, "viewport": [width, height], "scheme": scheme, "png": f"{ctx.request['id']}.png",
+            "png_sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+
+
+def op_http_smoke(ctx: Context) -> dict[str, Any]:
+    conf = ctx.conf("http.smoke")
+    args = _args(ctx, {"target"})
+    targets = conf.get("targets") or {}
+    target = targets.get(args.get("target")) if isinstance(targets, dict) and isinstance(args.get("target"), str) else None
+    if not isinstance(target, dict) or not _LOCAL_URL_RE.fullmatch(str(target.get("url"))):
+        raise Refused(f"target {args.get('target')!r} is not defined in the host policy")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirects())
+    started = time.monotonic()
+    try:
+        with opener.open(urllib.request.Request(target["url"], method="GET"), timeout=15) as response:
+            status, body = response.status, response.read(1 << 20)
+    except urllib.error.HTTPError as exc:
+        status, body = exc.code, b""
+    except (OSError, urllib.error.URLError) as exc:
+        raise Failed(f"request failed: {type(exc).__name__}", {"url": target["url"]}) from None
+    detail = {"target": args["target"], "url": target["url"], "status": status,
+              "ms": int((time.monotonic() - started) * 1000), "body_sha256": hashlib.sha256(body).hexdigest()}
+    if status != int(target.get("expect", 200)):
+        raise Failed(f"HTTP {status}, expected {target.get('expect', 200)}", detail)
+    return detail
+
+
+def op_bench_run(ctx: Context) -> dict[str, Any]:
+    """A policy-registered command, run inside jarvis-sandbox (never with host privileges) under cgroup limits."""
+    conf = ctx.conf("bench.run")
+    args = _args(ctx, {"bench", "worktree"})
+    if not isinstance(args.get("bench"), str):
+        raise Refused("bench must name a registered benchmark")
+    bench = (conf.get("benchmarks") or {}).get(args.get("bench"))
+    if not isinstance(bench, dict) or not isinstance(bench.get("argv"), list):
+        raise Refused(f"benchmark {args.get('bench')!r} is not registered in the host policy")
+    worktree = args.get("worktree")
+    if not isinstance(worktree, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", worktree):
+        raise Refused("worktree must be a directory name under ~/src/worktrees")
+    sha = ctx.request.get("sha")
+    if not sha:
+        raise Refused("bench.run needs the candidate sha")
+    launcher = str(conf.get("launcher") or ctx.paths.home / ".local" / "bin" / "jarvis-sandbox")
+    root = ctx.paths.home / "src" / "worktrees" / worktree
+    sub = str(bench.get("cwd") or ".")
+    if ".." in Path(sub).parts or Path(sub).is_absolute():
+        raise Refused("benchmark cwd must be relative")
+    # The checkout is agent-controlled: its revision is read inside the sandbox, never by host git.
+    head = ctx.run([launcher, "git", "rev-parse", "HEAD"], timeout=60, cwd=str(root))
+    dirty = ctx.run([launcher, "git", "status", "--porcelain"], timeout=60, cwd=str(root))
+    reported = str(head.stdout).strip()
+    if head.returncode != 0 or dirty.returncode != 0 or reported != sha or str(dirty.stdout).strip():
+        raise Refused(f"worktree {worktree} is not a clean checkout of {sha[:12]} (sandbox reports {reported[:12] or '?'})")
+    limits = {"timeout_s": min(int(bench.get("timeout_s", 1800)), 4 * 3600),
+              "memory_max": str(bench.get("memory_max", "8G")), "cpu_quota": str(bench.get("cpu_quota", "400%")),
+              "tasks_max": int(bench.get("tasks_max", 512))}
+    scope = f"hostops-bench-{ctx.request['id'][:12]}"
+    argv = ["systemd-run", "--user", "--scope", "--quiet", f"--unit={scope}",
+            "-p", f"MemoryMax={limits['memory_max']}", "-p", f"CPUQuota={limits['cpu_quota']}",
+            "-p", f"TasksMax={limits['tasks_max']}", "--",
+            "timeout", "-k", "15", str(limits["timeout_s"]), launcher,
+            *[str(a) for a in bench["argv"]]]
+    started = time.monotonic()
+    with tempfile.TemporaryFile() as out:
+        proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
+                                env=_host_env(), cwd=root / sub)
+        cancelled = False
+        while proc.poll() is None:
+            if ctx.cancelled():
+                cancelled = True
+                subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], capture_output=True, timeout=60,
+                               env=_host_env())
+                proc.wait(timeout=60)
+                break
+            time.sleep(1)
+        out.seek(0)
+        output = out.read()
+    detail = {"bench": args["bench"], "worktree": worktree, "sandbox_head": reported, "limits": limits,
+              "returncode": proc.returncode, "wall_s": round(time.monotonic() - started, 2),
+              "output_sha256": hashlib.sha256(output).hexdigest(),
+              "output_tail": scrub(output.decode("utf-8", "replace"), 1500)}
+    if cancelled:
+        raise Cancelled(detail)
+    if proc.returncode == 124:
+        raise Failed("benchmark exceeded its time limit", detail)
+    if proc.returncode != 0:
+        raise Failed(f"benchmark exited {proc.returncode}", detail)
+    return detail
+
+
+class Cancelled(Exception):
+    pass
+
+
+OPERATIONS: dict[str, Callable[[Context], dict[str, Any]]] = {
+    "slack.deliver": op_slack_deliver,
+    "service.status": op_service_status,
+    "service.control": op_service_control,
+    "service.install": op_service_install,
+    "wsl.probe": op_wsl_probe,
+    "wsl.handoff": op_wsl_handoff,
+    "browser.screenshot": op_browser_screenshot,
+    "http.smoke": op_http_smoke,
+    "bench.run": op_bench_run,
+}
+
+
+# ---------------------------------------------------------------------------
+# Executor
+
+
+def _host_env() -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if k in ("HOME", "USER", "LOGNAME", "LANG", "PATH", "WSL_INTEROP",
+                                                         "WSL_DISTRO_NAME", "DBUS_SESSION_BUS_ADDRESS")}
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    env["XDG_RUNTIME_DIR"] = os.environ.get("XDG_RUNTIME_DIR") or env["XDG_RUNTIME_DIR"]
+    return env
+
+
+def real_run(argv: list[str], timeout: float, cwd: str | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False, cwd=cwd, env=_host_env())
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201 - stdlib signature
+        raise urllib.error.HTTPError(req.full_url, code, "redirect rejected", headers, fp)
+
+
+def webhook_poster(paths: Paths) -> Callable[[str, bytes], int]:
+    def post(text: str, _unused: bytes) -> int:
+        st = paths.webhook.stat()
+        if st.st_mode & 0o077 or st.st_uid != os.getuid():
+            raise Failed("webhook file must be owned by this user and mode 600", {})
+        url = paths.webhook.read_text().strip()
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme != "https" or parts.hostname != "hooks.slack.com" or parts.port is not None \
+                or not parts.path.startswith("/services/") or parts.query or parts.fragment:
+            raise Failed("webhook file does not hold a hooks.slack.com URL", {})
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirects())
+        request = urllib.request.Request(url, data=json.dumps({"text": text}).encode(), method="POST",
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with opener.open(request, timeout=15) as response:
+                response.read(256)
+                return int(response.status)
+        except urllib.error.HTTPError as exc:
+            return int(exc.code)
+        except (OSError, urllib.error.URLError) as exc:
+            raise Failed(f"webhook unreachable: {type(exc).__name__}", {}) from None
+    return post
+
+
+def load_policy(paths: Paths) -> tuple[dict[str, Any], str]:
+    st = paths.policy.stat()
+    if st.st_uid != os.getuid() or st.st_mode & 0o022:
+        raise RuntimeError("policy must be owned by this user and not group/world writable")
+    raw = paths.policy.read_bytes()
+    policy = json.loads(raw)
+    if not isinstance(policy, dict) or policy.get("schema") != POLICY_SCHEMA or not isinstance(policy.get("ops"), dict):
+        raise RuntimeError("policy has an unknown schema")
+    unknown = set(policy["ops"]) - set(OPERATIONS)
+    if unknown:
+        raise RuntimeError(f"policy enables unknown operations {sorted(unknown)}")
+    return policy, hashlib.sha256(raw).hexdigest()
+
+
+def executor_version() -> str:
+    """The installed release directory name is the master commit the executor was installed from."""
+    here = Path(__file__).resolve().parent.parent.name
+    return here if SHA_RE.fullmatch(here) else "uninstalled"
+
+
+class Executor:
+    def __init__(self, paths: Paths, *, run: Callable[..., subprocess.CompletedProcess] = real_run,
+                 post: Callable[[str, bytes], int] | None = None, now: Callable[[], datetime] = now_utc,
+                 log: Callable[[str], None] = lambda m: print(m, file=sys.stderr, flush=True)):
+        self.paths, self.run, self.now, self.log = paths, run, now, log
+        self.post = post or webhook_poster(paths)
+        self.restart_requested = False
+
+    # Host-only durable state: one file per handled request id (replay protection and idempotency), an in-flight
+    # marker (recovery) and a journal (rate limits, audit).
+    def _state_fd(self, sub: str) -> int:
+        return open_dir(self.paths.state / sub, create=True)
+
+    def journal(self) -> list[dict[str, Any]]:
+        try:
+            lines = (self.paths.state / "journal.jsonl").read_text().splitlines()[-2000:]
+        except OSError:
+            return []
+        out = []
+        for line in lines:
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return out
+
+    def _append_journal(self, entry: dict[str, Any]) -> None:
+        os.close(open_dir(self.paths.state, create=True))
+        with open(self.paths.state / "journal.jsonl", "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+    def recover(self) -> None:
+        """A request in flight when the executor died gets an `interrupted` receipt; it is never re-executed."""
+        fd = self._state_fd("inflight")
+        try:
+            names = [n for n in os.listdir(fd) if REQUEST_NAME_RE.fullmatch(n)]
+            for name in names:
+                try:
+                    request = json.loads(read_regular(fd, name, MAX_REQUEST_BYTES))
+                except (OSError, ValueError):
+                    request = {"id": name[:-5], "op": None, "args": {}, "sha": None, "requested_at": None}
+                done_fd = self._state_fd("done")
+                try:
+                    if exists_at(done_fd, name[:-5]):
+                        self._republish(done_fd, name[:-5])
+                    else:
+                        self._finish(request, "interrupted", {}, "the executor stopped while this request was running",
+                                     started=None)
+                finally:
+                    os.close(done_fd)
+                unlink_at(fd, name)
+        finally:
+            os.close(fd)
+
+    def heartbeat(self, policy_sha: str | None, problem: str | None) -> None:
+        fd = open_dir(self.paths.spool, create=True)
+        try:
+            write_at(fd, "heartbeat.json", canonical({"at": iso(self.now()), "version": executor_version(),
+                                                       "policy_sha256": policy_sha, "problem": problem,
+                                                       "operations": sorted(OPERATIONS)}))
+        finally:
+            os.close(fd)
+
+    def step(self) -> int:
+        """Handle every pending request once, oldest first. Returns how many were handled."""
+        try:
+            policy, policy_sha = load_policy(self.paths)
+            problem = None
+        except (OSError, ValueError, RuntimeError) as exc:
+            policy, policy_sha, problem = {"ops": {}}, None, f"policy unusable: {exc}"
+        if not self.paths.key.is_file():
+            problem = "signing key missing"
+        self.heartbeat(policy_sha, problem)
+        if problem == "signing key missing":
+            return 0
+        rfd = open_dir(self.paths.requests, create=True)
+        handled = 0
+        try:
+            entries = []
+            for name in os.listdir(rfd):
+                if m := REQUEST_NAME_RE.fullmatch(name):
+                    try:
+                        entries.append((os.stat(name, dir_fd=rfd, follow_symlinks=False).st_mtime, m.group(1), name))
+                    except FileNotFoundError:
+                        continue
+            for _, request_id, name in sorted(entries):
+                if handled:
+                    try:
+                        policy, policy_sha = load_policy(self.paths)
+                    except (OSError, ValueError, RuntimeError):
+                        policy, policy_sha = {"ops": {}}, None
+                self._handle(rfd, request_id, name, policy, policy_sha)
+                handled += 1
+                if self.restart_requested:
+                    break
+        finally:
+            os.close(rfd)
+        return handled
+
+    def _handle(self, rfd: int, request_id: str, name: str, policy: dict[str, Any], policy_sha: str | None) -> None:
+        done_fd = self._state_fd("done")
+        try:
+            try:
+                raw = read_regular(rfd, name, MAX_REQUEST_BYTES)
+            except (OSError, ValueError):
+                unlink_at(rfd, name)
+                if exists_at(done_fd, request_id):
+                    self._republish(done_fd, request_id)
+                else:
+                    self._finish({"id": request_id}, "refused", {}, "request is not a bounded regular file",
+                                 started=self.now(), policy_sha=policy_sha)
+                return
+            unlink_at(rfd, name)  # consumed: the spool copy is never read twice
+            cancel = f"{request_id}.cancel"
+            if exists_at(done_fd, request_id):
+                self._republish(done_fd, request_id)  # idempotent: same id, same receipt, no second execution
+                return
+            try:
+                request = json.loads(raw)
+            except json.JSONDecodeError:
+                request = None
+            now = self.now()
+            problem = request_problem(request, now)
+            if problem or not isinstance(request, dict) or request.get("id") != request_id:
+                stub = {"id": request_id, "op": (request or {}).get("op") if isinstance(request, dict) else None,
+                        "args": {}, "sha": None, "requested_at": None}
+                self._finish(stub, "refused", {}, problem or "id does not match the file name", started=now,
+                             policy_sha=policy_sha, request_raw=raw)
+                return
+            if exists_at(rfd, cancel):
+                unlink_at(rfd, cancel)
+                self._finish(request, "cancelled", {}, "cancelled before it started", started=now,
+                             policy_sha=policy_sha, request_raw=raw)
+                return
+            ifd = self._state_fd("inflight")
+            try:
+                write_at(ifd, name, raw)
+            finally:
+                os.close(ifd)
+            ctx = Context(self.paths, policy, request, self.run, self.post, self.now,
+                          cancelled=lambda: exists_at(rfd, cancel), journal=self.journal())
+            self.log(f"hostops: {request_id[:8]} {request['op']} started")
+            outcome, detail, error = "ok", {}, None
+            try:
+                detail = OPERATIONS[request["op"]](ctx)
+            except Refused as exc:
+                outcome, error = "refused", str(exc)
+            except Failed as exc:
+                outcome, error, detail = "failed", str(exc), getattr(exc, "detail", {})
+            except Cancelled as exc:
+                outcome, error, detail = "cancelled", "cancelled while running", exc.args[0] if exc.args else {}
+            except subprocess.TimeoutExpired:
+                outcome, error = "timeout", "a host command exceeded its time limit"
+            except Exception as exc:  # noqa: BLE001 - every request ends in a receipt
+                outcome, error = "failed", f"executor error {type(exc).__name__}"
+            unlink_at(rfd, cancel)
+            self._finish(request, outcome, detail, error, started=now, policy_sha=policy_sha, request_raw=raw)
+            self.restart_requested = ctx.restart_required
+            ifd = self._state_fd("inflight")
+            try:
+                unlink_at(ifd, name)
+            finally:
+                os.close(ifd)
+        finally:
+            os.close(done_fd)
+
+    def _finish(self, request: dict[str, Any], outcome: str, detail: dict[str, Any], error: str | None, *,
+                started: datetime | None, policy_sha: str | None = None, request_raw: bytes = b"") -> None:
+        receipt = {"schema": RECEIPT_SCHEMA, "request_id": request["id"], "op": request.get("op"),
+                   "args": request.get("args") if outcome != "refused" else {}, "sha": request.get("sha"),
+                   "requested_at": request.get("requested_at"), "requester": request.get("requester"),
+                   "request_sha256": hashlib.sha256(request_raw).hexdigest() if request_raw else None,
+                   "started_at": iso(started) if started else None, "finished_at": iso(self.now()),
+                   "outcome": outcome, "error": error, "detail": detail,
+                   "executor": {"version": executor_version(), "host": socket.gethostname(),
+                                "policy_sha256": policy_sha}}
+        data = canonical(receipt)
+        signature = sign(self.paths.key, data)
+        done_fd = self._state_fd("done")
+        try:
+            write_at(done_fd, request["id"], data + b"\x00" + signature)
+        finally:
+            os.close(done_fd)
+        self._publish(request["id"], data, signature)
+        self._append_journal({"id": request["id"], "op": request.get("op"), "outcome": outcome,
+                              "finished_at": receipt["finished_at"], "sha": request.get("sha")})
+        self.log(f"hostops: {request['id'][:8]} {request.get('op')} {outcome}" + (f" ({error})" if error else ""))
+
+    def _publish(self, request_id: str, data: bytes, signature: bytes) -> None:
+        fd = open_dir(self.paths.receipts, create=True)
+        try:
+            write_at(fd, f"{request_id}.json.sig", signature)
+            write_at(fd, f"{request_id}.json", data)
+        finally:
+            os.close(fd)
+
+    def _republish(self, done_fd: int, request_id: str) -> None:
+        stored = read_regular(done_fd, request_id, 2 << 20)
+        data, _, signature = stored.partition(b"\x00")
+        self._publish(request_id, data, signature)
+
+
+def serve(paths: Paths, interval: float) -> int:
+    if os.environ.get("JARVIS_SANDBOX") or socket.gethostname() == "jarvis-sandbox":
+        return 2
+    state_fd = open_dir(paths.state, create=True)
+    try:
+        lock_fd = os.open("serve.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=state_fd)
+    finally:
+        os.close(state_fd)
+    import fcntl
+
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("another host-ops executor is running", file=sys.stderr)
+        os.close(lock_fd)
+        return 3
+    stop = {"flag": False}
+    signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
+    signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
+    executor = Executor(paths)
+    executor.recover()
+    executor.log(f"hostops: executor {executor_version()} serving")
+    while not stop["flag"]:
+        try:
+            executor.step()
+            if executor.restart_requested:
+                os.close(lock_fd)
+                return 75
+        except Exception as exc:  # noqa: BLE001 - a bad spool entry never stops the executor
+            executor.log(f"hostops: step error {type(exc).__name__}: {exc}")
+        for _ in range(int(interval * 10)):
+            if stop["flag"]:
+                break
+            time.sleep(0.1)
+    os.close(lock_fd)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Installation (host session only): code from GitHub master, never from a local checkout
+
+
+DEFAULT_POLICY: dict[str, Any] = {
+    "schema": POLICY_SCHEMA,
+    "ops": {
+        "release.install": {"trust_master": False},
+        "slack.deliver": {"max_per_hour": 6},
+        "service.status": {"units": ["jarvisos-relay-watch.service", "jarvisos-mission-owner.service",
+                                     "jarvisos-hostops.service", "agent-relay.service"]},
+        "service.control": {"units": ["jarvisos-relay-watch.service", "jarvisos-mission-owner.service"],
+                            "actions": OWNER_ACTIONS},
+        "service.install": {"templates": ["jarvisos-relay-watch"]},
+        "wsl.probe": {},
+        "wsl.handoff": {"dir": "/mnt/c/Users/user/JarvisOS-print", "open": True, "max_bytes": 200 << 20,
+                        "extensions": [".3mf", ".stl", ".step", ".glb", ".png", ".pdf"]},
+        "browser.screenshot": {"chrome": os.path.expanduser("~/.cache/ms-playwright/chromium-1187/chrome-linux/chrome")},
+        "http.smoke": {"targets": {"backend-health": {"url": "http://127.0.0.1:8000/health", "expect": 200}}},
+        "bench.run": {"benchmarks": {
+            "relay-observe-tests": {"cwd": "backend", "timeout_s": 900, "memory_max": "4G", "cpu_quota": "200%",
+                                    "argv": [os.path.expanduser("~/src/JarvisOS/backend/.venv/bin/python"), "-m", "pytest",
+                                             "-q", "-p", "no:cacheprovider", "tests/test_relay_observe.py"]}}},
+    },
+}
+
+SERVICE_UNIT = (
+    "[Unit]\nDescription=JarvisOS host operations executor (spec 207)\n"
+    "[Service]\nWorkingDirectory=%h\n"
+    "ExecStart=/usr/bin/python3 -I %h/.local/share/jarvisos-hostops/current/scripts/host_ops.py serve\n"
+    "Restart=on-failure\nRestartPreventExitStatus=2 3\nRestartSec=30\n"
+    "NoNewPrivileges=yes\nMemoryMax=2G\nTasksMax=256\nCPUQuota=200%\nRestartForceExitStatus=75\n"
+    "[Install]\nWantedBy=default.target\n")
+
+
+def _gh(args: list[str]) -> str:
+    proc = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(f"gh api {args[0]} failed")
+    return proc.stdout
+
+
+def install_release(paths: Paths, sha: str) -> None:
+    if os.environ.get("JARVIS_SANDBOX") or socket.gethostname() == "jarvis-sandbox":
+        raise Refused("installation is host-only")
+    if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+        raise Refused("sha must be a full commit id")
+    status = _gh([f"repos/{REPO}/compare/{sha}...master", "--jq", ".status"]).strip()
+    if status not in ("ahead", "identical"):
+        raise Refused(f"{sha} is not on GitHub master ({status})")
+    proc = subprocess.run(["gh", "api", f"repos/{REPO}/tarball/{sha}"],
+                          capture_output=True, timeout=120, check=True)
+    releases = paths.install / "releases"
+    releases.mkdir(parents=True, exist_ok=True)
+    release = releases / sha
+    with tempfile.TemporaryDirectory(dir=releases, prefix=".install-") as tmp:
+        stage = Path(tmp)
+        with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:gz") as archive:
+            for member in archive.getmembers():
+                parts = Path(member.name).parts
+                if member.name.startswith("/") or ".." in parts or not (member.isdir() or member.isfile()):
+                    raise Refused("unsafe release archive member")
+                if len(parts) < 2 or parts[1] != "scripts":
+                    continue
+                target = stage.joinpath(*parts[1:])
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.extractfile(member) as source:
+                        target.write_bytes(source.read())
+                    target.chmod(0o755 if member.mode & 0o111 else 0o644)
+        for name in ("host_ops.py", "relay_continuity.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+            if not (stage / "scripts" / name).is_file():
+                raise Refused(f"release missing {name}")
+        if not release.exists():
+            os.rename(stage, release)
+    tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
+    os.symlink(release, tmp_link)
+    os.replace(tmp_link, paths.install / "current")
+
+
+def op_release_install(ctx: Context) -> dict[str, Any]:
+    conf = ctx.conf("release.install")
+    args = _args(ctx, {"sha"})
+    if conf.get("trust_master") is not True:
+        raise Refused("release.install requires trust_master: true in the host policy")
+    install_release(ctx.paths, args.get("sha"))
+    ctx.restart_required = True
+    unit = "jarvisos-relay-watch.service"
+    if _unit_state(ctx, unit).get("ActiveState") == "active":
+        if _systemctl(ctx, "restart", unit).returncode:
+            raise Failed("watcher restart failed")
+    return {"sha": args["sha"], "executor_restart": True}
+
+
+OPERATIONS["release.install"] = op_release_install
+
+
+def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
+    try:
+        install_release(paths, sha)
+    except Refused as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    paths.config.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(paths.config, 0o700)
+    if not paths.key.is_file():
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", SIGNER, "-f", str(paths.key)],
+                       check=True, timeout=30)
+    public = Path(f"{paths.key}.pub").read_text().split()
+    paths.published.mkdir(parents=True, exist_ok=True)
+    (paths.published / "allowed_signers").write_text(
+        f'{SIGNER} namespaces="{SIG_NAMESPACE}" {public[0]} {public[1]}\n')
+    if not paths.policy.exists():
+        paths.policy.write_text(json.dumps(DEFAULT_POLICY, indent=1, sort_keys=True) + "\n")
+        os.chmod(paths.policy, 0o600)
+    paths.units.mkdir(parents=True, exist_ok=True)
+    (paths.units / UNIT).write_text(SERVICE_UNIT)
+    (paths.units / "jarvisos-relay-watch.service").write_text(UNIT_TEMPLATES["jarvisos-relay-watch"])
+    env = _host_env()
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, timeout=60, env=env)
+    subprocess.run(["systemctl", "--user", "enable", UNIT], check=True, timeout=60, env=env)
+    subprocess.run(["systemctl", "--user", "restart", UNIT], check=True, timeout=60, env=env)
+    if with_watch:
+        subprocess.run(["systemctl", "--user", "enable", "--now", "jarvisos-relay-watch.service"],
+                       check=True, timeout=60, env=env)
+    print(f"installed host-ops executor {sha} and restarted {UNIT}")
+    return 0
+
+
+def health(paths: Paths) -> int:
+    problems = []
+    if not paths.key.is_file() or paths.key.stat().st_mode & 0o077:
+        problems.append("signing key missing or not mode 600")
+    if not paths.allowed_signers.is_file():
+        problems.append("public key not published")
+    elif Path(f"{paths.key}.pub").is_file() and \
+            Path(f"{paths.key}.pub").read_text().split()[1] not in paths.allowed_signers.read_text():
+        problems.append("published public key does not match the signing key")
+    try:
+        load_policy(paths)
+    except (OSError, ValueError, RuntimeError) as exc:
+        problems.append(f"policy: {exc}")
+    beat = _heartbeat(paths)
+    if beat is None or (at := parse_ts(beat.get("at"))) is None or now_utc() - at > timedelta(minutes=2):
+        problems.append("executor heartbeat missing or older than 2 minutes")
+    elif beat.get("problem"):
+        problems.append(f"executor reports: {beat['problem']}")
+    print(json.dumps({"healthy": not problems, "problems": problems, "heartbeat": beat}, indent=1))
+    return 0 if not problems else 1
+
+
+def _heartbeat(paths: Paths) -> dict[str, Any] | None:
+    try:
+        data = json.loads(paths.heartbeat.read_text())
+        return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# CLI
+
+
+def _print_receipt(receipt: dict[str, Any]) -> None:
+    print(json.dumps({k: receipt.get(k) for k in ("request_id", "op", "sha", "outcome", "error", "finished_at",
+                                                  "detail")}, indent=1, ensure_ascii=False))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="host_ops.py", description=__doc__.splitlines()[0])
+    parser.add_argument("--home", default=os.environ.get("HOME", "/home/user"), help=argparse.SUPPRESS)
+    sub = parser.add_subparsers(dest="action", required=True)
+    p = sub.add_parser("request", help="submit a typed host operation request")
+    p.add_argument("op", choices=sorted(OPERATIONS))
+    p.add_argument("--args", default="{}", help="JSON object of operation arguments")
+    p.add_argument("--sha", help="full candidate commit the operation is evidence for")
+    p.add_argument("--requester", default=os.environ.get("USER", "agent"))
+    p.add_argument("--wait", type=float, default=0, help="seconds to wait for the verified receipt")
+    p = sub.add_parser("cancel", help="cancel a request (before it starts, or a running bench.run)")
+    p.add_argument("id")
+    p = sub.add_parser("verify", help="verify a receipt's host signature and outcome")
+    p.add_argument("id")
+    p.add_argument("--op")
+    p.add_argument("--sha")
+    sub.add_parser("status", help="executor heartbeat and recent receipts")
+    p = sub.add_parser("serve", help="run the host executor (systemd unit)")
+    p.add_argument("--interval", type=float, default=2.0)
+    p = sub.add_parser("install", help="install the executor from a GitHub master commit (host session)")
+    p.add_argument("--sha", required=True)
+    p.add_argument("--with-watch", action="store_true")
+    sub.add_parser("health", help="host-side health check")
+    args = parser.parse_args(argv)
+    paths = Paths(Path(args.home))
+
+    if args.action == "request":
+        try:
+            op_args = json.loads(args.args)
+        except json.JSONDecodeError:
+            print("--args must be JSON", file=sys.stderr)
+            return 2
+        request = make_request(args.op, op_args, args.sha, args.requester, now_utc())
+        if problem := request_problem(request, now_utc()):
+            print(f"refusing to submit: {problem}", file=sys.stderr)
+            return 2
+        request_id = submit(paths, request)
+        print(request_id)
+        deadline = time.monotonic() + args.wait
+        while args.wait and time.monotonic() < deadline:
+            receipt, _ = load_receipt(paths, request_id)
+            if receipt:
+                _print_receipt(receipt)
+                return 0 if receipt.get("outcome") == "ok" else 1
+            time.sleep(1)
+        if args.wait:
+            print("no verified receipt yet; check `host_ops.py status`", file=sys.stderr)
+            return 4
+        return 0
+    if args.action == "cancel":
+        if not ID_RE.fullmatch(args.id):
+            return 2
+        fd = open_dir(paths.requests, create=True)
+        try:
+            write_at(fd, f"{args.id}.cancel", b"cancel\n")
+        finally:
+            os.close(fd)
+        return 0
+    if args.action == "verify":
+        receipt, why = load_receipt(paths, args.id)
+        if receipt is None:
+            print(f"not verified: {why}", file=sys.stderr)
+            return 1
+        _print_receipt(receipt)
+        if problem := receipt_problem(receipt, op=args.op, sha=args.sha):
+            print(f"verified signature, but {problem}", file=sys.stderr)
+            return 1
+        return 0
+    if args.action == "status":
+        beat = _heartbeat(paths)
+        recent = []
+        try:
+            names = sorted((p for p in paths.receipts.iterdir() if REQUEST_NAME_RE.fullmatch(p.name)),
+                           key=lambda p: p.stat().st_mtime)[-10:]
+        except OSError:
+            names = []
+        for path in names:
+            receipt, why = load_receipt(paths, path.name[:-5])
+            recent.append({"id": path.name[:-5], "verified": bool(receipt), "op": (receipt or {}).get("op"),
+                           "outcome": (receipt or {}).get("outcome"), "why": why or None})
+        alive = bool(beat and (at := parse_ts(beat.get("at"))) and now_utc() - at <= timedelta(minutes=2))
+        print(json.dumps({"executor_alive": alive, "heartbeat": beat, "recent": recent}, indent=1))
+        return 0
+    if args.action == "serve":
+        return serve(paths, args.interval)
+    if args.action == "install":
+        return install(paths, args.sha, args.with_watch)
+    if args.action == "health":
+        return health(paths)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

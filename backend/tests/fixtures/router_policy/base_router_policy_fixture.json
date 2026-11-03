@@ -1,0 +1,126 @@
+{
+  "input": {
+    "message_text": "Answer locally with a concise explanation.",
+    "phase_a_signals": {
+      "contains_secret_or_credential": false,
+      "contains_raw_private_or_ip_sensitive_context": false,
+      "mentions_external_provider_or_upload_intent": false,
+      "external_provider_allowed": false,
+      "clarification_required": false,
+      "hard_reason_codes": [
+        "low_risk"
+      ],
+      "sensitivity_bucket_proposal": "public",
+      "requires_manual_review": true,
+      "source_policy_for_future_retrieval": "not_applicable",
+      "allowed_future_retrieval_behavior": "none"
+    },
+    "phase_b_soft_proposal": {
+      "project_bucket": "general",
+      "primary_domain": "general",
+      "domain_tags": [
+        "answer"
+      ],
+      "soft_reason_code": "contextual_summary",
+      "suggested_followup_question": ""
+    },
+    "router_hint": {
+      "task_type": "answer",
+      "complexity": "low",
+      "domain": "general",
+      "confidence": "high",
+      "estimated_tokens": 200,
+      "needs_reasoning": false,
+      "needs_current_info": false,
+      "needs_file_context": false,
+      "needs_code_execution": false,
+      "needs_scientific_depth": false
+    },
+    "action_hint": {
+      "requested_action_type": "answer",
+      "modifies_state": false,
+      "side_effect_level": "none",
+      "reversibility": "reversible",
+      "environment_type": "chat",
+      "state_scope": "none",
+      "needs_terminal": false,
+      "needs_file_write": false,
+      "needs_memory_write": false,
+      "needs_provider_call": false,
+      "confidence": "high"
+    },
+    "user_policy": {
+      "external_routing_enabled": false,
+      "external_requires_confirmation": true,
+      "allow_persistent_auto_allow": false
+    },
+    "provider_policy": {
+      "allowed_provider_tiers": [
+        "LOCAL_ONLY",
+        "LOCAL_FAST"
+      ],
+      "blocked_provider_tiers": [
+        "CHEAP_EXTERNAL",
+        "SCIENTIFIC_MEDIUM",
+        "FRONTIER"
+      ]
+    },
+    "budget_policy": {
+      "max_tier": "LOCAL_FAST",
+      "max_tokens": 2048,
+      "require_confirmation_above_tier": "CHEAP_EXTERNAL"
+    },
+    "context_metadata": {
+      "attached_files_present": false,
+      "conversation_context_available": true
+    }
+  },
+  "decision": {
+    "policy_version": "router_policy_v0_3_1_1",
+    "schema_version": "router_policy_decision_v0_3_1_1",
+    "decision_id": "decision-base-0001",
+    "input_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "created_at": "2026-06-24T08:00:00+00:00",
+    "expires_at": null,
+    "lifecycle_stage": "initial_request",
+    "route_action": "answer_local",
+    "route_tier": "LOCAL_ONLY",
+    "provider_candidate": "local:qwen",
+    "proposed_external_target": null,
+    "external_allowed": false,
+    "external_network_allowed_now": false,
+    "local_allowed": true,
+    "response_allowed_now": true,
+    "tool_execution_allowed_now": false,
+    "provider_call_allowed_now": false,
+    "state_change_allowed_now": false,
+    "confirmation_required": false,
+    "requires_new_decision_after_confirmation": false,
+    "redaction_required": false,
+    "redaction_status": "not_required",
+    "manual_review_required": true,
+    "simulation_required": false,
+    "dry_run_required": false,
+    "requested_action_type": "answer",
+    "modifies_state": false,
+    "state_scope": "none",
+    "side_effect_level": "none",
+    "reversibility": "reversible",
+    "environment_type": "chat",
+    "allowed_execution_mode": "answer_only",
+    "confirmation_payload_required": false,
+    "confirmation_payload": null,
+    "confirmation_digest": null,
+    "confirmation_options": [],
+    "consent_context": null,
+    "memory_policy_result": null,
+    "reason_codes": [
+      "low_complexity_local"
+    ],
+    "audit_notes": [
+      "Low-risk local answer only."
+    ],
+    "budget_class": "local",
+    "max_tokens_allowed": 1000
+  }
+}

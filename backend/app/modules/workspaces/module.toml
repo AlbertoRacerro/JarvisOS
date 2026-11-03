@@ -1,0 +1,4 @@
+purpose = "Workspaces (create, archive, restore, rename), design versions and design components; seeds the default workspace."
+status = "live"
+entrypoints = ["/workspaces", "/workspaces/{id}/design-versions", "service.py"]
+owner = "maintainer"

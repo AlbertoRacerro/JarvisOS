@@ -1,0 +1,4 @@
+purpose = "Jarvis chat sidecar: message rendering, workspace action cards, math text and proposal presentation."
+status = "live"
+entrypoints = ["useJarvisSidecar.tsx", "JarvisSidecar.css"]
+owner = "maintainer"

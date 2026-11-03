@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvisos.local/schemas/bluecad_analysis_spec_v0_1.schema.json",
+  "title": "BLUECAD AnalysisSpec v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "analysis_id",
+    "analysis_type",
+    "geometry",
+    "material",
+    "bcs",
+    "loads",
+    "mesh",
+    "pass_criteria"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "bluecad_analysis_spec_v0_1"
+    },
+    "analysis_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "analysis_type": {
+      "enum": [
+        "static"
+      ]
+    },
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "step_path",
+        "manifest_path"
+      ],
+      "properties": {
+        "step_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifest_path": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "material": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "E",
+        "nu",
+        "rho",
+        "yield_strength"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+        },
+        "E": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "nu": {
+          "type": "number"
+        },
+        "rho": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "yield_strength": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "description": "Static v0 material. Units are BLUECAD N-mm-s with mass in tonne, density in tonne/mm^3, and stress in MPa; no adapter unit conversion is performed."
+    },
+    "bcs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "port_label",
+          "kind"
+        ],
+        "properties": {
+          "port_label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "const": "fixed"
+          }
+        }
+      }
+    },
+    "loads": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "port_label",
+          "type"
+        ],
+        "properties": {
+          "port_label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "enum": [
+              "pressure",
+              "force_total"
+            ]
+          },
+          "force": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          },
+          "vector_n": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          },
+          "pressure": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "mesh": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_size"
+      ],
+      "properties": {
+        "target_size": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "element_order": {
+          "type": "integer",
+          "enum": [
+            1,
+            2
+          ],
+          "default": 1,
+          "description": "Optional tetrahedral element order. Omission is equivalent to 1; order 2 must be verified from the generated mesh artifact rather than inferred from the request."
+        },
+        "refinements": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "quality": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min_element_quality": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "pass_criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "metric",
+          "op",
+          "value"
+        ],
+        "properties": {
+          "metric": {
+            "enum": [
+              "max_displacement",
+              "max_von_mises"
+            ]
+          },
+          "op": {
+            "enum": [
+              "<=",
+              "<",
+              ">=",
+              ">",
+              "=="
+            ]
+          },
+          "value": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "timeout_s": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  }
+}

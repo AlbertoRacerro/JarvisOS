@@ -1,0 +1,495 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+  schedule:
+    # Weekly (was nightly): master is already fully classified on every push, so a nightly run re-tested an
+    # unchanged commit. The scheduled run stays the explicit repository-wide regression (see classify).
+    - cron: "17 2 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      run_backend: ${{ steps.scope.outputs.run_backend }}
+      run_frontend: ${{ steps.scope.outputs.run_frontend }}
+      run_bluecad: ${{ steps.scope.outputs.run_bluecad }}
+      full_required: ${{ steps.scope.outputs.full_required }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Classify CI scope
+        id: scope
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/classify_ci_scope.py --self-test
+
+          emit_full() {
+            {
+              echo "docs_only=false"
+              echo "run_backend=true"
+              echo "run_frontend=true"
+              echo "run_bluecad=true"
+              echo "full_required=true"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              BASE_SHA="$PR_BASE_SHA"
+              HEAD_SHA="$PR_HEAD_SHA"
+              # Keep checkout shallow, but make both exact PR endpoints available.
+              # The pull/<n>/head ref works for same-repo and fork pull requests.
+              git fetch --no-tags --depth=1 origin "$BASE_SHA"
+              git fetch --no-tags --depth=1 origin "refs/pull/${PR_NUMBER}/head"
+              ;;
+            push)
+              BASE_SHA="$PUSH_BASE_SHA"
+              HEAD_SHA="$PUSH_HEAD_SHA"
+              # A missing/all-zero before SHA can occur on unusual ref creation or
+              # rewritten history. Fail closed rather than infer a partial domain.
+              if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+                emit_full
+                exit 0
+              fi
+              git fetch --no-tags --depth=1 origin "$BASE_SHA"
+              ;;
+            *)
+              # Scheduled/manual runs are the explicit repository-wide regression.
+              emit_full
+              exit 0
+              ;;
+          esac
+
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+          # Disable rename collapsing so a move across execution domains is
+          # observed as delete+add and therefore cannot gain a narrower lane.
+          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files.txt"
+          python3 scripts/classify_ci_scope.py < "$RUNNER_TEMP/changed-files.txt" >> "$GITHUB_OUTPUT"
+
+  backend:
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # Cache only when this job installs dependencies: on a cache miss without an install
+          # (docs-only or frontend-only changes) the post-job save fails on a missing pip directory.
+          cache: ${{ needs.classify.outputs.run_backend == 'true' && 'pip' || '' }}
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Spec status registry gate
+        run: |
+          python scripts/check_spec_status.py --self-test
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            python scripts/check_spec_status.py --event "$GITHUB_EVENT_PATH"
+          else
+            python scripts/check_spec_status.py
+          fi
+
+      - name: BLUECAD license-boundary import gate
+        if: needs.classify.outputs.run_backend == 'true' || needs.classify.outputs.run_frontend == 'true'
+        run: |
+          python - <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          pattern = re.compile(r"^\s*(?:import\s+(?:gmsh|FreeCAD|calculix)\b|from\s+(?:gmsh|FreeCAD|calculix)\b)")
+          paths = []
+          if "${{ needs.classify.outputs.run_backend }}" == "true":
+              paths.extend(Path("backend/app").rglob("*.py"))
+          if "${{ needs.classify.outputs.run_frontend }}" == "true":
+              src_root = Path("frontend/src")
+              if src_root.exists():
+                  paths.extend(path for path in src_root.rglob("*") if path.suffix in {".ts", ".tsx"})
+
+          violations = []
+          for path in paths:
+              for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                  if pattern.search(line):
+                      violations.append(f"{path}:{lineno}: {line.strip()}")
+
+          if violations:
+              print("Forbidden in-process GPL tool imports found:")
+              print("\n".join(violations))
+              sys.exit(1)
+          PY
+
+      - name: Docs-only fast path
+        if: needs.classify.outputs.docs_only == 'true'
+        run: |
+          echo "docs/**-only change: governance gates passed; unrelated runtime domains are intentionally skipped."
+
+      - name: Install backend dependencies
+        if: needs.classify.outputs.run_backend == 'true'
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Typecheck debt ratchet
+        if: needs.classify.outputs.run_backend == 'true'
+        working-directory: backend
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          python ../scripts/check_typecheck_ratchet.py --self-test
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "$PR_BASE_SHA"
+            python ../scripts/check_typecheck_ratchet.py --base-sha "$PR_BASE_SHA"
+          else
+            python ../scripts/check_typecheck_ratchet.py
+          fi
+
+      - name: Architecture enforcement gate
+        if: needs.classify.outputs.run_backend == 'true'
+        run: |
+          python scripts/check_architecture_enforcement.py --self-test
+          python scripts/check_architecture_enforcement.py
+
+      - name: Ruff
+        if: needs.classify.outputs.run_backend == 'true'
+        working-directory: backend
+        run: >-
+          python -m ruff check app tests ../scripts/check_spec_status.py
+          ../scripts/check_architecture_enforcement.py
+          ../scripts/classify_ci_scope.py
+          ../scripts/check_doc_paths.py
+          ../scripts/check_ip_denylist.py
+          ../scripts/gen_modules.py
+          ../scripts/check_typecheck_ratchet.py
+          ../scripts/generate_frontend_contracts.py
+          ../scripts/relay_continuity.py ../scripts/relay_argon.py ../scripts/relay_observe.py ../scripts/host_ops.py ../scripts/worker_routing.py
+
+  gen-check:
+    name: gen-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies (the OpenAPI contract needs the app importable)
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Regenerate generated files and require no drift
+        run: |
+          python scripts/generate_frontend_contracts.py --self-test
+          python scripts/generate_frontend_contracts.py --check
+          python scripts/gen_modules.py
+          git diff --exit-code
+
+  doc-paths:
+    name: doc-paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Canonical documents cite only existing paths
+        run: python scripts/check_doc_paths.py
+
+  leak-guard:
+    name: leak-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned gitleaks
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tgz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+
+      - name: Secret scan of the tree
+        run: '"$RUNNER_TEMP/gitleaks" dir . --no-banner --redact --config .gitleaks.toml'
+
+      - name: Private deny-list (Actions secret IP_DENYLIST; matched terms are never printed)
+        env:
+          IP_DENYLIST: ${{ secrets.IP_DENYLIST }}
+        run: |
+          set -euo pipefail
+          # Fork pull requests do not receive secrets: skip with a notice. Everywhere else a missing secret fails.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            python scripts/check_ip_denylist.py
+          else
+            python scripts/check_ip_denylist.py --require
+          fi
+
+  backend-core-tests:
+    name: backend-tests (${{ matrix.group }})
+    needs: classify
+    if: needs.classify.outputs.run_backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core-a, core-b, core-c, core-d, core-e, core-f]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Probe Studio isolation on CI host
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_bubblewrap() { sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap; }
+          if install_bubblewrap &&
+             JARVISOS_STUDIO_USER_CODE_ENABLED=1 python -c 'from app.modules.studio_runtime.runtime import status; assert status()["available"]'; then
+            echo "Studio bubblewrap namespace available; hostile tests are required."
+          else
+            echo "JARVISOS_STUDIO_CI_SANDBOX_UNAVAILABLE=1" >> "$GITHUB_ENV"
+            echo "::warning::CI runner cannot create a bubblewrap namespace; hostile Studio tests require WSL2 qualification evidence."
+          fi
+
+      - name: Run backend core test shard
+        working-directory: backend
+        shell: bash
+        env:
+          TEST_GROUP: ${{ matrix.group }}
+        run: |
+          set -euo pipefail
+          mapfile -t test_files < <(python - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          groups = ("core-a", "core-b", "core-c", "core-d", "core-e", "core-f")
+          shard = groups.index(os.environ["TEST_GROUP"])
+          bluecad_root = Path("tests/bluecad")
+          files = sorted(
+              path
+              for path in Path("tests").rglob("test_*.py")
+              if path.is_file() and not path.is_relative_to(bluecad_root)
+          )
+          assigned = [files[index::len(groups)] for index in range(len(groups))]
+          flattened = [path for group in assigned for path in group]
+          assert all(assigned), "each core shard must have tests"
+          assert sorted(flattened) == files
+          assert len(flattened) == len(set(flattened)), "a test module belongs to exactly one shard"
+          print(f"{groups[shard]}: {len(assigned[shard])}/{len(files)} core modules", file=sys.stderr)
+          for path in assigned[shard]:
+              print(path)
+          PY
+          )
+          test "${#test_files[@]}" -gt 0
+          python -m pytest -q -ra --durations=25 "${test_files[@]}"
+
+  backend-bluecad-tests:
+    name: backend-tests (${{ matrix.group }})
+    needs: classify
+    if: needs.classify.outputs.run_bluecad == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [bluecad-a, bluecad-b]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run BLUECAD test shard
+        working-directory: backend
+        shell: bash
+        env:
+          TEST_GROUP: ${{ matrix.group }}
+        run: |
+          set -euo pipefail
+          if [ "$TEST_GROUP" = "bluecad-a" ]; then
+            export BLUECAD_SHARD=0
+          else
+            export BLUECAD_SHARD=1
+          fi
+
+          mapfile -t test_files < <(python - <<'PY'
+          import os
+          from pathlib import Path
+
+          shard = int(os.environ["BLUECAD_SHARD"])
+          canary_owned = {
+              Path("tests/bluecad/test_manifest_determinism_canary.py"),
+              Path("tests/bluecad/test_geometry_property_invariants.py"),
+              Path("tests/bluecad/test_capped_manifold.py"),
+          }
+          files = sorted(
+              path
+              for path in Path("tests/bluecad").rglob("test_*.py")
+              if path not in canary_owned
+          )
+          assigned = [files[0::2], files[1::2]]
+          assert files
+          assert sorted(assigned[0] + assigned[1]) == files
+          assert set(assigned[0]).isdisjoint(assigned[1])
+          for path in assigned[shard]:
+              print(path)
+          PY
+          )
+          test "${#test_files[@]}" -gt 0
+          python -m pytest -q "${test_files[@]}"
+
+  frontend-build:
+    needs: classify
+    if: needs.classify.outputs.run_frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+  bluecad-geometry-canary:
+    needs: classify
+    if: needs.classify.outputs.run_bluecad == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      JARVISOS_BLUECAD_CANARY_PROFILE: ubuntu24-py311
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run canonical canary, bounded property suite, and capped-manifold kernel proof
+        id: property
+        working-directory: backend
+        shell: bash
+        env:
+          JARVISOS_BLUECAD_CANARY_ACTUAL: ${{ runner.temp }}/bluecad-property-canary-actual.json
+        run: |
+          set -o pipefail
+          set +e
+          SECONDS=0
+          python -m pytest -q \
+            tests/bluecad/test_manifest_determinism_canary.py \
+            tests/bluecad/test_geometry_property_invariants.py \
+            tests/bluecad/test_capped_manifold.py \
+            2>&1 | tee "$RUNNER_TEMP/bluecad-property-canary.log"
+          status=${PIPESTATUS[0]}
+          elapsed=$SECONDS
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "elapsed=$elapsed" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload bounded canary diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bluecad-property-canary
+          path: |
+            ${{ runner.temp }}/bluecad-property-canary.log
+            ${{ runner.temp }}/bluecad-property-canary-actual.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce property and time gates
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.property.outputs.status }}" = "0"
+          test "${{ steps.property.outputs.elapsed }}" -le 240

@@ -1,0 +1,3 @@
+.final-fusion__disclosure-row--plain {
+  grid-template-columns: minmax(0, 1fr) auto;
+}

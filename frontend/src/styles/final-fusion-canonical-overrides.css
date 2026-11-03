@@ -1,0 +1,315 @@
+/* 100f canonical composition corrections.
+ * The canonical center surfaces own their visible top bars/dossier heads.
+ * Suppress the generic Panel title strip only for those main regions so the
+ * production geometry matches the approved HTML instead of stacking an extra
+ * non-canonical header above it. Side panels keep the shared Panel header.
+ */
+.final-fusion__basis > .final-fusion__panel-head,
+.final-fusion__model-dossier > .final-fusion__panel-head,
+.final-fusion__literature > .final-fusion__panel-head,
+.final-fusion__roadmap-main > .final-fusion__panel-head,
+.final-fusion__calendar-main > .final-fusion__panel-head,
+.final-fusion__brain > .final-fusion__panel-head,
+.final-fusion__repo > .final-fusion__panel-head,
+.final-fusion__runtime-main > .final-fusion__panel-head {
+  display: none;
+}
+
+/* Final surfaces are workstation compositions, not top-of-page cards. */
+.final-fusion {
+  height: 100%;
+  min-height: 0;
+}
+
+.final-fusion__surface-head {
+  flex: 0 0 auto;
+}
+
+.final-fusion__workbench {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Process keeps the approved canvas-first hierarchy even while authoring is
+ * unavailable. Controls are intentionally present but inert; no topology is
+ * fabricated in React. */
+.process-stage {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--color-text-primary);
+}
+
+.process-stage__header {
+  flex: 0 0 auto;
+  min-height: 58px;
+  padding: 2px 2px 0;
+}
+
+.process-stage__header h1 {
+  margin: 3px 0 3px;
+  font-size: 22px;
+  line-height: 1.08;
+  font-weight: 500;
+  letter-spacing: -.025em;
+}
+
+.process-stage__header .panel-subtitle {
+  margin: 0;
+  max-width: 760px;
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+}
+
+.process-stage__workbench {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-rows: 80px minmax(0, 1fr);
+  grid-template-areas:
+    "toolbar toolbar"
+    "palette canvas";
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--color-bg-surface-raised);
+  box-shadow: 0 10px 28px rgba(60,58,41,.05);
+}
+
+.process-stage__toolbar {
+  grid-area: toolbar;
+  min-height: 80px;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 2px;
+  padding: 7px 10px;
+  overflow-x: hidden;
+  border-bottom: 1px solid var(--color-border-default);
+  background: var(--color-bg-surface-raised);
+}
+
+.process-stage__tool,
+.process-stage__toolbar .process-stage__tool:disabled {
+  flex: 1 1 0;
+  min-width: 42px;
+  min-height: 66px;
+  padding: 4px 3px !important;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  color: var(--color-text-secondary) !important;
+  opacity: .72;
+}
+
+.process-stage__tool svg { color: var(--color-accent-foreground); }
+.process-stage__tool span { font-size: 12px; line-height: 1.05; white-space: nowrap; }
+
+.process-stage__palette {
+  grid-area: palette;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border-default);
+  background: linear-gradient(180deg,var(--color-bg-surface-raised),var(--color-bg-surface));
+}
+
+.process-stage__palette-head {
+  min-height: 39px;
+  padding: 10px 10px 7px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  border-bottom: 1px solid var(--color-border-default);
+}
+.process-stage__palette-head strong { font-size: 12px; font-weight: 500; }
+.process-stage__palette-head span { font-size: 7px; color: var(--color-text-muted); }
+
+.process-stage__palette-search {
+  margin: 8px 8px 5px;
+  min-height: 30px;
+  padding: 7px 8px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface-raised);
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.process-stage__palette-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 8px 6px;
+}
+.process-stage__palette-filters span {
+  padding: 5px 8px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 10px;
+  background: var(--color-bg-surface-raised);
+  color: var(--color-text-muted);
+  font-size: 7px;
+  line-height: 1;
+}
+.process-stage__palette-filters span.is-active {
+  background: var(--color-bg-subtle);
+  border-color: color-mix(in srgb, var(--color-accent-border-strong) 45%, transparent);
+  color: var(--color-status-success-text);
+  font-weight: 600;
+}
+
+.process-stage__palette-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 0 8px 9px;
+}
+.process-stage__palette-list section { padding: 6px 0; border-top: 1px solid var(--color-border-default); }
+.process-stage__palette-list section:first-child { border-top: 0; }
+.process-stage__palette-list h2 {
+  margin: 0 0 5px;
+  font-size: 7px;
+  font-weight: 500;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.process-stage__palette-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.process-stage__palette-list button,
+.process-stage__palette-list button:disabled {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  margin: 0;
+  padding: 7px 8px !important;
+  border: 1px solid var(--color-border-default) !important;
+  border-radius: 4px !important;
+  background: linear-gradient(180deg,var(--color-bg-surface-raised),var(--color-bg-surface)) !important;
+  color: var(--color-text-secondary) !important;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.15;
+  overflow-wrap: normal;
+  word-break: normal;
+  opacity: .72;
+}
+
+.process-stage__canvas {
+  grid-area: canvas;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background-color: var(--color-bg-surface-raised);
+  background-image: linear-gradient(var(--color-bg-subtle) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-bg-subtle) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.process-stage__canvas-meta {
+  position: absolute;
+  inset: 9px auto auto 9px;
+  display: flex;
+  gap: 4px;
+}
+.process-stage__canvas-meta span {
+  padding: 5px 7px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg-surface-raised) 92%, transparent);
+  color: var(--color-text-muted);
+  font-size: 7px;
+}
+
+.process-stage__canvas-empty {
+  width: min(50%, 390px);
+  min-width: 300px;
+  max-width: 390px;
+  padding: 24px 26px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-bg-surface-raised) 94%, transparent);
+  text-align: center;
+  box-shadow: 0 12px 28px rgba(70,67,55,.07);
+}
+.process-stage__canvas-empty strong { font-size: 12px; font-weight: 500; }
+.process-stage__canvas-empty .panel-subtitle { margin: 8px 0 0; font-size: var(--font-size-caption); line-height: 1.4; }
+
+/* Design final routes reuse the legacy shell regions but the canonical
+ * workstations treat them as compact structural columns, not generic app cards. */
+.application-shell--final .shell-navigator,
+.application-shell--final .shell-sidecar {
+  margin: 12px 0 16px;
+  padding: 10px;
+  border-color: var(--color-border-default);
+  border-radius: 5px;
+  background: linear-gradient(180deg,var(--color-bg-surface-raised) 0%,var(--color-bg-surface) 100%);
+  box-shadow: 0 10px 26px rgba(60,58,41,.06);
+}
+.application-shell--final .shell-navigator { width: 240px; }
+.application-shell--final .shell-sidecar {
+  width: var(--jarvis-width, 300px);
+  height: calc(100vh - 28px);
+  max-height: calc(100vh - 28px);
+}
+.application-shell--final .shell-panel__header {
+  min-height: 30px;
+  margin-block-end: 8px;
+  align-items: center;
+  gap: 6px;
+}
+.application-shell--final .shell-panel__header h2 {
+  min-width: 0;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.15;
+  font-weight: 600;
+  overflow-wrap: normal;
+}
+.application-shell--final .shell-panel__header .ui-button {
+  min-height: 24px;
+  padding: 3px 6px;
+  font-size: 7px;
+  white-space: nowrap;
+}
+.application-shell--final .shell-sidecar__view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.application-shell--final .shell-sidecar__view[hidden] { display: none; }
+.application-shell--final .shell-sidecar__properties { flex: 1 1 auto; min-height: 0; overflow: auto; font-size: 12px; }
+.application-shell--final .shell-properties__header h3 {
+  margin: 2px 0 6px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.application-shell--final .shell-properties__header .eyebrow,
+.application-shell--final .shell-sidecar__properties .eyebrow { font-size: 12px; }
+.application-shell--final .shell-sidecar__properties .ui-inline-notice,
+.application-shell--final .shell-sidecar__properties p,
+.application-shell--final .shell-sidecar__properties summary,
+.application-shell--final .shell-sidecar__properties dt,
+.application-shell--final .shell-sidecar__properties dd {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+@media (max-width: 980px) {
+  .process-stage__workbench { grid-template-columns: 180px minmax(0,1fr); }
+  .application-shell--final .shell-navigator { width: 190px; }
+  .application-shell--final .shell-sidecar { width: 280px; }
+}

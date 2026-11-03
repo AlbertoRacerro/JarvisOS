@@ -1,0 +1,132 @@
+{
+  "dimensions_mm": {
+    "bore_band_count": 8,
+    "bore_band_length": 20.0,
+    "inner_radius": 20.0,
+    "length": 160.0,
+    "outer_radius": 40.0,
+    "selection_half_side": 20.5
+  },
+  "fixture": "segmented_open_end_cylinder",
+  "resolved_ports": {
+    "cylinder": {
+      "bore_01": {
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "origin": [
+          0.0,
+          0.0,
+          10.0
+        ],
+        "outer_d": 27.333333333333332
+      },
+      "bore_02": {
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "origin": [
+          0.0,
+          0.0,
+          30.0
+        ],
+        "outer_d": 27.333333333333332
+      },
+      "bore_03": {
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "origin": [
+          0.0,
+          0.0,
+          50.0
+        ],
+        "outer_d": 27.333333333333332
+      },
+      "bore_04": {
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "origin": [
+          0.0,
+          0.0,
+          70.0
+        ],
+        "outer_d": 27.333333333333332
+      },
+      "bore_05": {
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "origin": [
+          0.0,
+          0.0,
+          90.0
+        ],
+        "outer_d": 27.333333333333332
+      },
+      "bore_06": {
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "origin": [
+          0.0,
+          0.0,
+          110.0
+        ],
+        "outer_d": 27.333333333333332
+      },
+      "bore_07": {
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "origin": [
+          0.0,
+          0.0,
+          130.0
+        ],
+        "outer_d": 27.333333333333332
+      },
+      "bore_08": {
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "origin": [
+          0.0,
+          0.0,
+          150.0
+        ],
+        "outer_d": 27.333333333333332
+      },
+      "fixed": {
+        "direction": [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        "origin": [
+          0.0,
+          0.0,
+          -40.0
+        ],
+        "outer_d": 54.0
+      }
+    }
+  }
+}

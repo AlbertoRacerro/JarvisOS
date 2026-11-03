@@ -1,0 +1,2926 @@
+{
+  "captures": [
+    "evidence/158/units.json",
+    "evidence/158/ports.json",
+    "evidence/158/pfr_ok.json",
+    "evidence/158/column2.json",
+    "evidence/158/inputs.json",
+    "evidence/158/cstr_180.json",
+    "evidence/158/recycle_tolerance.json"
+  ],
+  "objects": {
+    "CSTR": {
+      "dof": {
+        "mode": "Adiabatic",
+        "slots": [
+          {
+            "property": "ReactionSetID",
+            "required": true,
+            "units": null
+          },
+          {
+            "property": "ReactorOperationMode",
+            "required": false,
+            "units": null
+          },
+          {
+            "property": "Volume",
+            "required": true,
+            "units": "m3"
+          },
+          {
+            "property": "Headspace",
+            "required": false,
+            "units": "m3"
+          },
+          {
+            "property": "DeltaP",
+            "required": false,
+            "units": "Pa"
+          }
+        ],
+        "supported": true
+      },
+      "enum_values": {},
+      "mode_evidence": {
+        "Isothermic": [
+          "cstr_180.json:CSTR.results (calculation_modes)",
+          "cstr_180.json:CSTR.set (applied)"
+        ],
+        "OutletTemperature": [
+          "cstr_180.json:CSTR.results (calculation_modes)",
+          "cstr_180.json:CSTR.set (applied)"
+        ]
+      },
+      "mode_property": {
+        "ReactorOperationMode": [
+          "cstr_180.json:CSTR.set (applied)"
+        ]
+      },
+      "modes": [
+        "Isothermic",
+        "OutletTemperature"
+      ],
+      "native_type": "CSTR",
+      "native_xml_inputs": {},
+      "observed_mode": null,
+      "ports": {
+        "energy_feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "cstr_180.json:CSTR.set"
+            ],
+            "port": 1
+          }
+        ],
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "cstr_180.json:CSTR.set"
+            ],
+            "port": 0
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "cstr_180.json:CSTR.set"
+            ],
+            "port": 0
+          }
+        ]
+      },
+      "refused_properties": [],
+      "result_properties": [
+        {
+          "classification": "result",
+          "name": "Area Calculation Mode",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Calculate External HTC",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Calculate Internal HTC",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Calculated External HTC",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "result",
+          "name": "Calculated Internal HTC",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "result",
+          "name": "Calculated Overall HTC",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Density",
+          "unit": "kg/m3"
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Flow Direction",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Inlet Temperature",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Mass Flow Rate",
+          "unit": "kg/h"
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Specific Heat",
+          "unit": "J/kg.K"
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Thermal Conductivity",
+          "unit": "W/m.K"
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Viscosity",
+          "unit": "Pa.s"
+        },
+        {
+          "classification": "result",
+          "name": "Diameter",
+          "unit": "mm"
+        },
+        {
+          "classification": "result",
+          "name": "External Heat Transfer Coefficient",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "input",
+          "name": "Headspace",
+          "unit": "m3"
+        },
+        {
+          "classification": "result",
+          "name": "Heat Exchange Area",
+          "unit": "m2"
+        },
+        {
+          "classification": "result",
+          "name": "Heat load",
+          "unit": "kW"
+        },
+        {
+          "classification": "result",
+          "name": "Impeller Diameter",
+          "unit": "mm"
+        },
+        {
+          "classification": "result",
+          "name": "Impeller Speed",
+          "unit": "RPM"
+        },
+        {
+          "classification": "result",
+          "name": "Impeller Type",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Internal Heat Transfer Coefficient",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "result",
+          "name": "Jacket Diameter",
+          "unit": "mm"
+        },
+        {
+          "classification": "result",
+          "name": "Outlet Temperature",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Overall Heat Transfer Coefficient",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "result",
+          "name": "Pressure Drop",
+          "unit": "bar"
+        },
+        {
+          "classification": "result",
+          "name": "Residence time",
+          "unit": "s"
+        },
+        {
+          "classification": "result",
+          "name": "Select the calculation mode of this reactor.",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Temperature delta",
+          "unit": "C."
+        },
+        {
+          "classification": "result",
+          "name": "Use Utility Stream",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Use Wall Properties",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Vapor residence time",
+          "unit": "s"
+        },
+        {
+          "classification": "input",
+          "name": "Volume",
+          "unit": "m3"
+        },
+        {
+          "classification": "result",
+          "name": "Wall Thickness",
+          "unit": "m"
+        }
+      ],
+      "settable_properties": [
+        "DeltaP",
+        "Headspace",
+        "OutletTemperature",
+        "ReactionSetID",
+        "ReactorOperationMode",
+        "Volume"
+      ],
+      "settable_property_evidence": {
+        "DeltaP": [
+          "units.json:CSTR.dof (dof_slot)"
+        ],
+        "Headspace": [
+          "units.json:CSTR.dof (dof_slot)"
+        ],
+        "OutletTemperature": [
+          "cstr_180.json:CSTR.set (applied)"
+        ],
+        "ReactionSetID": [
+          "units.json:CSTR.dof (dof_slot)"
+        ],
+        "ReactorOperationMode": [
+          "cstr_180.json:CSTR.set (applied)",
+          "units.json:CSTR.dof (dof_slot)"
+        ],
+        "Volume": [
+          "units.json:CSTR.dof (dof_slot)"
+        ]
+      }
+    },
+    "Cooler": {
+      "dof": {
+        "mode": "HeatRemoved",
+        "slots": [
+          {
+            "property": "DeltaQ",
+            "required": true,
+            "units": "kW"
+          },
+          {
+            "property": "DeltaP",
+            "required": false,
+            "units": "Pa"
+          },
+          {
+            "property": "Eficiencia",
+            "required": false,
+            "units": "%"
+          }
+        ],
+        "supported": true
+      },
+      "enum_values": {},
+      "mode_evidence": {
+        "EnergyStream": [
+          "inputs.json:cases.Cooler_energy_stream.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_energy_stream.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_heat_removed.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_outlet_temperature.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_outlet_vapor_fraction.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_temperature_change.read_back (calculation_modes)",
+          "units.json:Cooler.results (calculation_modes)"
+        ],
+        "HeatRemoved": [
+          "inputs.json:cases.Cooler_energy_stream.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_heat_removed.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_heat_removed.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_outlet_temperature.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_outlet_vapor_fraction.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_temperature_change.read_back (calculation_modes)",
+          "units.json:Cooler.dof (dof)",
+          "units.json:Cooler.results (calculation_modes)"
+        ],
+        "OutletTemperature": [
+          "inputs.json:cases.Cooler_energy_stream.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_heat_removed.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_outlet_temperature.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_outlet_temperature.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_outlet_vapor_fraction.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_temperature_change.read_back (calculation_modes)",
+          "units.json:Cooler.results (calculation_modes)"
+        ],
+        "OutletVaporFraction": [
+          "inputs.json:cases.Cooler_energy_stream.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_heat_removed.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_outlet_temperature.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_outlet_vapor_fraction.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_outlet_vapor_fraction.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_temperature_change.read_back (calculation_modes)",
+          "units.json:Cooler.results (calculation_modes)"
+        ],
+        "TemperatureChange": [
+          "inputs.json:cases.Cooler_energy_stream.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_heat_removed.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_outlet_temperature.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_outlet_vapor_fraction.read_back (calculation_modes)",
+          "inputs.json:cases.Cooler_temperature_change.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_temperature_change.read_back (calculation_modes)",
+          "units.json:Cooler.results (calculation_modes)"
+        ]
+      },
+      "mode_property": {
+        "CalcMode": [
+          "inputs.json:cases.Cooler_energy_stream.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_heat_removed.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_outlet_temperature.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_outlet_vapor_fraction.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_temperature_change.calls[13].result (applied)"
+        ]
+      },
+      "modes": [
+        "HeatRemoved",
+        "OutletTemperature",
+        "OutletVaporFraction",
+        "TemperatureChange",
+        "EnergyStream"
+      ],
+      "native_type": "Cooler",
+      "native_xml_inputs": {},
+      "observed_mode": "HeatRemoved",
+      "ports": {
+        "energy_feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Cooler_energy_stream.calls[12].result",
+              "inputs.json:cases.Cooler_heat_removed.calls[12].result",
+              "inputs.json:cases.Cooler_outlet_temperature.calls[12].result",
+              "inputs.json:cases.Cooler_outlet_vapor_fraction.calls[12].result",
+              "inputs.json:cases.Cooler_temperature_change.calls[12].result"
+            ],
+            "port": 1
+          }
+        ],
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Cooler_energy_stream.calls[10].result",
+              "inputs.json:cases.Cooler_heat_removed.calls[10].result",
+              "inputs.json:cases.Cooler_outlet_temperature.calls[10].result",
+              "inputs.json:cases.Cooler_outlet_vapor_fraction.calls[10].result",
+              "inputs.json:cases.Cooler_temperature_change.calls[10].result"
+            ],
+            "port": 0
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Cooler_energy_stream.calls[11].result",
+              "inputs.json:cases.Cooler_heat_removed.calls[11].result",
+              "inputs.json:cases.Cooler_outlet_temperature.calls[11].result",
+              "inputs.json:cases.Cooler_outlet_vapor_fraction.calls[11].result",
+              "inputs.json:cases.Cooler_temperature_change.calls[11].result"
+            ],
+            "port": 0
+          }
+        ]
+      },
+      "refused_properties": [],
+      "result_properties": [
+        {
+          "classification": "result",
+          "name": "Outlet Molar Vapor Fraction",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Temperature Difference",
+          "unit": "C."
+        }
+      ],
+      "settable_properties": [
+        "CalcMode",
+        "DeltaP",
+        "DeltaQ",
+        "DeltaT",
+        "Eficiencia",
+        "OutletTemperature",
+        "OutletVaporFraction"
+      ],
+      "settable_property_evidence": {
+        "CalcMode": [
+          "inputs.json:cases.Cooler_energy_stream.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_heat_removed.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_outlet_temperature.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_outlet_vapor_fraction.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_temperature_change.calls[13].result (applied)"
+        ],
+        "DeltaP": [
+          "inputs.json:cases.Cooler_energy_stream.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_heat_removed.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_outlet_temperature.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_outlet_vapor_fraction.calls[13].result (applied)",
+          "inputs.json:cases.Cooler_temperature_change.calls[13].result (applied)",
+          "units.json:Cooler.dof (dof_slot)"
+        ],
+        "DeltaQ": [
+          "inputs.json:cases.Cooler_heat_removed.calls[13].result (applied)",
+          "units.json:Cooler.dof (dof_slot)"
+        ],
+        "DeltaT": [
+          "inputs.json:cases.Cooler_temperature_change.calls[13].result (applied)"
+        ],
+        "Eficiencia": [
+          "units.json:Cooler.dof (dof_slot)"
+        ],
+        "OutletTemperature": [
+          "inputs.json:cases.Cooler_outlet_temperature.calls[13].result (applied)"
+        ],
+        "OutletVaporFraction": [
+          "inputs.json:cases.Cooler_outlet_vapor_fraction.calls[13].result (applied)"
+        ]
+      }
+    },
+    "DistillationColumn": {
+      "dof": {
+        "mode": "Wang-Henke (Bubble Point)",
+        "slots": [
+          {
+            "property": "NumberOfStages",
+            "required": true,
+            "units": null
+          },
+          {
+            "property": "Stages[0].P",
+            "required": true,
+            "units": "Pa"
+          },
+          {
+            "property": "Stages[N].P",
+            "required": true,
+            "units": "Pa"
+          },
+          {
+            "property": "Specs[C]",
+            "required": true,
+            "units": null
+          },
+          {
+            "property": "Specs[R]",
+            "required": true,
+            "units": "mol/s"
+          },
+          {
+            "property": "CondenserType",
+            "required": false,
+            "units": null
+          }
+        ],
+        "supported": true
+      },
+      "enum_values": {
+        "CondenserType": {
+          "Total_Condenser": [
+            "column2.json:set"
+          ]
+        }
+      },
+      "mode_evidence": {
+        "Wang-Henke (Bubble Point)": [
+          "column2.json:dof (dof)",
+          "units.json:DistillationColumn.dof (dof)"
+        ]
+      },
+      "mode_property": {},
+      "modes": [
+        "Wang-Henke (Bubble Point)"
+      ],
+      "native_type": "DistillationColumn",
+      "native_xml_inputs": {
+        "__BottomPressure": {
+          "source": "backend/app/modules/process_stack/draft_compiler.py:_patch_native_xml; no MCP stage-pressure property",
+          "xml": "Stages/Stage[N-1]/P"
+        },
+        "__CondenserSpec": {
+          "source": "backend/app/modules/process_stack/draft_compiler.py:_patch_native_xml; also set as Condenser_Specification_Value",
+          "xml": "Specs/Spec[@ID='C']/SpecValue"
+        },
+        "__FeedStage": {
+          "source": "backend/app/modules/process_stack/draft_compiler.py:_patch_native_xml; no MCP feed-stage property (column2.json:try_FeedStage)",
+          "xml": "MaterialStreams/StreamInformation[StreamBehavior=Feed]/AssociatedStage"
+        },
+        "__ReboilerSpec": {
+          "source": "backend/app/modules/process_stack/draft_compiler.py:_patch_native_xml; also set as Reboiler_Specification_Value",
+          "xml": "Specs/Spec[@ID='R']/SpecValue"
+        },
+        "__TopPressure": {
+          "source": "backend/app/modules/process_stack/draft_compiler.py:_patch_native_xml; MCP refuses Stages[0].P (column2.json:try_Stages[0].P)",
+          "xml": "Stages/Stage[0]/P"
+        }
+      },
+      "observed_mode": null,
+      "ports": {
+        "energy_feed": [
+          {
+            "captured": false,
+            "evidence": [
+              "backend/app/modules/process_stack/draft_compiler.py:_patch_native_xml native connector 10 plus reload, verified by read-back; the MCP refuses this connection (spec 158 probe findings) (reboiler duty)"
+            ],
+            "port": 10
+          }
+        ],
+        "energy_product": [
+          {
+            "captured": false,
+            "evidence": [
+              "backend/app/modules/process_stack/draft_compiler.py:_patch_native_xml native connector 10 plus reload, verified by read-back; the MCP refuses this connection (spec 158 probe findings) (condenser duty)"
+            ],
+            "port": 10
+          }
+        ],
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "column2.json:conn.feed0"
+            ],
+            "port": 0
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "column2.json:conn.d0"
+            ],
+            "port": 0
+          },
+          {
+            "captured": true,
+            "evidence": [
+              "column2.json:conn.b1"
+            ],
+            "port": 1
+          }
+        ]
+      },
+      "refused_properties": [
+        "CondenserPressure",
+        "Condenser_Specification_Type",
+        "FeedStage",
+        "ReboilerPressure",
+        "Reboiler_Specification_Type",
+        "Stages[0].P"
+      ],
+      "result_properties": [
+        {
+          "classification": "result",
+          "name": "Condenser Duty",
+          "unit": "kW"
+        },
+        {
+          "classification": "result",
+          "name": "Number of Stages",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Reboiler Duty",
+          "unit": "kW"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_1",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_10",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_11",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_12",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_2",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_3",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_4",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_5",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_6",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_7",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_8",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_LiquidFlow_9",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_1",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_10",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_11",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_12",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_2",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_3",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_4",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_5",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_6",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_7",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_8",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_Temperature_9",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_1",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_10",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_11",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_12",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_2",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_3",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_4",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_5",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_6",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_7",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_8",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Stage_VaporFlow_9",
+          "unit": "kmol/h"
+        },
+        {
+          "classification": "result",
+          "name": "Sump_LiquidLevel",
+          "unit": "m"
+        }
+      ],
+      "settable_properties": [
+        "AdjustVarType",
+        "Apply Murphree Efficiency",
+        "AutoUpdateInitialEstimates",
+        "BottomLiquidLevel",
+        "BottomSpacing",
+        "Calculated",
+        "Calibrate Tray Coefficients",
+        "ColumnPressureDrop",
+        "ColumnType",
+        "CondenserDeltaP",
+        "CondenserDuty",
+        "CondenserType",
+        "Condenser_Specification_Value",
+        "Coolant Temperature",
+        "CreateSolverConvergengeReport",
+        "DebugMode",
+        "DistillateFlowRate",
+        "DynamicsOnly",
+        "DynamicsSpec",
+        "EnergyFlow",
+        "EstimatedDiameter",
+        "EstimatedHeight",
+        "ExternalLoopTolerance",
+        "Flooding Alarm",
+        "Global_Stage_Efficiency",
+        "InfoCarrierVarType",
+        "Initial Pressure",
+        "Initial Sump Level",
+        "Initial Temperature",
+        "InternalLoopTolerance",
+        "IsAdjustAttached",
+        "IsInfoCarrierAttached",
+        "IsSpecAttached",
+        "Max. L change (%)",
+        "Max. P change (%)",
+        "Max. V change (%)",
+        "MaxIterations",
+        "Minimum Pressure",
+        "NumberOfStages",
+        "ObjectClass",
+        "Reboiler_Specification_Value",
+        "Specs[C]",
+        "Specs[R]",
+        "Stages[N].P"
+      ],
+      "settable_property_evidence": {
+        "AdjustVarType": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Apply Murphree Efficiency": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "AutoUpdateInitialEstimates": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "BottomLiquidLevel": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "BottomSpacing": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Calculated": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Calibrate Tray Coefficients": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "ColumnPressureDrop": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "ColumnType": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "CondenserDeltaP": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "CondenserDuty": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "CondenserType": [
+          "column2.json:dof (dof_slot)",
+          "column2.json:set (applied)",
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)",
+          "units.json:DistillationColumn.dof (dof_slot)"
+        ],
+        "Condenser_Specification_Value": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_Condenser_Specification_Value (applied)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Coolant Temperature": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "CreateSolverConvergengeReport": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "DebugMode": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "DistillateFlowRate": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "DynamicsOnly": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "DynamicsSpec": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "EnergyFlow": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "EstimatedDiameter": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "EstimatedHeight": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "ExternalLoopTolerance": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Flooding Alarm": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Global_Stage_Efficiency": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "InfoCarrierVarType": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Initial Pressure": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Initial Sump Level": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Initial Temperature": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "InternalLoopTolerance": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "IsAdjustAttached": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "IsInfoCarrierAttached": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "IsSpecAttached": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Max. L change (%)": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Max. P change (%)": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Max. V change (%)": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "MaxIterations": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Minimum Pressure": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "NumberOfStages": [
+          "column2.json:dof (dof_slot)",
+          "column2.json:set (applied)",
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)",
+          "units.json:DistillationColumn.dof (dof_slot)"
+        ],
+        "ObjectClass": [
+          "column2.json:try_CondenserPressure (available)",
+          "column2.json:try_Condenser_Specification_Type (available)",
+          "column2.json:try_FeedStage (available)",
+          "column2.json:try_ReboilerPressure (available)",
+          "column2.json:try_Reboiler_Specification_Type (available)",
+          "column2.json:try_Stages[0].P (available)"
+        ],
+        "Reboiler_Specification_Value": [
+          "column2.json:try_Reboiler_Specification_Value (applied)"
+        ],
+        "Specs[C]": [
+          "column2.json:dof (dof_slot)",
+          "units.json:DistillationColumn.dof (dof_slot)"
+        ],
+        "Specs[R]": [
+          "column2.json:dof (dof_slot)",
+          "units.json:DistillationColumn.dof (dof_slot)"
+        ],
+        "Stages[N].P": [
+          "column2.json:dof (dof_slot)",
+          "units.json:DistillationColumn.dof (dof_slot)"
+        ]
+      }
+    },
+    "EnergyStream": {
+      "dof": {
+        "mode": null,
+        "slots": [],
+        "supported": true
+      },
+      "enum_values": {},
+      "mode_evidence": {},
+      "mode_property": {},
+      "modes": [],
+      "native_type": "EnergyStream",
+      "native_xml_inputs": {},
+      "observed_mode": null,
+      "ports": {},
+      "refused_properties": [],
+      "result_properties": [],
+      "settable_properties": [
+        "EnergyFlow"
+      ],
+      "settable_property_evidence": {
+        "EnergyFlow": [
+          "inputs.json:cases.Cooler_energy_stream.calls[14].result (applied)",
+          "inputs.json:cases.Cooler_heat_removed.calls[14].result (applied)",
+          "inputs.json:cases.Cooler_outlet_temperature.calls[14].result (applied)",
+          "inputs.json:cases.Cooler_outlet_vapor_fraction.calls[14].result (applied)",
+          "inputs.json:cases.Cooler_temperature_change.calls[14].result (applied)",
+          "inputs.json:cases.Heater_energy_stream.calls[14].result (applied)",
+          "inputs.json:cases.Heater_heat_added.calls[14].result (applied)",
+          "inputs.json:cases.Heater_heat_added_removed.calls[14].result (applied)",
+          "inputs.json:cases.Heater_outlet_temperature.calls[14].result (applied)",
+          "inputs.json:cases.Heater_outlet_vapor_fraction.calls[14].result (applied)",
+          "inputs.json:cases.Heater_temperature_change.calls[14].result (applied)",
+          "inputs.json:cases.PFR_adiabatic.calls[14].result (applied)",
+          "inputs.json:cases.PFR_heat_exchange.calls[14].result (applied)",
+          "inputs.json:cases.PFR_isothermic.calls[14].result (applied)",
+          "inputs.json:cases.PFR_nonisothermal_nonadiabatic.calls[14].result (applied)",
+          "inputs.json:cases.PFR_outlet_temperature.calls[14].result (applied)",
+          "ports.json:q_set (applied)"
+        ]
+      }
+    },
+    "HeatExchanger": {
+      "dof": {
+        "mode": "CalcBothTemp_UA",
+        "slots": [
+          {
+            "property": "OverallCoefficient",
+            "required": true,
+            "units": "W/[m2.K]"
+          },
+          {
+            "property": "Area",
+            "required": true,
+            "units": "m2"
+          },
+          {
+            "property": "HotSidePressureDrop",
+            "required": false,
+            "units": "Pa"
+          },
+          {
+            "property": "ColdSidePressureDrop",
+            "required": false,
+            "units": "Pa"
+          },
+          {
+            "property": "HeatLoss",
+            "required": false,
+            "units": "kW"
+          }
+        ],
+        "supported": true
+      },
+      "enum_values": {},
+      "mode_evidence": {
+        "CalcArea": [
+          "ports.json:x_dof_modes.CalcArea (dof)",
+          "ports.json:x_res (calculation_modes)",
+          "units.json:HeatExchanger.results (calculation_modes)"
+        ],
+        "CalcBothTemp": [
+          "ports.json:x_dof_modes.CalcBothTemp (dof)",
+          "ports.json:x_res (calculation_modes)",
+          "units.json:HeatExchanger.results (calculation_modes)"
+        ],
+        "CalcBothTemp_UA": [
+          "ports.json:x_res (calculation_modes)",
+          "ports.json:x_set (applied)",
+          "units.json:HeatExchanger.dof (dof)",
+          "units.json:HeatExchanger.results (calculation_modes)"
+        ],
+        "CalcTempColdOut": [
+          "ports.json:x_dof_modes.CalcTempColdOut (dof)",
+          "ports.json:x_res (calculation_modes)",
+          "units.json:HeatExchanger.results (calculation_modes)"
+        ],
+        "CalcTempHotOut": [
+          "ports.json:x_dof_modes.CalcTempHotOut (dof)",
+          "ports.json:x_res (calculation_modes)",
+          "units.json:HeatExchanger.results (calculation_modes)"
+        ],
+        "OutletVaporFraction1": [
+          "ports.json:x_dof_modes.OutletVaporFraction1 (dof)",
+          "ports.json:x_res (calculation_modes)",
+          "units.json:HeatExchanger.results (calculation_modes)"
+        ],
+        "OutletVaporFraction2": [
+          "ports.json:x_dof_modes.OutletVaporFraction2 (dof)",
+          "ports.json:x_res (calculation_modes)",
+          "units.json:HeatExchanger.results (calculation_modes)"
+        ],
+        "PinchPoint": [
+          "ports.json:x_dof_modes.PinchPoint (dof)",
+          "ports.json:x_res (calculation_modes)",
+          "units.json:HeatExchanger.results (calculation_modes)"
+        ],
+        "ShellandTube_CalcFoulingFactor": [
+          "ports.json:x_res (calculation_modes)",
+          "units.json:HeatExchanger.results (calculation_modes)"
+        ],
+        "ShellandTube_Rating": [
+          "ports.json:x_res (calculation_modes)",
+          "units.json:HeatExchanger.results (calculation_modes)"
+        ],
+        "ThermalEfficiency": [
+          "ports.json:x_dof_modes.ThermalEfficiency (dof)",
+          "ports.json:x_res (calculation_modes)",
+          "units.json:HeatExchanger.results (calculation_modes)"
+        ]
+      },
+      "mode_property": {
+        "CalculationMode": [
+          "ports.json:x_set (applied)"
+        ]
+      },
+      "modes": [
+        "CalcTempHotOut",
+        "CalcTempColdOut",
+        "CalcBothTemp",
+        "CalcBothTemp_UA",
+        "CalcArea",
+        "ShellandTube_Rating",
+        "ShellandTube_CalcFoulingFactor",
+        "PinchPoint",
+        "ThermalEfficiency",
+        "OutletVaporFraction1",
+        "OutletVaporFraction2"
+      ],
+      "native_type": "HeatExchanger",
+      "native_xml_inputs": {},
+      "observed_mode": "",
+      "ports": {
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "ports.json:x_conn[0]"
+            ],
+            "port": 0
+          },
+          {
+            "captured": true,
+            "evidence": [
+              "ports.json:x_conn[1]"
+            ],
+            "port": 1
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "ports.json:x_conn[2]"
+            ],
+            "port": 0
+          },
+          {
+            "captured": true,
+            "evidence": [
+              "ports.json:x_conn[3]"
+            ],
+            "port": 1
+          }
+        ]
+      },
+      "refused_properties": [],
+      "result_properties": [
+        {
+          "classification": "result",
+          "name": "Calculated MITA",
+          "unit": "C."
+        },
+        {
+          "classification": "result",
+          "name": "Cold fluid outlet temperature",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Heat Load",
+          "unit": "kW"
+        },
+        {
+          "classification": "result",
+          "name": "Hot fluid outlet temperature",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Logarithmic mean temperature difference LMTD",
+          "unit": "C."
+        },
+        {
+          "classification": "result",
+          "name": "Maximum Theoretical Heat Exchange",
+          "unit": "kW"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_49",
+          "unit": "mm"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_50",
+          "unit": "m"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_51",
+          "unit": "m2"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_52",
+          "unit": "m2"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_53",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_54",
+          "unit": "m2"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_55",
+          "unit": "m2"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_56",
+          "unit": "m/s"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_57",
+          "unit": "m/s"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_58",
+          "unit": "m/s"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_59",
+          "unit": "m/s"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_60",
+          "unit": "m/s"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_61",
+          "unit": "m/s"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_62",
+          "unit": "bar"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_63",
+          "unit": "bar"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_64",
+          "unit": "bar"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_65",
+          "unit": "bar"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_66",
+          "unit": "m3"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_67",
+          "unit": "m3"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_68",
+          "unit": "kg"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_69",
+          "unit": "kg"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_HX_70",
+          "unit": "kg"
+        },
+        {
+          "classification": "result",
+          "name": "Thermal Efficiency",
+          "unit": "%"
+        },
+        {
+          "classification": "result",
+          "name": "[Shell and Tube] Fouling Factor (Design)",
+          "unit": "K.m2/W"
+        },
+        {
+          "classification": "result",
+          "name": "[Shell and Tube] LMTD Correction Factor (F)",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "[Shell and Tube] Resistance heat transfer pipes",
+          "unit": "K.m2/W"
+        },
+        {
+          "classification": "result",
+          "name": "[Shell and Tube] Resistance heat transfer shell",
+          "unit": "K.m2/W"
+        },
+        {
+          "classification": "result",
+          "name": "[Shell and Tube] Resistance thermal conductivity pipes",
+          "unit": "K.m2/W"
+        },
+        {
+          "classification": "result",
+          "name": "[Shell and Tube] Reynolds number shell",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "[Shell and Tube] Reynolds number tubes",
+          "unit": ""
+        }
+      ],
+      "settable_properties": [
+        "Area",
+        "CalculationMode",
+        "ColdSideOutletTemperature",
+        "ColdSidePressureDrop",
+        "HeatLoss",
+        "HotSideOutletTemperature",
+        "HotSidePressureDrop",
+        "MITA",
+        "OutletVaporFraction1",
+        "OutletVaporFraction2",
+        "OverallCoefficient",
+        "Q",
+        "ThermalEfficiency"
+      ],
+      "settable_property_evidence": {
+        "Area": [
+          "ports.json:x_set (applied)",
+          "units.json:HeatExchanger.dof (dof_slot)"
+        ],
+        "CalculationMode": [
+          "ports.json:x_set (applied)"
+        ],
+        "ColdSideOutletTemperature": [
+          "ports.json:x_dof_modes.CalcArea (dof_slot)",
+          "ports.json:x_dof_modes.CalcTempHotOut (dof_slot)"
+        ],
+        "ColdSidePressureDrop": [
+          "ports.json:x_dof_modes.CalcArea (dof_slot)",
+          "ports.json:x_dof_modes.CalcBothTemp (dof_slot)",
+          "ports.json:x_dof_modes.CalcTempColdOut (dof_slot)",
+          "ports.json:x_dof_modes.CalcTempHotOut (dof_slot)",
+          "ports.json:x_dof_modes.OutletVaporFraction1 (dof_slot)",
+          "ports.json:x_dof_modes.OutletVaporFraction2 (dof_slot)",
+          "ports.json:x_dof_modes.PinchPoint (dof_slot)",
+          "ports.json:x_dof_modes.ThermalEfficiency (dof_slot)",
+          "units.json:HeatExchanger.dof (dof_slot)"
+        ],
+        "HeatLoss": [
+          "ports.json:x_dof_modes.CalcArea (dof_slot)",
+          "ports.json:x_dof_modes.CalcBothTemp (dof_slot)",
+          "ports.json:x_dof_modes.CalcTempColdOut (dof_slot)",
+          "ports.json:x_dof_modes.CalcTempHotOut (dof_slot)",
+          "ports.json:x_dof_modes.OutletVaporFraction1 (dof_slot)",
+          "ports.json:x_dof_modes.OutletVaporFraction2 (dof_slot)",
+          "ports.json:x_dof_modes.PinchPoint (dof_slot)",
+          "ports.json:x_dof_modes.ThermalEfficiency (dof_slot)",
+          "units.json:HeatExchanger.dof (dof_slot)"
+        ],
+        "HotSideOutletTemperature": [
+          "ports.json:x_dof_modes.CalcTempColdOut (dof_slot)"
+        ],
+        "HotSidePressureDrop": [
+          "ports.json:x_dof_modes.CalcArea (dof_slot)",
+          "ports.json:x_dof_modes.CalcBothTemp (dof_slot)",
+          "ports.json:x_dof_modes.CalcTempColdOut (dof_slot)",
+          "ports.json:x_dof_modes.CalcTempHotOut (dof_slot)",
+          "ports.json:x_dof_modes.OutletVaporFraction1 (dof_slot)",
+          "ports.json:x_dof_modes.OutletVaporFraction2 (dof_slot)",
+          "ports.json:x_dof_modes.PinchPoint (dof_slot)",
+          "ports.json:x_dof_modes.ThermalEfficiency (dof_slot)",
+          "units.json:HeatExchanger.dof (dof_slot)"
+        ],
+        "MITA": [
+          "ports.json:x_dof_modes.PinchPoint (dof_slot)"
+        ],
+        "OutletVaporFraction1": [
+          "ports.json:x_dof_modes.OutletVaporFraction1 (dof_slot)"
+        ],
+        "OutletVaporFraction2": [
+          "ports.json:x_dof_modes.OutletVaporFraction2 (dof_slot)"
+        ],
+        "OverallCoefficient": [
+          "ports.json:x_dof_modes.CalcArea (dof_slot)",
+          "ports.json:x_set (applied)",
+          "units.json:HeatExchanger.dof (dof_slot)"
+        ],
+        "Q": [
+          "ports.json:x_dof_modes.CalcBothTemp (dof_slot)"
+        ],
+        "ThermalEfficiency": [
+          "ports.json:x_dof_modes.ThermalEfficiency (dof_slot)"
+        ]
+      }
+    },
+    "Heater": {
+      "dof": {
+        "mode": "HeatAdded",
+        "slots": [
+          {
+            "property": "DeltaQ",
+            "required": true,
+            "units": "kW"
+          },
+          {
+            "property": "DeltaP",
+            "required": false,
+            "units": "Pa"
+          },
+          {
+            "property": "Eficiencia",
+            "required": false,
+            "units": "%"
+          }
+        ],
+        "supported": true
+      },
+      "enum_values": {},
+      "mode_evidence": {
+        "EnergyStream": [
+          "inputs.json:cases.Heater_energy_stream.calls[13].result (applied)",
+          "inputs.json:cases.Heater_energy_stream.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added_removed.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_temperature.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_vapor_fraction.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_temperature_change.read_back (calculation_modes)",
+          "ports.json:h_res (calculation_modes)",
+          "ports.json:h_set (applied)",
+          "units.json:Heater.results (calculation_modes)"
+        ],
+        "HeatAdded": [
+          "inputs.json:cases.Heater_energy_stream.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added.calls[13].result (applied)",
+          "inputs.json:cases.Heater_heat_added.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added_removed.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_temperature.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_vapor_fraction.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_temperature_change.read_back (calculation_modes)",
+          "ports.json:h_res (calculation_modes)",
+          "units.json:Heater.dof (dof)",
+          "units.json:Heater.results (calculation_modes)"
+        ],
+        "HeatAddedRemoved": [
+          "inputs.json:cases.Heater_energy_stream.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added_removed.calls[13].result (applied)",
+          "inputs.json:cases.Heater_heat_added_removed.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_temperature.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_vapor_fraction.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_temperature_change.read_back (calculation_modes)",
+          "ports.json:h_res (calculation_modes)",
+          "units.json:Heater.results (calculation_modes)"
+        ],
+        "OutletTemperature": [
+          "inputs.json:cases.Heater_energy_stream.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added_removed.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_temperature.calls[13].result (applied)",
+          "inputs.json:cases.Heater_outlet_temperature.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_vapor_fraction.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_temperature_change.read_back (calculation_modes)",
+          "ports.json:h_res (calculation_modes)",
+          "units.json:Heater.results (calculation_modes)"
+        ],
+        "OutletVaporFraction": [
+          "inputs.json:cases.Heater_energy_stream.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added_removed.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_temperature.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_vapor_fraction.calls[13].result (applied)",
+          "inputs.json:cases.Heater_outlet_vapor_fraction.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_temperature_change.read_back (calculation_modes)",
+          "ports.json:h_res (calculation_modes)",
+          "units.json:Heater.results (calculation_modes)"
+        ],
+        "TemperatureChange": [
+          "inputs.json:cases.Heater_energy_stream.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_heat_added_removed.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_temperature.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_outlet_vapor_fraction.read_back (calculation_modes)",
+          "inputs.json:cases.Heater_temperature_change.calls[13].result (applied)",
+          "inputs.json:cases.Heater_temperature_change.read_back (calculation_modes)",
+          "ports.json:h_res (calculation_modes)",
+          "units.json:Heater.results (calculation_modes)"
+        ]
+      },
+      "mode_property": {
+        "CalcMode": [
+          "inputs.json:cases.Heater_energy_stream.calls[13].result (applied)",
+          "inputs.json:cases.Heater_heat_added.calls[13].result (applied)",
+          "inputs.json:cases.Heater_heat_added_removed.calls[13].result (applied)",
+          "inputs.json:cases.Heater_outlet_temperature.calls[13].result (applied)",
+          "inputs.json:cases.Heater_outlet_vapor_fraction.calls[13].result (applied)",
+          "inputs.json:cases.Heater_temperature_change.calls[13].result (applied)",
+          "ports.json:h_set (applied)"
+        ]
+      },
+      "modes": [
+        "HeatAdded",
+        "OutletTemperature",
+        "EnergyStream",
+        "OutletVaporFraction",
+        "TemperatureChange",
+        "HeatAddedRemoved"
+      ],
+      "native_type": "Heater",
+      "native_xml_inputs": {},
+      "observed_mode": "HeatAdded",
+      "ports": {
+        "energy_feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Heater_energy_stream.calls[12].result",
+              "inputs.json:cases.Heater_heat_added.calls[12].result",
+              "inputs.json:cases.Heater_heat_added_removed.calls[12].result",
+              "inputs.json:cases.Heater_outlet_temperature.calls[12].result",
+              "inputs.json:cases.Heater_outlet_vapor_fraction.calls[12].result",
+              "inputs.json:cases.Heater_temperature_change.calls[12].result",
+              "ports.json:h_q1"
+            ],
+            "port": 1
+          }
+        ],
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Heater_energy_stream.calls[10].result",
+              "inputs.json:cases.Heater_heat_added.calls[10].result",
+              "inputs.json:cases.Heater_heat_added_removed.calls[10].result",
+              "inputs.json:cases.Heater_outlet_temperature.calls[10].result",
+              "inputs.json:cases.Heater_outlet_vapor_fraction.calls[10].result",
+              "inputs.json:cases.Heater_temperature_change.calls[10].result",
+              "ports.json:h_conn[0]"
+            ],
+            "port": 0
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Heater_energy_stream.calls[11].result",
+              "inputs.json:cases.Heater_heat_added.calls[11].result",
+              "inputs.json:cases.Heater_heat_added_removed.calls[11].result",
+              "inputs.json:cases.Heater_outlet_temperature.calls[11].result",
+              "inputs.json:cases.Heater_outlet_vapor_fraction.calls[11].result",
+              "inputs.json:cases.Heater_temperature_change.calls[11].result",
+              "ports.json:h_conn[1]"
+            ],
+            "port": 0
+          }
+        ]
+      },
+      "refused_properties": [],
+      "result_properties": [
+        {
+          "classification": "result",
+          "name": "Temperature Difference",
+          "unit": "C."
+        }
+      ],
+      "settable_properties": [
+        "CalcMode",
+        "DeltaP",
+        "DeltaQ",
+        "DeltaT",
+        "Eficiencia",
+        "OutletTemperature",
+        "OutletVaporFraction"
+      ],
+      "settable_property_evidence": {
+        "CalcMode": [
+          "inputs.json:cases.Heater_energy_stream.calls[13].result (applied)",
+          "inputs.json:cases.Heater_heat_added.calls[13].result (applied)",
+          "inputs.json:cases.Heater_heat_added_removed.calls[13].result (applied)",
+          "inputs.json:cases.Heater_outlet_temperature.calls[13].result (applied)",
+          "inputs.json:cases.Heater_outlet_vapor_fraction.calls[13].result (applied)",
+          "inputs.json:cases.Heater_temperature_change.calls[13].result (applied)",
+          "ports.json:h_set (applied)"
+        ],
+        "DeltaP": [
+          "inputs.json:cases.Heater_energy_stream.calls[13].result (applied)",
+          "inputs.json:cases.Heater_heat_added.calls[13].result (applied)",
+          "inputs.json:cases.Heater_heat_added_removed.calls[13].result (applied)",
+          "inputs.json:cases.Heater_outlet_temperature.calls[13].result (applied)",
+          "inputs.json:cases.Heater_outlet_vapor_fraction.calls[13].result (applied)",
+          "inputs.json:cases.Heater_temperature_change.calls[13].result (applied)",
+          "units.json:Heater.dof (dof_slot)"
+        ],
+        "DeltaQ": [
+          "inputs.json:cases.Heater_heat_added.calls[13].result (applied)",
+          "inputs.json:cases.Heater_heat_added_removed.calls[13].result (applied)",
+          "units.json:Heater.dof (dof_slot)"
+        ],
+        "DeltaT": [
+          "inputs.json:cases.Heater_temperature_change.calls[13].result (applied)"
+        ],
+        "Eficiencia": [
+          "units.json:Heater.dof (dof_slot)"
+        ],
+        "OutletTemperature": [
+          "inputs.json:cases.Heater_outlet_temperature.calls[13].result (applied)"
+        ],
+        "OutletVaporFraction": [
+          "inputs.json:cases.Heater_outlet_vapor_fraction.calls[13].result (applied)"
+        ]
+      }
+    },
+    "Mixer": {
+      "dof": {
+        "mode": "",
+        "slots": [],
+        "supported": false
+      },
+      "enum_values": {},
+      "mode_evidence": {},
+      "mode_property": {},
+      "modes": [],
+      "native_type": "Mixer",
+      "native_xml_inputs": {},
+      "observed_mode": null,
+      "ports": {
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Mixer_default.calls[12].result"
+            ],
+            "port": 0
+          },
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Mixer_default.calls[13].result"
+            ],
+            "port": 1
+          },
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Mixer_default.calls[14].result"
+            ],
+            "port": 2
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Mixer_default.calls[15].result"
+            ],
+            "port": 0
+          }
+        ]
+      },
+      "refused_properties": [],
+      "result_properties": [],
+      "settable_properties": [],
+      "settable_property_evidence": {}
+    },
+    "PFR": {
+      "dof": {
+        "mode": "Adiabatic",
+        "slots": [
+          {
+            "property": "ReactionSetID",
+            "required": true,
+            "units": null
+          },
+          {
+            "property": "ReactorOperationMode",
+            "required": false,
+            "units": null
+          },
+          {
+            "property": "Volume",
+            "required": true,
+            "units": "m3"
+          },
+          {
+            "property": "Length",
+            "required": true,
+            "units": "m"
+          },
+          {
+            "property": "CatalystLoading",
+            "required": false,
+            "units": "kg/m3"
+          },
+          {
+            "property": "DeltaP",
+            "required": false,
+            "units": "Pa"
+          }
+        ],
+        "supported": true
+      },
+      "enum_values": {},
+      "mode_evidence": {
+        "Adiabatic": [
+          "inputs.json:cases.PFR_adiabatic.calls[13].result (applied)",
+          "units.json:PFR.dof (dof)"
+        ],
+        "HeatExchange": [
+          "inputs.json:cases.PFR_heat_exchange.calls[13].result (applied)",
+          "pfr_ok.json:dof (dof)",
+          "pfr_ok.json:set (applied)"
+        ],
+        "Isothermic": [
+          "inputs.json:cases.PFR_isothermic.calls[13].result (applied)"
+        ],
+        "NonIsothermalNonAdiabatic": [
+          "inputs.json:cases.PFR_nonisothermal_nonadiabatic.calls[13].result (applied)"
+        ],
+        "OutletTemperature": [
+          "inputs.json:cases.PFR_outlet_temperature.calls[13].result (applied)"
+        ]
+      },
+      "mode_property": {
+        "ReactorOperationMode": [
+          "inputs.json:cases.PFR_adiabatic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_heat_exchange.calls[13].result (applied)",
+          "inputs.json:cases.PFR_isothermic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_nonisothermal_nonadiabatic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_outlet_temperature.calls[13].result (applied)",
+          "pfr_ok.json:set (applied)"
+        ]
+      },
+      "modes": [
+        "Isothermic",
+        "Adiabatic",
+        "OutletTemperature",
+        "NonIsothermalNonAdiabatic",
+        "HeatExchange"
+      ],
+      "native_type": "PFR",
+      "native_xml_inputs": {
+        "__ReactionSetID": {
+          "source": "pfr_ok.json:load and pfr_ok.json:setrs (native reaction set reloaded)",
+          "xml": "SimulationObject/ReactionSetID plus Reactions/ReactionSets"
+        }
+      },
+      "observed_mode": null,
+      "ports": {
+        "energy_feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.PFR_adiabatic.calls[12].result",
+              "inputs.json:cases.PFR_heat_exchange.calls[12].result",
+              "inputs.json:cases.PFR_isothermic.calls[12].result",
+              "inputs.json:cases.PFR_nonisothermal_nonadiabatic.calls[12].result",
+              "inputs.json:cases.PFR_outlet_temperature.calls[12].result",
+              "pfr_ok.json:ce"
+            ],
+            "port": 1
+          }
+        ],
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.PFR_adiabatic.calls[10].result",
+              "inputs.json:cases.PFR_heat_exchange.calls[10].result",
+              "inputs.json:cases.PFR_isothermic.calls[10].result",
+              "inputs.json:cases.PFR_nonisothermal_nonadiabatic.calls[10].result",
+              "inputs.json:cases.PFR_outlet_temperature.calls[10].result",
+              "pfr_ok.json:c1"
+            ],
+            "port": 0
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.PFR_adiabatic.calls[11].result",
+              "inputs.json:cases.PFR_heat_exchange.calls[11].result",
+              "inputs.json:cases.PFR_isothermic.calls[11].result",
+              "inputs.json:cases.PFR_nonisothermal_nonadiabatic.calls[11].result",
+              "inputs.json:cases.PFR_outlet_temperature.calls[11].result",
+              "pfr_ok.json:c2"
+            ],
+            "port": 0
+          }
+        ]
+      },
+      "refused_properties": [],
+      "result_properties": [
+        {
+          "classification": "result",
+          "name": "Area Calculation Mode",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Calculate External HTC",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Calculate Internal HTC",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Calculated External HTC",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "result",
+          "name": "Calculated Internal HTC",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "result",
+          "name": "Calculated Overall HTC",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "result",
+          "name": "Catalyst Particle Sphericity",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Catalyst diameter",
+          "unit": "mm"
+        },
+        {
+          "classification": "result",
+          "name": "Catalyst loading",
+          "unit": "kg/m3"
+        },
+        {
+          "classification": "result",
+          "name": "Catalyst void fraction",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Density",
+          "unit": "kg/m3"
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Flow Direction",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Inlet Temperature",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Mass Flow Rate",
+          "unit": "kg/h"
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Specific Heat",
+          "unit": "J/kg.K"
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Thermal Conductivity",
+          "unit": "W/m.K"
+        },
+        {
+          "classification": "result",
+          "name": "Coolant Viscosity",
+          "unit": "Pa.s"
+        },
+        {
+          "classification": "result",
+          "name": "External Heat Transfer Coefficient",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "result",
+          "name": "Heat Exchange Area",
+          "unit": "m2"
+        },
+        {
+          "classification": "result",
+          "name": "Heat load",
+          "unit": "kW"
+        },
+        {
+          "classification": "result",
+          "name": "Integration Step",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Internal Heat Transfer Coefficient",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "result",
+          "name": "Jacket Diameter",
+          "unit": "mm"
+        },
+        {
+          "classification": "result",
+          "name": "Number of Tubes",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Outlet Temperature",
+          "unit": "C"
+        },
+        {
+          "classification": "result",
+          "name": "Overall Heat Transfer Coefficient",
+          "unit": "W/m2.K"
+        },
+        {
+          "classification": "result",
+          "name": "Pressure Drop",
+          "unit": "bar"
+        },
+        {
+          "classification": "result",
+          "name": "Residence time",
+          "unit": "s"
+        },
+        {
+          "classification": "result",
+          "name": "Select the calculation mode of this reactor.",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Temperature delta",
+          "unit": "C."
+        },
+        {
+          "classification": "result",
+          "name": "Tube Diameter",
+          "unit": "mm"
+        },
+        {
+          "classification": "result",
+          "name": "Tube Length",
+          "unit": "m"
+        },
+        {
+          "classification": "result",
+          "name": "Use Utility Stream",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Use Wall Properties",
+          "unit": ""
+        },
+        {
+          "classification": "input",
+          "name": "Volume",
+          "unit": "m3"
+        },
+        {
+          "classification": "result",
+          "name": "Wall Thickness",
+          "unit": "m"
+        }
+      ],
+      "settable_properties": [
+        "CatalystLoading",
+        "CoolantInletTemperature",
+        "CoolantMassFlowRate",
+        "CoolantSpecificHeat",
+        "DeltaP",
+        "HeatExchangeArea",
+        "Length",
+        "OverallHeatTransferCoefficient",
+        "ReactionSetID",
+        "ReactorOperationMode",
+        "Volume"
+      ],
+      "settable_property_evidence": {
+        "CatalystLoading": [
+          "pfr_ok.json:dof (dof_slot)",
+          "units.json:PFR.dof (dof_slot)"
+        ],
+        "CoolantInletTemperature": [
+          "inputs.json:cases.PFR_heat_exchange.calls[13].result (applied)",
+          "pfr_ok.json:dof (dof_slot)",
+          "pfr_ok.json:set (applied)"
+        ],
+        "CoolantMassFlowRate": [
+          "inputs.json:cases.PFR_heat_exchange.calls[13].result (applied)",
+          "pfr_ok.json:set (applied)"
+        ],
+        "CoolantSpecificHeat": [
+          "inputs.json:cases.PFR_heat_exchange.calls[13].result (applied)",
+          "pfr_ok.json:set (applied)"
+        ],
+        "DeltaP": [
+          "inputs.json:cases.PFR_adiabatic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_heat_exchange.calls[13].result (applied)",
+          "inputs.json:cases.PFR_isothermic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_nonisothermal_nonadiabatic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_outlet_temperature.calls[13].result (applied)",
+          "pfr_ok.json:dof (dof_slot)",
+          "units.json:PFR.dof (dof_slot)"
+        ],
+        "HeatExchangeArea": [
+          "inputs.json:cases.PFR_heat_exchange.calls[13].result (applied)",
+          "pfr_ok.json:set (applied)"
+        ],
+        "Length": [
+          "inputs.json:cases.PFR_adiabatic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_heat_exchange.calls[13].result (applied)",
+          "inputs.json:cases.PFR_isothermic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_nonisothermal_nonadiabatic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_outlet_temperature.calls[13].result (applied)",
+          "pfr_ok.json:dof (dof_slot)",
+          "pfr_ok.json:set (applied)",
+          "units.json:PFR.dof (dof_slot)"
+        ],
+        "OverallHeatTransferCoefficient": [
+          "inputs.json:cases.PFR_heat_exchange.calls[13].result (applied)",
+          "pfr_ok.json:dof (dof_slot)",
+          "pfr_ok.json:set (applied)"
+        ],
+        "ReactionSetID": [
+          "pfr_ok.json:dof (dof_slot)",
+          "pfr_ok.json:setrs (applied)",
+          "units.json:PFR.dof (dof_slot)"
+        ],
+        "ReactorOperationMode": [
+          "inputs.json:cases.PFR_adiabatic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_heat_exchange.calls[13].result (applied)",
+          "inputs.json:cases.PFR_isothermic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_nonisothermal_nonadiabatic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_outlet_temperature.calls[13].result (applied)",
+          "pfr_ok.json:set (applied)",
+          "units.json:PFR.dof (dof_slot)"
+        ],
+        "Volume": [
+          "inputs.json:cases.PFR_adiabatic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_heat_exchange.calls[13].result (applied)",
+          "inputs.json:cases.PFR_isothermic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_nonisothermal_nonadiabatic.calls[13].result (applied)",
+          "inputs.json:cases.PFR_outlet_temperature.calls[13].result (applied)",
+          "pfr_ok.json:dof (dof_slot)",
+          "pfr_ok.json:set (applied)",
+          "units.json:PFR.dof (dof_slot)"
+        ]
+      }
+    },
+    "Pump": {
+      "dof": {
+        "mode": "Delta_P",
+        "slots": [
+          {
+            "property": "DeltaP",
+            "required": true,
+            "units": "Pa"
+          },
+          {
+            "property": "Eficiencia",
+            "required": false,
+            "units": "%"
+          }
+        ],
+        "supported": true
+      },
+      "enum_values": {},
+      "mode_evidence": {
+        "Curves": [
+          "inputs.json:cases.Pump_outlet_pressure.read_back (calculation_modes)",
+          "inputs.json:cases.Pump_pressure_increase.read_back (calculation_modes)",
+          "units.json:Pump.results (calculation_modes)"
+        ],
+        "Delta_P": [
+          "inputs.json:cases.Pump_outlet_pressure.read_back (calculation_modes)",
+          "inputs.json:cases.Pump_pressure_increase.calls[10].result (applied)",
+          "inputs.json:cases.Pump_pressure_increase.read_back (calculation_modes)",
+          "units.json:Pump.dof (dof)",
+          "units.json:Pump.results (calculation_modes)"
+        ],
+        "EnergyStream": [
+          "inputs.json:cases.Pump_outlet_pressure.read_back (calculation_modes)",
+          "inputs.json:cases.Pump_pressure_increase.read_back (calculation_modes)",
+          "units.json:Pump.results (calculation_modes)"
+        ],
+        "OutletPressure": [
+          "inputs.json:cases.Pump_outlet_pressure.calls[10].result (applied)",
+          "inputs.json:cases.Pump_outlet_pressure.read_back (calculation_modes)",
+          "inputs.json:cases.Pump_pressure_increase.read_back (calculation_modes)",
+          "units.json:Pump.results (calculation_modes)"
+        ],
+        "Power": [
+          "inputs.json:cases.Pump_outlet_pressure.read_back (calculation_modes)",
+          "inputs.json:cases.Pump_pressure_increase.read_back (calculation_modes)",
+          "units.json:Pump.results (calculation_modes)"
+        ]
+      },
+      "mode_property": {
+        "CalcMode": [
+          "inputs.json:cases.Pump_outlet_pressure.calls[10].result (applied)",
+          "inputs.json:cases.Pump_pressure_increase.calls[10].result (applied)"
+        ]
+      },
+      "modes": [
+        "Delta_P",
+        "OutletPressure",
+        "EnergyStream",
+        "Curves",
+        "Power"
+      ],
+      "native_type": "Pump",
+      "native_xml_inputs": {},
+      "observed_mode": "Delta_P",
+      "ports": {
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Pump_outlet_pressure.calls[8].result",
+              "inputs.json:cases.Pump_pressure_increase.calls[8].result"
+            ],
+            "port": 0
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Pump_outlet_pressure.calls[9].result",
+              "inputs.json:cases.Pump_pressure_increase.calls[9].result"
+            ],
+            "port": 0
+          }
+        ]
+      },
+      "refused_properties": [],
+      "result_properties": [
+        {
+          "classification": "result",
+          "name": "Available NPSH",
+          "unit": "m"
+        },
+        {
+          "classification": "result",
+          "name": "Head",
+          "unit": "m"
+        },
+        {
+          "classification": "result",
+          "name": "NPSH Available",
+          "unit": "m"
+        },
+        {
+          "classification": "result",
+          "name": "Outlet Pressure",
+          "unit": "bar"
+        },
+        {
+          "classification": "result",
+          "name": "PROP_PU_8",
+          "unit": "rpm"
+        },
+        {
+          "classification": "result",
+          "name": "Power Required",
+          "unit": "kW"
+        },
+        {
+          "classification": "result",
+          "name": "Temperature Difference",
+          "unit": "C."
+        }
+      ],
+      "settable_properties": [
+        "CalcMode",
+        "DeltaP",
+        "Efficiency",
+        "Eficiencia",
+        "Pout"
+      ],
+      "settable_property_evidence": {
+        "CalcMode": [
+          "inputs.json:cases.Pump_outlet_pressure.calls[10].result (applied)",
+          "inputs.json:cases.Pump_pressure_increase.calls[10].result (applied)"
+        ],
+        "DeltaP": [
+          "inputs.json:cases.Pump_pressure_increase.calls[10].result (applied)",
+          "units.json:Pump.dof (dof_slot)"
+        ],
+        "Efficiency": [
+          "inputs.json:cases.Pump_outlet_pressure.calls[10].result (applied)",
+          "inputs.json:cases.Pump_pressure_increase.calls[10].result (applied)"
+        ],
+        "Eficiencia": [
+          "units.json:Pump.dof (dof_slot)"
+        ],
+        "Pout": [
+          "inputs.json:cases.Pump_outlet_pressure.calls[10].result (applied)"
+        ]
+      }
+    },
+    "Recycle": {
+      "dof": {
+        "mode": "",
+        "slots": [],
+        "supported": true
+      },
+      "enum_values": {},
+      "mode_evidence": {},
+      "mode_property": {},
+      "modes": [],
+      "native_type": "Recycle",
+      "native_xml_inputs": {
+        "__MassFlowTolerance": {
+          "source": "recycle_tolerance.json:Recycle.set (written as PROP_RY_1 in kg/h, read back in kg/s)",
+          "xml": "ConvergenceParameters/VazaoMassica (kg/s)"
+        }
+      },
+      "observed_mode": null,
+      "ports": {
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Recycle_default.calls[8].result"
+            ],
+            "port": 0
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Recycle_default.calls[9].result"
+            ],
+            "port": 0
+          }
+        ]
+      },
+      "refused_properties": [],
+      "result_properties": [
+        {
+          "classification": "result",
+          "name": "Mass Flow Error",
+          "unit": "kg/h"
+        },
+        {
+          "classification": "result",
+          "name": "Pressure Error",
+          "unit": "bar"
+        },
+        {
+          "classification": "result",
+          "name": "Temperature Error",
+          "unit": "C."
+        }
+      ],
+      "settable_properties": [
+        "PROP_RY_1"
+      ],
+      "settable_property_evidence": {
+        "PROP_RY_1": [
+          "recycle_tolerance.json:Recycle.set (applied)"
+        ]
+      }
+    },
+    "Splitter": {
+      "dof": {
+        "mode": "",
+        "slots": [],
+        "supported": false
+      },
+      "enum_values": {},
+      "mode_evidence": {
+        "SplitRatios": [
+          "ports.json:s_res (calculation_modes)",
+          "ports.json:s_set (applied)",
+          "units.json:Splitter.results (calculation_modes)"
+        ],
+        "StreamMassFlowSpec": [
+          "ports.json:s_res (calculation_modes)",
+          "units.json:Splitter.results (calculation_modes)"
+        ],
+        "StreamMoleFlowSpec": [
+          "ports.json:s_res (calculation_modes)",
+          "units.json:Splitter.results (calculation_modes)"
+        ],
+        "StreamVolumetricFlowSpec": [
+          "ports.json:s_res (calculation_modes)",
+          "units.json:Splitter.results (calculation_modes)"
+        ]
+      },
+      "mode_property": {
+        "OperationMode": [
+          "ports.json:s_set (applied)"
+        ]
+      },
+      "modes": [
+        "SplitRatios",
+        "StreamMassFlowSpec",
+        "StreamMoleFlowSpec",
+        "StreamVolumetricFlowSpec"
+      ],
+      "native_type": "Splitter",
+      "native_xml_inputs": {},
+      "observed_mode": "",
+      "ports": {
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "ports.json:s_conn[0]"
+            ],
+            "port": 0
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "ports.json:s_conn[1]"
+            ],
+            "port": 0
+          },
+          {
+            "captured": true,
+            "evidence": [
+              "ports.json:s_conn[2]"
+            ],
+            "port": 1
+          },
+          {
+            "captured": true,
+            "evidence": [
+              "ports.json:s_conn[3]"
+            ],
+            "port": 2
+          }
+        ]
+      },
+      "refused_properties": [
+        "SR0"
+      ],
+      "result_properties": [
+        {
+          "classification": "result",
+          "name": "SR0",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Stream 1 Flow Spec",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Stream 2 Flow Spec",
+          "unit": ""
+        }
+      ],
+      "settable_properties": [
+        "AdjustVarType",
+        "Calculated",
+        "DebugMode",
+        "DynamicsOnly",
+        "DynamicsSpec",
+        "EnergyFlow",
+        "InfoCarrierVarType",
+        "IsAdjustAttached",
+        "IsInfoCarrierAttached",
+        "IsSpecAttached",
+        "ObjectClass",
+        "OperationMode",
+        "OverrideCalculationRoutine",
+        "PROP_SP_1",
+        "PROP_SP_2",
+        "SR1",
+        "SR2",
+        "SpecVarType",
+        "StoreDetailedDebugReport",
+        "Stream2FlowSpec",
+        "StreamFlowSpec",
+        "Visible"
+      ],
+      "settable_property_evidence": {
+        "AdjustVarType": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "Calculated": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "DebugMode": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "DynamicsOnly": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "DynamicsSpec": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "EnergyFlow": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "InfoCarrierVarType": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "IsAdjustAttached": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "IsInfoCarrierAttached": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "IsSpecAttached": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "ObjectClass": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "OperationMode": [
+          "ports.json:s_set (applied)",
+          "ports.json:s_set_sr (available)"
+        ],
+        "OverrideCalculationRoutine": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "PROP_SP_1": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "PROP_SP_2": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "SR1": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "SR2": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "SpecVarType": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "StoreDetailedDebugReport": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "Stream2FlowSpec": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "StreamFlowSpec": [
+          "ports.json:s_set_sr (available)"
+        ],
+        "Visible": [
+          "ports.json:s_set_sr (available)"
+        ]
+      }
+    },
+    "Valve": {
+      "dof": {
+        "mode": "DeltaP",
+        "slots": [
+          {
+            "property": "DeltaP",
+            "required": true,
+            "units": "Pa"
+          }
+        ],
+        "supported": true
+      },
+      "enum_values": {},
+      "mode_evidence": {
+        "DeltaP": [
+          "inputs.json:cases.Valve_outlet_pressure.read_back (calculation_modes)",
+          "inputs.json:cases.Valve_pressure_drop.calls[10].result (applied)",
+          "inputs.json:cases.Valve_pressure_drop.read_back (calculation_modes)",
+          "units.json:Valve.dof (dof)",
+          "units.json:Valve.results (calculation_modes)"
+        ],
+        "Kv_Gas": [
+          "inputs.json:cases.Valve_outlet_pressure.read_back (calculation_modes)",
+          "inputs.json:cases.Valve_pressure_drop.read_back (calculation_modes)",
+          "units.json:Valve.results (calculation_modes)"
+        ],
+        "Kv_General": [
+          "inputs.json:cases.Valve_outlet_pressure.read_back (calculation_modes)",
+          "inputs.json:cases.Valve_pressure_drop.read_back (calculation_modes)",
+          "units.json:Valve.results (calculation_modes)"
+        ],
+        "Kv_Liquid": [
+          "inputs.json:cases.Valve_outlet_pressure.read_back (calculation_modes)",
+          "inputs.json:cases.Valve_pressure_drop.read_back (calculation_modes)",
+          "units.json:Valve.results (calculation_modes)"
+        ],
+        "Kv_Steam": [
+          "inputs.json:cases.Valve_outlet_pressure.read_back (calculation_modes)",
+          "inputs.json:cases.Valve_pressure_drop.read_back (calculation_modes)",
+          "units.json:Valve.results (calculation_modes)"
+        ],
+        "OutletPressure": [
+          "inputs.json:cases.Valve_outlet_pressure.calls[10].result (applied)",
+          "inputs.json:cases.Valve_outlet_pressure.read_back (calculation_modes)",
+          "inputs.json:cases.Valve_pressure_drop.read_back (calculation_modes)",
+          "units.json:Valve.results (calculation_modes)"
+        ]
+      },
+      "mode_property": {
+        "CalcMode": [
+          "inputs.json:cases.Valve_outlet_pressure.calls[10].result (applied)",
+          "inputs.json:cases.Valve_pressure_drop.calls[10].result (applied)"
+        ]
+      },
+      "modes": [
+        "DeltaP",
+        "OutletPressure",
+        "Kv_Liquid",
+        "Kv_Gas",
+        "Kv_Steam",
+        "Kv_General"
+      ],
+      "native_type": "Valve",
+      "native_xml_inputs": {},
+      "observed_mode": "DeltaP",
+      "ports": {
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Valve_outlet_pressure.calls[8].result",
+              "inputs.json:cases.Valve_pressure_drop.calls[8].result"
+            ],
+            "port": 0
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Valve_outlet_pressure.calls[9].result",
+              "inputs.json:cases.Valve_pressure_drop.calls[9].result"
+            ],
+            "port": 0
+          }
+        ]
+      },
+      "refused_properties": [],
+      "result_properties": [
+        {
+          "classification": "result",
+          "name": "Actual Flow Coefficient",
+          "unit": ""
+        },
+        {
+          "classification": "result",
+          "name": "Temperature Drop",
+          "unit": "C."
+        }
+      ],
+      "settable_properties": [
+        "CalcMode",
+        "DeltaP",
+        "OutletPressure"
+      ],
+      "settable_property_evidence": {
+        "CalcMode": [
+          "inputs.json:cases.Valve_outlet_pressure.calls[10].result (applied)",
+          "inputs.json:cases.Valve_pressure_drop.calls[10].result (applied)"
+        ],
+        "DeltaP": [
+          "inputs.json:cases.Valve_pressure_drop.calls[10].result (applied)",
+          "units.json:Valve.dof (dof_slot)"
+        ],
+        "OutletPressure": [
+          "inputs.json:cases.Valve_outlet_pressure.calls[10].result (applied)"
+        ]
+      }
+    },
+    "Vessel": {
+      "dof": {
+        "mode": "From the inlet",
+        "slots": [
+          {
+            "property": "FlashTemperature",
+            "required": false,
+            "units": "K"
+          },
+          {
+            "property": "FlashPressure",
+            "required": false,
+            "units": "Pa"
+          }
+        ],
+        "supported": true
+      },
+      "enum_values": {},
+      "mode_evidence": {},
+      "mode_property": {},
+      "modes": [],
+      "native_type": "Vessel",
+      "native_xml_inputs": {},
+      "observed_mode": null,
+      "ports": {
+        "feed": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Flash_default.calls[10].result"
+            ],
+            "port": 0
+          }
+        ],
+        "product": [
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Flash_default.calls[11].result"
+            ],
+            "port": 0
+          },
+          {
+            "captured": true,
+            "evidence": [
+              "inputs.json:cases.Flash_default.calls[12].result"
+            ],
+            "port": 1
+          }
+        ]
+      },
+      "refused_properties": [],
+      "result_properties": [],
+      "settable_properties": [
+        "FlashPressure",
+        "FlashTemperature"
+      ],
+      "settable_property_evidence": {
+        "FlashPressure": [
+          "units.json:Vessel.dof (dof_slot)"
+        ],
+        "FlashTemperature": [
+          "units.json:Vessel.dof (dof_slot)"
+        ]
+      }
+    }
+  },
+  "probe_sha256": "d20f9742",
+  "runtime": "DWSIM 10.2.9",
+  "source": "evidence/158/units.json",
+  "verified": {
+    "distillation_column": "column2.json: the MCP connects feed port 0, distillate product 0 and bottoms product 1 but rejects the condenser/reboiler energy connections, exposes no feed-stage or stage-pressure property, and the solve fails on missing streams; draft_compiler materializes the column through native XML (stage count and pressures, both specification values, feed stage, energy connectors 10) plus reload, verified by read-back",
+    "energy_stream": "ports.json: energy feed port 1 (h_q1) and EnergyFlow setter (q_set)",
+    "pfr_heat_exchange_reaction": "pfr_ok.json: native reaction-set reload and solve"
+  }
+}

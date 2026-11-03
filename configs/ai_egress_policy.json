@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "policy_version": "egress-policy-v1",
+  "trigger_version": "egress-triggers-v1",
+  "max_prompt_chars": 12000,
+  "max_context_blocks": 24,
+  "max_context_chars": 24000,
+  "sample_rate_bps": 500,
+  "confirmation_ticket_ttl_seconds": 900,
+  "daily_soft_spend_usd": 5.0,
+  "reservation_ttl_seconds": 300,
+  "confirmable_triggers": ["t1", "t2", "t5"],
+  "supported_operations": ["external_provider_call"]
+}

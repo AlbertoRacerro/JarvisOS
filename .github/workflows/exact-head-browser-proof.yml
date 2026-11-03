@@ -1,0 +1,257 @@
+name: Exact-head browser proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number whose exact head is being proved
+        required: true
+        type: string
+      expected_head_sha:
+        description: Exact 40-hex PR head SHA to prove
+        required: true
+        type: string
+      plan_id:
+        description: Trusted browser-proof plan ID from default branch
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: exact-head-browser-proof-${{ inputs.pr_number }}-${{ inputs.plan_id }}
+  cancel-in-progress: false
+
+jobs:
+  prove:
+    # This job creates a sudo-managed unprivileged user, installs browsers with apt and executes PR-head code.
+    # That boundary only holds on a disposable GitHub-hosted VM.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PROOF_DIR: /tmp/jarvis-browser-proof
+      PROOF_DATA_ROOT: /tmp/jarvis-proof-data
+      CANDIDATE_VENV: /tmp/jarvis-candidate-venv
+      CANDIDATE_USER: jarviscandidate
+      PLAN_ID: ${{ inputs.plan_id }}
+    steps:
+      - name: Require trusted default-branch dispatch and bounded identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/master" || { echo "Proof controller must execute from the default branch." >&2; exit 1; }
+          [[ "${{ inputs.expected_head_sha }}" =~ ^[0-9a-f]{40}$ ]] || { echo "expected_head_sha must be an exact lowercase 40-hex SHA." >&2; exit 1; }
+          [[ "${{ inputs.pr_number }}" =~ ^[1-9][0-9]*$ ]] || { echo "pr_number must be a positive integer." >&2; exit 1; }
+          [[ "$PLAN_ID" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] || { echo "plan_id has unsafe syntax." >&2; exit 1; }
+
+      - name: Resolve fresh PR head
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROOF_DIR"
+          api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${{ inputs.pr_number }}"
+          response="$(curl --fail-with-body --silent --show-error -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$api")"
+          resolved="$(python -c 'import json,sys; print(json.load(sys.stdin)["head"]["sha"])' <<<"$response")"
+          base_sha="$(python -c 'import json,sys; print(json.load(sys.stdin)["base"]["sha"])' <<<"$response")"
+          head_repo="$(python -c 'import json,sys; print(json.load(sys.stdin)["head"]["repo"]["full_name"])' <<<"$response")"
+          state="$(python -c 'import json,sys; print(json.load(sys.stdin)["state"])' <<<"$response")"
+          test "$head_repo" = "$GITHUB_REPOSITORY" || { echo "Browser proof supports same-repository PR heads only." >&2; exit 1; }
+          test "$state" = "open" || { echo "PR is not open." >&2; exit 1; }
+          [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Fresh PR base SHA is invalid." >&2; exit 1; }
+          test "$resolved" = "${{ inputs.expected_head_sha }}" || { echo "Fresh PR head does not match expected_head_sha." >&2; exit 1; }
+          echo "sha=$resolved" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact candidate system under test
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.expected_head_sha }}
+          path: candidate
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify candidate checkout identity and credential isolation
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked="$(git -C candidate rev-parse HEAD)"
+          test "$checked" = "${{ inputs.expected_head_sha }}" || { echo "Checked-out candidate SHA mismatch." >&2; exit 1; }
+          test "$checked" = "${{ steps.pr.outputs.sha }}" || { echo "Checked-out SHA differs from fresh PR head." >&2; exit 1; }
+          if git -C candidate config --local --get-regexp '^http\..*\.extraheader$' >/dev/null 2>&1; then echo "Candidate checkout retained HTTP credential headers." >&2; exit 1; fi
+          echo "sha=$checked" >> "$GITHUB_OUTPUT"
+
+      # No pip/npm cache: candidate dependencies are installed by the unprivileged candidate user with
+      # its own home, so the runner-user caches are never read or filled, and a cache miss fails the
+      # post-job save on a missing directory.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Create unprivileged candidate boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo useradd --create-home --shell /usr/sbin/nologin "$CANDIDATE_USER"
+          sudo chown -R "$CANDIDATE_USER:$CANDIDATE_USER" candidate
+          workspace_ancestor="$GITHUB_WORKSPACE"
+          while test "$workspace_ancestor" != "/"; do sudo setfacl -m "u:${CANDIDATE_USER}:--x" "$workspace_ancestor"; workspace_ancestor="$(dirname "$workspace_ancestor")"; done
+          sudo -u "$CANDIDATE_USER" test -r "$GITHUB_WORKSPACE/candidate/backend/requirements.txt"
+          if sudo -u "$CANDIDATE_USER" test -w "$GITHUB_WORKSPACE"; then echo "Candidate user unexpectedly has write access to trusted workspace root." >&2; exit 1; fi
+          sudo -u "$CANDIDATE_USER" -H env PATH="$PATH" python -m venv "$CANDIDATE_VENV"
+          mkdir -p "$PROOF_DATA_ROOT"
+          sudo chown -R "$CANDIDATE_USER:$CANDIDATE_USER" "$PROOF_DATA_ROOT" "$CANDIDATE_VENV"
+
+      - name: Install candidate dependencies and build UI as unprivileged user
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u "$CANDIDATE_USER" -H env PATH="$PATH" GITHUB_TOKEN= GH_TOKEN= "$CANDIDATE_VENV/bin/python" -m pip install --disable-pip-version-check -r "$GITHUB_WORKSPACE/candidate/backend/requirements.txt"
+          sudo -u "$CANDIDATE_USER" -H env PATH="$PATH" GITHUB_TOKEN= GH_TOKEN= npm --prefix "$GITHUB_WORKSPACE/candidate/frontend" ci --ignore-scripts --no-audit --no-fund
+          sudo -u "$CANDIDATE_USER" -H env PATH="$PATH" GITHUB_TOKEN= GH_TOKEN= npm --prefix "$GITHUB_WORKSPACE/candidate/frontend" run build
+
+      - name: Checkout trusted proof controller after candidate build
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          path: controller
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Freeze trusted controller identity, plan and ownership
+        id: controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          controller_sha="$(git -C controller rev-parse HEAD)"
+          test "$controller_sha" = "$GITHUB_SHA" || { echo "Default-branch controller SHA drifted from workflow identity." >&2; exit 1; }
+          node controller/.github/browser-proof/validate-plan.mjs "$PLAN_ID" >/dev/null
+          fixture="$(node controller/.github/browser-proof/validate-plan.mjs "$PLAN_ID" --fixture)"
+          test -n "$fixture" || { echo "Validated plan did not return a fixture identity." >&2; exit 1; }
+          test "$(stat -c '%U' controller/.github/browser-proof/run.mjs)" != "$CANDIDATE_USER" || { echo "Trusted controller is candidate-owned." >&2; exit 1; }
+          if sudo -u "$CANDIDATE_USER" test -w controller/.github/browser-proof/run.mjs; then echo "Candidate user can mutate trusted proof controller." >&2; exit 1; fi
+          if sudo -u "$CANDIDATE_USER" test -w "controller/.github/browser-proof/plans/${PLAN_ID}.json"; then echo "Candidate user can mutate trusted proof plan." >&2; exit 1; fi
+          echo "sha=$controller_sha" >> "$GITHUB_OUTPUT"
+          echo "fixture=$fixture" >> "$GITHUB_OUTPUT"
+
+      - name: Install trusted Playwright controller
+        working-directory: controller/.github/browser-proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Prepare isolated proof data
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u "$CANDIDATE_USER" -H env GITHUB_TOKEN= GH_TOKEN= JARVISOS_DATA_ROOT="$PROOF_DATA_ROOT" PYTHONPATH="$GITHUB_WORKSPACE/candidate/backend" "$CANDIDATE_VENV/bin/python" -c 'from app.core.database import initialize_database; info = initialize_database(); assert info.ready and info.initialized'
+
+      - name: Start isolated candidate runtime as unprivileged user
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u "$CANDIDATE_USER" -H env GITHUB_TOKEN= GH_TOKEN= JARVISOS_DATA_ROOT="$PROOF_DATA_ROOT" PYTHONPATH="$GITHUB_WORKSPACE/candidate/backend" "$CANDIDATE_VENV/bin/python" -m uvicorn app.main:app --app-dir candidate/backend --host 127.0.0.1 --port 8000 >"$PROOF_DIR/backend.log" 2>&1 &
+          echo $! > "$PROOF_DIR/backend.pid"
+          for attempt in $(seq 1 60); do if curl --fail --silent http://127.0.0.1:8000/health >/dev/null; then exit 0; fi; sleep 1; done
+          cat "$PROOF_DIR/backend.log" >&2 || true
+          exit 1
+
+      - name: Recheck trusted controller before verdict
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C controller rev-parse HEAD)" = "${{ steps.controller.outputs.sha }}"
+          test -z "$(git -C controller status --porcelain -- .github/browser-proof .github/workflows/exact-head-browser-proof.yml)" || { echo "Trusted proof controller changed after candidate runtime started." >&2; exit 1; }
+          node controller/.github/browser-proof/validate-plan.mjs "$PLAN_ID" >/dev/null
+          if sudo -u "$CANDIDATE_USER" test -w controller/.github/browser-proof/run.mjs; then echo "Candidate user acquired write access to trusted proof controller." >&2; exit 1; fi
+
+      - name: Run trusted real-Chromium proof
+        working-directory: controller/.github/browser-proof
+        shell: bash
+        env:
+          GITHUB_TOKEN: ''
+          GH_TOKEN: ''
+          JARVISOS_DATA_ROOT: /tmp/jarvis-proof-data
+          PYTHONPATH: ${{ github.workspace }}/candidate/backend
+          PROOF_PYTHON: /tmp/jarvis-candidate-venv/bin/python
+          PROOF_CANDIDATE_USER: jarviscandidate
+          PROOF_PLAN_ID: ${{ inputs.plan_id }}
+          PROOF_BASE_URL: http://127.0.0.1:8000
+          PROOF_ARTIFACT_DIR: /tmp/jarvis-browser-proof
+          PROOF_EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          PROOF_RESOLVED_HEAD_SHA: ${{ steps.pr.outputs.sha }}
+          PROOF_CHECKED_OUT_HEAD_SHA: ${{ steps.candidate.outputs.sha }}
+          PROOF_CONTROLLER_SHA: ${{ steps.controller.outputs.sha }}
+          PROOF_PR_BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          PROOF_REPOSITORY: ${{ github.repository }}
+          PROOF_PR_NUMBER: ${{ inputs.pr_number }}
+        run: node run.mjs
+
+      - name: Stop candidate runtime
+        if: always()
+        shell: bash
+        run: |
+          if test -f "$PROOF_DIR/backend.pid"; then kill "$(cat "$PROOF_DIR/backend.pid")" 2>/dev/null || true; fi
+
+      - name: Create fallback failure manifest
+        if: always()
+        shell: bash
+        env:
+          PROOF_REPOSITORY: ${{ github.repository }}
+          PROOF_PR_NUMBER: ${{ inputs.pr_number }}
+          PROOF_PLAN_ID: ${{ inputs.plan_id }}
+          PROOF_EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          PROOF_RESOLVED_HEAD_SHA: ${{ steps.pr.outputs.sha }}
+          PROOF_CHECKED_OUT_HEAD_SHA: ${{ steps.candidate.outputs.sha }}
+          PROOF_CONTROLLER_SHA: ${{ steps.controller.outputs.sha }}
+          PROOF_PR_BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROOF_DIR"
+          test -f "$PROOF_DIR/manifest.json" && exit 0
+          python3 - <<'PY'
+          import hashlib, json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          proof_dir = Path(os.environ["PROOF_DIR"])
+          artifacts = {}
+          backend_log = proof_dir / "backend.log"
+          if backend_log.is_file(): artifacts[backend_log.name] = hashlib.sha256(backend_log.read_bytes()).hexdigest()
+          def optional(name):
+              value = os.environ.get(name, "").strip()
+              return value or None
+          pr_number = optional("PROOF_PR_NUMBER")
+          manifest = {
+              "schema":"jarvisos.exact-head-browser-proof.v1", "repository":optional("PROOF_REPOSITORY"),
+              "pr_number":int(pr_number) if pr_number and pr_number.isdigit() else None,
+              "pr_base_sha":optional("PROOF_PR_BASE_SHA"), "expected_head_sha":optional("PROOF_EXPECTED_HEAD_SHA"),
+              "resolved_pr_head_sha":optional("PROOF_RESOLVED_HEAD_SHA"), "checked_out_head_sha":optional("PROOF_CHECKED_OUT_HEAD_SHA"),
+              "controller_sha":optional("PROOF_CONTROLLER_SHA"), "workflow_run_id":os.environ.get("GITHUB_RUN_ID", "unknown"),
+              "plan_id":optional("PROOF_PLAN_ID"), "browser":"chromium", "playwright_version":"1.55.0",
+              "started_at":None, "ended_at":datetime.now(timezone.utc).isoformat(),
+              "assertions":[{"name":"workflow:fallback-manifest","pass":False,"detail":"proof workflow failed before the trusted controller emitted manifest.json"}],
+              "artifacts":artifacts, "verdict":"FAIL", "failure":"proof workflow failed before the trusted controller emitted manifest.json",
+          }
+          (proof_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload exact-head proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exact-head-browser-proof-${{ inputs.pr_number }}-${{ inputs.plan_id }}-${{ inputs.expected_head_sha }}
+          path: /tmp/jarvis-browser-proof
+          if-no-files-found: error
+          retention-days: 14

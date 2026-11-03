@@ -1,0 +1,46 @@
+{
+  "schema": "jarvisos.browser-proof-plan.v1",
+  "id": "121-knowledge-actions",
+  "fixture": "project-search",
+  "forbidMutatingRequests": true,
+  "readOnlySameOriginPostPaths": [
+    "/ai/context/packs/preview",
+    "/memory/jarvis/context-preview",
+    "/memory/jarvis/propose"
+  ],
+  "steps": [
+    {"op":"run-fixture","name":"121:seed-workspace","fixture":"project-search","phase":"workspace"},
+    {"op":"navigate","name":"121:project-basis","route":"/memory/project-basis"},
+    {"op":"run-fixture","name":"121:seed-records","fixture":"project-search","phase":"records"},
+    {"op":"reload","name":"121:reload-after-seed"},
+    {"op":"fill","name":"121:search-project-basis","locator":{"kind":"label","text":"Search project records","exact":true},"value":"reactor"},
+    {"op":"click","name":"121:submit-project-basis-search","locator":{"kind":"role","role":"button","name":"Search","exact":true}},
+    {"op":"click","name":"121:open-project-basis","locator":{"kind":"within","parent":{"kind":"css","selector":"article.final-fusion__record-card:has-text('Reactor search requirement')"},"child":{"kind":"role","role":"button","name":"Open in modeling","exact":true}}},
+    {"op":"assert-visible","name":"121:project-basis-selected","locator":{"kind":"within","parent":{"kind":"css","selector":"[data-search-selected='true']"},"child":{"kind":"text","text":"Reactor search requirement","exact":true}}},
+    {"op":"capture-mutating-request-count","name":"121:capture-mutation-baseline","capture":"mutationBaseline"},
+    {"op":"assert-visible","name":"121:project-basis-action","locator":{"kind":"role","role":"button","name":"Add selected to Jarvis context","exact":true}},
+    {"op":"click","name":"121:add-project-basis-context","locator":{"kind":"role","role":"button","name":"Add selected to Jarvis context","exact":true}},
+    {"op":"assert-visible","name":"121:project-basis-inspected","locator":{"kind":"text","text":"Inspected context","exact":true}},
+    {"op":"fill","name":"121:project-basis-intent","locator":{"kind":"label","text":"Advisory proposal","exact":true},"value":"Make this requirement measurable"},
+    {"op":"click","name":"121:project-basis-propose","locator":{"kind":"role","role":"button","name":"Generate proposal","exact":true}},
+    {"op":"assert-visible","name":"121:project-basis-proposal","locator":{"kind":"text","text":"Advisory proposal · project_basis","exact":true}},
+    {"op":"assert-visible","name":"121:project-basis-no-mutation","locator":{"kind":"text","text":"No domain mutation was performed.","exact":true}},
+    {"op":"screenshot","name":"121:project-basis-proof","file":"knowledge-actions-project-basis"},
+
+    {"op":"navigate","name":"121:return-search-for-model","route":"/memory/project-basis"},
+    {"op":"fill","name":"121:search-model","locator":{"kind":"label","text":"Search project records","exact":true},"value":"reactor"},
+    {"op":"click","name":"121:submit-model-search","locator":{"kind":"role","role":"button","name":"Search","exact":true}},
+    {"op":"click","name":"121:open-model","locator":{"kind":"within","parent":{"kind":"css","selector":"article.final-fusion__record-card:has-text('Reactor search model')"},"child":{"kind":"role","role":"button","name":"Open in model-dossier","exact":true}}},
+    {"op":"assert-attribute","name":"121:model-selected","locator":{"kind":"css","selector":"button[data-model-version-id='proof-search-version']"},"attribute":"aria-pressed","equals":"true"},
+    {"op":"assert-visible","name":"121:model-action","locator":{"kind":"role","role":"button","name":"Add selected to Jarvis context","exact":true}},
+    {"op":"click","name":"121:add-model-context","locator":{"kind":"role","role":"button","name":"Add selected to Jarvis context","exact":true}},
+    {"op":"assert-visible","name":"121:model-inspected","locator":{"kind":"text","text":"Inspected context","exact":true}},
+    {"op":"fill","name":"121:model-intent","locator":{"kind":"label","text":"Advisory proposal","exact":true},"value":"Identify the next model validation question"},
+    {"op":"click","name":"121:model-propose","locator":{"kind":"role","role":"button","name":"Generate proposal","exact":true}},
+    {"op":"assert-visible","name":"121:model-proposal","locator":{"kind":"text","text":"Advisory proposal · models","exact":true}},
+    {"op":"assert-visible","name":"121:model-no-mutation","locator":{"kind":"text","text":"No domain mutation was performed.","exact":true}},
+    {"op":"capture-mutating-request-count","name":"121:capture-final-mutations","capture":"mutationAfterKnowledgeActions"},
+    {"op":"assert-value-equals","name":"121:knowledge-actions-read-only","left":{"capture":"mutationAfterKnowledgeActions"},"right":{"capture":"mutationBaseline"}},
+    {"op":"screenshot","name":"121:model-proof","file":"knowledge-actions-models"}
+  ]
+}

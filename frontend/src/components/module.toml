@@ -1,0 +1,4 @@
+purpose = "Shared and top-level components (layout, workspace bootstrap, 3D viewer, error boundary); feature components live in the subdirectories."
+status = "live"
+entrypoints = ["Layout.tsx", "WorkspaceBootstrap.tsx"]
+owner = "maintainer"

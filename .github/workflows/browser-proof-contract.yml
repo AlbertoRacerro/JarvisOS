@@ -1,0 +1,49 @@
+name: Browser proof contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/browser-proof/**'
+      - '.github/workflows/exact-head-browser-proof.yml'
+      - '.github/workflows/exact-head-browser-proof-command.yml'
+      - '.github/workflows/browser-proof-contract.yml'
+  push:
+    branches: [master]
+    paths:
+      - '.github/browser-proof/**'
+      - '.github/workflows/exact-head-browser-proof.yml'
+      - '.github/workflows/exact-head-browser-proof-command.yml'
+      - '.github/workflows/browser-proof-contract.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate closed plan vocabulary and migrated compatibility
+        run: |
+          node .github/browser-proof/test-plan-lib.mjs
+          node .github/browser-proof/test-mutation-window.mjs
+          node .github/browser-proof/test-request-policy.mjs
+          node .github/browser-proof/validate-contract.mjs
+      - name: Syntax-check trusted executor and validator
+        run: |
+          node --check .github/browser-proof/run.mjs
+          node --check .github/browser-proof/plan-lib.mjs
+          node --check .github/browser-proof/request-policy.mjs
+          node --check .github/browser-proof/validate-plan.mjs
+          node --check .github/browser-proof/validate-contract.mjs

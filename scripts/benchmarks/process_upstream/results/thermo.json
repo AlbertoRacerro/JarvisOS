@@ -1,0 +1,18 @@
+{
+  "candidate": "thermo",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "MIT",
+  "measurements": {
+    "brine_density_kg_m3": 1021.6374794605211,
+    "brine_phase": "l",
+    "co2_density_kg_m3": 1.7988462624603232,
+    "co2_phase": "g",
+    "water_density_kg_m3": 997.0483008954374,
+    "water_phase": "l"
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "0.6.1",
+  "wall_time_s": 4.794853
+}

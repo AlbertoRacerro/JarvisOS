@@ -1,0 +1,4 @@
+purpose = "Stage containers for the Design workspace (process, studies, model, review), the environment panel and the process draft editor."
+status = "live"
+entrypoints = ["registry.ts", "ProcessStage.tsx", "ModelStage.tsx"]
+owner = "maintainer"

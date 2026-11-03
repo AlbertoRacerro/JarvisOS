@@ -1,0 +1,34 @@
+{
+  "fixtures": [
+    {
+      "manifest_digest": "553439cee4b655ab413d667357e4c4c766feac8e61a99267d4047b31deba5554",
+      "spec_id": "sha256:bd04044e65c001b9911ce7adbc5e18b64618b0002f2fa25af5f34c1912a05050",
+      "spec_path": "minimal_single_tube.json"
+    },
+    {
+      "manifest_digest": "a58f9a1c04096bd855315353cf5f05f3b32690fc8e3a385c9379bd76f80fcdf1",
+      "spec_id": "sha256:155ec1b90a0cbe47c6ce0821360f838504695057f8a1bc0b1cf9a67b2851367f",
+      "spec_path": "chain_tube_bend_joint.json"
+    },
+    {
+      "manifest_digest": "d77abdf6d71327f4cb8000e58c51e38044ad5c9c63c85b2da6d0b15a7782b24b",
+      "spec_id": "sha256:5178bfeb841266749e2df7bec3fa777a27a236d31e2e9b232ee6b8944869e14f",
+      "spec_path": "u_shape_two_bends.json"
+    },
+    {
+      "manifest_digest": "b66687a3e15662595ba3845eb9336652f62c5db37dd2d80125df43ca01295bc8",
+      "spec_id": "sha256:7631c98b0cb478cc1a879200a577ef140c63d887c484bfbf65efaff7951b51b9",
+      "spec_path": "property_geometry/minimal_float.json"
+    }
+  ],
+  "profile": {
+    "architecture": "x86_64",
+    "build123d": "0.11.1",
+    "ocp_distribution": "cadquery-ocp-novtk",
+    "ocp_version": "7.9.3.1.1",
+    "os": "Linux",
+    "profile_id": "ubuntu24-py311",
+    "python": "3.11"
+  },
+  "schema_version": "bluecad_property_geometry_expected_v0_1"
+}

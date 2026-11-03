@@ -1,0 +1,88 @@
+{
+  "artifact_schema": "jarvisos.qualification_ledger_artifact.v1",
+  "contract": "engineering_evidence.v1 (spec 102 ScientificQualificationRecord)",
+  "model_version": "pbr_unit.v1",
+  "qualification_record": {
+    "schema_version": "engineering_evidence.v1",
+    "record_id": "jarvis.pbr_unit_t1.pbr_unit.v1.synthetic-unqualified",
+    "subject_ref": {
+      "authority_owner": "process_stack",
+      "object_type": "dynamic_model",
+      "object_id": "jarvis.pbr_unit_t1",
+      "workspace_id": "process",
+      "revision": "pbr_unit.v1",
+      "content_digest": null,
+      "location": null
+    },
+    "fidelity": "reduced_order",
+    "validity": {
+      "authority_owner": "process_stack",
+      "object_type": "validity_envelope",
+      "object_id": "jarvis.pbr_unit_t1.pbr_unit.v1",
+      "workspace_id": "process",
+      "revision": "pbr_unit.v1",
+      "content_digest": "sha256:55545c25ef48c4f994139460c4961f11d99681dc01297d466439d94a3c7e7ed0",
+      "location": null,
+      "domain": [
+        {
+          "variable": "optical_depth",
+          "lower": {
+            "value": 0.0,
+            "unit": "1",
+            "basis_ref": null
+          },
+          "upper": {
+            "value": 1000.0,
+            "unit": "1",
+            "basis_ref": null
+          }
+        },
+        {
+          "variable": "photoperiod",
+          "lower": {
+            "value": 0.0,
+            "unit": "h",
+            "basis_ref": null
+          },
+          "upper": {
+            "value": 24.0,
+            "unit": "h",
+            "basis_ref": null
+          }
+        }
+      ],
+      "uncertainty": [],
+      "qualification_status": "unqualified",
+      "evidence_refs": []
+    },
+    "provenance": [
+      {
+        "kind": "synthetic_fixture",
+        "source_ref": null,
+        "citation": null,
+        "organism": "Nannochloropsis gaditana (intended target; values are synthetic)",
+        "strain": null,
+        "conditions": [],
+        "note": "No measured species coefficients. Reference: backend/tests/test_pbr_unit_170.py and scripts/benchmarks/pbr_reference/cylinder_reference.py."
+      }
+    ],
+    "uncertainty": [],
+    "basis": {
+      "calibration_refs": [],
+      "benchmark_refs": [],
+      "decided_by": null,
+      "decided_at": null,
+      "decision_ref": null
+    },
+    "recorded_at": "2026-10-04T00:00:00Z"
+  },
+  "evidence": [
+    "backend/tests/test_pbr_unit_170.py",
+    "scripts/benchmarks/pbr_reference/cylinder_reference.py"
+  ],
+  "limits": [
+    "well-mixed periodic steady state",
+    "no array shading or wall losses",
+    "no energy, axial oxygen, carbon or phosphorus balance"
+  ]
+}

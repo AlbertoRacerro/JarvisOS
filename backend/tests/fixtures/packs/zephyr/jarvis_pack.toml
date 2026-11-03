@@ -1,0 +1,5 @@
+# Fake project pack for the test suite: carries one project term so the egress guard has something to match.
+id = "zephyr"
+
+[sensitivity]
+terms = ["zephyr"]

@@ -1,0 +1,4 @@
+purpose = "Declarative configuration: AI provider catalog, cloud escalation and egress policy, architecture-enforcement rules, BLUECAD tool registry, relay gateway."
+status = "live"
+entrypoints = ["ai_providers.yaml", "ai_egress_policy.json", "architecture_enforcement.json"]
+owner = "maintainer"

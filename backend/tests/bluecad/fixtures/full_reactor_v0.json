@@ -1,0 +1,216 @@
+{
+  "spec_version": "bluecad_geometry_spec_v0_1",
+  "name": "full_reactor_v0",
+  "parts": [
+    {
+      "part_id": "left",
+      "kind": "manifold",
+      "params": {
+        "outer_d_main": 110.0,
+        "wall_t": 4.0,
+        "length": 300.0,
+        "n_out": 2,
+        "out_d": 110.0,
+        "out_wall_t": 4.0,
+        "spacing": 180.0
+      }
+    },
+    {
+      "part_id": "run_top",
+      "kind": "tube_run",
+      "params": {
+        "outer_d": 110.0,
+        "wall_t": 4.0,
+        "length": 1000.0
+      }
+    },
+    {
+      "part_id": "bend_top_a",
+      "kind": "bend",
+      "params": {
+        "outer_d": 110.0,
+        "wall_t": 4.0,
+        "bend_radius": 150.0,
+        "angle": 1.5707963267948966
+      }
+    },
+    {
+      "part_id": "harvest",
+      "kind": "harvest_module",
+      "params": {
+        "outer_d": 220.0,
+        "height": 240.0,
+        "wall_t": 4.0,
+        "port_d": 110.0
+      }
+    },
+    {
+      "part_id": "bend_top_b",
+      "kind": "bend",
+      "params": {
+        "outer_d": 110.0,
+        "wall_t": 4.0,
+        "bend_radius": 150.0,
+        "angle": 1.5707963267948966
+      }
+    },
+    {
+      "part_id": "right",
+      "kind": "manifold",
+      "params": {
+        "outer_d_main": 110.0,
+        "wall_t": 4.0,
+        "length": 300.0,
+        "n_out": 2,
+        "out_d": 110.0,
+        "out_wall_t": 4.0,
+        "spacing": 180.0
+      }
+    },
+    {
+      "part_id": "run_bottom",
+      "kind": "tube_run",
+      "params": {
+        "outer_d": 110.0,
+        "wall_t": 4.0,
+        "length": 1000.0
+      }
+    },
+    {
+      "part_id": "bend_bottom_a",
+      "kind": "bend",
+      "params": {
+        "outer_d": 110.0,
+        "wall_t": 4.0,
+        "bend_radius": 150.0,
+        "angle": 1.5707963267948966
+      }
+    },
+    {
+      "part_id": "bend_bottom_b",
+      "kind": "bend",
+      "params": {
+        "outer_d": 110.0,
+        "wall_t": 4.0,
+        "bend_radius": 150.0,
+        "angle": 1.5707963267948966
+      }
+    },
+    {
+      "part_id": "float_a",
+      "kind": "float",
+      "params": {
+        "outer_d": 180.0,
+        "length": 800.0,
+        "n_mounts": 1,
+        "pad_d": 80.0
+      },
+      "frame": {
+        "origin": [
+          0.0,
+          -400.0,
+          0.0
+        ],
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "part_id": "float_b",
+      "kind": "float",
+      "params": {
+        "outer_d": 180.0,
+        "length": 800.0,
+        "n_mounts": 1,
+        "pad_d": 80.0
+      },
+      "frame": {
+        "origin": [
+          0.0,
+          -700.0,
+          0.0
+        ],
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "part_id": "anchor_a",
+      "kind": "anchor_mount",
+      "params": {
+        "base_w": 80.0,
+        "base_l": 120.0,
+        "base_t": 16.0,
+        "eye_d": 24.0
+      }
+    },
+    {
+      "part_id": "anchor_b",
+      "kind": "anchor_mount",
+      "params": {
+        "base_w": 80.0,
+        "base_l": 120.0,
+        "base_t": 16.0,
+        "eye_d": 24.0
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "left.out_1",
+      "to": "run_top.port_a"
+    },
+    {
+      "from": "run_top.port_b",
+      "to": "bend_top_a.port_a"
+    },
+    {
+      "from": "bend_top_a.port_b",
+      "to": "harvest.in_a"
+    },
+    {
+      "from": "harvest.out_a",
+      "to": "bend_top_b.port_a"
+    },
+    {
+      "from": "bend_top_b.port_b",
+      "to": "right.out_1"
+    },
+    {
+      "from": "left.out_2",
+      "to": "run_bottom.port_a"
+    },
+    {
+      "from": "run_bottom.port_b",
+      "to": "bend_bottom_a.port_a"
+    },
+    {
+      "from": "bend_bottom_a.port_b",
+      "to": "bend_bottom_b.port_a"
+    },
+    {
+      "from": "bend_bottom_b.port_b",
+      "to": "right.out_2"
+    },
+    {
+      "from": "float_a.mount_1",
+      "to": "anchor_a.mount_a"
+    },
+    {
+      "from": "float_b.mount_1",
+      "to": "anchor_b.mount_a"
+    }
+  ],
+  "declared": {
+    "total_volume_mm3": {
+      "value": 55229561.335149996,
+      "rel_tol": 0.05
+    }
+  }
+}

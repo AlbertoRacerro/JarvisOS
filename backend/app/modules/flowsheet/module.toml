@@ -1,0 +1,4 @@
+purpose = "Record lineage graph: dependency, provenance and freshness between model specs, runs, artifacts, parameters, decisions, AI jobs and evidence. Not a process flowsheet; to be rethought."
+status = "live"
+entrypoints = ["/workspaces/{id}/flowsheet"]
+owner = "maintainer"

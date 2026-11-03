@@ -1,0 +1,517 @@
+{
+ "conn": {
+  "feed0": {
+   "unitop": "C",
+   "connections": [
+    "feed:F->port0"
+   ]
+  },
+  "d0": {
+   "unitop": "C",
+   "connections": [
+    "product:D->port0"
+   ]
+  },
+  "b1": {
+   "unitop": "C",
+   "connections": [
+    "product:B->port1"
+   ]
+  }
+ },
+ "dof": {
+  "object": "C",
+  "type": "DistillationColumn",
+  "mode": "Wang-Henke (Bubble Point)",
+  "supported": true,
+  "required": 5,
+  "specified": 4,
+  "remaining": 1,
+  "missing": [
+   "Reboiler specification"
+  ],
+  "slots": [
+   {
+    "name": "Number of stages",
+    "property": "NumberOfStages",
+    "required": true,
+    "set": true,
+    "value": 12.0
+   },
+   {
+    "name": "Top stage pressure",
+    "property": "Stages[0].P",
+    "required": true,
+    "set": true,
+    "value": 101325.0,
+    "units": "Pa"
+   },
+   {
+    "name": "Bottom stage pressure",
+    "property": "Stages[N].P",
+    "required": true,
+    "set": true,
+    "value": 101325.0,
+    "units": "Pa"
+   },
+   {
+    "name": "Condenser specification",
+    "property": "Specs[C]",
+    "required": true,
+    "set": true,
+    "value": 5.0,
+    "note": "Stream Ratio"
+   },
+   {
+    "name": "Reboiler specification",
+    "property": "Specs[R]",
+    "required": true,
+    "set": false,
+    "value": 0.0,
+    "units": "mol/s",
+    "note": "Product Molar Flow Rate"
+   },
+   {
+    "name": "Condenser type",
+    "property": "CondenserType",
+    "required": false,
+    "set": true,
+    "note": "Total_Condenser"
+   }
+  ],
+  "note": "Stages, two pressures, one condenser specification and one reboiler specification fix a distillation column."
+ },
+ "set": {
+  "unitop": "C",
+  "applied": [
+   "NumberOfStages = 10",
+   "CondenserType = Total_Condenser"
+  ]
+ },
+ "try_FeedStage": {
+  "__error__": "{\"error\":\"'C' has no settable property 'FeedStage'. Available: 'AdjustVarType', 'Apply Murphree Efficiency', 'AutoUpdateInitialEstimates', 'BottomLiquidLevel', 'BottomSpacing', 'Calculated', 'Calibrate Tray Coefficients', 'ColumnPressureDrop', 'ColumnType', 'CondenserDeltaP', 'CondenserDuty', 'CondenserType', 'Condenser_Specification_Value', 'Coolant Temperature', 'CreateSolverConvergengeReport', 'DebugMode', 'DistillateFlowRate', 'DynamicsOnly', 'DynamicsSpec', 'EnergyFlow', 'EstimatedDiameter', 'EstimatedHeight', 'ExternalLoopTolerance', 'Flooding Alarm', 'Global_Stage_Efficiency', 'InfoCarrierVarType', 'Initial Pressure', 'Initial Sump Level', 'Initial Temperature', 'InternalLoopTolerance', 'IsAdjustAttached', 'IsInfoCarrierAttached', 'IsSpecAttached', 'Max. L change (%)', 'Max. P change (%)', 'Max. V change (%)', 'MaxIterations', 'Minimum Pressure', 'NumberOfStages', 'ObjectClass' (and 57 more).\",\"type\":\"ArgumentException\"}",
+  "structured": null
+ },
+ "try_Condenser_Specification_Value": {
+  "unitop": "C",
+  "applied": [
+   "Condenser_Specification_Value = 2"
+  ]
+ },
+ "try_Reboiler_Specification_Value": {
+  "unitop": "C",
+  "applied": [
+   "Reboiler_Specification_Value = 20"
+  ]
+ },
+ "try_Reboiler_Specification_Type": {
+  "__error__": "{\"error\":\"'C' has no settable property 'Reboiler_Specification_Type'. Available: 'AdjustVarType', 'Apply Murphree Efficiency', 'AutoUpdateInitialEstimates', 'BottomLiquidLevel', 'BottomSpacing', 'Calculated', 'Calibrate Tray Coefficients', 'ColumnPressureDrop', 'ColumnType', 'CondenserDeltaP', 'CondenserDuty', 'CondenserType', 'Condenser_Specification_Value', 'Coolant Temperature', 'CreateSolverConvergengeReport', 'DebugMode', 'DistillateFlowRate', 'DynamicsOnly', 'DynamicsSpec', 'EnergyFlow', 'EstimatedDiameter', 'EstimatedHeight', 'ExternalLoopTolerance', 'Flooding Alarm', 'Global_Stage_Efficiency', 'InfoCarrierVarType', 'Initial Pressure', 'Initial Sump Level', 'Initial Temperature', 'InternalLoopTolerance', 'IsAdjustAttached', 'IsInfoCarrierAttached', 'IsSpecAttached', 'Max. L change (%)', 'Max. P change (%)', 'Max. V change (%)', 'MaxIterations', 'Minimum Pressure', 'NumberOfStages', 'ObjectClass' (and 57 more).\",\"type\":\"ArgumentException\"}",
+  "structured": null
+ },
+ "try_Condenser_Specification_Type": {
+  "__error__": "{\"error\":\"'C' has no settable property 'Condenser_Specification_Type'. Available: 'AdjustVarType', 'Apply Murphree Efficiency', 'AutoUpdateInitialEstimates', 'BottomLiquidLevel', 'BottomSpacing', 'Calculated', 'Calibrate Tray Coefficients', 'ColumnPressureDrop', 'ColumnType', 'CondenserDeltaP', 'CondenserDuty', 'CondenserType', 'Condenser_Specification_Value', 'Coolant Temperature', 'CreateSolverConvergengeReport', 'DebugMode', 'DistillateFlowRate', 'DynamicsOnly', 'DynamicsSpec', 'EnergyFlow', 'EstimatedDiameter', 'EstimatedHeight', 'ExternalLoopTolerance', 'Flooding Alarm', 'Global_Stage_Efficiency', 'InfoCarrierVarType', 'Initial Pressure', 'Initial Sump Level', 'Initial Temperature', 'InternalLoopTolerance', 'IsAdjustAttached', 'IsInfoCarrierAttached', 'IsSpecAttached', 'Max. L change (%)', 'Max. P change (%)', 'Max. V change (%)', 'MaxIterations', 'Minimum Pressure', 'NumberOfStages', 'ObjectClass' (and 57 more).\",\"type\":\"ArgumentException\"}",
+  "structured": null
+ },
+ "try_Stages[0].P": {
+  "__error__": "{\"error\":\"'C' has no settable property 'Stages[0].P'. Available: 'AdjustVarType', 'Apply Murphree Efficiency', 'AutoUpdateInitialEstimates', 'BottomLiquidLevel', 'BottomSpacing', 'Calculated', 'Calibrate Tray Coefficients', 'ColumnPressureDrop', 'ColumnType', 'CondenserDeltaP', 'CondenserDuty', 'CondenserType', 'Condenser_Specification_Value', 'Coolant Temperature', 'CreateSolverConvergengeReport', 'DebugMode', 'DistillateFlowRate', 'DynamicsOnly', 'DynamicsSpec', 'EnergyFlow', 'EstimatedDiameter', 'EstimatedHeight', 'ExternalLoopTolerance', 'Flooding Alarm', 'Global_Stage_Efficiency', 'InfoCarrierVarType', 'Initial Pressure', 'Initial Sump Level', 'Initial Temperature', 'InternalLoopTolerance', 'IsAdjustAttached', 'IsInfoCarrierAttached', 'IsSpecAttached', 'Max. L change (%)', 'Max. P change (%)', 'Max. V change (%)', 'MaxIterations', 'Minimum Pressure', 'NumberOfStages', 'ObjectClass' (and 57 more).\",\"type\":\"ArgumentException\"}",
+  "structured": null
+ },
+ "try_CondenserPressure": {
+  "__error__": "{\"error\":\"'C' has no settable property 'CondenserPressure'. Available: 'AdjustVarType', 'Apply Murphree Efficiency', 'AutoUpdateInitialEstimates', 'BottomLiquidLevel', 'BottomSpacing', 'Calculated', 'Calibrate Tray Coefficients', 'ColumnPressureDrop', 'ColumnType', 'CondenserDeltaP', 'CondenserDuty', 'CondenserType', 'Condenser_Specification_Value', 'Coolant Temperature', 'CreateSolverConvergengeReport', 'DebugMode', 'DistillateFlowRate', 'DynamicsOnly', 'DynamicsSpec', 'EnergyFlow', 'EstimatedDiameter', 'EstimatedHeight', 'ExternalLoopTolerance', 'Flooding Alarm', 'Global_Stage_Efficiency', 'InfoCarrierVarType', 'Initial Pressure', 'Initial Sump Level', 'Initial Temperature', 'InternalLoopTolerance', 'IsAdjustAttached', 'IsInfoCarrierAttached', 'IsSpecAttached', 'Max. L change (%)', 'Max. P change (%)', 'Max. V change (%)', 'MaxIterations', 'Minimum Pressure', 'NumberOfStages', 'ObjectClass' (and 57 more).\",\"type\":\"ArgumentException\"}",
+  "structured": null
+ },
+ "try_ReboilerPressure": {
+  "__error__": "{\"error\":\"'C' has no settable property 'ReboilerPressure'. Available: 'AdjustVarType', 'Apply Murphree Efficiency', 'AutoUpdateInitialEstimates', 'BottomLiquidLevel', 'BottomSpacing', 'Calculated', 'Calibrate Tray Coefficients', 'ColumnPressureDrop', 'ColumnType', 'CondenserDeltaP', 'CondenserDuty', 'CondenserType', 'Condenser_Specification_Value', 'Coolant Temperature', 'CreateSolverConvergengeReport', 'DebugMode', 'DistillateFlowRate', 'DynamicsOnly', 'DynamicsSpec', 'EnergyFlow', 'EstimatedDiameter', 'EstimatedHeight', 'ExternalLoopTolerance', 'Flooding Alarm', 'Global_Stage_Efficiency', 'InfoCarrierVarType', 'Initial Pressure', 'Initial Sump Level', 'Initial Temperature', 'InternalLoopTolerance', 'IsAdjustAttached', 'IsInfoCarrierAttached', 'IsSpecAttached', 'Max. L change (%)', 'Max. P change (%)', 'Max. V change (%)', 'MaxIterations', 'Minimum Pressure', 'NumberOfStages', 'ObjectClass' (and 57 more).\",\"type\":\"ArgumentException\"}",
+  "structured": null
+ },
+ "solve": {
+  "ok": false,
+  "error_count": 1,
+  "errors": [
+   "C: One or more of the stream connections to the column is missing. Please check input data and try again."
+  ],
+  "objects": [
+   {
+    "name": "F",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "D",
+    "type": "MaterialStream",
+    "calculated": false,
+    "error": ""
+   },
+   {
+    "name": "B",
+    "type": "MaterialStream",
+    "calculated": false,
+    "error": ""
+   },
+   {
+    "name": "C",
+    "type": "DistillationColumn",
+    "calculated": false,
+    "error": "One or more of the stream connections to the column is missing. Please check input data and try again."
+   }
+  ],
+  "findings": [
+   {
+    "code": "NOT_CONVERGED",
+    "severity": "blocker",
+    "object": "C",
+    "message": "One or more of the stream connections to the column is missing. Please check input data and try again.",
+    "fix": "Check its specification, and that everything upstream of it solved.",
+    "learn_more": "https://dwsim.org/tutorials/en/reference/troubleshooting.html"
+   },
+   {
+    "code": "SOLVER_EXCEPTION",
+    "severity": "blocker",
+    "object": "F",
+    "message": "One or more of the stream connections to the column is missing. Please check input data and try again.",
+    "fix": "Check that object's specification, and its feed.",
+    "learn_more": "https://dwsim.org/tutorials/en/reference/troubleshooting.html"
+   }
+  ],
+  "blockers": 2
+ },
+ "C": {
+  "name": "C",
+  "type": "DistillationColumn",
+  "calculated": false,
+  "error": "One or more of the stream connections to the column is missing. Please check input data and try again.",
+  "properties": {
+   "Condenser Duty": {
+    "value": "0",
+    "units": "kW"
+   },
+   "Reboiler Duty": {
+    "value": "0",
+    "units": "kW"
+   },
+   "Number of Stages": {
+    "value": "10",
+    "units": ""
+   },
+   "Stage_Temperature_1": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_Temperature_2": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_Temperature_3": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_Temperature_4": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_Temperature_5": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_Temperature_6": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_Temperature_7": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_Temperature_8": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_Temperature_9": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_Temperature_10": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_Temperature_11": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_Temperature_12": {
+    "value": "-273.15",
+    "units": "C"
+   },
+   "Stage_VaporFlow_1": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_1": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_VaporFlow_2": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_2": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_VaporFlow_3": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_3": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_VaporFlow_4": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_4": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_VaporFlow_5": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_5": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_VaporFlow_6": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_6": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_VaporFlow_7": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_7": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_VaporFlow_8": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_8": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_VaporFlow_9": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_9": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_VaporFlow_10": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_10": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_VaporFlow_11": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_11": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_VaporFlow_12": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Stage_LiquidFlow_12": {
+    "value": "0",
+    "units": "kmol/h"
+   },
+   "Sump_LiquidLevel": {
+    "value": "0",
+    "units": "m"
+   }
+  }
+ },
+ "D": {
+  "name": "D",
+  "temperature_K": 298.15,
+  "pressure_Pa": 101325.0,
+  "mass_flow_kg_s": 1.0,
+  "molar_flow_mol_s": 0.0,
+  "phases": [
+   {
+    "name": "Mixture",
+    "fraction": 0.0,
+    "temperature_K": 298.15,
+    "pressure_Pa": 101325.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.5,
+      "mass_fraction": 0.35989431277935574
+     },
+     "Methanol": {
+      "mole_fraction": 0.5,
+      "mass_fraction": 0.6401056872206442
+     }
+    }
+   },
+   {
+    "name": "OverallLiquid",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Methanol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Vapor",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Methanol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Liquid1",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Methanol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Liquid2",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Methanol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Liquid3",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Methanol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Aqueous",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Methanol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Solid",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Methanol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   }
+  ]
+ },
+ "check": {
+  "ready": true,
+  "blockers": 0,
+  "warnings": 0,
+  "findings": [],
+  "explanations": [],
+  "object_count": 4,
+  "compound_count": 2
+ }
+}

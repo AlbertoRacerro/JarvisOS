@@ -1,0 +1,14 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.13.4
+httpx==0.28.1
+build123d==0.11.1
+lib3mf==2.5.0
+PyYAML==6.0.3
+Pint==0.25.3
+CoolProp==8.0.0
+fluids==1.3.1
+ht==1.2.0
+scikit-sundae==1.1.3
+pvlib==0.16.1
+pandas==3.0.6

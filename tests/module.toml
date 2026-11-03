@@ -1,0 +1,4 @@
+purpose = "Tests for the Relay supervisor's output parser and diagnostics (outside the backend suite)."
+status = "live"
+entrypoints = ["relay_reliability/"]
+owner = "maintainer"

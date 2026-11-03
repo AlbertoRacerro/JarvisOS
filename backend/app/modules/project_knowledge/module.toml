@@ -1,0 +1,4 @@
+purpose = "Project basis: working revisions, drafts, validation, approvals and reconciliation of requirements, parameters and decisions. Live; to be rethought."
+status = "live"
+entrypoints = ["/project-knowledge", "service.py"]
+owner = "maintainer"

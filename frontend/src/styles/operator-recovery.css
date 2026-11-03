@@ -1,0 +1,131 @@
+/* Operator work areas: real controls, one supporting Jarvis column, bounded readers. */
+.application-shell--final {
+  /* Spec 198 Lumen: the fusion palette is a view of the canonical appearance tokens. */
+  --fusion-panel: var(--color-bg-surface-raised);
+  --fusion-panel-warm: var(--color-bg-surface);
+  --fusion-bg: transparent;
+  --fusion-line: var(--color-border-default);
+  --fusion-line-soft: var(--color-border-default);
+  --fusion-green: var(--color-accent-foreground);
+  --fusion-green-deep: var(--color-accent-foreground);
+  --fusion-green-soft: var(--color-accent-subtle);
+  --fusion-muted: var(--color-text-muted);
+}
+.application-shell--final .shell-main > .final-fusion__workspace-head { flex: 0 0 auto; }
+.application-shell--final .shell-main:focus { outline: none; box-shadow: none; }
+.application-shell--final .shell-sidecar__properties .ui-inline-notice,
+.application-shell--final .shell-sidecar__properties :is(p, summary, dt, dd) { font-size: var(--font-size-label); line-height: var(--line-height-body); }
+.application-shell--final .shell-panel__header h2 { font-size: 13px; }
+.application-shell--final .shell-panel__header h2:focus { outline: none; }
+.application-shell--final .shell-panel__header .ui-button { font-size: var(--font-size-label); }
+.final-fusion__workbench { min-height: 420px; }
+.final-fusion__panel { overflow: auto; overscroll-behavior: contain; }
+.final-fusion__panel-head { flex: 0 0 auto; }
+.final-fusion__panel h2 { font-size: 15px; font-weight: 500; }
+.final-fusion__panel h3 { font-size: 13px; font-weight: 500; }
+.final-fusion__panel p, .final-fusion__panel label, .final-fusion__panel summary,
+.final-fusion__panel button, .final-fusion__panel select, .final-fusion__panel input,
+.final-fusion__toolbar-line, .final-fusion__source-empty, .final-fusion__context-note,
+.final-fusion__facts, .final-fusion__disclosure-row { font-size: var(--font-size-body); line-height: var(--line-height-body); }
+.final-fusion__panel button { min-height: 30px; }
+.final-fusion__panel :is(input, select, textarea) { font: inherit; max-width: 100%; min-width: 0; }
+.final-fusion__panel small { font-size: var(--font-size-caption); }
+.final-fusion__panel :is(pre, code) { overflow-wrap: anywhere; }
+.final-fusion__panel pre { white-space: pre-wrap; }
+.final-fusion__panel button:disabled { opacity: .5; cursor: not-allowed; }
+.final-fusion__workbench--memory { grid-template-columns: 240px minmax(0, 1fr) var(--jarvis-width, 315px); }
+.final-fusion__workbench--literature { grid-template-columns: minmax(0, 1fr) var(--jarvis-width, 315px); }
+.final-fusion__workbench--memory > section:first-child { padding: 14px; }
+.final-fusion__workbench--memory form { display: grid; gap: 8px; }
+.final-fusion__workbench--memory form input { width: 100%; }
+.basis-records { padding: 12px 16px; }
+.basis-group { margin-bottom: 16px; }
+.basis-group h3 { display: flex; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--fusion-line); }
+.basis-group h3 span { color: var(--fusion-muted); }
+.basis-record { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 8px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--fusion-line-soft); border-radius: 0; padding: 10px 4px; background: transparent; color: inherit; }
+.basis-record strong { font-weight: 500; overflow-wrap: anywhere; }
+.basis-record em { font-size: var(--font-size-caption); font-style: normal; color: var(--color-text-muted); }
+.basis-record[aria-expanded=true] { background: var(--fusion-green-soft); }
+.basis-record-detail { padding: 12px 20px; border-bottom: 1px solid var(--fusion-line); font-size: 12px; }
+.basis-record-detail dl { display: grid; gap: 8px; }
+.basis-record-detail dl > div { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 12px; }
+.basis-record-detail dt { color: var(--fusion-muted); text-transform: capitalize; }
+.basis-record-detail dd { margin: 0; overflow-wrap: anywhere; }
+.final-fusion__basis > .final-fusion__basis { flex-shrink: 0; margin: 12px; }
+.final-fusion__jarvis { padding: 14px; }
+.final-fusion__jarvis .jarvis-sidecar { overflow: hidden; height: 100%; min-height: 0; gap: 8px; font-size: 12px; }
+.jarvis-sidecar__composer { margin-top: auto; }
+.jarvis-sidecar__transcript { flex: 1 1 auto; min-height: 100px; overflow: auto; }
+.jarvis-sidecar__header .eyebrow { font-size: 10px; margin: 0; }
+.jarvis-sidecar__header strong { font-size: 16px; font-weight: 500; }
+.jarvis-sidecar__composer textarea { font: inherit; }
+.jarvis-sidecar summary { cursor: pointer; }
+.jarvis-selection-actions { padding: 8px 0; border-block: 1px solid var(--fusion-line); max-height: 200px; overflow: auto; flex: 0 1 auto; }
+.jarvis-selection-actions[open] { max-height: 55vh; overflow: auto; }
+.jarvis-sidecar__context { font-size: var(--font-size-caption); }
+.jarvis-sidecar__toggle { display: flex; }
+.jarvis-sidecar__toggle input { width: auto; }
+
+[data-testid=coding-repository-surface] { grid-template-columns: 230px minmax(0, 1fr) var(--jarvis-width, 315px); grid-template-rows: minmax(0, 1fr); }
+[data-testid=coding-repository-surface] > .final-fusion__panel { grid-column: auto; min-height: 0; }
+[data-testid=coding-repository-surface] .final-fusion__source-list { flex: 0 1 auto; overflow: auto; }
+[data-testid=coding-repository-surface] .final-fusion__toolbar-line { flex-wrap: wrap; gap: 8px; padding: 10px; }
+[data-testid=coding-repository-surface] .final-fusion__repo-status { padding: 12px; gap: 8px; flex-wrap: wrap; }
+[data-testid=coding-repository-surface] .final-fusion__repo-status strong { overflow-wrap: anywhere; font-size: 13px; }
+[data-testid=coding-repository-surface] > section:first-child .final-fusion__disclosure-row { text-align: left; grid-template-columns: minmax(0, 1fr); }
+[data-testid=coding-repository-surface] > section:nth-child(2) { overflow: hidden; }
+[data-testid=coding-repository-surface] > section:nth-child(3) { padding: 10px; }
+[data-testid=coding-repository-surface] .final-fusion__source-list > div.final-fusion__disclosure-row button {
+  width: 100%; min-height: 28px; padding: 6px 9px; text-align: left;
+  border: 0; border-radius: 0; background: transparent; color: var(--color-text-primary); box-shadow: none;
+}
+[data-testid=coding-repository-surface] .final-fusion__source-list > div.final-fusion__disclosure-row button:hover {
+  background: var(--fusion-green-soft);
+}
+.coding-jarvis-chat { height: min(680px, calc(100vh - 190px)); min-height: 390px; padding: 4px 0 12px; }
+.coding-proposal-tools { border-top: 1px solid var(--fusion-line); padding: 10px 0; }
+.coding-proposal-tools > summary { cursor: pointer; font-weight: 500; }
+.coding-proposal-tools[open] > summary { margin-bottom: 10px; }
+.repository-file-viewport { flex: 1 1 auto; min-height: 240px; overflow: auto; overscroll-behavior: contain; border-block: 1px solid var(--fusion-line-soft); background: var(--color-bg-surface-raised); }
+.repository-file-viewport pre { display: block; margin: 0; padding: 20px; white-space: pre; font: 12px/1.65 "IBM Plex Mono", Consolas, monospace; overflow-wrap: normal; min-width: max-content; }
+.repository-empty { padding: 40px; text-align: center; color: var(--fusion-muted); }
+.repository-pr-evidence { flex: 0 0 auto; max-height: 32vh; overflow: auto; padding: 12px; }
+.file-view-tabs { display: flex; gap: 6px; padding: 0 12px 8px; }
+.file-view-tabs button[aria-pressed=true] { background: var(--fusion-green-soft); color: var(--fusion-green-deep); border-color: var(--fusion-green); }
+.markdown-preview { max-width: 900px; padding: 20px 28px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.markdown-preview :is(p, li) { font-size: 14px; line-height: 1.65; }
+.markdown-preview h1 { font-size: 26px; }.markdown-preview h2 { font-size: 21px; }.markdown-preview h3 { font-size: 17px; }
+.markdown-preview pre { min-width: 0; overflow: auto; background: var(--color-bg-subtle); border: 1px solid var(--fusion-line); padding: 14px; }
+.markdown-preview table { border-collapse: collapse; display: block; overflow: auto; }
+.markdown-preview :is(td, th) { border: 1px solid var(--fusion-line); padding: 8px 12px; }
+
+@media(max-width: 1350px) {
+  .final-fusion__workbench--memory { grid-template-columns: 190px minmax(0, 1fr) 280px; }
+  [data-testid=coding-repository-surface] { grid-template-columns: 180px minmax(0, 1fr) 280px; }
+}
+@media(max-width: 1050px) {
+  .final-fusion__workbench--memory, .final-fusion__workbench--models { grid-template-columns: 190px minmax(0, 1fr); }
+  .final-fusion__workbench--memory > .final-fusion__jarvis, .final-fusion__workbench--models > .final-fusion__jarvis { grid-column: 1 / -1; min-height: 350px; }
+  [data-testid=coding-repository-surface] { grid-template-columns: 180px minmax(0, 1fr); }
+  [data-testid=coding-repository-surface] > section:nth-child(3) { grid-column: 1 / -1; }
+}
+.application-shell--final .basis-record { background: transparent; color: var(--color-text-primary); box-shadow: none; }
+.application-shell--final .basis-record:hover,
+.application-shell--final .basis-record[aria-expanded=true] { background: var(--fusion-green-soft); }
+.jarvis-sidecar__transcript { max-height: none; }
+.jarvis-conversation-settings { flex: 0 0 auto; }
+.jarvis-sidecar p { margin: 4px 0; }
+.jarvis-sidecar [data-testid="knowledge-context-basket"] li { display: flex; align-items: center; gap: 6px; }
+.jarvis-sidecar [data-testid="knowledge-context-basket"] li span { flex: 1; }
+.basis-revision-summary { padding: 0 12px; }
+.basis-change-list { padding-left: 20px; font-size: 12px; }
+@media(max-width: 760px) {
+  .final-fusion__workbench--memory,
+  .final-fusion__workbench--models,
+  .final-fusion__workbench--literature {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+  }
+}
+.process-stage__available-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
+

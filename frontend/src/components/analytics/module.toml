@@ -1,0 +1,4 @@
+purpose = "Analytics dock content and its state logic."
+status = "live"
+entrypoints = ["AnalyticsDockContent.tsx", "analyticsState.ts"]
+owner = "maintainer"

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvisos.local/schemas/bluecad_mesh_result_v0_1.schema.json",
+  "title": "BLUECAD MeshResult v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "verdict", "errors", "attempts", "artifacts"],
+  "properties": {
+    "schema_version": {"const": "bluecad_mesh_result_v0_1"},
+    "verdict": {"enum": ["pass", "fail", "error"]},
+    "errors": {"type": "array"},
+    "attempts": {"type": "array"},
+    "artifacts": {"type": "object"}
+  }
+}

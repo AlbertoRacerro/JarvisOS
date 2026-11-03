@@ -1,0 +1,4 @@
+purpose = "Immutable workspace environment profiles (site, weather and irradiance series): import, offline generators and provenance."
+status = "live"
+entrypoints = ["/workspaces/{id}/environment"]
+owner = "maintainer"

@@ -1,0 +1,2237 @@
+{
+  "schemas": {
+    "EvaluationRequest": {
+      "$defs": {
+        "DynamicModelRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "dynamic_model",
+              "default": "dynamic_model",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "DynamicModelRef",
+          "type": "object"
+        },
+        "EnvironmentalScenarioRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "environmental_scenario",
+              "default": "environmental_scenario",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "EnvironmentalScenarioRef",
+          "type": "object"
+        },
+        "EvaluationRequestRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "evaluation_request",
+              "default": "evaluation_request",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "EvaluationRequestRef",
+          "type": "object"
+        },
+        "GeometryAssetRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "geometry_asset",
+              "default": "geometry_asset",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "GeometryAssetRef",
+          "type": "object"
+        },
+        "MaterialStateRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "material_state",
+              "default": "material_state",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "MaterialStateRef",
+          "type": "object"
+        },
+        "MeshArtifactRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "mesh_artifact",
+              "default": "mesh_artifact",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "MeshArtifactRef",
+          "type": "object"
+        },
+        "NamedQuantity": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Name",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Quantity"
+            }
+          },
+          "required": [
+            "name",
+            "value"
+          ],
+          "title": "NamedQuantity",
+          "type": "object"
+        },
+        "PhysicsCaseRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "physics_case",
+              "default": "physics_case",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "PhysicsCaseRef",
+          "type": "object"
+        },
+        "ProcessDesignEnvelopeRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "process_design_envelope",
+              "default": "process_design_envelope",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "ProcessDesignEnvelopeRef",
+          "type": "object"
+        },
+        "ProcessModelIRRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "process_model_ir",
+              "default": "process_model_ir",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "ProcessModelIRRef",
+          "type": "object"
+        },
+        "PropertyBasisRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "property_basis",
+              "default": "property_basis",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "PropertyBasisRef",
+          "type": "object"
+        },
+        "Quantity": {
+          "additionalProperties": false,
+          "description": "A finite magnitude in a unit understood by the single Pint owner.\n\nCompound units use Pint syntax (``W/(m**2*K)``); compact exponents such as\n``m2`` are accepted only as whole reviewed tokens (``m2``, ``kg/m3``).",
+          "properties": {
+            "basis_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "unit": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Unit",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "number"
+            }
+          },
+          "required": [
+            "value",
+            "unit"
+          ],
+          "title": "Quantity",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        },
+        "StudyRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "study",
+              "default": "study",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "StudyRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "backend_case_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "backend_options": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "title": "Backend Options",
+          "type": "object"
+        },
+        "cancellation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancellation Id"
+        },
+        "deadline_at": {
+          "format": "date-time",
+          "title": "Deadline At",
+          "type": "string"
+        },
+        "design_envelope_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProcessDesignEnvelopeRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "evaluator_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Evaluator Id",
+          "type": "string"
+        },
+        "inputs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NamedQuantity"
+          },
+          "maxItems": 64,
+          "title": "Inputs",
+          "type": "array"
+        },
+        "lease_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lease Id"
+        },
+        "request_ref": {
+          "$ref": "#/$defs/EvaluationRequestRef"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "requested_fidelity": {
+          "anyOf": [
+            {
+              "enum": [
+                "screening",
+                "reduced_order",
+                "steady_state_detailed",
+                "dynamic_detailed",
+                "field_resolved"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Fidelity"
+        },
+        "scenario_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentalScenarioRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "const": "engineering_evaluator.v1",
+          "default": "engineering_evaluator.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "study_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StudyRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "subject_ref": {
+          "discriminator": {
+            "mapping": {
+              "dynamic_model": "#/$defs/DynamicModelRef",
+              "geometry_asset": "#/$defs/GeometryAssetRef",
+              "material_state": "#/$defs/MaterialStateRef",
+              "mesh_artifact": "#/$defs/MeshArtifactRef",
+              "physics_case": "#/$defs/PhysicsCaseRef",
+              "process_model_ir": "#/$defs/ProcessModelIRRef",
+              "property_basis": "#/$defs/PropertyBasisRef"
+            },
+            "propertyName": "object_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ProcessModelIRRef"
+            },
+            {
+              "$ref": "#/$defs/DynamicModelRef"
+            },
+            {
+              "$ref": "#/$defs/PropertyBasisRef"
+            },
+            {
+              "$ref": "#/$defs/MaterialStateRef"
+            },
+            {
+              "$ref": "#/$defs/GeometryAssetRef"
+            },
+            {
+              "$ref": "#/$defs/MeshArtifactRef"
+            },
+            {
+              "$ref": "#/$defs/PhysicsCaseRef"
+            }
+          ],
+          "title": "Subject Ref"
+        }
+      },
+      "required": [
+        "request_ref",
+        "evaluator_id",
+        "subject_ref",
+        "requested_at",
+        "deadline_at"
+      ],
+      "title": "EvaluationRequest",
+      "type": "object"
+    },
+    "EvaluationResult": {
+      "$defs": {
+        "DomainBound": {
+          "additionalProperties": false,
+          "properties": {
+            "lower": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Quantity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "upper": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Quantity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "variable": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Variable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "variable"
+          ],
+          "title": "DomainBound",
+          "type": "object"
+        },
+        "EvaluationFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "backend_code": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Backend Code",
+              "type": "string"
+            },
+            "category": {
+              "enum": [
+                "not_available",
+                "invalid_input",
+                "unsupported_request",
+                "outside_validity_domain",
+                "resource_unavailable",
+                "initialization_failed",
+                "did_not_converge",
+                "numerical_error",
+                "solver_crash",
+                "result_parse_error",
+                "timeout",
+                "cancelled",
+                "internal_error"
+              ],
+              "title": "Category",
+              "type": "string"
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Message"
+            },
+            "retryable": {
+              "default": false,
+              "title": "Retryable",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "category",
+            "backend_code"
+          ],
+          "title": "EvaluationFailure",
+          "type": "object"
+        },
+        "EvaluationRequestRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "evaluation_request",
+              "default": "evaluation_request",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "EvaluationRequestRef",
+          "type": "object"
+        },
+        "EvaluationResultRef": {
+          "additionalProperties": false,
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "evaluation_result",
+              "default": "evaluation_result",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id"
+          ],
+          "title": "EvaluationResultRef",
+          "type": "object"
+        },
+        "NamedQuantity": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Name",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Quantity"
+            }
+          },
+          "required": [
+            "name",
+            "value"
+          ],
+          "title": "NamedQuantity",
+          "type": "object"
+        },
+        "NumericalDiagnostics": {
+          "additionalProperties": false,
+          "description": "Solver health only. Convergence is never evidence of physical validity.",
+          "properties": {
+            "converged": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Converged"
+            },
+            "final_residual": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Final Residual"
+            },
+            "iterations": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Iterations"
+            },
+            "wall_time_s": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Wall Time S"
+            }
+          },
+          "title": "NumericalDiagnostics",
+          "type": "object"
+        },
+        "Quantity": {
+          "additionalProperties": false,
+          "description": "A finite magnitude in a unit understood by the single Pint owner.\n\nCompound units use Pint syntax (``W/(m**2*K)``); compact exponents such as\n``m2`` are accepted only as whole reviewed tokens (``m2``, ``kg/m3``).",
+          "properties": {
+            "basis_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "unit": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Unit",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "number"
+            }
+          },
+          "required": [
+            "value",
+            "unit"
+          ],
+          "title": "Quantity",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        },
+        "UncertaintyBound": {
+          "additionalProperties": false,
+          "properties": {
+            "absolute": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Quantity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "confidence_level": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "maximum": 1.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Confidence Level"
+            },
+            "relative": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Relative"
+            },
+            "variable": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Variable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "variable"
+          ],
+          "title": "UncertaintyBound",
+          "type": "object"
+        },
+        "ValidityEnvelopeRef": {
+          "additionalProperties": false,
+          "description": "Where a model/result may be used, how uncertain it is, and its qualification state.\n\nThere is no default status; anything beyond ``candidate`` must cite evidence.\nRecording a status here is metadata, not a qualification decision.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "domain": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/DomainBound"
+              },
+              "maxItems": 32,
+              "title": "Domain",
+              "type": "array"
+            },
+            "evidence_refs": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SourceRef"
+              },
+              "maxItems": 32,
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "location": {
+              "default": null,
+              "title": "Location",
+              "type": "null"
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "const": "validity_envelope",
+              "default": "validity_envelope",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "qualification_status": {
+              "enum": [
+                "unqualified",
+                "candidate",
+                "calibrated",
+                "benchmarked",
+                "qualified"
+              ],
+              "title": "Qualification Status",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "uncertainty": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/UncertaintyBound"
+              },
+              "maxItems": 32,
+              "title": "Uncertainty",
+              "type": "array"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_id",
+            "workspace_id",
+            "qualification_status"
+          ],
+          "title": "ValidityEnvelopeRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "backend_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Backend Version",
+          "type": "string"
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "evaluator_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Evaluator Id",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 64,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvaluationFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fidelity": {
+          "enum": [
+            "screening",
+            "reduced_order",
+            "steady_state_detailed",
+            "dynamic_detailed",
+            "field_resolved"
+          ],
+          "title": "Fidelity",
+          "type": "string"
+        },
+        "numerical": {
+          "$ref": "#/$defs/NumericalDiagnostics",
+          "default": {
+            "converged": null,
+            "final_residual": null,
+            "iterations": null,
+            "wall_time_s": null
+          }
+        },
+        "output_artifacts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 64,
+          "title": "Output Artifacts",
+          "type": "array"
+        },
+        "outputs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NamedQuantity"
+          },
+          "maxItems": 64,
+          "title": "Outputs",
+          "type": "array"
+        },
+        "qualification_record_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "request_ref": {
+          "$ref": "#/$defs/EvaluationRequestRef"
+        },
+        "result_ref": {
+          "$ref": "#/$defs/EvaluationResultRef"
+        },
+        "schema_version": {
+          "const": "engineering_evaluator.v1",
+          "default": "engineering_evaluator.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "refused",
+            "cancelled",
+            "deadline_exceeded"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "validity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValidityEnvelopeRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "result_ref",
+        "request_ref",
+        "evaluator_id",
+        "backend_version",
+        "status",
+        "fidelity",
+        "completed_at"
+      ],
+      "title": "EvaluationResult",
+      "type": "object"
+    },
+    "EvaluatorAvailability": {
+      "additionalProperties": false,
+      "description": "Truthful runtime availability; says nothing about scientific qualification.",
+      "properties": {
+        "backend_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Backend Version"
+        },
+        "checked_at": {
+          "format": "date-time",
+          "title": "Checked At",
+          "type": "string"
+        },
+        "evaluator_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Evaluator Id",
+          "type": "string"
+        },
+        "reason_code": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason Code"
+        },
+        "state": {
+          "enum": [
+            "available",
+            "not_installed",
+            "disabled",
+            "unhealthy",
+            "unknown"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evaluator_id",
+        "state",
+        "checked_at"
+      ],
+      "title": "EvaluatorAvailability",
+      "type": "object"
+    },
+    "EvaluatorDescriptor": {
+      "$defs": {
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Static identity of one evaluator adapter; the backend version is exact.",
+      "properties": {
+        "backend_kind": {
+          "enum": [
+            "process_kernel",
+            "process_simulator",
+            "dynamic_simulator",
+            "property_package",
+            "cad_kernel",
+            "mesher",
+            "fem_solver",
+            "cfd_solver",
+            "specialist"
+          ],
+          "title": "Backend Kind",
+          "type": "string"
+        },
+        "backend_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Backend Name",
+          "type": "string"
+        },
+        "backend_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Backend Version",
+          "type": "string"
+        },
+        "capabilities": {
+          "default": [],
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "evaluator_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Evaluator Id",
+          "type": "string"
+        },
+        "fidelity": {
+          "enum": [
+            "screening",
+            "reduced_order",
+            "steady_state_detailed",
+            "dynamic_detailed",
+            "field_resolved"
+          ],
+          "title": "Fidelity",
+          "type": "string"
+        },
+        "qualification_record_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "const": "engineering_evaluator.v1",
+          "default": "engineering_evaluator.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tool_registry_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Registry Id"
+        }
+      },
+      "required": [
+        "evaluator_id",
+        "backend_kind",
+        "backend_name",
+        "backend_version",
+        "fidelity"
+      ],
+      "title": "EvaluatorDescriptor",
+      "type": "object"
+    }
+  },
+  "version": "engineering_evaluator.v1"
+}

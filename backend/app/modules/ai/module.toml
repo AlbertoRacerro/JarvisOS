@@ -1,0 +1,4 @@
+purpose = "The AI execution spine: task runner, provider routing and gateway, budget and token guard, sensitivity labels and egress control, context packs, retrieval index, thread records and the ai_jobs ledger."
+status = "live"
+entrypoints = ["/ai/settings", "/ai/sensitivity", "/ai/context", "execution.py"]
+owner = "maintainer"

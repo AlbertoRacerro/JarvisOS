@@ -1,0 +1,118 @@
+.final-fusion__workspace-head {
+  min-height: 0;
+  padding: var(--space-3) 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "eyebrow tabs"
+    "title tabs";
+  align-items: center;
+  column-gap: var(--space-5);
+  row-gap: var(--space-1);
+  background: transparent;
+}
+
+/* The shared shell gives every direct child flex: 1. The workspace header is
+ * navigation metadata, not a work region, so override that rule explicitly. */
+.application-shell--final .shell-main > .final-fusion__workspace-head {
+  flex: 0 0 auto;
+}
+
+.final-fusion__workspace-head .eyebrow {
+  grid-area: eyebrow;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+
+.final-fusion__workspace-head h1 {
+  grid-area: title;
+  margin: 0;
+  font-size: var(--font-size-page-title);
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.final-fusion__peer-tabs {
+  grid-area: tabs;
+  margin-top: 0;
+  display: flex;
+  align-self: center;
+  justify-self: start;
+  gap: 2px;
+  flex-wrap: wrap;
+  padding: 3px;
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--lumen-radius-button);
+  background: var(--lumen-segment-bg);
+}
+
+.final-fusion__peer-tabs a {
+  min-height: var(--control-height-compact);
+  padding: var(--space-1) var(--space-4);
+  display: inline-flex;
+  align-items: center;
+  border: var(--border-width-default) solid transparent;
+  border-radius: var(--lumen-radius-button);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.final-fusion__peer-tabs a.is-active {
+  border-color: var(--color-accent-foreground);
+  background: var(--color-accent-surface);
+  color: var(--color-text-primary);
+  font-weight: 600;
+  box-shadow: var(--lumen-selected-glow);
+}
+
+.final-fusion__peer-tabs a:hover {
+  background: var(--color-bg-surface-raised);
+}
+
+.final-fusion__peer-tabs a:focus-visible {
+  outline: var(--border-width-default) solid var(--color-focus-ring);
+  outline-offset: var(--space-1);
+}
+
+/* Production has two truthful surface roots: backend-owned READ surfaces expose
+ * the workbench directly; unavailable/future surfaces retain the 100f wrapper.
+ * Both must begin immediately below the compact workspace header. */
+.final-fusion__workspace-head + .final-fusion,
+.final-fusion__workspace-head + .final-fusion__workbench {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  height: auto;
+}
+
+.final-fusion__workspace-head + .final-fusion > .final-fusion__surface-head,
+.final-fusion__workspace-head + .final-fusion__workbench > .final-fusion__surface-head {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .final-fusion__workspace-head {
+    min-height: auto;
+    padding: var(--space-3) 0 var(--space-2);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "eyebrow"
+      "title"
+      "tabs";
+    align-items: start;
+  }
+
+  .final-fusion__workspace-head + .final-fusion,
+  .final-fusion__workspace-head + .final-fusion__workbench {
+    height: auto;
+  }
+
+  .final-fusion__peer-tabs {
+    margin-top: var(--space-1);
+  }
+}

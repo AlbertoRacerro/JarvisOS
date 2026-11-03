@@ -1,0 +1,4 @@
+purpose = "Studio authoring editors: Python editor, unit, geometry and procedure authoring, derived documentation and workshop drafts."
+status = "live"
+entrypoints = ["PythonEditor.tsx", "UnitAuthoring.tsx", "WorkshopDraftPanel.tsx"]
+owner = "maintainer"

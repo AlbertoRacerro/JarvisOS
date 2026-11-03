@@ -1,0 +1,27 @@
+{
+  "candidate": "fmpy",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "not declared in metadata",
+  "measurements": {
+    "analytical_absolute_error": 0.019201001071442347,
+    "documented_analytical_x_at_1": 0.36787944117144233,
+    "final_time_s": 1.0,
+    "fmu": "Dahlquist.fmu",
+    "last_values": {
+      "x": 0.3486784401
+    },
+    "model_exchange_analytical_absolute_error": 3.826046414923123e-05,
+    "model_exchange_final_x": 0.3678411807072931,
+    "output_names": [
+      "time",
+      "x"
+    ],
+    "reference_files_in_fmu": [],
+    "samples": 11
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "0.3.32",
+  "wall_time_s": 0.17065
+}

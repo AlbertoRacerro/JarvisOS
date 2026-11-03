@@ -1,0 +1,4 @@
+purpose = "Process engineering on selected upstream owners (CoolProp, fluids/ht, SUNDIALS, DWSIM): process drafts and editor, steady-state and dynamic engines, culture and PBR units, results views."
+status = "live"
+entrypoints = ["/workspaces/{id}/process", "draft.py", "dynamic_engine.py"]
+owner = "maintainer"

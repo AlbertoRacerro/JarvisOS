@@ -1,0 +1,176 @@
+{
+ "provenance": "scripts/qualification/158 recycle tolerance probe on DWSIM 10.2.9 (MCP sha256 d20f97426c264ac91114240b085b3c4e7877dfda83ecb487c0125f838cf66cfa); fix/158-native-recycle-tolerance 2026-10-06",
+ "Recycle": {
+  "add": {
+   "name": "Rec",
+   "type": "Recycle"
+  },
+  "set": {
+   "unitop": "Rec",
+   "applied": [
+    "PROP_RY_1 = 0.00036"
+   ]
+  }
+ },
+ "loop_0p01_kg_s": {
+  "topology": "Feed 0.01 kg/s water -> Heater 298.15 K -> Mixer -> Splitter 0.9 purge / 0.1 Back -> Recycle Rec -> Mixer",
+  "default_tolerance_run_before_fix": {
+   "source": "master 46f00794 compiler (no PROP_RY_1), same DWSIM 10.2.9 MCP, 2026-10-06",
+   "status": "completed",
+   "solve_ok": true,
+   "recycle_reported": {
+    "Mass Flow Error": {
+     "value": "32.36399999999998",
+     "units": "kg/h"
+    }
+   },
+   "recycle_properties": {
+    "Mass Flow Tolerance": {
+     "value": 36.0,
+     "unit": "kg/h"
+    },
+    "Maximum Iterations": 50.0
+   },
+   "streams": {
+    "Hot": {
+     "mass_flow_kg_s": 0.01,
+     "temperature_K": 298.15,
+     "vapor_fraction": 0.0
+    },
+    "Mixed": {
+     "mass_flow_kg_s": 0.0211,
+     "temperature_K": 372.7636,
+     "vapor_fraction": 0.3588
+    },
+    "Purge": {
+     "mass_flow_kg_s": 0.01899,
+     "temperature_K": 372.7636,
+     "vapor_fraction": 0.3588
+    },
+    "Back": {
+     "mass_flow_kg_s": 0.00211
+    },
+    "Torn": {
+     "mass_flow_kg_s": 0.00211
+    }
+   }
+  },
+  "default_tolerance_read_back": {
+   "status": "materialization_mismatch",
+   "materialization_diffs": [
+    {
+     "path": "units.Rec.__MassFlowTolerance",
+     "expected": 1.0000000000000001e-07,
+     "actual": 0.01
+    }
+   ],
+   "streams": {
+    "Feed": {
+     "mass_flow_kg_s": null,
+     "temperature_K": null,
+     "vapor_fraction": null
+    },
+    "Hot": {
+     "mass_flow_kg_s": null,
+     "temperature_K": null,
+     "vapor_fraction": null
+    },
+    "Mixed": {
+     "mass_flow_kg_s": null,
+     "temperature_K": null,
+     "vapor_fraction": null
+    },
+    "Purge": {
+     "mass_flow_kg_s": null,
+     "temperature_K": null,
+     "vapor_fraction": null
+    },
+    "Back": {
+     "mass_flow_kg_s": null,
+     "temperature_K": null,
+     "vapor_fraction": null
+    },
+    "Torn": {
+     "mass_flow_kg_s": null,
+     "temperature_K": null,
+     "vapor_fraction": null
+    }
+   },
+   "recycle_reported": null,
+   "native_case": {
+    "ConvergenceParameters": {
+     "Type": "DWSIM.UnitOperations.SpecialOps.Helpers.Recycle.ConvergenceParameters",
+     "Temperatura": "0.1",
+     "Pressao": "0.1",
+     "VazaoMassica": "0.01",
+     "FracaoVapor": "0.01",
+     "Entalpia": "1",
+     "Entropia": "0.01",
+     "Composicao": "0.001"
+    }
+   }
+  },
+  "jarvis_tolerance_run": {
+   "status": "completed",
+   "materialization_diffs": [],
+   "streams": {
+    "Feed": {
+     "mass_flow_kg_s": 0.01,
+     "temperature_K": 300.0,
+     "vapor_fraction": 0.0
+    },
+    "Hot": {
+     "mass_flow_kg_s": 0.01,
+     "temperature_K": 298.14999999999355,
+     "vapor_fraction": 0.0
+    },
+    "Mixed": {
+     "mass_flow_kg_s": 0.011111211,
+     "temperature_K": 298.154482828485,
+     "vapor_fraction": 0.0
+    },
+    "Purge": {
+     "mass_flow_kg_s": 0.0100000899,
+     "temperature_K": 298.1544828284783,
+     "vapor_fraction": 0.0
+    },
+    "Back": {
+     "mass_flow_kg_s": 0.0011111210999999997,
+     "temperature_K": 298.1544828284783,
+     "vapor_fraction": 0.0
+    },
+    "Torn": {
+     "mass_flow_kg_s": 0.0011111210999999997,
+     "temperature_K": 298.1544828284783,
+     "vapor_fraction": 0.0
+    }
+   },
+   "recycle_reported": {
+    "Mass Flow Error": {
+     "value": "0.00032364000000029494",
+     "units": "kg/h"
+    },
+    "Temperature Error": {
+     "value": "-0.04034109809373376",
+     "units": "C."
+    },
+    "Pressure Error": {
+     "value": "0",
+     "units": "bar"
+    }
+   },
+   "native_case": {
+    "ConvergenceParameters": {
+     "Type": "DWSIM.UnitOperations.SpecialOps.Helpers.Recycle.ConvergenceParameters",
+     "Temperatura": "0.1",
+     "Pressao": "0.1",
+     "VazaoMassica": "1.0000000000000001E-07",
+     "FracaoVapor": "0.01",
+     "Entalpia": "1",
+     "Entropia": "0.01",
+     "Composicao": "0.001"
+    }
+   }
+  }
+ }
+}

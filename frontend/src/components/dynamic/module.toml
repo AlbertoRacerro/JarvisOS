@@ -1,0 +1,4 @@
+purpose = "Dynamic plant simulation UI: scenario, schedule and controller editors, plant view, run results and synchronized charts."
+status = "live"
+entrypoints = ["DynamicPanel.tsx", "dynamicApi.ts"]
+owner = "maintainer"

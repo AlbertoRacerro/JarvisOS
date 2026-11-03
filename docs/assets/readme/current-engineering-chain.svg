@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">Current CAD to FEM engineering chain with bounded repair feedback</title>
+  <desc id="desc">Current implemented physical-design path from GeometrySpec through build123d and OpenCascade to artifacts, Gmsh, CalculiX, runs and evidence. When structural repair is enabled and criteria fail, selected attempt-scoped evidence can drive a new AI repair proposal and another deterministic build and simulation cycle.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#475569"/></marker>
+  <style>.frame{fill:#fff;stroke:#cbd5e1;stroke-width:2}.implemented{fill:#ecfdf5;stroke:#16a34a;stroke-width:2.4}.partial{fill:#fffbeb;stroke:#d97706;stroke-width:2.4}.title{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f172a;font-size:26px;font-weight:750}.boxTitle{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f172a;font-size:16px;font-weight:700}.sub{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#475569;font-size:12px}.tag{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:11px;font-weight:800}.line{stroke:#475569;stroke-width:2.3;fill:none;marker-end:url(#arrow)}.loop{stroke:#0284c7;stroke-width:2.6;fill:none;marker-end:url(#arrow)}</style></defs>
+  <rect x="30" y="30" width="1140" height="460" rx="22" class="frame"/>
+  <text x="65" y="73" class="title">A current physical-design path — including its real feedback loop</text>
+  <text x="65" y="100" class="sub">Useful current infrastructure, not a claim that every engineering workflow begins with CAD.</text>
+
+  <rect x="50" y="150" width="145" height="100" rx="14" class="implemented"/><text x="123" y="183" text-anchor="middle" class="boxTitle">GeometrySpec</text><text x="123" y="209" text-anchor="middle" class="sub">bounded semantic CAD</text><text x="123" y="234" text-anchor="middle" class="tag" fill="#15803d">WORKING</text>
+  <rect x="225" y="150" width="150" height="100" rx="14" class="implemented"/><text x="300" y="183" text-anchor="middle" class="boxTitle">build123d / OCCT</text><text x="300" y="209" text-anchor="middle" class="sub">B-Rep geometry</text><text x="300" y="234" text-anchor="middle" class="tag" fill="#15803d">WORKING</text>
+  <rect x="405" y="150" width="140" height="100" rx="14" class="implemented"/><text x="475" y="183" text-anchor="middle" class="boxTitle">Artifacts</text><text x="475" y="209" text-anchor="middle" class="sub">STEP · STL · GLB</text><text x="475" y="234" text-anchor="middle" class="tag" fill="#15803d">WORKING</text>
+  <rect x="575" y="150" width="130" height="100" rx="14" class="partial"/><text x="640" y="183" text-anchor="middle" class="boxTitle">Gmsh</text><text x="640" y="209" text-anchor="middle" class="sub">mesh · groups</text><text x="640" y="234" text-anchor="middle" class="tag" fill="#b45309">QUALIFY</text>
+  <rect x="735" y="150" width="130" height="100" rx="14" class="partial"/><text x="800" y="183" text-anchor="middle" class="boxTitle">CalculiX</text><text x="800" y="209" text-anchor="middle" class="sub">static FEM</text><text x="800" y="234" text-anchor="middle" class="tag" fill="#b45309">QUALIFY</text>
+  <rect x="895" y="150" width="250" height="100" rx="14" class="implemented"/><text x="1020" y="183" text-anchor="middle" class="boxTitle">Run + evidence + UI</text><text x="1020" y="209" text-anchor="middle" class="sub">results · provenance · criteria</text><text x="1020" y="234" text-anchor="middle" class="tag" fill="#15803d">WORKING SPINE</text>
+  <path d="M195 200 H225" class="line"/><path d="M375 200 H405" class="line"/><path d="M545 200 H575" class="line"/><path d="M705 200 H735" class="line"/><path d="M865 200 H895" class="line"/>
+
+  <rect x="350" y="335" width="500" height="85" rx="15" class="partial"/>
+  <text x="600" y="366" text-anchor="middle" class="boxTitle">Optional evidence-guided structural repair</text>
+  <text x="600" y="391" text-anchor="middle" class="sub">criteria fail → attempt-scoped evidence → AI repair proposal → new GeometrySpec</text>
+  <text x="600" y="413" text-anchor="middle" class="sub">unsuccessful repair never silently replaces the valid candidate</text>
+
+  <path d="M1020 250 C1020 315 835 315 800 335" class="loop"/><text x="865" y="305" class="sub" fill="#0369a1">criteria failed</text>
+  <path d="M350 378 C250 378 165 340 123 250" class="loop"/><text x="180" y="365" class="sub" fill="#0369a1">repair proposal</text>
+
+  <text x="600" y="465" text-anchor="middle" class="sub">Gmsh/CalculiX adapters exist; executable/host qualification and scientific validity remain separate gates.</text>
+</svg>

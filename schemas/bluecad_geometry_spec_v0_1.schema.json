@@ -1,0 +1,117 @@
+{
+  "$id": "https://jarvisos.local/schemas/bluecad_geometry_spec_v0_1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "spec_version": {"const": "bluecad_geometry_spec_v0_1"},
+    "spec_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "name": {"type": "string", "minLength": 1},
+    "parts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/part"}},
+    "connections": {"type": "array", "items": {"$ref": "#/$defs/connection"}, "default": []},
+    "declared": {"$ref": "#/$defs/declared"}
+  },
+  "required": ["spec_version", "parts"],
+  "type": "object",
+  "$defs": {
+    "finiteNumber": {"type": "number"},
+    "positiveNumber": {"type": "number", "exclusiveMinimum": 0},
+    "nonNegativeNumber": {"type": "number", "minimum": 0},
+    "vector3": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "#/$defs/finiteNumber"}},
+    "frame": {
+      "additionalProperties": false,
+      "properties": {"origin": {"$ref": "#/$defs/vector3"}, "direction": {"$ref": "#/$defs/vector3"}},
+      "required": ["origin", "direction"],
+      "type": "object"
+    },
+    "tubeRunParams": {
+      "additionalProperties": false,
+      "properties": {"outer_d": {"$ref": "#/$defs/positiveNumber"}, "wall_t": {"$ref": "#/$defs/positiveNumber"}, "length": {"$ref": "#/$defs/positiveNumber"}},
+      "required": ["outer_d", "wall_t", "length"],
+      "type": "object"
+    },
+    "bendParams": {
+      "additionalProperties": false,
+      "properties": {"outer_d": {"$ref": "#/$defs/positiveNumber"}, "wall_t": {"$ref": "#/$defs/positiveNumber"}, "bend_radius": {"$ref": "#/$defs/positiveNumber"}, "angle": {"$ref": "#/$defs/positiveNumber"}},
+      "required": ["outer_d", "wall_t", "bend_radius", "angle"],
+      "type": "object"
+    },
+    "jointParams": {
+      "additionalProperties": false,
+      "properties": {"joint_type": {"const": "socket"}, "outer_d": {"$ref": "#/$defs/positiveNumber"}, "wall_t": {"$ref": "#/$defs/positiveNumber"}, "socket_len": {"$ref": "#/$defs/positiveNumber"}},
+      "required": ["joint_type", "outer_d", "wall_t", "socket_len"],
+      "type": "object"
+    },
+    "part": {
+      "unevaluatedProperties": false,
+      "oneOf": [
+        {"properties": {"part_id": {"type": "string", "minLength": 1}, "kind": {"const": "tube_run"}, "params": {"$ref": "#/$defs/tubeRunParams"}, "frame": {"$ref": "#/$defs/frame"}}, "required": ["part_id", "kind", "params"], "type": "object"},
+        {"properties": {"part_id": {"type": "string", "minLength": 1}, "kind": {"const": "bend"}, "params": {"$ref": "#/$defs/bendParams"}, "frame": {"$ref": "#/$defs/frame"}}, "required": ["part_id", "kind", "params"], "type": "object"},
+        {"properties": {"part_id": {"type": "string", "minLength": 1}, "kind": {"const": "joint"}, "params": {"$ref": "#/$defs/jointParams"}, "frame": {"$ref": "#/$defs/frame"}}, "required": ["part_id", "kind", "params"], "type": "object"},
+        {"properties": {"part_id": {"type": "string", "minLength": 1}, "kind": {"const": "manifold"}, "params": {"$ref": "#/$defs/manifoldParams"}, "frame": {"$ref": "#/$defs/frame"}}, "required": ["part_id", "kind", "params"], "type": "object"},
+        {"properties": {"part_id": {"type": "string", "minLength": 1}, "kind": {"const": "capped_manifold"}, "params": {"$ref": "#/$defs/cappedManifoldParams"}, "frame": {"$ref": "#/$defs/frame"}}, "required": ["part_id", "kind", "params"], "type": "object"},
+        {"properties": {"part_id": {"type": "string", "minLength": 1}, "kind": {"const": "float"}, "params": {"$ref": "#/$defs/floatParams"}, "frame": {"$ref": "#/$defs/frame"}}, "required": ["part_id", "kind", "params"], "type": "object"},
+        {"properties": {"part_id": {"type": "string", "minLength": 1}, "kind": {"const": "anchor_mount"}, "params": {"$ref": "#/$defs/anchorMountParams"}, "frame": {"$ref": "#/$defs/frame"}}, "required": ["part_id", "kind", "params"], "type": "object"},
+        {"properties": {"part_id": {"type": "string", "minLength": 1}, "kind": {"const": "harvest_module"}, "params": {"$ref": "#/$defs/harvestModuleParams"}, "frame": {"$ref": "#/$defs/frame"}}, "required": ["part_id", "kind", "params"], "type": "object"}
+      ]
+    },
+    "connection": {
+      "additionalProperties": false,
+      "properties": {"from": {"type": "string", "pattern": "^[^.]+\\.[^.]+$"}, "to": {"type": "string", "pattern": "^[^.]+\\.[^.]+$"}},
+      "required": ["from", "to"],
+      "type": "object"
+    },
+    "declared": {
+      "additionalProperties": false,
+      "properties": {
+        "total_volume_mm3": {"additionalProperties": false, "properties": {"value": {"$ref": "#/$defs/positiveNumber"}, "rel_tol": {"$ref": "#/$defs/nonNegativeNumber"}}, "required": ["value", "rel_tol"], "type": "object"},
+        "bbox_mm": {"additionalProperties": false, "properties": {"min": {"$ref": "#/$defs/vector3"}, "max": {"$ref": "#/$defs/vector3"}, "abs_tol": {"$ref": "#/$defs/nonNegativeNumber"}}, "required": ["min", "max", "abs_tol"], "type": "object"},
+        "min_wall_t": {"$ref": "#/$defs/positiveNumber"}
+      },
+      "type": "object"
+    },
+    "positiveInteger1To12": {
+      "$comment": "Draft 2020-12 treats numerically integral JSON numbers such as 1.0 as integers. The canonical Python validator named below additionally requires a decoded Python int and rejects float and bool representations.",
+      "x-jarvis-representation-validator": "app.modules.bluecad.spec.validate_geometry_spec",
+      "x-jarvis-python-type": "int-not-bool",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 12
+    },
+    "manifoldParams": {
+      "additionalProperties": false,
+      "properties": {"outer_d_main": {"$ref": "#/$defs/positiveNumber"}, "wall_t": {"$ref": "#/$defs/positiveNumber"}, "length": {"$ref": "#/$defs/positiveNumber"}, "n_out": {"$ref": "#/$defs/positiveInteger1To12"}, "out_d": {"$ref": "#/$defs/positiveNumber"}, "out_wall_t": {"$ref": "#/$defs/positiveNumber"}, "spacing": {"$ref": "#/$defs/positiveNumber"}},
+      "required": ["outer_d_main", "wall_t", "length", "n_out", "out_d", "out_wall_t", "spacing"],
+      "type": "object"
+    },
+    "cappedManifoldParams": {
+      "$comment": "Draft 2020-12 cannot compare sibling numeric fields. The canonical Python validator named below is mandatory after structural JSON Schema validation.",
+      "x-jarvis-relational-validator": "app.modules.bluecad.spec.validate_geometry_spec",
+      "x-jarvis-relational-constraints": [
+        "2 * main_wall_t < main_outer_d",
+        "2 * branch_wall_t < branch_outer_d"
+      ],
+      "additionalProperties": false,
+      "properties": {"main_outer_d": {"$ref": "#/$defs/positiveNumber"}, "main_wall_t": {"$ref": "#/$defs/positiveNumber"}, "branch_count": {"$ref": "#/$defs/positiveInteger1To12"}, "branch_outer_d": {"$ref": "#/$defs/positiveNumber"}, "branch_wall_t": {"$ref": "#/$defs/positiveNumber"}, "branch_gap": {"$ref": "#/$defs/positiveNumber"}, "end_gap": {"$ref": "#/$defs/positiveNumber"}, "branch_stub_length": {"$ref": "#/$defs/positiveNumber"}, "cap_thickness": {"$ref": "#/$defs/positiveNumber"}},
+      "required": ["main_outer_d", "main_wall_t", "branch_count", "branch_outer_d", "branch_wall_t", "branch_gap", "end_gap", "branch_stub_length", "cap_thickness"],
+      "type": "object"
+    },
+    "floatParams": {
+      "additionalProperties": false,
+      "properties": {"outer_d": {"$ref": "#/$defs/positiveNumber"}, "length": {"$ref": "#/$defs/positiveNumber"}, "n_mounts": {"$ref": "#/$defs/positiveInteger1To12"}, "pad_d": {"$ref": "#/$defs/positiveNumber"}},
+      "required": ["outer_d", "length", "n_mounts", "pad_d"],
+      "type": "object"
+    },
+    "anchorMountParams": {
+      "additionalProperties": false,
+      "properties": {"base_w": {"$ref": "#/$defs/positiveNumber"}, "base_l": {"$ref": "#/$defs/positiveNumber"}, "base_t": {"$ref": "#/$defs/positiveNumber"}, "eye_d": {"$ref": "#/$defs/positiveNumber"}},
+      "required": ["base_w", "base_l", "base_t", "eye_d"],
+      "type": "object"
+    },
+    "harvestModuleParams": {
+      "additionalProperties": false,
+      "properties": {"outer_d": {"$ref": "#/$defs/positiveNumber"}, "height": {"$ref": "#/$defs/positiveNumber"}, "wall_t": {"$ref": "#/$defs/positiveNumber"}, "port_d": {"$ref": "#/$defs/positiveNumber"}},
+      "required": ["outer_d", "height", "wall_t", "port_d"],
+      "type": "object"
+    }
+  }
+}

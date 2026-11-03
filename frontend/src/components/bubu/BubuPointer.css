@@ -1,0 +1,104 @@
+/* "Show me where" overlay: sits above the page and the launcher, below the speech bubble; never takes input. */
+.bubu-pointer {
+  --bubu-pointer-ring: var(--color-accent-foreground, #2f6b3f);
+  --bubu-pointer-glow: var(--accent-seed, #8db943);
+  --bubu-pointer-halo: rgb(255 255 255 / 75%);
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+  pointer-events: none;
+}
+
+[data-theme="dark"] .bubu-pointer {
+  --bubu-pointer-ring: var(--accent-seed, #8db943);
+  --bubu-pointer-halo: rgb(0 0 0 / 60%);
+}
+
+.bubu-pointer__svg { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+
+.bubu-pointer rect, .bubu-pointer path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.bubu-pointer__halo { stroke: var(--bubu-pointer-halo); stroke-width: 7; }
+.bubu-pointer__ring {
+  stroke: var(--bubu-pointer-ring);
+  stroke-width: 3;
+  filter: drop-shadow(0 0 6px var(--bubu-pointer-glow));
+  animation: bubu-pointer-pulse 1.8s ease-in-out infinite;
+}
+.bubu-pointer__arrow {
+  stroke: var(--bubu-pointer-ring);
+  stroke-width: 3.5;
+  /* Static: the path is recomputed every frame while tracking, so a draw-in animation would restart and hide it. */
+  filter: drop-shadow(0 0 1.5px var(--bubu-pointer-halo)) drop-shadow(0 0 5px var(--bubu-pointer-glow));
+}
+.bubu-pointer .bubu-pointer__head { fill: var(--bubu-pointer-ring); stroke: var(--bubu-pointer-ring); stroke-width: 1; }
+
+.bubu-pointer__tag {
+  position: absolute;
+  max-width: 260px;
+  padding: 3px 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--accent-seed, #8db943);
+  color: #10200f;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateY(-100%);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 28%);
+}
+.bubu-pointer__tag.is-below { transform: none; }
+
+/* The only interactive parts of the overlay: the dismiss buttons (the overlay itself stays pass-through). */
+.bubu-pointer button.bubu-pointer__dismiss[data-bubu-ui],
+.bubu-pointer button.bubu-pointer__clear[data-bubu-ui] {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  border: 1px solid var(--bubu-pointer-ring);
+  background: var(--color-bg-surface, #fff);
+  color: var(--bubu-pointer-ring);
+  box-shadow: 0 1px 6px rgb(0 0 0 / 30%);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.bubu-pointer button.bubu-pointer__dismiss[data-bubu-ui] {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  line-height: 1;
+}
+.bubu-pointer button.bubu-pointer__clear[data-bubu-ui] {
+  height: 20px;
+  min-height: 0;
+  padding: 0 8px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.bubu-pointer .bubu-pointer__dismiss:hover,
+.bubu-pointer .bubu-pointer__clear:hover { background: var(--bubu-pointer-ring); color: var(--color-bg-surface, #fff); }
+.bubu-pointer .bubu-pointer__dismiss:focus-visible,
+.bubu-pointer .bubu-pointer__clear:focus-visible { outline: 2px solid var(--bubu-pointer-ring); outline-offset: 2px; }
+
+@keyframes bubu-pointer-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+@keyframes bubu-pointer-draw {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubu-pointer__ring, .bubu-pointer__arrow { animation: none; }
+}
+@media print { .bubu-pointer { display: none; } }

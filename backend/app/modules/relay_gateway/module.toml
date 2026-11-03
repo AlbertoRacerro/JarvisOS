@@ -1,0 +1,4 @@
+purpose = "Governed runs of sandboxed coding agents (Relay) and AI threads, under the same egress rules as other AI calls."
+status = "live"
+entrypoints = ["/ai/relay", "/ai/threads", "sandbox.py"]
+owner = "maintainer"

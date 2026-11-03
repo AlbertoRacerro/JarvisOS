@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Claude entrypoint for Relay missions inside the certified JarvisOS sandbox."""
+
+import os
+import socket
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    if (socket.gethostname() != "jarvis-sandbox" or Path("/mnt/c").exists()
+            or os.environ.get("JARVISOS_MISSION_PROFILE") != "1"):
+        print("mission Claude entrypoint requires the JarvisOS sandbox", file=sys.stderr)
+        return 2
+    real = os.environ.get("RELAY_CLAUDE_REAL_BIN")
+    if not real or not Path(real).is_absolute() or not Path(real).is_file() or Path(real).resolve() == Path(__file__).resolve():
+        print("mission Claude entrypoint has no real Claude binary", file=sys.stderr)
+        return 2
+    args = []
+    source = iter(sys.argv[1:])
+    for arg in source:
+        if arg == "--permission-mode":
+            next(source, None)
+        elif not arg.startswith("--permission-mode="):
+            args.append(arg)
+    os.execv(real, [real, *args, "--permission-mode", "bypassPermissions"])
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

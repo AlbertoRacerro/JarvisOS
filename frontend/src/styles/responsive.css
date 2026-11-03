@@ -1,0 +1,129 @@
+/* Spec 070/083 responsive containment.
+ * Wide tables and technical viewports keep their own local overflow; the shell
+ * and BLUECAD grid items must shrink inside the available document viewport.
+ */
+.main-panel,
+.page,
+.panel,
+.ui-surface,
+.application-shell,
+.shell-topbar,
+.shell-rail,
+.shell-workspace,
+.shell-main,
+.shell-panel,
+.shell-stage,
+.shell-stage__compatibility,
+.shell-placeholder,
+.shell-legacy,
+.shell-legacy__content,
+.shell-home,
+.shell-home__content,
+.bluecad-page,
+.bluecad-grid,
+.bluecad-grid > *,
+.bluecad-detail,
+.bluecad-candidate-list,
+.bluecad-viewer-shell,
+.table-wrap {
+  min-width: 0;
+}
+
+.page,
+.application-shell,
+.shell-workspace,
+.shell-main,
+.shell-stage,
+.shell-placeholder,
+.shell-legacy,
+.shell-home {
+  width: 100%;
+}
+
+.shell-topbar__controls,
+.shell-placeholder__links,
+.shell-panel,
+.shell-stage,
+.shell-legacy {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 60rem) {
+  .application-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
+    grid-template-areas:
+      "topbar"
+      "rail"
+      "workspace"
+      "dock";
+  }
+
+  .shell-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .shell-topbar__controls {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .shell-rail {
+    padding: var(--space-3);
+    border-inline-end: 0;
+    border-block-end: var(--border-width-default) solid var(--color-border-default);
+  }
+
+  .shell-rail__links {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .shell-nav-link {
+    flex: 1 1 10rem;
+  }
+
+  .shell-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .shell-navigator,
+  .shell-main,
+  .shell-sidecar {
+    grid-column: 1;
+    width: auto;
+    max-width: none;
+    margin: var(--space-3);
+  }
+
+  .shell-navigator {
+    grid-row: 1;
+    border: var(--border-width-default) solid var(--color-border-default);
+    border-radius: var(--radius-md);
+  }
+
+  .shell-main {
+    grid-row: 2;
+    margin: 0;
+    padding: var(--space-3);
+  }
+
+  .shell-sidecar {
+    grid-row: 3;
+    border: var(--border-width-default) solid var(--color-border-default);
+    border-radius: var(--radius-md);
+  }
+
+  .shell-analysis-dock {
+    margin: 0 var(--space-3) var(--space-3);
+  }
+
+  .shell-legacy__header,
+  .shell-panel__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

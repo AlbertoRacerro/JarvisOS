@@ -1,0 +1,4 @@
+purpose = "End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map)."
+status = "in-development"
+entrypoints = ["README.md", "design_discovery_walk.mjs"]
+owner = "maintainer"

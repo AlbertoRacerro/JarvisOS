@@ -1,0 +1,38 @@
+{
+  "dimensions_mm": {
+    "height": 10.0,
+    "length": 200.0,
+    "width": 10.0
+  },
+  "fixture": "cantilever",
+  "resolved_ports": {
+    "beam": {
+      "fixed": {
+        "direction": [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "outer_d": 12.0
+      },
+      "loaded": {
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "origin": [
+          200.0,
+          0.0,
+          0.0
+        ],
+        "outer_d": 12.0
+      }
+    }
+  }
+}

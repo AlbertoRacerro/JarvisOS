@@ -1,0 +1,4 @@
+purpose = "Design tokens and style sheets for the shell and each surface."
+status = "live"
+entrypoints = ["tokens.css", "global.css", "lumen.css"]
+owner = "maintainer"

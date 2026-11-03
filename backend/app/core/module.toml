@@ -1,0 +1,4 @@
+purpose = "Configuration, data-root paths, the SQLite database with additive schema (one `*_schema.py` per owner), the project-pack loader, bootstrap, errors and static serving of the built frontend."
+status = "live"
+entrypoints = ["database.py", "schema.py", "packs.py", "paths.py", "config.py"]
+owner = "maintainer"

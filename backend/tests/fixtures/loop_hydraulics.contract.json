@@ -1,0 +1,15 @@
+{
+  "evaluation_mode": "forward",
+  "schema_version": 1,
+  "variables": [
+    {"category": "design", "description": "Illuminated tube centreline length.", "domain": {"exclusive_min": 0.0}, "label": "Tube length", "name": "tube_length", "required": true, "unit": "m"},
+    {"category": "design", "description": "Tube internal hydraulic diameter.", "domain": {"exclusive_min": 0.0}, "label": "Tube inner diameter", "name": "tube_inner_diameter", "required": true, "unit": "mm"},
+    {"category": "design", "description": "Tube external diameter used by the illuminated-area proxy.", "domain": {"exclusive_min": 0.0}, "label": "Tube outer diameter", "name": "tube_outer_diameter", "required": true, "unit": "mm"},
+    {"category": "design", "description": "Liquid volume outside the illuminated tube segment.", "domain": {"min": 0.0}, "label": "Reservoir liquid volume", "name": "reservoir_liquid_volume", "required": true, "unit": "L"},
+    {"category": "operating", "description": "Target mean liquid velocity inside the tube.", "domain": {"exclusive_min": 0.0}, "label": "Target liquid velocity", "name": "target_liquid_velocity", "required": true, "unit": "m/s"},
+    {"category": "property", "description": "Liquid density used by hydraulic calculations.", "domain": {"exclusive_min": 0.0}, "label": "Liquid density", "name": "liquid_density", "required": true, "unit": "kg/m3"},
+    {"category": "property", "description": "Liquid dynamic viscosity used by Reynolds and friction calculations.", "domain": {"exclusive_min": 0.0}, "label": "Dynamic viscosity", "name": "dynamic_viscosity", "required": true, "unit": "Pa*s"},
+    {"category": "model_parameter", "description": "Aggregate coefficient for represented minor hydraulic losses.", "domain": {"min": 0.0}, "label": "Minor loss coefficient", "name": "minor_loss_coefficient", "required": true, "unit": "1"},
+    {"category": "equipment", "description": "Overall pump electrical efficiency used by the screening model.", "domain": {"exclusive_min": 0.0, "max": 1.0}, "label": "Pump efficiency", "name": "pump_efficiency", "required": true, "unit": "1"}
+  ]
+}

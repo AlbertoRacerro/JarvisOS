@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc">
+  <title id="title">JarvisOS high-level architecture</title>
+  <desc id="desc">The engineer interacts bidirectionally with the JarvisOS authority boundary. AI runtimes and engineering evaluators receive bounded requests and return proposals, results, artifacts and evidence. No external runtime writes canonical state directly.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#475569"/></marker>
+    <style>.frame{fill:#fff;stroke:#cbd5e1;stroke-width:2}.implemented{fill:#ecfdf5;stroke:#16a34a;stroke-width:2.5}.partial{fill:#fffbeb;stroke:#d97706;stroke-width:2.5}.planned{fill:#eff6ff;stroke:#0284c7;stroke-width:2.5}.optional{fill:#f8fafc;stroke:#64748b;stroke-width:2}.title{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f172a;font-size:27px;font-weight:750}.boxTitle{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f172a;font-size:18px;font-weight:700}.sub{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#475569;font-size:12px}.tag{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:10.5px;font-weight:800}.line{stroke:#475569;stroke-width:2.3;fill:none;marker-end:url(#arrow)}.note{fill:#f8fafc;stroke:#94a3b8;stroke-width:1.8}</style>
+  </defs>
+  <rect id="frame" x="30" y="30" width="1140" height="590" rx="22" class="frame"/>
+  <text x="65" y="74" class="title">JarvisOS — authority and data flow</text>
+  <text x="65" y="101" class="sub">Requests go out; proposals, results and evidence come back. Canonical state changes only inside the JarvisOS authority boundary.</text>
+
+  <g id="card-engineer"><rect id="rect-engineer" x="60" y="225" width="185" height="130" rx="16" class="implemented"/>
+    <text x="152.5" y="265" text-anchor="middle" class="boxTitle">Engineer</text>
+    <text x="152.5" y="295" text-anchor="middle" class="sub">goals · constraints</text>
+    <text x="152.5" y="319" text-anchor="middle" class="sub">review · decisions</text>
+    <text x="152.5" y="342" text-anchor="middle" class="sub">final responsibility</text></g>
+
+  <g id="card-authority"><rect id="rect-authority" x="335" y="165" width="430" height="250" rx="18" class="implemented"/>
+    <text x="550" y="207" text-anchor="middle" class="boxTitle">JarvisOS authority boundary</text>
+    <text x="550" y="240" text-anchor="middle" class="sub">canonical state · provenance · freshness</text>
+    <text x="550" y="267" text-anchor="middle" class="sub">routing · privacy/egress · budgets</text>
+    <text x="550" y="294" text-anchor="middle" class="sub">capability gates · validation</text>
+    <text x="550" y="321" text-anchor="middle" class="sub">runs · artifacts · evidence identity</text>
+    <text x="550" y="348" text-anchor="middle" class="sub">commit / promotion transitions</text>
+    <text x="550" y="381" text-anchor="middle" class="tag" fill="#15803d">CURRENT FOUNDATION</text>
+    <text x="550" y="399" text-anchor="middle" class="sub">write-path cleanup is queued</text></g>
+
+  <g id="card-ai"><rect id="rect-ai" x="860" y="135" width="270" height="150" rx="16" class="partial"/>
+    <text x="995" y="176" text-anchor="middle" class="boxTitle">AI / AgentRuntime</text>
+    <text x="995" y="207" text-anchor="middle" class="sub">models · agent sessions</text>
+    <text x="995" y="231" text-anchor="middle" class="sub">code intelligence · tool intents</text>
+    <text x="995" y="261" text-anchor="middle" class="tag" fill="#b45309">CURRENT AI ROUTES · RUNTIME PLANNED</text></g>
+
+  <g id="card-engineering"><rect id="rect-engineering" x="860" y="360" width="270" height="150" rx="16" class="partial"/>
+    <text x="995" y="401" text-anchor="middle" class="boxTitle">Engineering evaluators</text>
+    <text x="995" y="432" text-anchor="middle" class="sub">process · CAD · mesh · FEM</text>
+    <text x="995" y="456" text-anchor="middle" class="sub">CFD · specialist / commercial</text>
+    <text x="995" y="486" text-anchor="middle" class="tag" fill="#b45309">MIXED MATURITY</text></g>
+
+  <path d="M245 268 H335" class="line"/><text x="270" y="253" class="sub">request</text>
+  <path d="M335 330 H245" class="line"/><text x="263" y="350" class="sub">result / explanation</text>
+
+  <path d="M765 220 C805 220 820 210 860 210" class="line"/><text x="785" y="198" class="sub">bounded task + context</text>
+  <path d="M860 252 C820 265 805 275 765 275" class="line"/><text x="786" y="294" class="sub">response / proposal</text>
+
+  <path d="M765 332 C810 345 820 420 860 420" class="line"/><text x="781" y="374" class="sub">authorized execution</text>
+  <path d="M860 470 C825 510 785 500 765 385" class="line"/><text x="778" y="526" class="sub">results · artifacts · diagnostics · evidence</text>
+
+  <g id="card-nobypass"><rect id="rect-nobypass" x="335" y="500" width="430" height="82" rx="14" class="note"/>
+    <text x="550" y="532" text-anchor="middle" class="boxTitle">No bypass path</text>
+    <text x="550" y="557" text-anchor="middle" class="sub">AI and tool output returns to JarvisOS before any canonical-state transition.</text></g>
+</svg>

@@ -1,0 +1,4 @@
+purpose = "Coding workspace panels: provider quota rings and the relay monitor."
+status = "live"
+entrypoints = ["ProviderQuotaPanel.tsx", "RelayMonitorPanel.tsx"]
+owner = "maintainer"

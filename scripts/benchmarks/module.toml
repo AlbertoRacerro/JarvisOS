@@ -1,0 +1,4 @@
+purpose = "Solver benchmarks against real OpenFOAM, DWSIM and process libraries; today scripts that record evidence, to be turned into pinned regression tests."
+status = "in-development"
+entrypoints = ["README.md"]
+owner = "maintainer"

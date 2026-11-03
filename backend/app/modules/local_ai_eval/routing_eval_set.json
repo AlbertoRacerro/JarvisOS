@@ -1,0 +1,212 @@
+[
+  {
+    "id": "route-eval-001",
+    "prompt": "Summarize what a debounce function does in one sentence.",
+    "expected_capability": "simple",
+    "expected_context_level": "none",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-002",
+    "prompt": "Rewrite this generic TODO as a polite reminder and use the attached note if available.",
+    "expected_capability": "simple",
+    "expected_context_level": "light",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-003",
+    "prompt": "Create a short onboarding checklist from the provided project notes.",
+    "expected_capability": "simple",
+    "expected_context_level": "standard",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-004",
+    "prompt": "Answer: what does HTTP 404 generally mean?",
+    "expected_capability": "simple",
+    "expected_context_level": "none",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-005",
+    "prompt": "Turn a short meeting note into three bullet points.",
+    "expected_capability": "simple",
+    "expected_context_level": "light",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-006",
+    "prompt": "Draft a friendly one-line acknowledgement.",
+    "expected_capability": "simple",
+    "expected_context_level": "none",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-007",
+    "prompt": "Explain the tradeoffs between optimistic and pessimistic locking.",
+    "expected_capability": "general_reasoning",
+    "expected_context_level": "none",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-008",
+    "prompt": "Given a small design note, identify two risks and one mitigation.",
+    "expected_capability": "general_reasoning",
+    "expected_context_level": "light",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-009",
+    "prompt": "Compare two API pagination designs using the provided architecture excerpt.",
+    "expected_capability": "general_reasoning",
+    "expected_context_level": "standard",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-010",
+    "prompt": "Plan a multi-phase migration using the full supplied system context.",
+    "expected_capability": "general_reasoning",
+    "expected_context_level": "deep",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-011",
+    "prompt": "Analyze whether a retry policy should use jitter based on the attached service constraints.",
+    "expected_capability": "general_reasoning",
+    "expected_context_level": "standard",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-012",
+    "prompt": "Explain why idempotency keys are useful.",
+    "expected_capability": "general_reasoning",
+    "expected_context_level": "none",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-013",
+    "prompt": "Write a small Python function that normalizes whitespace.",
+    "expected_capability": "coding",
+    "expected_context_level": "none",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-014",
+    "prompt": "Review this short function for an off-by-one bug.",
+    "expected_capability": "coding",
+    "expected_context_level": "light",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-015",
+    "prompt": "Modify the provided module to add validation for empty names.",
+    "expected_capability": "coding",
+    "expected_context_level": "standard",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-016",
+    "prompt": "Find likely causes for this stack trace using the attached code snippet.",
+    "expected_capability": "coding",
+    "expected_context_level": "standard",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-017",
+    "prompt": "Suggest unit tests for a date parser.",
+    "expected_capability": "coding",
+    "expected_context_level": "light",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-018",
+    "prompt": "Convert this JavaScript loop to Python.",
+    "expected_capability": "coding",
+    "expected_context_level": "none",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-019",
+    "prompt": "Refactor the provided package to separate persistence from business logic.",
+    "expected_capability": "heavy_coding",
+    "expected_context_level": "standard",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-020",
+    "prompt": "Design and implement a cross-module transaction boundary using the full repository context.",
+    "expected_capability": "heavy_coding",
+    "expected_context_level": "deep",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-021",
+    "prompt": "Debug an intermittent concurrency failure across these attached service files.",
+    "expected_capability": "heavy_coding",
+    "expected_context_level": "standard",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-022",
+    "prompt": "Plan a large API migration touching routes, services, schema, and tests.",
+    "expected_capability": "heavy_coding",
+    "expected_context_level": "deep",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-023",
+    "prompt": "Review a complex diff for security and regression risks.",
+    "expected_capability": "heavy_coding",
+    "expected_context_level": "standard",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-024",
+    "prompt": "Implement a multi-file compiler cache invalidation strategy from the supplied codebase.",
+    "expected_capability": "heavy_coding",
+    "expected_context_level": "deep",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-025",
+    "prompt": "Solve a tricky logic puzzle and explain each inference.",
+    "expected_capability": "deep_reasoning",
+    "expected_context_level": "none",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-026",
+    "prompt": "Evaluate a subtle algorithmic proof using the attached definitions.",
+    "expected_capability": "deep_reasoning",
+    "expected_context_level": "light",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-027",
+    "prompt": "Derive a scheduling algorithm from the provided constraints and prove it terminates.",
+    "expected_capability": "deep_reasoning",
+    "expected_context_level": "standard",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-028",
+    "prompt": "Synthesize an end-to-end architecture decision from multiple long context documents.",
+    "expected_capability": "deep_reasoning",
+    "expected_context_level": "deep",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-029",
+    "prompt": "Analyze a numerical stability issue in a generic simulation method.",
+    "expected_capability": "deep_reasoning",
+    "expected_context_level": "standard",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  },
+  {
+    "id": "route-eval-030",
+    "prompt": "Compare two distributed consensus approaches using the full supplied design packet.",
+    "expected_capability": "deep_reasoning",
+    "expected_context_level": "deep",
+    "notes": "Synthetic generic engineering prompt; no project-sensitive content."
+  }
+]

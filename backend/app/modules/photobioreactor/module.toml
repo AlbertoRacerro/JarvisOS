@@ -1,0 +1,4 @@
+purpose = "Generic photobioreactor engineering models: culture kinetics, light, axial oxygen, airlift and centrifugal-pump shear, and the evaluator over them."
+status = "live"
+entrypoints = ["pbr_core.py", "pbr_evaluator.py"]
+owner = "maintainer"

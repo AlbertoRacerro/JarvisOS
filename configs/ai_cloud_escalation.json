@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "max_request_usd": 0.02,
+  "max_thread_usd": 0.10,
+  "max_output_tokens": 512,
+  "eur_usd_rate": "1.1403",
+  "fx_date": "2026-09-25",
+  "fx_source": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html",
+  "task_floors": {
+    "general": 1,
+    "engineering": 2,
+    "coding": 2
+  },
+  "candidates": [
+    {
+      "route_class": "external:scaleway",
+      "quality_tier": 2,
+      "qualification_evidence_ref": "Scaleway live qualification, 2026-09-28 (governed cloud escalation, spec 156)",
+      "pricing_reviewed_on": "2026-09-28",
+      "pricing_source_url": "https://www.scaleway.com/en/pricing/model-as-a-service/",
+      "qualification": "One approved synthetic textbook engineering task answered correctly; scope limited to acceptance"
+    },
+    {
+      "route_class": "external:deepseek_flash",
+      "quality_tier": 1,
+      "qualification_evidence_ref": null,
+      "pricing_reviewed_on": "2026-09-28",
+      "pricing_source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "qualification": "operator-declared; live Jarvis task qualification pending"
+    },
+    {
+      "route_class": "external:cheap",
+      "quality_tier": 2,
+      "qualification_evidence_ref": null,
+      "pricing_reviewed_on": "2026-09-28",
+      "pricing_source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "qualification": "operator-declared; live Jarvis task qualification pending"
+    }
+  ]
+}

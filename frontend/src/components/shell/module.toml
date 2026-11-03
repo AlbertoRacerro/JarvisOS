@@ -1,0 +1,4 @@
+purpose = "Application shell: rail, top bar, navigator, contextual sidecar, analysis dock, project switcher and the Bubu launcher."
+status = "live"
+entrypoints = ["Rail.tsx", "TopBar.tsx", "BubuLauncher.tsx"]
+owner = "maintainer"

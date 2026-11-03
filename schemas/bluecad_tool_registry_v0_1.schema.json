@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bluecad_tool_registry_v0_1.schema.json",
+  "title": "BLUECAD tool registry v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["registry_version", "tools"],
+  "properties": {
+    "registry_version": {"const": "bluecad_tool_registry_v0_1"},
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "integration_mode", "version_pin", "license", "enabled", "entrypoint", "capabilities", "health_check"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9_][a-z0-9_-]*$"},
+          "kind": {"enum": ["cad_kernel", "mesher", "fem_solver", "cfd_solver", "viewer"]},
+          "integration_mode": {"enum": ["in_process", "subprocess", "container"]},
+          "version_pin": {"type": "string", "minLength": 1, "not": {"pattern": "[<>=~^*]"}},
+          "license": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["spdx", "boundary", "verified_date"],
+            "properties": {
+              "spdx": {"type": "string", "minLength": 1},
+              "boundary": {"enum": ["A", "B", "C", "D"]},
+              "verified_date": {"type": "string", "format": "date"}
+            }
+          },
+          "enabled": {"type": "boolean"},
+          "entrypoint": {"type": ["string", "null"]},
+          "binary_sha256": {"type": ["string", "null"], "pattern": "^[a-fA-F0-9]{64}$"},
+          "provenance_url": {"type": ["string", "null"], "minLength": 1},
+          "capabilities": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "health_check": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

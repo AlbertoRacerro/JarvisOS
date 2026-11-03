@@ -1,0 +1,4 @@
+purpose = "Page-level screens: Design project, Studio, Runs, Coding, Settings, Literature, Model dossier, Engineering Data, Development roadmap, AI threads, and the CFD panels."
+status = "live"
+entrypoints = ["DesignProject.tsx", "Studio.tsx", "CodingWorkbench.tsx"]
+owner = "maintainer"

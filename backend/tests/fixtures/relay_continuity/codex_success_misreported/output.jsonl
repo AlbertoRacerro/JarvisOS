@@ -1,0 +1,4 @@
+{"type": "thread.started"}
+{"type": "turn.started"}
+{"item": {"id": "item_0", "text": "PONG2", "type": "agent_message"}, "type": "item.completed"}
+{"type": "turn.completed"}

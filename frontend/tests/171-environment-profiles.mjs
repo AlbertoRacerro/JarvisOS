@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const source = async (path) => readFile(new URL(path, import.meta.url), 'utf8');
+const stage = await source('../src/stages/ProcessStage.tsx');
+const panel = await source('../src/stages/EnvironmentPanel.tsx');
+const chart = await source('../src/components/environment/ProfileChart.tsx');
+const table = await source('../src/components/environment/ProfileTable.tsx');
+const wizard = await source('../src/components/environment/ImportWizard.tsx');
+const provenance = await source('../src/components/environment/Provenance.tsx');
+assert.match(stage, /lazy\(\(\) => import\("\.\/EnvironmentPanel"\)\)/);
+assert.match(stage, /Environment…/);
+assert.match(chart, /import\("uplot"\)/);
+assert.match(chart, /Site time \(/);
+assert.match(chart, /environment-swatch/);
+assert.match(chart, /LocaleSafeNumberFormat/);
+assert.match(chart, /Chart unavailable/);
+assert.match(table, /Save cell edits/);
+assert.match(table, /ArrowLeft/);
+assert.match(table, /data-cell-row/);
+assert.match(wizard, /stampConvention/);
+assert.match(wizard, /Add channel mapping/);
+assert.match(provenance, /Selected TMY months and years/);
+assert.match(provenance, /Year normalization/);
+assert.match(panel, /role="dialog" aria-modal="true"/);
+assert.match(panel, /event.key === "Escape"/);
+assert.doesNotMatch(panel, /document\.getElementById/);
+console.log('171 lazy environment panel, chart, import, keyboard table, and provenance contracts: PASS');

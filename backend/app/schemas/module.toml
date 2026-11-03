@@ -1,0 +1,4 @@
+purpose = "One shared dataclass (ServiceStatus) with no consumer in the app; delete it or give it a purpose."
+status = "backlog-candidate"
+entrypoints = ["common.py"]
+owner = "maintainer"

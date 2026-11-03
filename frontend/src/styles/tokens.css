@@ -1,0 +1,407 @@
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/InterVariable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter Display";
+  src: url("/fonts/InterVariable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("/fonts/InstrumentSans-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("/fonts/InstrumentSans-Medium.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("/fonts/InstrumentSans-SemiBold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("/fonts/BricolageGrotesque-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 200 800;
+  font-stretch: 75% 100%;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Latin Modern Math";
+  src: url("/fonts/LatinModernMath.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/IBMPlexMono-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+
+  --font-sans: "Inter", "Instrument Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: "Inter Display", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-wordmark: "Bricolage Grotesque", "Inter", ui-sans-serif, sans-serif;
+  --font-math: "Latin Modern Math", "STIX Two Math", "Cambria Math", math;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  --font-size-caption: 0.75rem;
+  --font-size-label: 0.8125rem;
+  --font-size-body: 0.875rem;
+  --font-size-section-title: 1rem;
+  --font-size-page-title: clamp(1.3125rem, 1.18rem + 0.42vw, 1.5rem);
+  --line-height-body: 1.5;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-7: 2rem;
+  --space-8: 3rem;
+
+  --control-height-compact: 1.875rem;
+  --control-height-default: 2.1875rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-floating: 0.75rem;
+  --radius-pill: 999px;
+  --border-width-default: 1px;
+  --shadow-structural: 0 1px 2px rgb(32 37 31 / 0.06), 0 4px 12px rgb(32 37 31 / 0.045);
+  --shadow-raised: 0 2px 4px rgb(32 37 31 / 0.08), 0 10px 28px rgb(32 37 31 / 0.08);
+  --motion-fast: 110ms;
+  --motion-standard: 160ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Spec 198 Lumen geometry: rounded glass islands, capsule controls, detached rail. */
+  --lumen-radius-panel: 1.75rem;
+  --lumen-radius-viewport: 1.5rem;
+  --lumen-radius-item: 1.125rem;
+  --lumen-radius-field: 0.875rem;
+  --lumen-radius-button: 999px;
+  --lumen-rail-width: 9.125rem;
+  --lumen-emblem-size: 5.75rem;
+
+  --layout-sidebar-width: 17.5rem;
+  --layout-content-max-width: 100rem;
+
+  --accent-seed: #8DB943;
+  --color-accent-subtle: #e8f4ea;
+  --color-accent-surface: #d6edda;
+  --color-accent-border: #92c19e;
+  --color-accent-border-strong: #56956a;
+  --color-accent-primary: var(--accent-seed);
+  --color-accent-foreground: #427150;
+  --color-accent-hover: var(--accent-seed);
+  --color-accent-active: var(--accent-seed);
+  --color-accent-on: #ffffff;
+  --color-focus-ring: var(--color-accent-foreground);
+  --lumen-accent-fill: var(--accent-seed);
+}
+
+/* Spec 198 Lumen Light: Lumen geometry and depth with Herbarium-inspired botanical daylight colours. */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  --palette-neutral-0: #ffffff;
+  --palette-neutral-50: #e8f1e9;
+  --palette-neutral-100: #e2ede4;
+  --palette-neutral-300: #a3b5a7;
+  --palette-neutral-500: #6c7c70;
+  --palette-neutral-700: #3e5044;
+  --palette-neutral-900: #132318;
+  --palette-neutral-950: #0a160e;
+  --palette-green-700: #3c8a5b;
+  --palette-green-800: #225637;
+  --palette-green-900: #13331f;
+  --palette-blue-700: #1557b0;
+  --palette-amber-50: #fff4d6;
+  --palette-amber-800: #684600;
+  --palette-red-50: #fff0ef;
+  --palette-red-800: #8d2424;
+  --palette-violet-50: #f3edff;
+  --palette-violet-800: #5b3698;
+  --palette-cyan-50: #e9f5f7;
+  --palette-cyan-800: #31566a;
+
+  --color-bg-canvas: #e8f1e9;
+  --color-bg-shell: #f3faf4;
+  --color-bg-surface: #f7fcf8;
+  --color-bg-surface-raised: #fffffb;
+  --color-bg-subtle: #e2ede4;
+  --color-bg-technical-viewport: #121a16;
+  --color-viewport-grid-major: #778d7e;
+  --color-viewport-grid-minor: #425946;
+  --color-text-on-viewport: #dce8df;
+  --color-text-on-viewport-muted: #a6b6aa;
+  --color-text-primary: #132318;
+  --color-text-secondary: #3e5044;
+  --color-text-muted: #526357;
+  --color-text-inverse: #f7fcf8;
+  --color-text-on-accent: var(--color-accent-on);
+  --color-border-default: #cbdace;
+  --color-border-strong: #a3b5a7;
+  --color-focus-separator: #f7fcf8;
+  --color-selection: #cae8d0;
+
+  --color-status-info-bg: #e7f1fb;
+  --color-status-info-text: #12588e;
+  --color-status-success-bg: #e4f4e9;
+  --color-status-success-text: #155f37;
+  --color-status-warning-bg: var(--palette-amber-50);
+  --color-status-warning-text: var(--palette-amber-800);
+  --color-status-danger-bg: var(--palette-red-50);
+  --color-status-danger-text: var(--palette-red-800);
+  --color-status-neutral-bg: #e2ede4;
+  --color-status-neutral-text: #3e5044;
+  --color-status-proposed-bg: var(--palette-violet-50);
+  --color-status-proposed-text: var(--palette-violet-800);
+  --color-status-stale-bg: #fff0d8;
+  --color-status-stale-text: #704000;
+  --color-status-unavailable-bg: #e9edef;
+  --color-status-unavailable-text: #3c5059;
+  --color-status-synthetic-bg: var(--palette-cyan-50);
+  --color-status-synthetic-text: var(--palette-cyan-800);
+  --color-status-archived-bg: #e7e9e8;
+  --color-status-archived-text: #3e4b45;
+
+  --color-chart-bg: #fffffb;
+  --color-chart-series-1: #236a42;
+  --color-chart-series-2: #1f5f99;
+  --color-chart-series-3: #b4541a;
+  --color-chart-series-4: #8a3f86;
+  --color-chart-series-5: #3a3f44;
+  --color-chart-series-6: #476e68;
+  --color-chart-series-7: #87640e;
+  --color-chart-series-8: #126f73;
+  --color-flow-bg: #f6fcf7;
+  --color-flow-grid: rgb(41 98 64 / 0.16);
+  --color-flow-node: #fffffd;
+  --color-flow-node-stroke: #3c8a5b;
+  --color-flow-edge: #48584d;
+  --color-flow-select: #a3601a;
+
+  /* Lumen depth: field light, glass islands, rail capsule, emblem. Decorative only. */
+  --lumen-canvas-base: linear-gradient(160deg, #c5e4cc 0%, #deefe1 38%, #edf6ee 70%, #f5faf5 100%);
+  --lumen-field-light:
+    radial-gradient(48% 50% at 14% -10%, rgb(47 120 77 / 0.42), transparent 70%),
+    radial-gradient(70% 62% at 6% -4%, rgb(110 188 134 / 0.48), transparent 72%),
+    radial-gradient(60% 60% at 100% 108%, rgb(247 255 248 / 0.95), transparent 72%),
+    radial-gradient(38% 40% at 62% 42%, rgb(243 252 244 / 0.4), transparent 80%);
+  --lumen-texture:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='p' x='0' y='0' width='100%25' height='100%25' filterUnits='userSpaceOnUse'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75333' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .3 0 0 0 0 .36 0 0 0 0 .16 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23p)' opacity='.035'/%3E%3C/svg%3E");
+  --lumen-panel-fill: linear-gradient(180deg, rgb(215 240 220 / 0.9) 0%, rgb(239 249 240 / 0.86) 34%, rgb(250 254 250 / 0.84) 100%);
+  --lumen-panel-border: rgb(58 105 73 / 0.14);
+  --lumen-item-fill: linear-gradient(180deg, #fffffc 0%, #f0f8f1 100%);
+  --lumen-control-bg: rgb(254 255 254 / 0.75);
+  --lumen-field-bg: #fffffd;
+  --lumen-segment-bg: rgb(217 234 220 / 0.7);
+  --lumen-rule: rgb(47 91 62 / 0.1);
+  --lumen-vein: #235a39;
+  --lumen-nav-hover: rgb(101 180 127 / 0.1);
+  --lumen-rail-bg: rgb(243 250 244 / 0.72);
+  --lumen-rail-border: rgb(58 105 73 / 0.14);
+  --lumen-rail-sheen: linear-gradient(180deg, rgb(110 188 134 / 0.3) 0%, rgb(154 225 173 / 0.1) 30%, rgb(255 255 255 / 0) 52%, rgb(255 255 255 / 0.55) 100%);
+  --lumen-sidecar-bg: rgb(246 252 247 / 0.82);
+  --lumen-sidecar-inset: rgb(224 239 227 / 0.6);
+  --lumen-glass-filter: blur(20px) saturate(135%);
+  --lumen-shadow-panel: inset 0 1px 0 rgb(255 255 255 / 0.95), inset 0 -1px 0 rgb(65 121 84 / 0.06), 0 1px 2px rgb(25 60 38 / 0.06), 0 26px 54px -30px rgb(28 80 50 / 0.34);
+  --lumen-shadow-float: inset 0 1px 0 rgb(255 255 255 / 0.95), 0 1px 2px rgb(25 60 38 / 0.06), 0 34px 70px -36px rgb(28 80 50 / 0.42);
+  --lumen-viewport-frame: rgb(47 91 62 / 0.22);
+  --lumen-viewport-shadow: 0 0 0 6px rgb(110 188 134 / 0.1), 0 26px 60px -30px rgb(28 80 50 / 0.45);
+  --lumen-status-rim: inset 0 0 0 1px rgb(32 60 41 / 0.06);
+  --lumen-hero-bloom: rgb(90 174 119 / 0.3);
+  --lumen-workspace-bloom: rgb(154 225 173 / 0.16);
+  --lumen-sidecar-bloom: rgb(154 225 173 / 0.22);
+  --lumen-emblem: url("/brand/emblem-detailed.svg");
+  --lumen-emblem-halo: radial-gradient(closest-side, rgb(110 188 134 / 0.34), rgb(110 188 134 / 0.12) 55%, rgb(110 188 134 / 0) 100%);
+  --lumen-emblem-filter: drop-shadow(0 6px 10px rgb(20 71 43 / 0.28));
+  --lumen-wordmark-color: #0f2f1d;
+  --lumen-accent-shadow: 0 0 0 1px rgb(62 131 87 / 0.35), inset 0 1px 0 rgb(250 255 251 / 0.6), 0 10px 22px -10px rgb(54 121 79 / 0.65);
+  --lumen-selected-glow: 0 0 0 1px rgb(62 131 87 / 0.3), 0 8px 22px -10px rgb(62 131 87 / 0.45);
+  --shadow-structural: var(--lumen-shadow-panel);
+  --shadow-raised: var(--lumen-shadow-float);
+}
+
+/* Spec 198 Lumen Dark: the approved bioluminescent canopy. */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --palette-neutral-0: #eef0de;
+  --palette-neutral-50: #dfe5d2;
+  --palette-neutral-100: #142318;
+  --palette-neutral-300: #5f6f55;
+  --palette-neutral-500: #97a68d;
+  --palette-neutral-700: #bac6a8;
+  --palette-neutral-900: #0e1a0f;
+  --palette-neutral-950: #050b06;
+  --palette-green-700: #96bd45;
+  --palette-green-800: #b9dc72;
+  --palette-green-900: #0b150c;
+  --palette-blue-700: #8bbde8;
+  --palette-amber-50: #2a200c;
+  --palette-amber-800: #f6cd8e;
+  --palette-red-50: #2e1513;
+  --palette-red-800: #ffb4aa;
+  --palette-violet-50: #221b33;
+  --palette-violet-800: #d6c6ff;
+  --palette-cyan-50: #0f2a2c;
+  --palette-cyan-800: #a6e8ef;
+
+  --color-bg-canvas: #050b06;
+  --color-bg-shell: #0e1a0f;
+  --color-bg-surface: #0e1a0f;
+  --color-bg-surface-raised: #142318;
+  --color-bg-subtle: #0b150c;
+  --color-bg-technical-viewport: #07110a;
+  --color-viewport-grid-major: #758c6c;
+  --color-viewport-grid-minor: #344a30;
+  --color-text-on-viewport: #dfe8d6;
+  --color-text-on-viewport-muted: #a9b6a0;
+  --color-text-primary: #eef0de;
+  --color-text-secondary: #bac6a8;
+  --color-text-muted: #97a68d;
+  --color-text-inverse: #eef0de;
+  --color-text-on-accent: var(--color-accent-on);
+  --color-border-default: #2e4127;
+  --color-border-strong: #4c6340;
+  --color-accent-subtle: #17260f;
+  --color-accent-surface: #1e3313;
+  --color-accent-border: #557a26;
+  --color-accent-border-strong: #7ba236;
+  --color-accent-foreground: #b9dc72;
+  --color-accent-hover: var(--accent-seed);
+  --color-accent-active: var(--accent-seed);
+  --color-focus-ring: var(--color-accent-foreground);
+  --color-focus-separator: #050b06;
+  --color-selection: rgb(150 189 69 / 0.35);
+
+  --color-status-info-bg: #10232c;
+  --color-status-info-text: #a9dcf6;
+  --color-status-success-bg: #10251a;
+  --color-status-success-text: #a7e6bc;
+  --color-status-warning-bg: var(--palette-amber-50);
+  --color-status-warning-text: var(--palette-amber-800);
+  --color-status-danger-bg: var(--palette-red-50);
+  --color-status-danger-text: var(--palette-red-800);
+  --color-status-neutral-bg: #142318;
+  --color-status-neutral-text: #c3ccc6;
+  --color-status-proposed-bg: var(--palette-violet-50);
+  --color-status-proposed-text: var(--palette-violet-800);
+  --color-status-stale-bg: #2c200e;
+  --color-status-stale-text: #ffd18b;
+  --color-status-unavailable-bg: #172021;
+  --color-status-unavailable-text: #bdc9cf;
+  --color-status-synthetic-bg: var(--palette-cyan-50);
+  --color-status-synthetic-text: var(--palette-cyan-800);
+  --color-status-archived-bg: #151d17;
+  --color-status-archived-text: #c2cbc6;
+
+  --color-chart-bg: #07110a;
+  --color-chart-series-1: #b9dc72;
+  --color-chart-series-2: #74c7ef;
+  --color-chart-series-3: #f2b35b;
+  --color-chart-series-4: #ee92c8;
+  --color-chart-series-5: #ede6be;
+  --color-chart-series-6: #a4c8c2;
+  --color-chart-series-7: #e4ca6c;
+  --color-chart-series-8: #73d1cf;
+  --color-flow-bg: #07100a;
+  --color-flow-grid: rgb(190 220 140 / 0.09);
+  --color-flow-node: #112016;
+  --color-flow-node-stroke: #7fa84a;
+  --color-flow-edge: #a9be90;
+  --color-flow-select: #e4f29a;
+
+  --lumen-canvas-base: #050b06;
+  --lumen-field-light:
+    radial-gradient(60% 55% at 12% -6%, rgb(84 140 32 / 0.3), transparent 70%),
+    radial-gradient(45% 50% at 98% 104%, rgb(44 96 18 / 0.34), transparent 70%),
+    radial-gradient(30% 30% at 55% 40%, rgb(28 72 10 / 0.16), transparent 80%);
+  --lumen-texture:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25' filterUnits='userSpaceOnUse'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .75 0 0 0 0 .86 0 0 0 0 .5 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='.045'/%3E%3C/svg%3E");
+  --lumen-panel-fill: linear-gradient(180deg, rgb(220 240 190 / 0.045) 0%, rgb(220 240 190 / 0) 38%), rgb(16 30 18 / 0.72);
+  --lumen-panel-border: rgb(196 226 150 / 0.13);
+  --lumen-item-fill: linear-gradient(180deg, rgb(220 240 190 / 0.07), rgb(220 240 190 / 0.025));
+  --lumen-control-bg: rgb(220 240 190 / 0.05);
+  --lumen-field-bg: rgb(3 10 4 / 0.55);
+  --lumen-segment-bg: rgb(220 240 190 / 0.05);
+  --lumen-rule: rgb(196 226 150 / 0.08);
+  --lumen-vein: #f9f5df;
+  --lumen-nav-hover: rgb(220 240 190 / 0.06);
+  --lumen-rail-bg: rgb(14 26 16 / 0.66);
+  --lumen-rail-border: rgb(196 226 150 / 0.12);
+  --lumen-rail-sheen: linear-gradient(180deg, rgb(220 240 190 / 0.06), rgb(220 240 190 / 0) 32%);
+  --lumen-sidecar-bg: rgb(14 26 16 / 0.78);
+  --lumen-sidecar-inset: rgb(220 240 190 / 0.05);
+  --lumen-glass-filter: blur(22px) saturate(140%);
+  --lumen-shadow-panel: inset 0 1px 0 rgb(249 245 223 / 0.07), 0 1px 0 rgb(0 0 0 / 0.4), 0 30px 70px -34px rgb(0 0 0 / 0.9);
+  --lumen-shadow-float: inset 0 1px 0 rgb(249 245 223 / 0.08), 0 40px 90px -40px rgb(0 0 0 / 0.95), 0 0 0 1px rgb(0 0 0 / 0.3);
+  --lumen-viewport-frame: rgb(249 245 223 / 0.22);
+  --lumen-viewport-shadow: 0 0 0 6px rgb(150 189 69 / 0.06), 0 30px 80px -30px rgb(0 0 0 / 0.95);
+  --lumen-status-rim: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  --lumen-hero-bloom: rgb(150 189 69 / 0.12);
+  --lumen-workspace-bloom: rgb(150 189 69 / 0.1);
+  --lumen-sidecar-bloom: rgb(150 189 69 / 0.14);
+  --lumen-emblem: url("/brand/emblem-detailed-dark.svg");
+  --lumen-emblem-halo: radial-gradient(closest-side, rgb(150 189 69 / 0.3), rgb(150 189 69 / 0.1) 55%, rgb(150 189 69 / 0) 100%);
+  --lumen-emblem-filter: drop-shadow(0 0 10px rgb(169 208 88 / 0.45));
+  --lumen-wordmark-color: #f6f3e0;
+  --lumen-accent-shadow: 0 0 0 1px rgb(185 220 114 / 0.35), inset 0 1px 0 rgb(255 255 230 / 0.35), 0 10px 28px -8px rgb(150 189 69 / 0.55);
+  --lumen-selected-glow: 0 0 0 1px rgb(150 189 69 / 0.35), 0 0 24px -6px rgb(150 189 69 / 0.45);
+  --shadow-structural: var(--lumen-shadow-panel);
+  --shadow-raised: var(--lumen-shadow-float);
+}
+
+@supports (color: color-mix(in oklch, red, blue)) {
+  :root {
+    --color-accent-subtle: color-mix(in oklch, var(--accent-seed) 14%, #f7fcf8);
+    --color-accent-surface: color-mix(in oklch, var(--accent-seed) 22%, #f7fcf8);
+    --color-accent-border: color-mix(in oklch, var(--accent-seed) 55%, #64806b);
+    --color-accent-border-strong: color-mix(in oklch, var(--accent-seed) 70%, #315b3f);
+    --lumen-accent-fill: radial-gradient(120% 150% at 50% 12%, color-mix(in oklch, var(--accent-seed) 70%, #ffffff) 0%, var(--accent-seed) 48%, color-mix(in oklch, var(--accent-seed) 80%, #000000) 100%);
+  }
+
+  [data-theme="dark"] {
+    --color-accent-subtle: color-mix(in oklch, var(--accent-seed) 13%, #0e1a0f);
+    --color-accent-surface: color-mix(in oklch, var(--accent-seed) 22%, #0e1a0f);
+    --color-accent-border: color-mix(in oklch, var(--accent-seed) 55%, #0e1a0f);
+    --color-accent-border-strong: color-mix(in oklch, var(--accent-seed) 80%, #0e1a0f);
+    --lumen-accent-fill: radial-gradient(120% 150% at 50% 15%, color-mix(in oklch, var(--accent-seed) 75%, #ffffff) 0%, var(--accent-seed) 45%, color-mix(in oklch, var(--accent-seed) 82%, #000000) 100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-standard: 0ms;
+  }
+}

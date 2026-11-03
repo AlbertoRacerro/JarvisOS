@@ -1,0 +1,541 @@
+.application-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(12rem, 15rem) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "topbar topbar"
+    "rail workspace"
+    "rail dock";
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+}
+
+.shell-skip-link {
+  position: fixed;
+  inset-block-start: var(--space-2);
+  inset-inline-start: var(--space-2);
+  z-index: 100;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-surface-raised);
+  color: var(--color-accent-foreground);
+  border: var(--border-width-default) solid var(--color-focus-ring);
+  border-radius: var(--radius-md);
+  transform: translateY(-200%);
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.shell-skip-link:focus {
+  transform: translateY(0);
+}
+
+.shell-skip-link:focus-visible,
+.shell-nav-link:focus-visible,
+.shell-text-link:focus-visible,
+.shell-panel__header h2:focus {
+  outline: 2px solid var(--color-focus-separator);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 5px var(--color-focus-ring);
+}
+
+.shell-topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-surface-raised);
+  border-block-end: var(--border-width-default) solid var(--color-border-default);
+  box-shadow: var(--shadow-structural);
+}
+
+.shell-topbar__title {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.shell-topbar__title span,
+.shell-rail__identity span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.shell-topbar__title strong {
+  overflow-wrap: anywhere;
+}
+
+.shell-topbar__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.shell-appearance-control {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 8rem;
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.shell-appearance-control .ui-field__label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: 700;
+}
+
+.shell-rail {
+  grid-area: rail;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-3);
+  background: var(--color-bg-subtle);
+  border-inline-end: var(--border-width-default) solid var(--color-border-default);
+}
+
+.shell-rail__identity {
+  display: grid;
+  gap: var(--space-1);
+  padding-inline: var(--space-2);
+}
+
+.shell-rail__links,
+.shell-stage-links {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.shell-nav-link {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height-default);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  border: var(--border-width-default) solid transparent;
+  border-radius: var(--radius-md);
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
+}
+
+.shell-nav-link:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-surface);
+  border-color: var(--color-border-default);
+}
+
+.shell-nav-link[aria-current] {
+  color: var(--color-text-primary);
+  background: var(--color-accent-subtle);
+  border-color: var(--color-accent-border-strong);
+  box-shadow: inset 3px 0 0 var(--color-accent-primary);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: var(--space-1);
+}
+
+.shell-workspace {
+  grid-area: workspace;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.shell-main {
+  grid-column: 2;
+  min-width: 0;
+  width: 100%;
+  padding: var(--space-5);
+  outline: none;
+}
+
+.shell-main:focus {
+  box-shadow: inset 0 0 0 2px var(--color-focus-ring);
+}
+
+.shell-panel {
+  min-width: 0;
+  background: var(--color-bg-surface-raised);
+  border: var(--border-width-default) solid var(--color-border-default);
+  box-shadow: var(--shadow-structural);
+}
+
+.shell-navigator,
+.shell-sidecar {
+  width: clamp(13rem, 18vw, 19rem);
+  margin: var(--space-5) 0;
+  padding: var(--space-4);
+}
+
+.shell-navigator {
+  grid-column: 1;
+  border-inline-start: 0;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+
+.shell-sidecar {
+  grid-column: 3;
+  border-inline-end: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  height: min(72rem, calc(100vh - 8rem));
+  max-height: calc(100vh - 8rem);
+  overflow: hidden;
+  box-shadow: var(--shadow-raised);
+}
+
+.shell-panel__header,
+.shell-legacy__header,
+.shell-stage__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.shell-panel__header {
+  margin-block-end: var(--space-4);
+}
+
+.shell-panel__header h2,
+.shell-legacy__header h1,
+.shell-stage__header h1 {
+  margin: 0;
+}
+
+.shell-sidecar__tabs {
+  display: none;
+  gap: var(--space-2);
+  margin-block-end: var(--space-2);
+}
+
+.shell-sidecar__tabs button {
+  flex: 1;
+}
+
+.shell-sidecar__tabs button[aria-selected="true"] {
+  font-weight: 700;
+  border-color: var(--color-accent-border-strong);
+  box-shadow: inset 0 -2px 0 var(--color-accent-primary);
+}
+
+.shell-sidecar__workbench {
+  display: grid;
+  grid-template-rows: minmax(0, 42fr) minmax(0, 58fr);
+  min-height: 0;
+  flex: 1;
+  gap: var(--space-3);
+}
+
+.shell-sidecar__pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-inline-end: var(--space-1);
+}
+
+.shell-sidecar__pane--jarvis {
+  padding-block-end: var(--space-3);
+  border-block-end: var(--border-width-default) solid var(--color-border-default);
+}
+
+.shell-properties__header {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  padding-block-end: var(--space-2);
+  background: var(--color-bg-surface-raised);
+}
+
+.shell-properties__header h3,
+.shell-properties__header p,
+.shell-properties__selection p,
+.shell-properties__inspect p {
+  margin-block: 0;
+}
+
+.shell-properties__selection,
+.shell-properties__inspect {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.shell-properties__selection details,
+.shell-properties__inspect {
+  margin-block-start: var(--space-3);
+}
+
+.shell-properties__selection .details,
+.shell-properties__inspect .details {
+  min-width: 0;
+}
+
+.shell-analysis-dock {
+  grid-area: dock;
+  margin: 0 var(--space-5) var(--space-5);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+}
+
+.shell-stage,
+.shell-placeholder,
+.shell-legacy,
+.shell-home {
+  min-width: 0;
+  width: 100%;
+}
+
+.shell-stage__header,
+.shell-home__header {
+  display: block;
+  margin-block-end: var(--space-4);
+}
+
+.shell-stage__header p:last-child {
+  max-width: 70ch;
+  color: var(--color-text-secondary);
+}
+
+.shell-stage__compatibility,
+.shell-legacy__content,
+.shell-home__content {
+  min-width: 0;
+}
+
+.shell-stage__compatibility > .page,
+.shell-legacy__content > .page,
+.shell-home__content > .page {
+  max-width: none;
+  margin: 0;
+}
+
+.shell-placeholder {
+  max-width: 60rem;
+  margin-inline: auto;
+}
+
+.shell-placeholder__surface {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.shell-placeholder__links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.shell-text-link {
+  color: var(--color-accent-foreground);
+  font-weight: 700;
+}
+
+.shell-legacy__header {
+  align-items: center;
+  margin-block-end: var(--space-4);
+  padding: var(--space-4);
+  background: var(--color-bg-subtle);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-structural);
+}
+
+.process-stage {
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  gap: var(--space-4);
+}
+
+.process-stage__header {
+  margin-block-end: 0;
+}
+
+.process-stage__workbench {
+  min-width: 0;
+  min-height: min(42rem, calc(100vh - 14rem));
+  display: grid;
+  grid-template-columns: minmax(11rem, 14rem) minmax(0, 1fr);
+  grid-template-rows: auto minmax(20rem, 1fr);
+  grid-template-areas:
+    "toolbar toolbar"
+    "palette canvas";
+  gap: var(--space-3);
+}
+
+.process-stage__toolbar,
+.process-stage__palette,
+.process-stage__canvas {
+  min-width: 0;
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-structural);
+}
+
+.process-stage__toolbar {
+  grid-area: toolbar;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-surface-raised);
+}
+
+.process-stage__palette {
+  grid-area: palette;
+  padding: var(--space-3);
+  overflow: auto;
+}
+
+.process-stage__palette p {
+  margin-block-end: 0;
+  color: var(--color-text-secondary);
+}
+
+.process-stage__canvas {
+  grid-area: canvas;
+  min-height: 20rem;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+  overflow: auto;
+  text-align: center;
+  background: var(--color-bg-subtle);
+  background-image:
+    linear-gradient(var(--color-border-default) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-border-default) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -1px -1px;
+}
+
+.process-stage__canvas > div {
+  max-width: 36rem;
+  padding: var(--space-5);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-floating);
+  background: var(--color-bg-surface-raised);
+  box-shadow: var(--shadow-structural);
+}
+
+@media (max-width: 58rem) {
+  .shell-sidecar {
+    height: min(56rem, calc(100vh - 6rem));
+    max-height: calc(100vh - 6rem);
+  }
+
+  .shell-sidecar__tabs {
+    display: flex;
+  }
+
+  .shell-sidecar__workbench {
+    display: block;
+  }
+
+  .shell-sidecar__pane {
+    height: 100%;
+  }
+
+  .shell-sidecar__pane--jarvis {
+    border-block-end: 0;
+    padding-block-end: 0;
+  }
+
+  .shell-sidecar__pane[data-compact-hidden="true"] {
+    display: none;
+  }
+
+  .process-stage__workbench {
+    min-height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(24rem, 1fr);
+    grid-template-areas:
+      "toolbar"
+      "palette"
+      "canvas";
+  }
+}
+
+/* The one active project, chosen once for every page. */
+.shell-project {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2) var(--space-2) 0;
+  text-align: center;
+}
+
+.shell-project__label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.shell-project__name {
+  overflow-wrap: anywhere;
+}
+
+.shell-project select {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+}
+
+/* "Back to <project>" reads as a plain link, not a pill button squeezed into the narrow rail. */
+.application-shell .shell-rail button.shell-project__back {
+  min-height: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--color-accent-foreground, inherit);
+  font-size: var(--font-size-caption);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Back and Forward: two small plain arrows, always in the rail's top corner. The selectors match the specificity of
+ * the global button rules in foundation.css so the arrows stay quiet icons instead of filled capsules. */
+.shell-history {
+  display: flex;
+  gap: var(--space-1);
+  padding-inline: var(--space-1);
+}
+
+.shell-history button.shell-history__button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  min-height: 28px;
+  height: 28px;
+  padding: 0;
+  border: var(--border-width-default) solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.shell-history button.shell-history__button:hover:not(:disabled) {
+  border-color: var(--color-border-default);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-primary);
+}
+
+.shell-history button.shell-history__button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}

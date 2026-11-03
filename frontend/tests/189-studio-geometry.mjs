@@ -1,0 +1,35 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const read = (path) => readFileSync(resolve(root, path), "utf8");
+const logic = read("src/components/studio/geometryLogic.ts").replace(/^import type .*$/m, "");
+const js = ts.transpileModule(logic, { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } }).outputText;
+const geometry = await import(`data:text/javascript;base64,${Buffer.from(js).toString("base64")}`);
+const studioApi = read("src/api/studio.ts");
+assert.match(studioApi, /STUDIO_KINDS = \["studio_calc_v1", "studio_geometry_v1"\]/);
+assert.match(studioApi, /geometryPreviewUrl/);
+assert.match(studioApi, /\/geometry-runs\//);
+const component = read("src/components/studio/GeometryAuthoring.tsx");
+for (const text of ["BluecadGlbViewer", "Declared bounds", "Largest extent", "Download ", "limitText", "SHA-256", "Preview"]) assert.ok(component.includes(text), text);
+for (const text of ["untrusted output", "120 s wall time", "4 GiB memory", "128 MiB for all three files"]) assert.ok(geometry.GEOMETRY_NOTICE.includes(text), text);
+{
+  assert.equal(geometry.limitText("memory_bytes", 4294967296), "Stopped by the memory (bytes) limit: 4294967296.");
+  assert.equal(geometry.limitText(null, null), null);
+  const output = { geometry: { valid: true, solids: 1, volume: 1, bbox_min: [0, 0, 0], bbox_max: [1, 1, 1] }, artifacts: [{ name: "model.glb", sha256: "a".repeat(64), size_bytes: 10 }] };
+  assert.deepEqual(geometry.geometryRunOutput(JSON.stringify(output)), output);
+  assert.equal(geometry.geometryRunOutput(JSON.stringify({ outputs: {} })), null);
+  assert.equal(geometry.geometryRunOutput("not json"), null);
+  assert.equal(geometry.runFailure(JSON.stringify({ status: "failed", error: { message: "Studio geometry run stopped at the wall_seconds limit (120)." } })), "Studio geometry run stopped at the wall_seconds limit (120).");
+}
+const page = read("src/pages/Studio.tsx");
+for (const text of ["New geometry", "GeometryCases", "GeometryReport", "GeometryArtifacts", "GeometryFacts", "geometryRunArtifactUrl", "Select for generation", "Generate from a published version", "up to 120 s", "Source {model.versions.find"]) assert.ok(page.includes(text), text);
+assert.match(page, /\{ id: "geometry", label: "Geometry", available: true \}/);
+const properties = read("src/components/engineering/EngineeringProperties.tsx");
+assert.ok(!properties.includes('=== "studio_calc_v1"'), "the run surface treats every Studio kind alike");
+const studioCss = read("src/pages/studio.css");
+assert.doesNotMatch(studioCss, /\.studio-geometry-viewer\s*\{[^}]*height\s*:/, "the viewer must size to its content so download links are not overlapped");
+assert.match(read("package.json"), /npm run test:189/);
+console.log("189 Studio geometry frontend ok");

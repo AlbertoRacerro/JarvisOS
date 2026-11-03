@@ -1,0 +1,2 @@
+"""Event logging module boundary."""
+

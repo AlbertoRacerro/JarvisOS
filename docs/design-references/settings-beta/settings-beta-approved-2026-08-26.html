@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JarvisOS — Settings beta V2</title>
+<style>
+@page { size: 1365px 768px; margin: 0; }
+:root{
+  --bg:#FBFAF6;--panel:#FFFEFC;--line:#DED7CB;--line2:#EEE8DE;--text:#23241F;--muted:#71756D;
+  --green:#467E2A;--green-deep:#28581A;--green-soft:#EDF7E7;--stone:#FAF6EE;--danger:#8C3D34;--amber:#8B691F;
+}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;font-family:'Inter Display','Inter','Segoe UI',Arial,sans-serif;color:var(--text);background:var(--bg)}
+body{overflow:hidden}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+.app{display:flex;width:100%;height:100%}
+.rail{width:170px;flex:0 0 170px;border-right:1px solid #E5DCCE;background:linear-gradient(180deg,#FAF7F0 0%,#FAF6EE 100%);padding:20px 10px 14px;position:relative}
+.brandline{display:flex;align-items:center;gap:7px;margin-bottom:3px}.brand{font-size:12px;font-weight:750;letter-spacing:.02em}.backend-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(70,126,42,.10)}
+.rail-sub{font-size:8px;color:#7d847d;margin-bottom:24px}.nav{height:37px;border-radius:4px;padding:10px 12px;font-size:12px;margin:3px 0;color:#596159;border:1px solid transparent}.nav.active{background:#FFFEFC;border-color:rgba(70,126,42,.62);color:#1f2720;font-weight:700;position:relative;box-shadow:0 4px 14px rgba(75,142,47,.09)}.nav.active:before{content:"";position:absolute;left:-1px;top:-1px;bottom:-1px;width:3px;background:var(--green);border-radius:4px 0 0 4px}
+.rail-note{position:absolute;left:11px;right:12px;bottom:16px;color:#92978F;font-size:8px;line-height:1.45}
+.main{flex:1;min-width:0;height:100%;padding:16px 22px 18px;background:var(--bg)}
+.header{height:88px;display:flex;justify-content:space-between;align-items:flex-start}.eyebrow{font-size:9px;color:#6e7368;text-transform:uppercase;letter-spacing:.14em}.title{font-size:23px;font-weight:750;margin-top:5px;letter-spacing:-.03em}.subtitle{font-size:10px;color:#6A6C63;margin-top:6px;max-width:720px;line-height:1.4}.appearance{font-size:8px;color:#6f766f}.appearance .select{margin-top:4px;width:108px;height:30px;border:1px solid #DDD5C8;background:#FFFEFC;border-radius:4px;padding:7px 10px;font-size:10px}
+.tabs{height:42px;border-bottom:1px solid var(--line);display:flex;gap:5px;align-items:flex-end;margin-bottom:12px}.tab{border:1px solid transparent;border-bottom:none;background:transparent;padding:9px 15px 10px;font-size:11px;color:#687068;border-radius:4px 4px 0 0}.tab.active{background:#FFFEFC;border-color:var(--line);color:var(--green-deep);font-weight:700;box-shadow:0 -3px 12px rgba(60,58,41,.03)}
+.content{height:calc(100% - 142px);overflow:hidden}.settings-pane{display:none;height:100%;overflow:auto;padding-right:18px}.settings-pane.active{display:block}.sheet{max-width:960px;background:transparent}
+.section{border-bottom:1px solid var(--line);padding:13px 0 14px}.section:first-child{padding-top:2px}.section-title{font-size:13px;font-weight:750;margin:0 0 4px}.section-desc{font-size:9px;color:var(--muted);margin:0 0 10px;line-height:1.45}
+.row{min-height:36px;display:flex;align-items:center;border-top:1px solid var(--line2);font-size:10px}.row:first-of-type{border-top:none}.row .label{width:225px;font-weight:600;color:#4b504a}.row .value{flex:1;color:#62675f}.row .actions{display:flex;gap:6px;align-items:center}.status{display:inline-flex;align-items:center;gap:6px;font-weight:600}.status:before{content:"";width:6px;height:6px;border-radius:50%;background:#A3A69F}.status.ok:before{background:var(--green)}.status.warn:before{background:#B38B2C}.status.off:before{background:#AAA89E}
+.btn{border:1px solid #DCD5C8;background:#FFFEFC;border-radius:4px;padding:6px 9px;font-size:9px}.btn.primary{border-color:rgba(70,126,42,.65);background:linear-gradient(180deg,#F8FCF5 0%,#EDF7E7 100%);color:var(--green-deep);font-weight:700}.btn.ghost{background:transparent}.btn.danger{color:var(--danger)}
+.provider{border-top:1px solid var(--line2)}.provider:first-of-type{border-top:none}.provider-row{height:37px;display:flex;align-items:center;font-size:10px}.provider-name{width:180px;font-weight:700}.provider-state{width:145px}.provider-models{flex:1;color:#6c7169;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.provider-action{width:92px;text-align:right}.provider-detail{display:none;margin:0 0 10px 180px;padding:10px 12px;border-left:2px solid rgba(70,126,42,.55);background:#FCFBF7}.provider.open .provider-detail{display:block}.detail-row{display:flex;align-items:center;min-height:30px;border-top:1px solid var(--line2);font-size:9px}.detail-row:first-child{border-top:none}.detail-row b{width:120px;font-weight:600}.credential{display:flex;gap:6px;align-items:center;flex:1}.credential input{height:27px;flex:1;max-width:320px;border:1px solid #DDD5C8;background:#FFFEFC;border-radius:4px;padding:0 8px;font-size:9px}.masked{font-family:'IBM Plex Mono',Consolas,monospace;letter-spacing:.08em}
+.ai-layout{display:flex;gap:34px;align-items:flex-start}.ai-providers{flex:1;min-width:0}.ai-side{width:360px;flex:0 0 360px;border-left:1px solid var(--line);padding-left:24px}.ai-side .section:first-child{padding-top:2px}.ai-side .section:last-child{border-bottom:none}.ai-side .row .label{width:165px}.ai-side .row{min-height:33px}.ai-side .section-desc{margin-bottom:6px}.control{height:27px;border:1px solid #DDD5C8;background:#FFFEFC;border-radius:4px;padding:0 8px;font-size:9px;min-width:145px}.toggle{width:28px;height:16px;border-radius:10px;background:#D6D8D2;position:relative;display:inline-block;vertical-align:middle}.toggle.on{background:var(--green)}.toggle:after{content:"";position:absolute;width:12px;height:12px;border-radius:50%;background:#fff;top:2px;left:2px;box-shadow:0 1px 3px rgba(0,0,0,.2)}.toggle.on:after{left:14px}
+.progress{width:170px;height:6px;background:#E9E4DB;border-radius:6px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:8px}.progress>span{display:block;height:100%;width:23%;background:var(--green)}
+.advanced{padding:11px 0;font-size:10px;color:#586157}.advanced summary{cursor:pointer;font-weight:650}.advanced-content{padding:8px 0 0 18px;color:#737970;font-size:9px;line-height:1.6}
+.radio-group{display:flex;gap:7px}.choice{display:flex;align-items:center;gap:6px;border:1px solid #DED7CB;border-radius:4px;background:#FFFEFC;padding:6px 9px;font-size:9px}.choice.active{border-color:rgba(70,126,42,.62);background:var(--green-soft);color:var(--green-deep);font-weight:700}.swatches{display:flex;gap:10px;align-items:center}.swatch{width:18px;height:18px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #CEC7BC}.swatch.s1{background:#467E2A}.swatch.s2{background:#5B7F45}.swatch.s3{background:#4D8380}.swatch.s4{background:#6B7B5B}.swatch.active{box-shadow:0 0 0 2px var(--green)}
+.system-grid{max-width:900px}.sys-group{padding:12px 0;border-bottom:1px solid var(--line)}.sys-group h3{font-size:12px;margin:0 0 6px}.sys-row{display:flex;min-height:31px;align-items:center;border-top:1px solid var(--line2);font-size:9px}.sys-row:first-of-type{border-top:none}.sys-row dt{width:220px;font-weight:600;color:#50554f}.sys-row dd{margin:0;flex:1;color:#6e746c}.mono{font-family:'IBM Plex Mono',Consolas,monospace;font-size:8.5px}
+.note{font-size:9px;color:#7a8078;line-height:1.5;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brandline"><span class="brand">JARVIS OS</span><span class="backend-dot" title="Backend online"></span></div>
+    <div class="rail-sub">Engineering workstation</div>
+    <div class="nav">Design</div>
+    <div class="nav">Memory</div>
+    <div class="nav">Development</div>
+    <div class="nav active">Settings</div>
+    <div class="rail-note">Local-first engineering environment<br/>System health is available from Settings → System.</div>
+  </aside>
+
+  <main class="main">
+    <header class="header">
+      <div>
+        <div class="eyebrow">Operator controls</div>
+        <div class="title">Settings</div>
+        <div class="subtitle">Configure visual preferences, AI access and system diagnostics without mixing operational controls into the engineering workspace.</div>
+      </div>
+      <div class="appearance">Appearance<div class="select">Light ▾</div></div>
+    </header>
+
+    <nav class="tabs" aria-label="Settings sections">
+      <button class="tab" data-target="appearance">Appearance</button>
+      <button class="tab active" data-target="ai">AI</button>
+      <button class="tab" data-target="system">System</button>
+    </nav>
+
+    <div class="content">
+      <section id="appearance" class="settings-pane">
+        <div class="sheet">
+          <div class="section">
+            <h2 class="section-title">Theme</h2><p class="section-desc">Local visual preferences only.</p>
+            <div class="row"><div class="label">Appearance</div><div class="value"><div class="radio-group"><span class="choice">System</span><span class="choice active">Light</span><span class="choice">Dark</span></div></div></div>
+          </div>
+          <div class="section">
+            <h2 class="section-title">Accent</h2><p class="section-desc">Accent affects navigation, focus and selection emphasis; scientific and status colors remain independent.</p>
+            <div class="row"><div class="label">Preset</div><div class="value"><div class="swatches"><span class="swatch s1 active"></span><span>Microalgae</span><span class="swatch s2"></span><span>Leaf Chlorophyll</span><span class="swatch s3"></span><span>Lagoon</span><span class="swatch s4"></span><span>Custom</span></div></div></div>
+            <div class="row"><div class="label">Custom HEX</div><div class="value"><input class="control mono" value="#467E2A" /></div><div class="actions"><button class="btn">Reset</button></div></div>
+          </div>
+          <div class="section">
+            <h2 class="section-title">Interface</h2><p class="section-desc">Reserved for stable global presentation controls as the product matures.</p>
+            <div class="row"><div class="label">Density</div><div class="value">Comfortable</div><div class="actions"><select class="control"><option>Comfortable</option><option>Compact</option></select></div></div>
+            <div class="row"><div class="label">Motion</div><div class="value">Standard</div><div class="actions"><select class="control"><option>Standard</option><option>Reduced</option></select></div></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="ai" class="settings-pane active">
+        <div class="sheet ai-layout">
+          <div class="ai-providers">
+            <div class="section">
+              <h2 class="section-title">Providers</h2>
+              <p class="section-desc">Credentials and connectivity are provider-level. Model availability can be refreshed without redesigning the settings surface.</p>
+
+              <div class="provider" data-provider>
+                <div class="provider-row"><div class="provider-name">DeepSeek</div><div class="provider-state"><span class="status ok">Connected</span></div><div class="provider-models">V4 Flash · V4 Pro</div><div class="provider-action"><button class="btn manage">Manage</button></div></div>
+                <div class="provider-detail"><div class="detail-row"><b>Credential</b><span class="masked">••••••••••••7B2F</span></div><div class="detail-row"><b>Endpoint</b><span>Provider default</span></div><div class="detail-row"><b>Models</b><span>2 available</span></div><div class="detail-row"><b>Update API key</b><div class="credential"><input type="password" placeholder="Paste new API key"/><button class="btn primary">Save securely</button><button class="btn">Test</button></div></div></div>
+              </div>
+              <div class="provider" data-provider><div class="provider-row"><div class="provider-name">Z.AI</div><div class="provider-state"><span class="status ok">Connected</span></div><div class="provider-models">GLM 5.2 · catalogue refresh available</div><div class="provider-action"><button class="btn manage">Manage</button></div></div><div class="provider-detail"><div class="detail-row"><b>Credential</b><span class="masked">••••••••••••19A4</span></div><div class="detail-row"><b>Update API key</b><div class="credential"><input type="password" placeholder="Paste new API key"/><button class="btn primary">Save securely</button><button class="btn">Refresh models</button></div></div></div></div>
+              <div class="provider" data-provider><div class="provider-row"><div class="provider-name">OpenAI</div><div class="provider-state"><span class="status ok">Connected</span></div><div class="provider-models">API credential · Codex integration</div><div class="provider-action"><button class="btn manage">Manage</button></div></div><div class="provider-detail"><div class="detail-row"><b>API credential</b><span class="masked">••••••••••••45C1</span></div><div class="detail-row"><b>Codex</b><span class="status ok">Connected</span></div><div class="detail-row"><b>Update API key</b><div class="credential"><input type="password" placeholder="Paste new API key"/><button class="btn primary">Save securely</button><button class="btn">Test</button></div></div></div></div>
+              <div class="provider" data-provider><div class="provider-row"><div class="provider-name">Anthropic</div><div class="provider-state"><span class="status ok">Connected</span></div><div class="provider-models">API credential · Claude Code integration</div><div class="provider-action"><button class="btn manage">Manage</button></div></div><div class="provider-detail"><div class="detail-row"><b>API credential</b><span class="masked">••••••••••••92DA</span></div><div class="detail-row"><b>Claude Code</b><span class="status ok">Connected</span></div><div class="detail-row"><b>Update API key</b><div class="credential"><input type="password" placeholder="Paste new API key"/><button class="btn primary">Save securely</button><button class="btn">Test</button></div></div></div></div>
+              <div class="provider" data-provider><div class="provider-row"><div class="provider-name">OpenRouter</div><div class="provider-state"><span class="status warn">Not configured</span></div><div class="provider-models">Free / temporary opportunities · fallback catalogue</div><div class="provider-action"><button class="btn primary manage">Connect</button></div></div><div class="provider-detail"><div class="detail-row"><b>API key</b><div class="credential"><input type="password" placeholder="Paste OpenRouter API key"/><button class="btn primary">Save securely</button><button class="btn">Test</button></div></div><div class="detail-row"><b>Catalogue</b><span>Refresh after connection</span></div></div></div>
+              <div class="provider" data-provider><div class="provider-row"><div class="provider-name">Local AI</div><div class="provider-state"><span class="status ok">Available</span></div><div class="provider-models">Local runtime · no external credential</div><div class="provider-action"><button class="btn manage">Manage</button></div></div><div class="provider-detail"><div class="detail-row"><b>Runtime</b><span>Detected</span></div><div class="detail-row"><b>Models</b><span>Managed by local runtime</span></div></div></div>
+              <div class="provider" data-provider><div class="provider-row"><div class="provider-name">Scaleway</div><div class="provider-state"><span class="status off">Disabled</span></div><div class="provider-models">Legacy / optional provider</div><div class="provider-action"><button class="btn manage">Manage</button></div></div><div class="provider-detail"><div class="detail-row"><b>Credential</b><span>Stored securely</span></div><div class="detail-row"><b>Enabled</b><span class="toggle"></span></div></div></div>
+            </div>
+            <details class="advanced"><summary>Provider advanced</summary><div class="advanced-content">Custom endpoints · credential source · provider-specific limits · model catalogue diagnostics</div></details>
+          </div>
+
+          <aside class="ai-side">
+            <div class="section">
+              <h2 class="section-title">Orchestration</h2><p class="section-desc">Stable policy controls. Concrete routing will be driven by Hermes when the backend layer is integrated.</p>
+              <div class="row"><div class="label">Routing mode</div><div class="value">Automatic</div><div class="actions"><select class="control"><option>Automatic</option><option>Manual override</option></select></div></div>
+              <div class="row"><div class="label">Orchestrator</div><div class="value">Hermes</div><div class="actions"><span class="status warn">Planned</span></div></div>
+              <div class="row"><div class="label">Fallback routing</div><div class="value">Enabled</div><div class="actions"><span class="toggle on"></span></div></div>
+              <div class="row"><div class="label">Free opportunities</div><div class="value">Allowed</div><div class="actions"><span class="toggle on"></span></div></div>
+              <div class="row"><div class="label">Deterministic validation</div><div class="value">Required</div><div class="actions"><span class="status ok">Required</span></div></div>
+              <div class="row"><div class="label">Sensitive context</div><div class="value">Restricted</div><div class="actions"><select class="control"><option>Restricted</option><option>Local only</option></select></div></div>
+            </div>
+            <div class="section">
+              <h2 class="section-title">Budget & usage</h2><p class="section-desc">Generic global limits. Provider-specific metering can be attached later.</p>
+              <div class="row"><div class="label">Monthly budget</div><div class="value">$10.00</div><div class="actions"><button class="btn">Edit</button></div></div>
+              <div class="row"><div class="label">Spend this month</div><div class="value"><span class="progress"><span></span></span>$2.31</div></div>
+              <div class="row"><div class="label">Global token limit</div><div class="value">500,000</div><div class="actions"><button class="btn">Edit</button></div></div>
+              <div class="row"><div class="label">Hard stop</div><div class="value">Enabled</div><div class="actions"><span class="toggle on"></span></div></div>
+            </div>
+            <details class="advanced"><summary>Advanced policy</summary><div class="advanced-content">Routing diagnostics · policy identifiers · detailed usage counters</div></details>
+          </aside>
+        </div>
+      </section>
+
+      <section id="system" class="settings-pane">
+        <div class="sheet system-grid">
+          <div class="sys-group"><h3>Application</h3><dl><div class="sys-row"><dt>JarvisOS version</dt><dd>0.x.x</dd></div><div class="sys-row"><dt>Environment</dt><dd>Development</dd></div></dl></div>
+          <div class="sys-group"><h3>Runtime</h3><dl><div class="sys-row"><dt>Backend</dt><dd><span class="status ok">Online</span></dd></div><div class="sys-row"><dt>Endpoint</dt><dd class="mono">127.0.0.1:8000</dd></div><div class="sys-row"><dt>Local AI</dt><dd><span class="status ok">Online</span></dd></div></dl></div>
+          <div class="sys-group"><h3>Data</h3><dl><div class="sys-row"><dt>Data root</dt><dd>Available</dd></div><div class="sys-row"><dt>Database</dt><dd><span class="status ok">Ready</span></dd></div><div class="sys-row"><dt>Engine</dt><dd>SQLite</dd></div><div class="sys-row"><dt>Schema</dt><dd class="mono">0016</dd></div><div class="sys-row"><dt>Database path</dt><dd class="mono">…/JarvisOS/data/jarvis.db</dd></div></dl></div>
+          <div class="sys-group"><h3>Services</h3><dl><div class="sys-row"><dt>AI providers</dt><dd>Configured</dd></div><div class="sys-row"><dt>Process kernel</dt><dd>Available</dd></div><div class="sys-row"><dt>BLUECAD</dt><dd>Available</dd></div></dl></div>
+          <details class="advanced"><summary>Advanced diagnostics</summary><div class="advanced-content">Schema migrations · provider mode · credential source · local paths · runtime identifiers · <button class="btn">Reload system state</button> <button class="btn">Open logs</button></div></details>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script>
+const tabs = [...document.querySelectorAll('.tab')];
+const panes = [...document.querySelectorAll('.settings-pane')];
+tabs.forEach(tab => tab.addEventListener('click', () => {
+  tabs.forEach(t => t.classList.toggle('active', t === tab));
+  panes.forEach(p => p.classList.toggle('active', p.id === tab.dataset.target));
+}));
+document.querySelectorAll('.manage').forEach(btn => btn.addEventListener('click', () => {
+  const provider = btn.closest('[data-provider]');
+  provider.classList.toggle('open');
+  btn.textContent = provider.classList.contains('open') ? 'Close' : (provider.querySelector('.status.warn') ? 'Connect' : 'Manage');
+}));
+</script>
+</body>
+</html>

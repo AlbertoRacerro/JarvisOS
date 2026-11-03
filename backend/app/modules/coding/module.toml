@@ -1,0 +1,4 @@
+purpose = "Coding workspace backend: repository and CI truth read from GitHub, the development pipeline state, relay monitor, provider quota and governed coding actions."
+status = "live"
+entrypoints = ["/api/coding", "repository_truth.py", "pipeline_state.py"]
+owner = "maintainer"

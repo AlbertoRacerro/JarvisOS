@@ -1,0 +1,79 @@
+/* Spec 181: run state, outcome and results. Only converged is green; ready/running/validated are neutral. */
+.run-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-weight: 700;
+  background: var(--color-bg-subtle, var(--color-bg-subtle));
+  color: var(--color-text-muted, var(--color-text-secondary));
+}
+.run-state small { font-weight: 500; }
+.run-state__dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.run-state--ready { border-color: var(--color-border-default); color: var(--color-text-secondary); background: var(--color-bg-surface); }
+.run-state--running { border-color: var(--color-status-info-text); color: var(--color-status-info-text); background: var(--color-bg-subtle); }
+.run-state--running .run-state__dot { animation: run-state-pulse 1s ease-in-out infinite; }
+.run-state--validated { border-color: var(--color-status-info-text); color: var(--color-status-info-text); background: var(--color-bg-surface); border-style: dashed; }
+.run-state--converged { border-color: var(--color-accent-border-strong); color: var(--color-status-success-text); background: var(--color-bg-subtle); }
+.run-state--non_converged { border-color: var(--color-status-warning-text); color: var(--color-status-warning-text); background: var(--color-status-warning-bg); }
+.run-state--failed { border-color: var(--color-status-danger-text); color: var(--color-status-danger-text); background: var(--color-bg-subtle); }
+.run-state--blocked { border-color: var(--color-status-danger-text); color: var(--color-status-danger-text); background: var(--color-bg-surface-raised); }
+.run-state--cancelled { border-color: var(--color-border-strong); color: var(--color-text-primary); background: var(--color-bg-subtle); }
+@keyframes run-state-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .run-state--running .run-state__dot { animation: none; } }
+
+/* One status line per panel: a coloured dot and a few words; every cell below says `empty` or shows a value. */
+.results-status { display: flex; align-items: baseline; gap: 6px; margin: 0 0 4px; font-weight: 600; font-size: 12px; color: var(--color-text-primary); }
+.results-status__dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--color-text-muted); transform: translateY(-1px); }
+.results-status--ok .results-status__dot { background: var(--color-status-success-text); }
+.results-status--warn .results-status__dot { background: var(--color-status-warning-text); }
+.results-status--danger .results-status__dot { background: var(--color-status-danger-text); }
+.results-footnote { margin: 2px 0 0; font-size: 11px; color: var(--color-text-muted); }
+
+.run-outcome { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; font-size: 12px; }
+.run-outcome__headline { overflow-wrap: anywhere; }
+.run-outcome__facts, .run-outcome__details dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 0; }
+.run-outcome__facts > div, .run-outcome__details dl > div { display: contents; }
+.run-outcome dt { color: var(--color-text-muted); }
+.run-outcome dd { margin: 0; overflow-wrap: anywhere; }
+.run-outcome ul { margin: 0; padding-left: 16px; }
+.run-outcome__details > summary { cursor: pointer; color: var(--color-text-muted); }
+.run-outcome__details[open] > summary { margin-bottom: 4px; }
+.run-outcome__message { white-space: pre-wrap; font-family: var(--font-mono, monospace); font-size: 11px; }
+
+.view-q--last-iterate { font-style: italic; color: var(--color-status-warning-text); }
+.view-q--empty, .view-q--failed, .view-q--absent {
+  color: var(--color-text-muted, var(--color-text-muted));
+  font-size: 11px;
+}
+.view-q--failed { color: var(--color-status-danger-text); }
+
+.object-results { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; border-bottom: 1px solid var(--color-border-default, var(--color-border-default)); }
+.object-results h4, .results-balances h4 { margin: 6px 0 2px; font-size: 12px; }
+.object-results__grid { display: grid; grid-template-columns: max-content 1fr; gap: 1px 10px; margin: 0; font-size: 12px; }
+.object-results__grid > div { display: contents; }
+.object-results__grid dt { color: var(--color-text-muted, var(--color-text-muted)); }
+.object-results__grid dd { margin: 0; }
+.object-results__links { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 0; font-size: 12px; }
+.object-results__links button, .results-link { padding: 1px 6px; min-height: 0; height: auto; font-size: 12px; }
+.object-results__status { margin: 0; font-size: 12px; }
+
+.results-workspace { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--color-border-default, var(--color-border-default)); border-radius: 6px; }
+.results-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.results-tabs button.is-active { font-weight: 700; border-color: var(--color-accent-primary, var(--color-accent-border-strong)); }
+.results-scroll { max-width: 100%; overflow: auto; }
+.results-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.results-table th, .results-table td { padding: 3px 6px; border-bottom: 1px solid var(--color-border-default, var(--color-border-default)); text-align: left; vertical-align: top; }
+.results-table__definition { color: var(--color-text-muted, var(--color-text-muted)); font-size: 11px; }
+
+.draft-viewport-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; align-items: center; }
+.draft-viewport-controls button { min-height: 26px; height: 26px; padding: 0 8px; background: var(--color-bg-surface, var(--color-bg-surface-raised)); }
+.draft-viewport-controls output { min-width: 44px; font-size: 11px; text-align: center; color: var(--color-text-muted, var(--color-text-muted)); }
+
+/* Spec 182: Setup overlays the flowsheet (below the view controls) and takes no canvas width when closed. */
+.draft-setup-drawer { position: absolute; top: 42px; right: 8px; z-index: 2; display: grid; gap: 6px; width: min(360px, calc(100% - 16px)); max-height: calc(100% - 50px); overflow: auto; padding: 8px; border: 1px solid var(--color-border-default, var(--color-border-default)); border-radius: 6px; background: var(--color-bg-surface, var(--color-bg-surface-raised)); box-shadow: 0 6px 20px #26321d33; }
+.draft-setup-drawer:focus-visible { outline: 2px solid var(--color-status-info-text); outline-offset: 1px; }
+.draft-setup-drawer header { display: flex; justify-content: space-between; align-items: center; }
+.draft-setup-drawer header h3 { margin: 0; font-size: 13px; }

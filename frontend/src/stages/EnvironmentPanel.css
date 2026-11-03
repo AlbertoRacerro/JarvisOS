@@ -1,0 +1,311 @@
+.environment-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  overflow: auto;
+  background: rgb(8 14 8 / 0.62);
+}
+
+.environment-panel {
+  width: min(1440px, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  padding: clamp(1rem, 2vw, 1.75rem);
+  color: var(--color-text-primary);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-default);
+  border-radius: 14px;
+  box-shadow: 0 18px 70px rgb(0 0 0 / 28%);
+}
+
+.environment-toolbar,
+.environment-editor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.environment-toolbar h2,
+.environment-editor-header h3,
+.environment-card h3 {
+  margin: 0 0 0.5rem;
+}
+
+.environment-toolbar .eyebrow {
+  margin: 0 0 0.25rem;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.environment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.environment-card {
+  min-width: 0;
+  padding: 1rem;
+  background: var(--color-bg-surface-raised);
+  border: 1px solid var(--color-border-default);
+  border-radius: 10px;
+}
+
+.environment-editor {
+  margin-top: 1rem;
+}
+
+.environment-site-grid,
+.environment-form-row,
+.environment-bulk-edit,
+.environment-derive,
+.environment-map-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.environment-card label {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  margin: 0.5rem 0;
+  color: var(--color-text-secondary);
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.environment-card input,
+.environment-card select,
+.environment-card button {
+  min-width: 0;
+  min-height: 2.35rem;
+  padding: 0.45rem 0.6rem;
+  color: var(--color-text-primary);
+  background: var(--color-bg-surface-raised);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.environment-card button,
+.environment-toolbar button {
+  cursor: pointer;
+}
+
+.environment-card button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.environment-card button:focus-visible,
+.environment-card input:focus-visible,
+.environment-card select:focus-visible,
+.environment-toolbar button:focus-visible {
+  outline: 3px solid var(--color-accent-border-strong);
+  outline-offset: 2px;
+}
+
+.environment-profile-list {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 19rem;
+  overflow: auto;
+}
+
+.environment-profile-list button {
+  display: grid;
+  gap: 0.28rem;
+  text-align: left;
+}
+
+.environment-profile-list button[aria-pressed="true"] {
+  border-color: var(--color-status-synthetic-text);
+  box-shadow: inset 3px 0 #17715c;
+}
+
+.environment-profile-list button.is-integrity-error {
+  border-color: var(--color-status-danger-text);
+  background: var(--color-bg-surface);
+}
+
+.environment-profile-list small,
+.environment-help {
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+}
+
+.environment-error,
+.environment-message {
+  padding: 0.7rem 0.85rem;
+  border-radius: 6px;
+}
+
+.environment-error {
+  color: var(--color-status-danger-text);
+  background: var(--color-bg-subtle);
+}
+
+.environment-message {
+  color: var(--color-status-success-text);
+  background: var(--color-bg-subtle);
+}
+
+.environment-derive {
+  width: min(100%, 540px);
+  grid-template-columns: minmax(130px, 1fr) auto;
+}
+
+.environment-derive small {
+  grid-column: 1 / -1;
+}
+
+.environment-inline-check {
+  grid-column: 1 / -1;
+  display: flex !important;
+  align-items: center;
+}
+
+.environment-inline-check input {
+  min-height: auto;
+}
+
+.environment-bulk-edit {
+  margin: 1rem 0;
+}
+
+.environment-plot {
+  width: 100%;
+  min-height: 260px;
+  margin-top: 0.75rem;
+}
+
+.environment-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.75rem 0;
+}
+
+.environment-legend button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--color-text-primary);
+  background: var(--color-bg-surface-raised);
+  border: 1px solid var(--color-border-default);
+}
+
+.environment-swatch {
+  display: inline-block;
+  width: 1.1rem;
+  height: 0.2rem;
+  border-radius: 2px;
+}
+
+.environment-table-wrap,
+.environment-preview-table {
+  max-width: 100%;
+  overflow: auto;
+  margin-top: 0.8rem;
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+}
+
+.environment-table-wrap table,
+.environment-preview-table table {
+  width: 100%;
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+
+.environment-table-wrap th,
+.environment-table-wrap td,
+.environment-preview-table th,
+.environment-preview-table td {
+  padding: 0.4rem;
+  border-bottom: 1px solid var(--color-border-default);
+  text-align: left;
+}
+
+.environment-table-wrap th {
+  position: sticky;
+  top: 0;
+  background: var(--color-bg-subtle);
+}
+
+.environment-table-wrap td input {
+  width: 7rem;
+}
+
+.environment-pages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.environment-pages span {
+  margin-right: auto;
+}
+
+.environment-prov {
+  margin-top: 1rem;
+  padding: 0.85rem;
+  background: var(--color-bg-surface);
+  border-radius: 7px;
+}
+
+.environment-prov h4 {
+  margin: 0 0 0.5rem;
+}
+
+.environment-prov dl {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.35fr) minmax(0, 1fr);
+  gap: 0.45rem 0.8rem;
+  margin: 0;
+}
+
+.environment-prov dl > div {
+  display: contents;
+}
+
+.environment-prov dt {
+  font-weight: 700;
+}
+
+.environment-prov dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.environment-parent-link {
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+@media (max-width: 760px) {
+  .environment-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .environment-editor-header {
+    flex-direction: column;
+  }
+
+  .environment-prov dl {
+    grid-template-columns: 1fr;
+  }
+}

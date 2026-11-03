@@ -1,0 +1,15 @@
+{
+  "candidate": "idaes-pse",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "BSD",
+  "measurements": {
+    "equation_recycle_owner": "pyomo probe; IDAES process model not solved",
+    "idaes_version": "2.13.0",
+    "ipopt_available": true
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "2.13.0",
+  "wall_time_s": 1.543178
+}

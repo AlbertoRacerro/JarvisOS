@@ -1,0 +1,4 @@
+purpose = "Semantic unit registry (Pint) and the error type shared by the calculation stack."
+status = "live"
+entrypoints = ["units.py", "canonical.py"]
+owner = "maintainer"

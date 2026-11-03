@@ -1,0 +1,82 @@
+name: Exact-head browser proof trigger
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  dispatch:
+    if: >-
+      github.actor == github.repository_owner &&
+      startsWith(github.event.label.name, 'browser-proof:')
+    # pull_request_target runs with a write-capable token in the base-repo context: it checks out only the default
+    # branch and never executes PR-controlled code.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      LABEL_NAME: ${{ github.event.label.name }}
+      EVENT_ACTOR: ${{ github.actor }}
+      REPOSITORY_OWNER: ${{ github.repository_owner }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout trusted default-branch controller
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Authorize trusted browser-proof plan
+        id: command
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$EVENT_ACTOR" = "$REPOSITORY_OWNER" || { echo "Browser proof labels must be applied by repository owner." >&2; exit 1; }
+          plan_id="${LABEL_NAME#browser-proof:}"
+          test "$plan_id" != "$LABEL_NAME" || { echo "Browser proof label prefix missing." >&2; exit 1; }
+          [[ "$plan_id" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] || { echo "Unsafe browser-proof plan id." >&2; exit 1; }
+          node .github/browser-proof/validate-plan.mjs "$plan_id" >/dev/null
+
+          api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}"
+          response="$(curl --fail-with-body --silent --show-error -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$api")"
+          head_sha="$(python -c 'import json,sys; print(json.load(sys.stdin)["head"]["sha"])' <<<"$response")"
+          head_repo="$(python -c 'import json,sys; print(json.load(sys.stdin)["head"]["repo"]["full_name"])' <<<"$response")"
+          state="$(python -c 'import json,sys; print(json.load(sys.stdin)["state"])' <<<"$response")"
+          test "$head_repo" = "$GITHUB_REPOSITORY" || { echo "Browser proof supports same-repository PR heads only." >&2; exit 1; }
+          test "$state" = "open" || { echo "PR is not open." >&2; exit 1; }
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Fresh PR head is invalid." >&2; exit 1; }
+          echo "plan_id=$plan_id" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch trusted exact-head browser proof
+        shell: bash
+        env:
+          PLAN_ID: ${{ steps.command.outputs.plan_id }}
+          EXPECTED_HEAD_SHA: ${{ steps.command.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          payload="$(python - <<'PY'
+          import json, os
+          print(json.dumps({
+              "ref": "master",
+              "inputs": {
+                  "pr_number": os.environ["PR_NUMBER"],
+                  "expected_head_sha": os.environ["EXPECTED_HEAD_SHA"],
+                  "plan_id": os.environ["PLAN_ID"],
+              },
+          }))
+          PY
+          )"
+          curl --fail-with-body --silent --show-error -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/exact-head-browser-proof.yml/dispatches" \
+            -d "$payload"
+          echo "Dispatched ${PLAN_ID} for PR #${PR_NUMBER} at exact head ${EXPECTED_HEAD_SHA}."

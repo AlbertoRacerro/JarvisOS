@@ -1,0 +1,4 @@
+purpose = "Audit event log with redaction of secret-bearing keys. models.py is unused."
+status = "live"
+entrypoints = ["service.py"]
+owner = "maintainer"

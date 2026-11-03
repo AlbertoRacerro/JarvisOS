@@ -1,0 +1,27 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+const fail = (message) => { console.error(`920 two-column sync failed: ${message}`); process.exit(1); };
+const studio = read("src/pages/Studio.tsx");
+const editor = read("src/components/studio/PythonEditor.tsx");
+const docs = read("src/components/studio/DerivedDocumentation.tsx");
+const css = read("src/pages/studio.css");
+const code = studio.split('{tab === "code" ?')[1]?.split('{tab === "documentation"')[0] ?? fail("code tab missing");
+const math = code.indexOf('aria-label="Derived mathematics"'), python = code.indexOf('aria-label="Python source"'), details = code.indexOf("studio-math-details");
+if (!(math > 0 && python > math)) fail("explanation section must precede Python section in DOM order");
+if (!(details > python)) fail("contract details must follow the two-column workspace");
+if (/role="tab"/.test(code)) fail("two-column view must not use tabs");
+if (!css.includes(".studio-math-workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)")) fail("two-column grid CSS missing");
+if (!/@media\(max-width:60rem\)\{\.studio-math-workspace\{grid-template-columns:minmax\(0,1fr\)\}/.test(css)) fail("narrow stacking breakpoint missing");
+if (css.includes(".studio--embedded .studio-math-workspace>section")) fail("embedded order swap must be removed");
+if (!studio.includes('tab === "code" ? "Explanation & code"')) fail("tab title missing");
+if (!/const open = [^\n]*category === "procedure" \? "contract" : "code"/.test(studio)) fail("open() must default non-procedure models to the code tab");
+for (const needle of ["onSelectionLinesChange", "selection.main", "main.from", "main.to"]) if (!editor.includes(needle)) fail(`editor missing ${needle}`);
+for (const needle of ["selectedRange", "is-linked", "scrollIntoView"]) if (!docs.includes(needle)) fail(`DerivedDocumentation missing ${needle}`);
+for (const needle of ["cm-linked-line", "StateField", "StateEffect"]) if (!editor.includes(needle)) fail(`editor missing ${needle}`);
+for (const needle of [".cm-linked-line", ".is-linked", "var(--color-accent-surface)"]) if (!css.includes(needle)) fail(`studio.css missing ${needle}`);
+if (/#[0-9a-fA-F]{3,6}/.test(css.match(/\.cm-linked-line\{[^}]*\}/)[0])) fail("linked-line style must use tokens only");
+console.log("920 two-column sync: PASS");

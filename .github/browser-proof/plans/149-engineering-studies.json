@@ -1,0 +1,19 @@
+{
+  "schema": "jarvisos.browser-proof-plan.v1",
+  "id": "149-engineering-studies",
+  "fixture": "engineering-workspace",
+  "steps": [
+    {"op":"run-fixture","name":"149:seed-default-workspace","fixture":"engineering-workspace","phase":"workspace"},
+    {"op":"navigate","name":"149:engineering-studies","route":"/design/studies"},
+    {"op":"same-origin-get","name":"149:evaluators-api","path":"/workspaces/main/engineering/evaluators","capture":"evaluators"},
+    {"op":"same-origin-get","name":"149:capabilities-api","path":"/workspaces/main/engineering/capabilities","capture":"capabilities"},
+    {"op":"assert-json-contract","name":"149:pipe-evaluator-contract","source":"evaluators","pointer":"/0","contract":{"fields":{"evaluator_id":{"type":"string","equals":"fluids.pipe_pressure_drop"},"state":{"type":"string","in":["available","unavailable","not_configured","unknown"]}}}},
+    {"op":"map-value","name":"149:pipe-evaluator-render-state","source":{"json":{"source":"evaluators","pointer":"/0/state"}},"capture":"pipeState","cases":{"available":"Available","unavailable":"Unavailable","not_configured":"Not configured","unknown":"Unavailable"}},
+    {"op":"assert-text-template","name":"149:evaluator-state-matches-api","locator":{"kind":"within","parent":{"kind":"css","selector":"[data-evaluator-id=\"fluids.pipe_pressure_drop\"]"},"child":{"kind":"css","selector":".engineering-state"}},"template":"{{capture:pipeState}}"},
+    {"op":"assert-json-contract","name":"149:hermes-unavailable-contract","source":"capabilities","pointer":"/0","contract":{"fields":{"capability_id":{"type":"string","equals":"hermes"},"state":{"type":"string","in":["unavailable","not_configured"]},"reason_code":{"type":"nullable-string","minLength":1}}}},
+    {"op":"assert-text-template","name":"149:unavailable-capability-and-reason","locator":{"kind":"css","selector":"[data-capability-id=\"hermes\"]"},"template":"hermes · unavailable · {{json:capabilities:/0/reason_code}}"},
+    {"op":"assert-visible","name":"149:run-controls","locator":{"kind":"role","role":"heading","name":"Configure and run","exact":true}},
+    {"op":"assert-visible","name":"149:operator-surface","locator":{"kind":"testid","testid":"engineering-studies-surface"}},
+    {"op":"screenshot","name":"149:engineering-studies-screenshot","file":"engineering-studies"}
+  ]
+}

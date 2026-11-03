@@ -1,0 +1,15 @@
+{
+  "candidate": "ht",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "MIT",
+  "measurements": {
+    "heat_transfer_coefficient_W_m2_K": 3601.508292194385,
+    "incumbent": "047 has no heat-transfer correlation",
+    "nusselt": 300.12569101619874
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "1.2.0",
+  "wall_time_s": 0.008882
+}

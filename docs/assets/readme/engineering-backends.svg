@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="660" viewBox="0 0 1200 660" role="img" aria-labelledby="title desc">
+  <title id="title">JarvisOS engineering evaluator architecture</title>
+  <desc id="desc">JarvisOS creates typed evaluation requests. Replaceable backend adapters execute solver-specific work and return evaluation results. Results are recorded with artifacts, evidence, fidelity, provenance and qualification metadata before any engineering acceptance decision.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#475569"/></marker>
+  <style>.frame{fill:#fff;stroke:#cbd5e1;stroke-width:2}.implemented{fill:#ecfdf5;stroke:#16a34a;stroke-width:2.5}.partial{fill:#fffbeb;stroke:#d97706;stroke-width:2.5}.planned{fill:#eff6ff;stroke:#0284c7;stroke-width:2.5}.research{fill:#fef2f2;stroke:#dc2626;stroke-width:2.5}.optional{fill:#f8fafc;stroke:#64748b;stroke-width:2}.title{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f172a;font-size:27px;font-weight:750}.boxTitle{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f172a;font-size:17px;font-weight:700}.sub{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#475569;font-size:12px}.tag{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:11px;font-weight:800}.line{stroke:#475569;stroke-width:2.2;fill:none;marker-end:url(#arrow)}.bus{stroke:#475569;stroke-width:2.2;fill:none}</style></defs>
+  <rect x="30" y="30" width="1140" height="600" rx="22" class="frame"/>
+  <text x="65" y="74" class="title">Engineering backends are evaluators, not project authorities</text>
+  <text x="65" y="101" class="sub">This is an adapter catalog plus common target contract. It is not a claim that every backend shares one universal implementation today.</text>
+
+  <rect x="330" y="135" width="540" height="105" rx="17" class="partial"/>
+  <text x="600" y="171" text-anchor="middle" class="boxTitle">EvaluationRequest / EngineeringEvaluator boundary</text>
+  <text x="600" y="199" text-anchor="middle" class="sub">typed inputs · units · evaluator identity · model/fidelity choice · execution policy</text>
+  <text x="600" y="223" text-anchor="middle" class="tag" fill="#b45309">SEVERAL TYPED PATHS EXIST · COMMON CONTRACT QUEUED</text>
+
+  <rect x="55" y="315" width="175" height="120" rx="16" class="partial"/>
+  <text x="143" y="349" text-anchor="middle" class="boxTitle">Process / biology</text><text x="143" y="376" text-anchor="middle" class="sub">M0/M1 screens today</text><text x="143" y="399" text-anchor="middle" class="sub">upstream bake-off next</text><text x="143" y="421" text-anchor="middle" class="tag" fill="#b45309">REPLATFORM</text>
+
+  <rect x="250" y="315" width="175" height="120" rx="16" class="implemented"/>
+  <text x="338" y="349" text-anchor="middle" class="boxTitle">CAD</text><text x="338" y="376" text-anchor="middle" class="sub">build123d + OCCT</text><text x="338" y="399" text-anchor="middle" class="sub">STEP · STL · GLB</text><text x="338" y="421" text-anchor="middle" class="tag" fill="#15803d">CURRENT</text>
+
+  <rect x="445" y="315" width="160" height="120" rx="16" class="partial"/>
+  <text x="525" y="349" text-anchor="middle" class="boxTitle">Meshing</text><text x="525" y="376" text-anchor="middle" class="sub">Gmsh adapter</text><text x="525" y="399" text-anchor="middle" class="sub">host/use qualification</text><text x="525" y="421" text-anchor="middle" class="tag" fill="#b45309">BUILT / QUALIFY</text>
+
+  <rect x="625" y="315" width="160" height="120" rx="16" class="partial"/>
+  <text x="705" y="349" text-anchor="middle" class="boxTitle">Static FEM</text><text x="705" y="376" text-anchor="middle" class="sub">CalculiX adapter</text><text x="705" y="399" text-anchor="middle" class="sub">case qualification</text><text x="705" y="421" text-anchor="middle" class="tag" fill="#b45309">BUILT / QUALIFY</text>
+
+  <rect x="805" y="315" width="155" height="120" rx="16" class="research"/>
+  <text x="883" y="349" text-anchor="middle" class="boxTitle">CFD / field</text><text x="883" y="376" text-anchor="middle" class="sub">OpenFOAM / others</text><text x="883" y="399" text-anchor="middle" class="sub">multi-fidelity escalation</text><text x="883" y="421" text-anchor="middle" class="tag" fill="#b91c1c">DEMAND-GATED</text>
+
+  <rect x="980" y="315" width="165" height="120" rx="16" class="optional"/>
+  <text x="1063" y="349" text-anchor="middle" class="boxTitle">Commercial</text><text x="1063" y="376" text-anchor="middle" class="sub">HYSYS · ANSYS · etc.</text><text x="1063" y="399" text-anchor="middle" class="sub">when stronger/needed</text><text x="1063" y="421" text-anchor="middle" class="tag" fill="#475569">OPTIONAL</text>
+
+  <path d="M600 240 V275 H143 V315" class="line"/><path d="M600 275 H338 V315" class="line"/><path d="M600 275 H525 V315" class="line"/><path d="M600 275 H705 V315" class="line"/><path d="M600 275 H883 V315" class="line"/><path d="M600 275 H1063 V315" class="line"/>
+
+  <rect x="260" y="515" width="680" height="90" rx="16" class="implemented"/>
+  <text x="600" y="548" text-anchor="middle" class="boxTitle">EvaluationResult → run / artifacts / evidence</text>
+  <text x="600" y="574" text-anchor="middle" class="sub">outputs · failure state · provenance · fidelity · validity domain · qualification · uncertainty where available</text>
+  <text x="600" y="596" text-anchor="middle" class="tag" fill="#15803d">RETURNS TO JARVISOS · NO BACKEND BYPASS</text>
+
+  <path d="M143 435 V475" class="bus"/><path d="M338 435 V475" class="bus"/><path d="M525 435 V475" class="bus"/><path d="M705 435 V475" class="bus"/><path d="M883 435 V475" class="bus"/><path d="M1063 435 V475" class="bus"/>
+  <path d="M143 475 H1063" class="bus"/><path d="M600 475 V515" class="line"/>
+</svg>

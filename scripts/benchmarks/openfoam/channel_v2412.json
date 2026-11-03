@@ -1,0 +1,44 @@
+{
+  "binary_sha256": {
+    "openfoam": "59bc5059ef2a3376d6c16b5e6a4f26a37443189598749d7ab6096035d966746e",
+    "openfoam_blockmesh": "61929db77c637f0b394b7aef85b0f5ab42af8185a72c234270e4a03e2a13257b"
+  },
+  "case_archive_sha256": "dc1dfab22e774de5065c11bbdbfc02d8f77745f2c326811e976bd65a13fb8891",
+  "case_digest": "sha256:ce1bd5e7b3f19ce12fca517ed918954eb88d10957d87caa4cecc34e0ec06bb8f",
+  "case_family": "laminar_2d_channel",
+  "centreline_relative_error": 0.0034666666666666643,
+  "centreline_velocity_m_s": 0.014948,
+  "expected_centreline_velocity_m_s": 0.015,
+  "expected_pressure_drop_pa": 0.12,
+  "generated_by": "scripts/benchmarks/openfoam/channel_benchmark.py",
+  "log_sha256": {
+    "openfoam": "57937c18b3335e4f5c2fd73bf5c52c5d106e5a32e55248e53cc9f6cd28bebf9c",
+    "openfoam_blockmesh": "23e13fc4cf7d9dfdce283461a4a62a251d1715505cfa7abc915dcd66fd198032"
+  },
+  "mesh": {
+    "nx": 160,
+    "ny": 24,
+    "nz": 1
+  },
+  "numerical": {
+    "converged": true,
+    "final_residual": 6.7877e-09,
+    "iterations": 10000,
+    "wall_time_s": null
+  },
+  "parameters_si": {
+    "diameter": 0.01,
+    "length": 0.2,
+    "velocity": 0.01,
+    "viscosity": 1e-06
+  },
+  "pressure_drop_pa": 0.12024480000000001,
+  "pressure_drop_relative_error": 0.0020400000000001437,
+  "reference_density_kg_m3": 1000,
+  "reynolds": 100.00000000000001,
+  "sample_positions_m": [
+    0.05,
+    0.15
+  ],
+  "solver_version": "v2412"
+}

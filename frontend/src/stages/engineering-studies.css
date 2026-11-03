@@ -1,0 +1,26 @@
+.engineering-studies { display: grid; gap: 1rem; }
+.engineering-studies > .ui-surface { padding: 1.1rem; }
+.engineering-studies h2 { margin: 0 0 .65rem; }
+.engineering-studies h3 { margin: .9rem 0 .4rem; }
+.engineering-studies label { display: grid; gap: .3rem; font-weight: 600; }
+.engineering-studies input, .engineering-studies select, .engineering-studies textarea { min-width: 0; width: 100%; }
+.engineering-studies__fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .75rem; align-items: end; }
+.engineering-studies__configure form { display: grid; gap: .85rem; }
+.engineering-studies__availability ul { display: grid; gap: .65rem; padding-left: 1.25rem; }
+.engineering-studies__availability li { padding: .5rem 0; }
+.engineering-state { display: inline-block; padding: .1rem .45rem; border-radius: 1rem; font-size: .82rem; font-weight: 700; }
+.engineering-state--available { color: var(--success-strong, var(--color-status-success-text)); background: var(--success-soft, var(--color-bg-subtle)); }
+.engineering-state--unavailable, .engineering-state--not_configured { color: var(--danger-strong, var(--color-status-danger-text)); background: var(--danger-soft, var(--color-bg-subtle)); }
+.engineering-studies__run-list, .engineering-studies__points { display: grid; gap: .7rem; margin-top: .8rem; }
+.engineering-studies__run-list button { text-align: left; }
+.engineering-studies__points article, .engineering-studies__compare article { padding: .75rem; border: 1px solid var(--border-subtle, var(--color-border-default)); border-radius: .5rem; }
+.engineering-studies__points dl { display: grid; gap: .5rem; }
+.engineering-studies__points dl > div { display: grid; grid-template-columns: 8rem 1fr; gap: .5rem; }
+.engineering-studies__points dt { font-weight: 700; }
+.engineering-studies__points dd { margin: 0; overflow-wrap: anywhere; }
+.engineering-studies__heading, .engineering-studies__compare > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; align-items: start; }
+.engineering-studies__compare-points { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; margin-top: .7rem; }
+.engineering-studies pre { max-height: 22rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.engineering-studies details { margin-top: .55rem; }
+.engineering-studies .button-row { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-top: .9rem; }
+@media (max-width: 42rem) { .engineering-studies__points dl > div { grid-template-columns: 1fr; } .engineering-studies__compare-points { grid-template-columns: 1fr; } }

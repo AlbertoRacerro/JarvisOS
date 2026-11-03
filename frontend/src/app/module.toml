@@ -1,0 +1,4 @@
+purpose = "Routing table and router hook, navigation history, selection, and the owner and target registries Bubu uses to find controls."
+status = "live"
+entrypoints = ["routes.ts", "useAppRouter.ts", "designTargets.ts"]
+owner = "maintainer"

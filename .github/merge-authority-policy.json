@@ -1,0 +1,16 @@
+{
+  "schema_version": "jarvisos.merge-authority.v1",
+  "repository": "AlbertoRacerro/JarvisOS",
+  "branch": "master",
+  "require_protection": true,
+  "require_status_checks": true,
+  "required_check_contexts": [
+    "backend",
+    "gen-check",
+    "doc-paths",
+    "leak-guard"
+  ],
+  "allow_auto_merge": false,
+  "normal_merge_owner_bypass": "forbidden",
+  "merge_methods": "observe_only"
+}

@@ -1,0 +1,1000 @@
+{
+ "compounds": {
+  "added": [
+   "Water",
+   "Ethylene oxide",
+   "Ethylene glycol"
+  ]
+ },
+ "c1": {
+  "unitop": "R",
+  "connections": [
+   "feed:F->port0"
+  ]
+ },
+ "c2": {
+  "unitop": "R",
+  "connections": [
+   "product:P->port0"
+  ]
+ },
+ "set": {
+  "unitop": "R",
+  "applied": [
+   "ReactorOperationMode = HeatExchange",
+   "Volume = 2",
+   "Length = 4",
+   "OverallHeatTransferCoefficient = 400",
+   "HeatExchangeArea = 12",
+   "CoolantInletTemperature = 300",
+   "CoolantMassFlowRate = 2",
+   "CoolantSpecificHeat = 4180"
+  ]
+ },
+ "load": {
+  "flowsheet_id": "749332f1034b",
+  "name": "pfr",
+  "compounds": [
+   "Water",
+   "Ethylene oxide",
+   "Ethylene glycol"
+  ],
+  "objects_count": 3
+ },
+ "setrs": {
+  "unitop": "R",
+  "applied": [
+   "ReactionSetID = JARVIS"
+  ]
+ },
+ "ce": {
+  "unitop": "R",
+  "connections": [
+   "energy_feed:Q->port1"
+  ]
+ },
+ "dof": {
+  "object": "R",
+  "type": "PFR reactor",
+  "mode": "HeatExchange",
+  "supported": true,
+  "required": 5,
+  "specified": 5,
+  "remaining": 0,
+  "missing": [],
+  "slots": [
+   {
+    "name": "Reaction set",
+    "property": "ReactionSetID",
+    "required": true,
+    "set": true,
+    "value": 1.0,
+    "note": "1 active reaction(s) in the set."
+   },
+   {
+    "name": "Overall heat transfer coefficient",
+    "property": "OverallHeatTransferCoefficient",
+    "required": true,
+    "set": true,
+    "value": 400.0,
+    "units": "W/[m2.K]"
+   },
+   {
+    "name": "Coolant inlet temperature",
+    "property": "CoolantInletTemperature",
+    "required": true,
+    "set": true,
+    "value": 300.0,
+    "units": "K"
+   },
+   {
+    "name": "Reactor volume",
+    "property": "Volume",
+    "required": true,
+    "set": true,
+    "value": 2.0,
+    "units": "m3"
+   },
+   {
+    "name": "Reactor length",
+    "property": "Length",
+    "required": true,
+    "set": true,
+    "value": 4.0,
+    "units": "m",
+    "note": "Volume and length together fix the diameter."
+   },
+   {
+    "name": "Catalyst loading",
+    "property": "CatalystLoading",
+    "required": false,
+    "set": true,
+    "value": 0.0,
+    "units": "kg/m3",
+    "note": "Read by heterogeneous kinetics only."
+   },
+   {
+    "name": "Pressure drop",
+    "property": "DeltaP",
+    "required": false,
+    "set": true,
+    "units": "Pa",
+    "note": "0 by default."
+   }
+  ],
+  "note": "Kinetic reactor: the rate expressions on the reactions and the volume fix the conversion."
+ },
+ "check": {
+  "ready": true,
+  "blockers": 0,
+  "warnings": 1,
+  "findings": [
+   {
+    "code": "ENERGY_STREAM_HALF_CONNECTED",
+    "severity": "warning",
+    "object": "Q",
+    "message": "This energy stream is attached at one end only, so its duty has no source or no destination.",
+    "fix": "Connect both ends, or delete it if the unit computes its own duty.",
+    "learn_more": "https://dwsim.org/tutorials/en/beginner/03-heater-cooler.html"
+   }
+  ],
+  "explanations": [
+   {
+    "code": "ENERGY_STREAM_HALF_CONNECTED",
+    "title": "Energy stream with a loose end",
+    "meaning": "An energy stream is attached to a unit at one end only.",
+    "why": "An energy stream carries a duty: heat into a heater, work into a pump, heat out of a cooler. A unit in Energy Stream mode reads its duty from the stream, so the stream needs a value from somewhere. One loose end means the duty comes from nowhere, or goes nowhere.",
+    "how_to_fix": "Connect the other end, set the duty on the stream by hand if it is a boundary energy input, or delete the stream if the unit computes its own duty from a temperature specification.",
+    "learn_more": "https://dwsim.org/tutorials/en/beginner/03-heater-cooler.html"
+   }
+  ],
+  "object_count": 4,
+  "compound_count": 3
+ },
+ "solve": {
+  "ok": true,
+  "error_count": 0,
+  "errors": [],
+  "objects": [
+   {
+    "name": "R",
+    "type": "RCT_PFR",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "P",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "F",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "Q",
+    "type": "EnergyStream",
+    "calculated": true,
+    "error": ""
+   }
+  ]
+ },
+ "R": {
+  "name": "R",
+  "type": "RCT_PFR",
+  "calculated": true,
+  "error": "",
+  "properties": {
+   "Pressure Drop": {
+    "value": "4.4620240805670615E-09",
+    "units": "bar"
+   },
+   "Residence time": {
+    "value": "1861.99178064533",
+    "units": "s"
+   },
+   "Volume": {
+    "value": "2",
+    "units": "m3"
+   },
+   "Tube Length": {
+    "value": "4",
+    "units": "m"
+   },
+   "Catalyst loading": {
+    "value": "0",
+    "units": "kg/m3"
+   },
+   "Catalyst diameter": {
+    "value": "0",
+    "units": "mm"
+   },
+   "Catalyst void fraction": {
+    "value": "0",
+    "units": ""
+   },
+   "Temperature delta": {
+    "value": "-16.507363479951664",
+    "units": "C."
+   },
+   "Heat load": {
+    "value": "-74.55993158997836",
+    "units": "kW"
+   },
+   "Tube Diameter": {
+    "value": "797.8845608028654",
+    "units": "mm"
+   },
+   "Number of Tubes": {
+    "value": "1",
+    "units": ""
+   },
+   "Integration Step": {
+    "value": "0.01",
+    "units": ""
+   },
+   "Outlet Temperature": {
+    "value": "38.492636520048336",
+    "units": "C"
+   },
+   "Overall Heat Transfer Coefficient": {
+    "value": "400",
+    "units": "W/m2.K"
+   },
+   "Heat Exchange Area": {
+    "value": "12",
+    "units": "m2"
+   },
+   "Coolant Inlet Temperature": {
+    "value": "26.850000000000023",
+    "units": "C"
+   },
+   "Coolant Mass Flow Rate": {
+    "value": "7200",
+    "units": "kg/h"
+   },
+   "Coolant Specific Heat": {
+    "value": "4180",
+    "units": "J/kg.K"
+   },
+   "Coolant Flow Direction": {
+    "value": "0",
+    "units": ""
+   },
+   "Area Calculation Mode": {
+    "value": "0",
+    "units": ""
+   },
+   "Use Utility Stream": {
+    "value": "0",
+    "units": ""
+   },
+   "Wall Thickness": {
+    "value": "0.005",
+    "units": "m"
+   },
+   "Internal Heat Transfer Coefficient": {
+    "value": "1000",
+    "units": "W/m2.K"
+   },
+   "External Heat Transfer Coefficient": {
+    "value": "2000",
+    "units": "W/m2.K"
+   },
+   "Use Wall Properties": {
+    "value": "0",
+    "units": ""
+   },
+   "Calculated Overall HTC": {
+    "value": "400",
+    "units": "W/m2.K"
+   },
+   "Calculate Internal HTC": {
+    "value": "0",
+    "units": ""
+   },
+   "Calculate External HTC": {
+    "value": "0",
+    "units": ""
+   },
+   "Jacket Diameter": {
+    "value": "150",
+    "units": "mm"
+   },
+   "Coolant Density": {
+    "value": "998",
+    "units": "kg/m3"
+   },
+   "Coolant Viscosity": {
+    "value": "0.001",
+    "units": "Pa.s"
+   },
+   "Coolant Thermal Conductivity": {
+    "value": "0.6",
+    "units": "W/m.K"
+   },
+   "Calculated Internal HTC": {
+    "value": "0",
+    "units": "W/m2.K"
+   },
+   "Calculated External HTC": {
+    "value": "0",
+    "units": "W/m2.K"
+   },
+   "Catalyst Particle Sphericity": {
+    "value": "0",
+    "units": ""
+   },
+   "Select the calculation mode of this reactor.": {
+    "value": "Heat Exchange",
+    "units": ""
+   },
+   "Ethylene oxide: Conversion": {
+    "value": "0.26046388502753115",
+    "units": "%"
+   },
+   "Water: Conversion": {
+    "value": "0.045649980244424924",
+    "units": "%"
+   },
+   "Ethylene glycol: Conversion": {
+    "value": "0",
+    "units": "%"
+   },
+   "R1: Reaction Extent": {
+    "value": "6.385576589186499E-05",
+    "units": "kmol/h"
+   },
+   "R1: Reaction Rate": {
+    "value": "8.868856373870138E-06",
+    "units": "mol/[m3.s]"
+   },
+   "R1: Reaction Heat": {
+    "value": "0",
+    "units": "kW"
+   }
+  }
+ },
+ "P": {
+  "name": "P",
+  "temperature_K": 311.6426365200483,
+  "pressure_Pa": 199999.9995537976,
+  "mass_flow_kg_s": 1.0000000000062057,
+  "molar_flow_mol_s": 45.648213738209705,
+  "phases": [
+   {
+    "name": "Mixture",
+    "fraction": 0.0,
+    "temperature_K": 311.6426365200483,
+    "pressure_Pa": 199999.9995537976,
+    "enthalpy_kJ_kg": -1871.6244674639706,
+    "entropy_kJ_kgK": -5.165569870853648,
+    "density_kg_m3": 944.7461926345328,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.8508146025875539,
+      "mass_fraction": 0.6996804501339471
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.148796823328267,
+      "mass_fraction": 0.2992186083430606
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.00038857408417911635,
+      "mass_fraction": 0.0011009415229924766
+     }
+    }
+   },
+   {
+    "name": "OverallLiquid",
+    "fraction": 1.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": -1871.6244674639706,
+    "entropy_kJ_kgK": -5.165569870853648,
+    "density_kg_m3": 944.7461926345328,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.8508146025875539,
+      "mass_fraction": 0.6996804501339471
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.148796823328267,
+      "mass_fraction": 0.2992186083430606
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.00038857408417911635,
+      "mass_fraction": 0.0011009415229924766
+     }
+    }
+   },
+   {
+    "name": "Vapor",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.12389524813147587,
+      "mass_fraction": 0.05467033227613796
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.8761044888589918,
+      "mass_fraction": 0.9453292678765617
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 2.630095323270791e-07,
+      "mass_fraction": 3.998473003578953e-07
+     }
+    }
+   },
+   {
+    "name": "Liquid1",
+    "fraction": 1.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": -1871.6244674639706,
+    "entropy_kJ_kgK": -5.165569870853648,
+    "density_kg_m3": 944.7461926345328,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.8508146025875539,
+      "mass_fraction": 0.6996804501339471
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.148796823328267,
+      "mass_fraction": 0.2992186083430606
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.00038857408417911635,
+      "mass_fraction": 0.0011009415229924766
+     }
+    }
+   },
+   {
+    "name": "Liquid2",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Liquid3",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Aqueous",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Solid",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   }
+  ]
+ },
+ "F": {
+  "name": "F",
+  "temperature_K": 328.15,
+  "pressure_Pa": 200000.0,
+  "mass_flow_kg_s": 1.0,
+  "molar_flow_mol_s": 45.665951450857484,
+  "phases": [
+   {
+    "name": "Mixture",
+    "fraction": 0.0,
+    "temperature_K": 328.15,
+    "pressure_Pa": 200000.0,
+    "enthalpy_kJ_kg": -1798.798636865263,
+    "entropy_kJ_kgK": -4.93956421131236,
+    "density_kg_m3": 930.995890322665,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.8508725496515365,
+      "mass_fraction": 0.7000000000000001
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.1491274503484636,
+      "mass_fraction": 0.3
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "OverallLiquid",
+    "fraction": 1.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": -1798.798636865263,
+    "entropy_kJ_kgK": -4.93956421131236,
+    "density_kg_m3": 930.995890322665,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.8508725496515365,
+      "mass_fraction": 0.7000000000000001
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.1491274503484636,
+      "mass_fraction": 0.3
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Vapor",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.16523343245938915,
+      "mass_fraction": 0.07488557924393659
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.8347665675406108,
+      "mass_fraction": 0.9251144207560634
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Liquid1",
+    "fraction": 1.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": -1798.798636865263,
+    "entropy_kJ_kgK": -4.93956421131236,
+    "density_kg_m3": 930.9958903226649,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.8508725496515365,
+      "mass_fraction": 0.7000000000000001
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.1491274503484636,
+      "mass_fraction": 0.3
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Liquid2",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Liquid3",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Aqueous",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Solid",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene oxide": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Ethylene glycol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   }
+  ]
+ },
+ "snap": {
+  "label": "base",
+  "values": 770,
+  "objects": 4,
+  "taken": "2026-09-30T08:54:57.1785186+02:00"
+ },
+ "Q": {
+  "name": "Q",
+  "type": "EnergyStream",
+  "calculated": true,
+  "error": "",
+  "properties": {
+   "Amount of heat flow carried by this stream.": {
+    "value": "-74.55993158997836",
+    "units": "kW"
+   }
+  }
+ },
+ "explain": {
+  "object": "R",
+  "type": "RCT_PFR",
+  "title": "PFR R: the reactions",
+  "lines": [
+   "## What fixes the extent",
+   "A PFR (plug-flow reactor) has no mixing along its length: each slice of fluid moves through the tube as a plug and reacts as it goes. The composition changes from inlet to outlet and the rate changes with it, so the balance is written per unit of volume, dF_i/dV = r_i, and integrated along the reactor from the inlet to the outlet.",
+   "The reactor operates in the mode \"HeatExchange\". The outlet temperature is 38.4926 C and the duty is -74.5599 kW.",
+   "Multiplying the heat of reaction by the extent of each reaction gives the heat released (or absorbed) inside the reactor. In adiabatic operation that heat has nowhere to go but the stream, so it sets the outlet temperature; in isothermal operation it is removed (or supplied) through the duty, which is what the duty above represents.",
+   "## Levenspiel plot",
+   "Take the reaction R1 (EO + H2O --> EG) at the outlet temperature, 38.4926 C. The Arrhenius expression gives its rate constant: k_f = A exp(-E/RT) = 0.005 * exp(-0 / (8.314 * 311.64)) = 0.005. The rate is expressed in kmol/[m3.h] and the concentrations in kmol/m3.",
+   "As the conversion X of Ethylene oxide increases, the concentration of every compound follows the stoichiometry: C_i = C_i0 + (nu_i / |nu_A|) C_A0 X, starting from C_A0 = 6340 mol/m3. The volumetric flow is held at its inlet value of 3.86683 m3/h, which is exact for a liquid and a fair approximation for a gas whose number of moles does not change.",
+   "The Levenspiel plot draws F_A0 / (-r_A) against the conversion X. The higher the curve, the slower the reaction and the more volume each increment of conversion costs, so the volume a reactor needs can be read straight off it. A CSTR runs entirely at its outlet conditions, so its volume is the rectangle V = F_A0 X / (-r_A) evaluated at the outlet. A PFR passes through every conversion from 0 to X on its way, so its volume is the area under the curve, V = F_A0 int dX / (-r_A).",
+   "At this reactor's conversion, X = 0.0026 of Ethylene oxide, the rate is -r_A = 0.008783 mol/(m3 s). Read from the plot, a CSTR would need V_CSTR = 2.0196 m3 and a PFR would need V_PFR = 0 m3. This reactor's volume is 2 m3.",
+   "The volume read from the plot differs from the reactor's own. The plot assumes a constant volumetric flow and the outlet temperature everywhere; inside the reactor the flow, the temperature or the density may change along the way, and other reactions may consume Ethylene oxide as well. Each of these moves the curve."
+  ],
+  "tables": [
+   {
+    "title": "Molar flows (kmol/h)",
+    "columns": [
+     "Compound",
+     "in",
+     "out",
+     "change",
+     "conversion (%)"
+    ],
+    "rows": [
+     [
+      "Water",
+      "139.881",
+      "139.817",
+      "-0.0638558",
+      "0.05"
+     ],
+     [
+      "Ethylene oxide",
+      "24.5162",
+      "24.4523",
+      "-0.0638558",
+      "0.26"
+     ],
+     [
+      "Ethylene glycol",
+      "0",
+      "0.0638558",
+      "0.0638558",
+      ""
+     ]
+    ]
+   },
+   {
+    "title": "Reactions of set JARVIS",
+    "columns": [
+     "Reaction",
+     "Equation",
+     "Type",
+     "Base compound",
+     "Conversion (%)",
+     "Heat of reaction (kJ/mol)"
+    ],
+    "rows": [
+     [
+      "R1",
+      "EO + H2O --> EG",
+      "Kinetic",
+      "Ethylene oxide",
+      "0.26",
+      "0.00"
+     ]
+    ]
+   }
+  ],
+  "charts": [
+   {
+    "title": "Levenspiel plot: R1",
+    "x_title": "Conversion of Ethylene oxide",
+    "y_title": "F_A0 / (-r_A) (m3)",
+    "series": [
+     {
+      "title": "F_A0 / (-r_A)",
+      "x": [
+       0.0,
+       0.015000000000000001,
+       0.030000000000000002,
+       0.045000000000000005,
+       0.060000000000000005,
+       0.075,
+       0.09000000000000001,
+       0.105,
+       0.12000000000000001,
+       0.13499999999999998,
+       0.15,
+       0.165,
+       0.18000000000000002,
+       0.195,
+       0.21,
+       0.225,
+       0.24000000000000002,
+       0.255,
+       0.26999999999999996,
+       0.28500000000000003,
+       0.3,
+       0.31500000000000006,
+       0.33,
+       0.345,
+       0.36000000000000004,
+       0.375,
+       0.39,
+       0.405,
+       0.42,
+       0.435,
+       0.45,
+       0.465,
+       0.48000000000000004,
+       0.495,
+       0.51,
+       0.525,
+       0.5399999999999999,
+       0.555,
+       0.5700000000000001,
+       0.5850000000000001,
+       0.6,
+       0.615,
+       0.6300000000000001,
+       0.645,
+       0.66,
+       0.675,
+       0.69,
+       0.7050000000000001,
+       0.7200000000000001,
+       0.735,
+       0.75,
+       0.765,
+       0.78,
+       0.795,
+       0.81,
+       0.825,
+       0.84,
+       0.8550000000000001,
+       0.87,
+       0.885,
+       0.9
+      ],
+      "y": [
+       773.3653902064616,
+       785.1425281283874,
+       797.283907429342,
+       809.8066913156667,
+       822.7291385175124,
+       836.0706921150936,
+       849.8520771499577,
+       864.0954080519125,
+       878.8243070527975,
+       894.0640349207649,
+       909.8416355370138,
+       926.1860960556425,
+       943.1285246420265,
+       960.702348082561,
+       978.9435319069133,
+       997.8908260728538,
+       1017.5860397453444,
+       1038.0743492704182,
+       1059.4046441184405,
+       1081.6299163726735,
+       1104.8077002949453,
+       1129.0005696444696,
+       1154.2767018006894,
+       1180.710519399178,
+       1208.3834221975962,
+       1237.3846243303385,
+       1267.8121150925601,
+       1299.773765052877,
+       1333.388603804244,
+       1368.7883012503748,
+       1406.1188912844757,
+       1445.5427854326385,
+       1487.2411350124264,
+       1531.4166142702213,
+       1578.2967147070647,
+       1628.137663592551,
+       1681.2291091444815,
+       1737.8997532729481,
+       1798.5241632708414,
+       1863.531060738462,
+       1933.4134755161544,
+       2008.7412732635369,
+       2090.1767302877347,
+       2178.4940569196106,
+       2274.604088842535,
+       2379.5858160198827,
+       2494.727065182134,
+       2621.57759392021,
+       2762.0192507373636,
+       2918.3599630432514,
+       3093.461560825846,
+       3290.916554070051,
+       3515.29722821119,
+       3772.514098568105,
+       4070.344158981379,
+       4419.230801179778,
+       4833.533688790385,
+       5333.5544152169805,
+       5948.964540049707,
+       6724.916436577927,
+       7733.653902064614
+      ]
+     },
+     {
+      "title": "CSTR rectangle",
+      "x": [
+       0.0,
+       0.002604638850275181,
+       0.002604638850275181
+      ],
+      "y": [
+       775.3849880703096,
+       775.3849880703096,
+       0.0
+      ]
+     },
+     {
+      "title": "reactor outlet",
+      "x": [
+       0.002604638850275181
+      ],
+      "y": [
+       775.3849880703096
+      ]
+     }
+    ]
+   }
+  ],
+  "warnings": [],
+  "text": "PFR R: the reactions\n====================\n\nWhat fixes the extent\n---------------------\nA PFR (plug-flow reactor) has no mixing along its length: each slice of fluid moves through the tube as a plug and reacts as it goes. The composition changes from inlet to outlet and the rate changes with it, so the balance is written per unit of volume, dF_i/dV = r_i, and integrated along the reactor from the inlet to the outlet.\nThe reactor operates in the mode \"HeatExchange\". The outlet temperature is 38.4926 C and the duty is -74.5599 kW.\nMultiplying the heat of reaction by the extent of each reaction gives the heat released (or absorbed) inside the reactor. In adiabatic operation that heat has nowhere to go but the stream, so it sets the outlet temperature; in isothermal operation it is removed (or supplied) through the duty, which is what the duty above represents.\n\nLevenspiel plot\n---------------\nTake the reaction R1 (EO + H2O --> EG) at the outlet temperature, 38.4926 C. The Arrhenius expression gives its rate constant: k_f = A exp(-E/RT) = 0.005 * exp(-0 / (8.314 * 311.64)) = 0.005. The rate is expressed in kmol/[m3.h] and the concentrations in kmol/m3.\nAs the conversion X of Ethylene oxide increases, the concentration of every compound follows the stoichiometry: C_i = C_i0 + (nu_i / |nu_A|) C_A0 X, starting from C_A0 = 6340 mol/m3. The volumetric flow is held at its inlet value of 3.86683 m3/h, which is exact for a liquid and a fair approximation for a gas whose number of moles does not change.\nThe Levenspiel plot draws F_A0 / (-r_A) against the conversion X. The higher the curve, the slower the reaction and the more volume each increment of conversion costs, so the volume a reactor needs can be read straight off it. A CSTR runs entirely at its outlet conditions, so its volume is the rectangle V = F_A0 X / (-r_A) evaluated at the outlet. A PFR passes through every conversion from 0 to X on its way, so its volume is the area under the curve, V = F_A0 int dX / (-r_A).\nAt this reactor's conversion, X = 0.0026 of Ethylene oxide, the rate is -r_A = 0.008783 mol/(m3 s). Read from the plot, a CSTR would need V_CSTR = 2.0196 m3 and a PFR would need V_PFR = 0 m3. This reactor's volume is 2 m3.\nThe volume read from the plot differs from the reactor's own. The plot assumes a constant volumetric flow and the outlet temperature everywhere; inside the reactor the flow, the temperature or the density may change along the way, and other reactions may consume Ethylene oxide as well. Each of these moves the curve.\n\nMolar flows (kmol/h)\nCompound         in       out        change      conversion (%)\nWater            139.881  139.817    -0.0638558  0.05          \nEthylene oxide   24.5162  24.4523    -0.0638558  0.26          \nEthylene glycol  0        0.0638558  0.0638558                 \n\nReactions of set JARVIS\nReaction  Equation         Type     Base compound   Conversion (%)  Heat of reaction (kJ/mol)\nR1        EO + H2O --> EG  Kinetic  Ethylene oxide  0.26            0.00                     \n"
+ }
+}

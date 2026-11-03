@@ -1,0 +1,4 @@
+purpose = "Shared engineering contracts: evaluator and evidence contracts, multi-fidelity selection, deterministic inner-loop studies, process-to-CAD handoff and operator projections."
+status = "live"
+entrypoints = ["/workspaces/{id}/engineering", "evaluator_contracts.py", "studies.py"]
+owner = "maintainer"

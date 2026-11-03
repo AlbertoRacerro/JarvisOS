@@ -1,0 +1,146 @@
+registry_version: bluecad_tool_registry_v0_1
+tools:
+  - id: build123d
+    kind: cad_kernel
+    integration_mode: in_process
+    version_pin: "0.11.1"
+    license:
+      spdx: Apache-2.0
+      boundary: A
+      verified_date: "2026-07-03"
+    enabled: false
+    entrypoint: build123d
+    capabilities: [brep, sweep, boolean, fillet, step_export, stl_export]
+    health_check: "python -c 'import build123d'"
+  # Pin moved 4.13.1 -> 4.15.2 by spec 216: the conda-forge release installed in
+  # the project cfd environment (operator registry enables it with path and hash).
+  - id: gmsh
+    kind: mesher
+    integration_mode: subprocess
+    version_pin: "4.15.2"
+    license:
+      spdx: GPL-2.0-or-later
+      boundary: C
+      verified_date: "2026-10-24"
+    enabled: false
+    entrypoint: null
+    binary_sha256: null
+    provenance_url: null
+    capabilities: [step_import, tet_mesh, physical_groups, inp_export]
+    health_check: null
+  - id: calculix
+    kind: fem_solver
+    integration_mode: subprocess
+    version_pin: "2.22"
+    license:
+      spdx: GPL-2.0
+      boundary: C
+      verified_date: "2026-07-03"
+    enabled: false
+    entrypoint: null
+    binary_sha256: null
+    provenance_url: null
+    capabilities: [static, modal, thermal]
+    health_check: null
+  - id: openfoam_blockmesh
+    kind: mesher
+    integration_mode: subprocess
+    version_pin: "v2412"
+    license:
+      spdx: GPL-3.0-or-later
+      boundary: C
+      verified_date: "2026-09-24"
+    enabled: false
+    entrypoint: null
+    binary_sha256: null
+    provenance_url: null
+    capabilities: [structured_channel_mesh]
+    health_check: null
+  - id: openfoam
+    kind: cfd_solver
+    integration_mode: subprocess
+    version_pin: "v2412"
+    license:
+      spdx: GPL-3.0-or-later
+      boundary: C
+      verified_date: "2026-09-24"
+    enabled: false
+    entrypoint: null
+    binary_sha256: null
+    provenance_url: null
+    capabilities: [laminar_channel_flow]
+    health_check: null
+  # Spec 216 smooth-tube study binaries. Same OpenFOAM v2412 install as above;
+  # disabled here, enabled by the operator registry with absolute path and hash.
+  - id: openfoam_checkmesh
+    kind: mesher
+    integration_mode: subprocess
+    version_pin: "v2412"
+    license:
+      spdx: GPL-3.0-or-later
+      boundary: C
+      verified_date: "2026-10-24"
+    enabled: false
+    entrypoint: null
+    binary_sha256: null
+    provenance_url: null
+    capabilities: [mesh_quality_check]
+    health_check: null
+  - id: openfoam_simplefoam
+    kind: cfd_solver
+    integration_mode: subprocess
+    version_pin: "v2412"
+    license:
+      spdx: GPL-3.0-or-later
+      boundary: C
+      verified_date: "2026-10-24"
+    enabled: false
+    entrypoint: null
+    binary_sha256: null
+    provenance_url: null
+    capabilities: [steady_incompressible_pipe_flow, laminar, rans_komega_sst, rans_kepsilon]
+    health_check: null
+  # Spec 216 MPI execution: domain decomposition/reconstruction from the same
+  # OpenFOAM install, and the MPICH launcher shipped in that conda environment.
+  - id: openfoam_decomposepar
+    kind: mesher
+    integration_mode: subprocess
+    version_pin: "v2412"
+    license:
+      spdx: GPL-3.0-or-later
+      boundary: C
+      verified_date: "2026-10-24"
+    enabled: false
+    entrypoint: null
+    binary_sha256: null
+    provenance_url: null
+    capabilities: [domain_decomposition]
+    health_check: null
+  - id: openfoam_reconstructpar
+    kind: cfd_solver
+    integration_mode: subprocess
+    version_pin: "v2412"
+    license:
+      spdx: GPL-3.0-or-later
+      boundary: C
+      verified_date: "2026-10-24"
+    enabled: false
+    entrypoint: null
+    binary_sha256: null
+    provenance_url: null
+    capabilities: [field_reconstruction]
+    health_check: null
+  - id: openfoam_mpiexec
+    kind: cfd_solver
+    integration_mode: subprocess
+    version_pin: "4.3.2"
+    license:
+      spdx: LicenseRef-MPICH
+      boundary: C
+      verified_date: "2026-10-24"
+    enabled: false
+    entrypoint: null
+    binary_sha256: null
+    provenance_url: null
+    capabilities: [mpi_launch]
+    health_check: null

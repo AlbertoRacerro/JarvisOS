@@ -1,0 +1,5828 @@
+{
+ "h_conn": [
+  {
+   "unitop": "H",
+   "connections": [
+    "feed:F->port0"
+   ]
+  },
+  {
+   "unitop": "H",
+   "connections": [
+    "product:P->port0"
+   ]
+  },
+  {
+   "__error__": "{\"error\":\"This connection is not allowed.\",\"type\":\"Exception\"}",
+   "structured": null
+  }
+ ],
+ "h_q1": {
+  "unitop": "H",
+  "connections": [
+   "energy_feed:Q->port1"
+  ]
+ },
+ "h_set": {
+  "unitop": "H",
+  "applied": [
+   "CalcMode = EnergyStream"
+  ]
+ },
+ "q_set": {
+  "unitop": "Q",
+  "applied": [
+   "EnergyFlow = 50"
+  ]
+ },
+ "h_solve": {
+  "ok": true,
+  "error_count": 0,
+  "errors": [],
+  "objects": [
+   {
+    "name": "F",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "P",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "H",
+    "type": "Heater",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "Q",
+    "type": "EnergyStream",
+    "calculated": true,
+    "error": ""
+   }
+  ]
+ },
+ "h_P": {
+  "name": "P",
+  "temperature_K": 340.57316692099243,
+  "pressure_Pa": 300000.0,
+  "mass_flow_kg_s": 1.0,
+  "molar_flow_mol_s": 43.358804780200494,
+  "phases": [
+   {
+    "name": "Mixture",
+    "fraction": 0.0,
+    "temperature_K": 340.57316692099243,
+    "pressure_Pa": 300000.0,
+    "enthalpy_kJ_kg": -1728.7765388748019,
+    "entropy_kJ_kgK": -4.5828785515258526,
+    "density_kg_m3": 847.5877014047662,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.6401056872206442,
+      "mass_fraction": 0.5
+     },
+     "Methanol": {
+      "mole_fraction": 0.35989431277935574,
+      "mass_fraction": 0.5
+     }
+    }
+   },
+   {
+    "name": "OverallLiquid",
+    "fraction": 1.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": -1728.7765388748019,
+    "entropy_kJ_kgK": -4.5828785515258526,
+    "density_kg_m3": 847.5877014047662,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.6401056872206442,
+      "mass_fraction": 0.5
+     },
+     "Methanol": {
+      "mole_fraction": 0.35989431277935574,
+      "mass_fraction": 0.5
+     }
+    }
+   },
+   {
+    "name": "Vapor",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.30505071574479675,
+      "mass_fraction": 0.19794567581901745
+     },
+     "Methanol": {
+      "mole_fraction": 0.6949492842552032,
+      "mass_fraction": 0.8020543241809825
+     }
+    }
+   },
+   {
+    "name": "Liquid1",
+    "fraction": 1.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": -1728.7765388748019,
+    "entropy_kJ_kgK": -4.5828785515258526,
+    "density_kg_m3": 847.5877014047662,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.6401056872206442,
+      "mass_fraction": 0.5
+     },
+     "Methanol": {
+      "mole_fraction": 0.35989431277935574,
+      "mass_fraction": 0.5
+     }
+    }
+   },
+   {
+    "name": "Liquid2",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Methanol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Liquid3",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Methanol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Aqueous",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Methanol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   },
+   {
+    "name": "Solid",
+    "fraction": 0.0,
+    "temperature_K": 0.0,
+    "pressure_Pa": 0.0,
+    "enthalpy_kJ_kg": 0.0,
+    "entropy_kJ_kgK": 0.0,
+    "density_kg_m3": 0.0,
+    "compounds": {
+     "Water": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     },
+     "Methanol": {
+      "mole_fraction": 0.0,
+      "mass_fraction": 0.0
+     }
+    }
+   }
+  ]
+ },
+ "h_res": {
+  "name": "H",
+  "type": "Heater",
+  "calculated": true,
+  "error": "",
+  "properties": {
+   "Temperature Difference": {
+    "value": "10.573166920992435",
+    "units": "C."
+   }
+  },
+  "calculation_modes": [
+   "HeatAdded",
+   "OutletTemperature",
+   "EnergyStream",
+   "OutletVaporFraction",
+   "TemperatureChange",
+   "HeatAddedRemoved"
+  ],
+  "calculation_mode": "EnergyStream"
+ },
+ "cmp": {
+  "a": "a",
+  "b": "b",
+  "specifications_changed": 1,
+  "results_changed": 72,
+  "unchanged": 577,
+  "summary": [
+   "1 specification(s) changed from a to b: H Heat Added 50 -> 60 kW.",
+   "72 result(s) moved; the largest relative changes: H Temperature Difference +20.0 %; Q Energy Flow +20.0 %; P Fugacity Coefficient, Liquid Phase 1 / Water +9.6 %; P Fugacity Coefficient, Liquid Phase 1 / Methanol +8.3 %; P Molar Gibbs Free Energy (Mixture) +5.8 %; P Molar Gibbs Free Energy (Overall Liquid) +5.8 %.",
+   "3 object(s) felt the change; 1 did not (F): they sit upstream of the change, or on a branch it does not reach.",
+   "With one specification changed, every difference below is its effect: read the table as a sensitivity, from the object edited down the flowsheet."
+  ],
+  "rows": [
+   {
+    "object": "H",
+    "property": "Heat Added",
+    "id": "PROP_HT_3",
+    "specification": true,
+    "a": 50.0,
+    "b": 60.0,
+    "change": 10.0,
+    "percent": 20.0,
+    "unit": "kW",
+    "changed": true
+   },
+   {
+    "object": "H",
+    "property": "Temperature Difference",
+    "id": "PROP_HT_5",
+    "specification": false,
+    "a": 10.573166920992435,
+    "b": 12.689449358118281,
+    "change": 2.1162824371258466,
+    "percent": 20.015596584634313,
+    "unit": "C.",
+    "changed": true
+   },
+   {
+    "object": "Q",
+    "property": "Energy Flow",
+    "id": "PROP_ES_0",
+    "specification": false,
+    "a": 50.0,
+    "b": 60.0,
+    "change": 10.0,
+    "percent": 20.0,
+    "unit": "kW",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Fugacity Coefficient, Liquid Phase 1 / Water",
+    "id": "Fugacity Coefficient, Liquid Phase 1 / Water",
+    "specification": false,
+    "a": 1.0533185075244598e-06,
+    "b": 1.1543478882452435e-06,
+    "change": 1.0102938072078377e-07,
+    "percent": 9.591531905978373,
+    "unit": "bar",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Fugacity Coefficient, Liquid Phase 1 / Methanol",
+    "id": "Fugacity Coefficient, Liquid Phase 1 / Methanol",
+    "specification": false,
+    "a": 4.8298446572070695e-06,
+    "b": 5.232901713634617e-06,
+    "change": 4.0305705642754716e-07,
+    "percent": 8.345134989509601,
+    "unit": "bar",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Gibbs Free Energy (Mixture)",
+    "id": "PROP_MS_209",
+    "specification": false,
+    "a": -3873.9784876186072,
+    "b": -3651.006889054557,
+    "change": 222.97159856405005,
+    "percent": 5.755623044285774,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Gibbs Free Energy (Overall Liquid)",
+    "id": "PROP_MS_215",
+    "specification": false,
+    "a": -3873.9784876186072,
+    "b": -3651.006889054557,
+    "change": 222.97159856405005,
+    "percent": 5.755623044285774,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Gibbs Free Energy (Liquid 1)",
+    "id": "PROP_MS_218",
+    "specification": false,
+    "a": -3873.9784876186072,
+    "b": -3651.006889054557,
+    "change": 222.97159856405005,
+    "percent": 5.755623044285774,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Gibbs Free Energy (Overall Liquid)",
+    "id": "PROP_MS_167",
+    "specification": false,
+    "a": -167.97107696735156,
+    "b": -158.3032949536837,
+    "change": 9.667782013667875,
+    "percent": 5.7556230442857705,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Gibbs Free Energy (Liquid 1)",
+    "id": "PROP_MS_173",
+    "specification": false,
+    "a": -167.97107696735156,
+    "b": -158.3032949536837,
+    "change": 9.667782013667875,
+    "percent": 5.7556230442857705,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Gibbs Free Energy (Mixture)",
+    "id": "PROP_MS_206",
+    "specification": false,
+    "a": -167.97107696735156,
+    "b": -158.3032949536837,
+    "change": 9.667782013667875,
+    "percent": 5.7556230442857705,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Helmholtz Free Energy (Mixture)",
+    "id": "PROP_MS_210",
+    "specification": false,
+    "a": -3881.7265435593745,
+    "b": -3658.7756932491407,
+    "change": 222.95085031023382,
+    "percent": 5.743600117328141,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Helmholtz Free Energy (Overall Liquid)",
+    "id": "PROP_MS_216",
+    "specification": false,
+    "a": -3881.7265435593745,
+    "b": -3658.7756932491407,
+    "change": 222.95085031023382,
+    "percent": 5.743600117328141,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Helmholtz Free Energy (Liquid 1)",
+    "id": "PROP_MS_219",
+    "specification": false,
+    "a": -3881.7265435593745,
+    "b": -3658.7756932491407,
+    "change": 222.95085031023382,
+    "percent": 5.743600117328141,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Helmholtz Free Energy (Overall Liquid)",
+    "id": "PROP_MS_168",
+    "specification": false,
+    "a": -168.30702341231336,
+    "b": -158.64014101813223,
+    "change": 9.66688239418113,
+    "percent": 5.74360011732814,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Helmholtz Free Energy (Liquid 1)",
+    "id": "PROP_MS_174",
+    "specification": false,
+    "a": -168.30702341231336,
+    "b": -158.64014101813223,
+    "change": 9.66688239418113,
+    "percent": 5.74360011732814,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Helmholtz Free Energy (Mixture)",
+    "id": "PROP_MS_207",
+    "specification": false,
+    "a": -168.30702341231336,
+    "b": -158.64014101813223,
+    "change": 9.66688239418113,
+    "percent": 5.74360011732814,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "H",
+    "property": "Outlet Temperature",
+    "id": "PROP_HT_2",
+    "specification": false,
+    "a": 67.42316692099246,
+    "b": 69.5394493581183,
+    "change": 2.1162824371258466,
+    "percent": 3.1388060421512685,
+    "unit": "C",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Temperature",
+    "id": "PROP_MS_0",
+    "specification": false,
+    "a": 67.42316692099246,
+    "b": 69.5394493581183,
+    "change": 2.1162824371258466,
+    "percent": 3.1388060421512685,
+    "unit": "C",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Dynamic Viscosity (Overall Liquid)",
+    "id": "PROP_MS_38",
+    "specification": false,
+    "a": 0.3846355590572886,
+    "b": 0.3743647381802879,
+    "change": -0.010270820877000653,
+    "percent": -2.670273362705628,
+    "unit": "cP",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Dynamic Viscosity (Liquid 1)",
+    "id": "PROP_MS_56",
+    "specification": false,
+    "a": 0.3846355590572886,
+    "b": 0.3743647381802879,
+    "change": -0.010270820877000653,
+    "percent": -2.670273362705628,
+    "unit": "cP",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Kinematic Viscosity (Overall Liquid)",
+    "id": "PROP_MS_37",
+    "specification": false,
+    "a": 0.45380030694145895,
+    "b": 0.4426539320664589,
+    "change": -0.011146374875000031,
+    "percent": -2.4562290294876186,
+    "unit": "cSt",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Kinematic Viscosity (Liquid 1)",
+    "id": "PROP_MS_55",
+    "specification": false,
+    "a": 0.45380030694145895,
+    "b": 0.4426539320664589,
+    "change": -0.011146374875000031,
+    "percent": -2.4562290294876186,
+    "unit": "cSt",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Bulk Modulus (Liquid 1)",
+    "id": "PROP_MS_169",
+    "specification": false,
+    "a": -0.01865828496927478,
+    "b": -0.018835113585252958,
+    "change": -0.0001768286159781786,
+    "percent": -0.9477217025539495,
+    "unit": "bar",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Isothermal Compressibility (Liquid 1)",
+    "id": "PROP_MS_175",
+    "specification": false,
+    "a": -0.0005359549399351192,
+    "b": -0.0005309232649294745,
+    "change": 5.031675005644654e-06,
+    "percent": 0.9388242612809523,
+    "unit": "1/Pa",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Mass Fraction (Vapor) / Water",
+    "id": "PROP_MS_111/Water",
+    "specification": false,
+    "a": 0.19794567581901745,
+    "b": 0.19974193769093485,
+    "change": 0.0017962618719173928,
+    "percent": 0.9074519382579099,
+    "unit": "",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Fraction (Vapor) / Water",
+    "id": "PROP_MS_106/Water",
+    "specification": false,
+    "a": 0.30505071574479675,
+    "b": 0.3074463419235415,
+    "change": 0.0023956261787447253,
+    "percent": 0.7853206221449711,
+    "unit": "",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Specific Entropy (Mixture)",
+    "id": "PROP_MS_8",
+    "specification": false,
+    "a": -4.5828785515258526,
+    "b": -4.553607496749133,
+    "change": 0.02927105477671965,
+    "percent": 0.6387045706671403,
+    "unit": "kJ/[kg.K]",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Specific Entropy (Overall Liquid)",
+    "id": "PROP_MS_33",
+    "specification": false,
+    "a": -4.5828785515258526,
+    "b": -4.553607496749133,
+    "change": 0.02927105477671965,
+    "percent": 0.6387045706671403,
+    "unit": "kJ/[kg.K]",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Specific Entropy (Liquid 1)",
+    "id": "PROP_MS_51",
+    "specification": false,
+    "a": -4.5828785515258526,
+    "b": -4.553607496749133,
+    "change": 0.02927105477671965,
+    "percent": 0.6387045706671403,
+    "unit": "kJ/[kg.K]",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Entropy (Mixture)",
+    "id": "PROP_MS_10",
+    "specification": false,
+    "a": -105.69660706188544,
+    "b": -105.0215180015411,
+    "change": 0.675089060344348,
+    "percent": 0.6387045706671387,
+    "unit": "kJ/[kmol.K]",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Entropy (Overall Liquid)",
+    "id": "PROP_MS_35",
+    "specification": false,
+    "a": -105.69660706188544,
+    "b": -105.0215180015411,
+    "change": 0.675089060344348,
+    "percent": 0.6387045706671387,
+    "unit": "kJ/[kmol.K]",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Entropy (Liquid 1)",
+    "id": "PROP_MS_53",
+    "specification": false,
+    "a": -105.69660706188544,
+    "b": -105.0215180015411,
+    "change": 0.675089060344348,
+    "percent": 0.6387045706671387,
+    "unit": "kJ/[kmol.K]",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Specific Enthalpy (Mixture)",
+    "id": "PROP_MS_7",
+    "specification": false,
+    "a": -1728.7765388748019,
+    "b": -1718.7765406076435,
+    "change": 9.99999826715839,
+    "percent": 0.5784436589859686,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Specific Enthalpy (Overall Liquid)",
+    "id": "PROP_MS_32",
+    "specification": false,
+    "a": -1728.7765388748019,
+    "b": -1718.7765406076435,
+    "change": 9.99999826715839,
+    "percent": 0.5784436589859686,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Specific Enthalpy (Liquid 1)",
+    "id": "PROP_MS_50",
+    "specification": false,
+    "a": -1728.7765388748019,
+    "b": -1718.7765406076435,
+    "change": 9.99999826715839,
+    "percent": 0.5784436589859686,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Enthalpy (Mixture)",
+    "id": "PROP_MS_9",
+    "specification": false,
+    "a": -39871.40668748867,
+    "b": -39640.77306375639,
+    "change": 230.633623732283,
+    "percent": 0.578443658985962,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Enthalpy (Overall Liquid)",
+    "id": "PROP_MS_34",
+    "specification": false,
+    "a": -39871.40668748867,
+    "b": -39640.77306375639,
+    "change": 230.633623732283,
+    "percent": 0.578443658985962,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Enthalpy (Liquid 1)",
+    "id": "PROP_MS_52",
+    "specification": false,
+    "a": -39871.40668748867,
+    "b": -39640.77306375639,
+    "change": 230.633623732283,
+    "percent": 0.578443658985962,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Internal Energy (Mixture)",
+    "id": "PROP_MS_208",
+    "specification": false,
+    "a": -39879.15474342944,
+    "b": -39648.54186795097,
+    "change": 230.61287547847314,
+    "percent": 0.5782792462933767,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Internal Energy (Overall Liquid)",
+    "id": "PROP_MS_214",
+    "specification": false,
+    "a": -39879.15474342944,
+    "b": -39648.54186795097,
+    "change": 230.61287547847314,
+    "percent": 0.5782792462933767,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Internal Energy (Liquid 1)",
+    "id": "PROP_MS_217",
+    "specification": false,
+    "a": -39879.15474342944,
+    "b": -39648.54186795097,
+    "change": 230.61287547847314,
+    "percent": 0.5782792462933767,
+    "unit": "kJ/kmol",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Internal Energy (Overall Liquid)",
+    "id": "PROP_MS_166",
+    "specification": false,
+    "a": -1729.1124853197637,
+    "b": -1719.113386672092,
+    "change": 9.999098647671644,
+    "percent": 0.5782792462933675,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Internal Energy (Liquid 1)",
+    "id": "PROP_MS_172",
+    "specification": false,
+    "a": -1729.1124853197637,
+    "b": -1719.113386672092,
+    "change": 9.999098647671644,
+    "percent": 0.5782792462933675,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Internal Energy (Mixture)",
+    "id": "PROP_MS_205",
+    "specification": false,
+    "a": -1729.1124853197637,
+    "b": -1719.113386672092,
+    "change": 9.999098647671644,
+    "percent": 0.5782792462933675,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Heat Capacity Ratio (Overall Liquid)",
+    "id": "PROP_MS_40",
+    "specification": false,
+    "a": 2.0597234844396235,
+    "b": 2.0676619182097182,
+    "change": 0.007938433770094733,
+    "percent": 0.3854125968881932,
+    "unit": "",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Heat Capacity Ratio (Liquid 1)",
+    "id": "PROP_MS_58",
+    "specification": false,
+    "a": 2.0597234844396235,
+    "b": 2.0676619182097182,
+    "change": 0.007938433770094733,
+    "percent": 0.3854125968881932,
+    "unit": "",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Compressibility Factor (Overall Liquid)",
+    "id": "PROP_MS_44",
+    "specification": false,
+    "a": 0.002736354117692156,
+    "b": 0.002726738070382829,
+    "change": -9.616047309326647e-06,
+    "percent": -0.35141823374223335,
+    "unit": "",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Compressibility Factor (Liquid 1)",
+    "id": "PROP_MS_62",
+    "specification": false,
+    "a": 0.002736354117692156,
+    "b": 0.002726738070382829,
+    "change": -9.616047309326647e-06,
+    "percent": -0.35141823374223335,
+    "unit": "",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molar Fraction (Vapor) / Methanol",
+    "id": "PROP_MS_106/Methanol",
+    "specification": false,
+    "a": 0.6949492842552032,
+    "b": 0.6925536580764584,
+    "change": -0.002395626178744781,
+    "percent": -0.34471956918586383,
+    "unit": "",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Mass Fraction (Vapor) / Methanol",
+    "id": "PROP_MS_111/Methanol",
+    "specification": false,
+    "a": 0.8020543241809825,
+    "b": 0.8002580623090652,
+    "change": -0.0017962618719173928,
+    "percent": -0.2239576320159666,
+    "unit": "",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Volumetric Flow",
+    "id": "PROP_MS_4",
+    "specification": false,
+    "a": 4.247348084491397,
+    "b": 4.256688712684854,
+    "change": 0.009340628193457157,
+    "percent": 0.2199167105602474,
+    "unit": "m3/h",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Volumetric Flow (Overall Liquid)",
+    "id": "PROP_MS_43",
+    "specification": false,
+    "a": 4.247348084491397,
+    "b": 4.256688712684854,
+    "change": 0.009340628193457157,
+    "percent": 0.2199167105602474,
+    "unit": "m3/h",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Volumetric Flow (Liquid 1)",
+    "id": "PROP_MS_61",
+    "specification": false,
+    "a": 4.247348084491397,
+    "b": 4.256688712684854,
+    "change": 0.009340628193457157,
+    "percent": 0.2199167105602474,
+    "unit": "m3/h",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molarity (Mixture) / Methanol",
+    "id": "PROP_MS_239/Methanol",
+    "specification": false,
+    "a": 13226.256238008125,
+    "b": 13197.233316613268,
+    "change": -29.022921394856894,
+    "percent": -0.21943413822162383,
+    "unit": "mol/m3",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Density (Mixture)",
+    "id": "PROP_MS_5",
+    "specification": false,
+    "a": 847.5877014047662,
+    "b": 845.7278046365162,
+    "change": -1.859896768249996,
+    "percent": -0.21943413822162114,
+    "unit": "kg/m3",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Density (Overall Liquid)",
+    "id": "PROP_MS_30",
+    "specification": false,
+    "a": 847.5877014047662,
+    "b": 845.7278046365162,
+    "change": -1.859896768249996,
+    "percent": -0.21943413822162114,
+    "unit": "kg/m3",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Density (Liquid 1)",
+    "id": "PROP_MS_48",
+    "specification": false,
+    "a": 847.5877014047662,
+    "b": 845.7278046365162,
+    "change": -1.859896768249996,
+    "percent": -0.21943413822162114,
+    "unit": "kg/m3",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molarity (Mixture) / Water",
+    "id": "PROP_MS_239/Water",
+    "specification": false,
+    "a": 23524.133441299997,
+    "b": 23472.513461808976,
+    "change": -51.619979491020786,
+    "percent": -0.21943413822162092,
+    "unit": "mol/m3",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molarity (Overall Liquid) / Methanol",
+    "id": "PROP_MS_241/Methanol",
+    "specification": false,
+    "a": 13226.256238008125,
+    "b": 13197.23331661327,
+    "change": -29.022921394855075,
+    "percent": -0.21943413822161006,
+    "unit": "mol/m3",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molarity (Liquid Phase 1) / Methanol",
+    "id": "PROP_MS_242/Methanol",
+    "specification": false,
+    "a": 13226.256238008125,
+    "b": 13197.23331661327,
+    "change": -29.022921394855075,
+    "percent": -0.21943413822161006,
+    "unit": "mol/m3",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molarity (Overall Liquid) / Water",
+    "id": "PROP_MS_241/Water",
+    "specification": false,
+    "a": 23524.133441299997,
+    "b": 23472.51346180898,
+    "change": -51.61997949101715,
+    "percent": -0.21943413822160546,
+    "unit": "mol/m3",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Molarity (Liquid Phase 1) / Water",
+    "id": "PROP_MS_242/Water",
+    "specification": false,
+    "a": 23524.133441299997,
+    "b": 23472.51346180898,
+    "change": -51.61997949101715,
+    "percent": -0.21943413822160546,
+    "unit": "mol/m3",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Ideal Gas Heat Capacity Cp (Liquid 1)",
+    "id": "PROP_MS_251",
+    "specification": false,
+    "a": 1.6818904954930745,
+    "b": 1.684637505217148,
+    "change": 0.0027470097240736013,
+    "percent": 0.16332869062728542,
+    "unit": "kJ/kg",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Activity Coefficient, Liquid Phase 1 / Methanol",
+    "id": "Activity Coefficient, Liquid Phase 1 / Methanol",
+    "specification": false,
+    "a": 1.2812555405563009,
+    "b": 1.2800281498727353,
+    "change": -0.001227390683565588,
+    "percent": -0.09579593178053102,
+    "unit": "",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Energy Flow",
+    "id": "PROP_MS_154",
+    "specification": false,
+    "a": -11575.720658766131,
+    "b": -11565.720660498973,
+    "change": 9.999998267157935,
+    "percent": 0.08638769508993875,
+    "unit": "kW",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Activity Coefficient, Liquid Phase 1 / Water",
+    "id": "Activity Coefficient, Liquid Phase 1 / Water",
+    "specification": false,
+    "a": 1.1321919808703704,
+    "b": 1.131291320646942,
+    "change": -0.0009006602234284955,
+    "percent": -0.07955013272008116,
+    "unit": "",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Ideal Gas Heat Capacity Ratio (Liquid 1)",
+    "id": "PROP_MS_256",
+    "specification": false,
+    "a": 1.272804322560545,
+    "b": 1.2722383785456752,
+    "change": -0.000565944014869757,
+    "percent": -0.044464337906334854,
+    "unit": "",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Heat Capacity (Overall Liquid)",
+    "id": "PROP_MS_39",
+    "specification": false,
+    "a": 4.725923147147897,
+    "b": 4.724446737642205,
+    "change": -0.0014764095056927218,
+    "percent": -0.0312406583798075,
+    "unit": "kJ/[kg.K]",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Heat Capacity (Liquid 1)",
+    "id": "PROP_MS_57",
+    "specification": false,
+    "a": 4.725923147147897,
+    "b": 4.724446737642205,
+    "change": -0.0014764095056927218,
+    "percent": -0.0312406583798075,
+    "unit": "kJ/[kg.K]",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Thermal Conductivity (Mixture)",
+    "id": "PROP_MS_11",
+    "specification": false,
+    "a": 0.34108674728309885,
+    "b": 0.34104419605897207,
+    "change": -4.255122412677448e-05,
+    "percent": -0.012475191271930995,
+    "unit": "W/[m.K]",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Thermal Conductivity (Overall Liquid)",
+    "id": "PROP_MS_36",
+    "specification": false,
+    "a": 0.34108674728309885,
+    "b": 0.34104419605897207,
+    "change": -4.255122412677448e-05,
+    "percent": -0.012475191271930995,
+    "unit": "W/[m.K]",
+    "changed": true
+   },
+   {
+    "object": "P",
+    "property": "Thermal Conductivity (Liquid 1)",
+    "id": "PROP_MS_54",
+    "specification": false,
+    "a": 0.34108674728309885,
+    "b": 0.34104419605897207,
+    "change": -4.255122412677448e-05,
+    "percent": -0.012475191271930995,
+    "unit": "W/[m.K]",
+    "changed": true
+   },
+   {
+    "object": "F",
+    "property": "Temperature",
+    "id": "PROP_MS_0",
+    "specification": true,
+    "a": 56.85000000000002,
+    "b": 56.85000000000002,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "C",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Pressure",
+    "id": "PROP_MS_1",
+    "specification": true,
+    "a": 3.0,
+    "b": 3.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow",
+    "id": "PROP_MS_2",
+    "specification": true,
+    "a": 3600.0,
+    "b": 3600.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Diffusion Coefficient, Liquid Phase 1 / Water",
+    "id": "Diffusion Coefficient, Liquid Phase 1 / Water",
+    "specification": false,
+    "a": 7.811690455894317e-09,
+    "b": 8.070104343889868e-09,
+    "change": 2.584138879955506e-10,
+    "percent": 3.3080405509484083,
+    "unit": "m2/s",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Diffusion Coefficient, Liquid Phase 1 / Methanol",
+    "id": "Diffusion Coefficient, Liquid Phase 1 / Methanol",
+    "specification": false,
+    "a": 5.361789012071845e-09,
+    "b": 5.53328817341353e-09,
+    "change": 1.7149916134168495e-10,
+    "percent": 3.198543638243909,
+    "unit": "m2/s",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Diffusion Coefficient, Vapor Phase / Methanol",
+    "id": "Diffusion Coefficient, Vapor Phase / Methanol",
+    "specification": false,
+    "a": 5.7292463883709964e-11,
+    "b": 5.791693023987842e-11,
+    "change": 6.244663561684554e-13,
+    "percent": 1.0899624729632387,
+    "unit": "m2/s",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Diffusion Coefficient, Vapor Phase / Water",
+    "id": "Diffusion Coefficient, Vapor Phase / Water",
+    "specification": false,
+    "a": 1.363433845716765e-10,
+    "b": 1.3782947629787569e-10,
+    "change": 1.4860917261991901e-12,
+    "percent": 1.0899624729632138,
+    "unit": "m2/s",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Joule-Thomson Coefficient (Liquid 1)",
+    "id": "PROP_MS_171",
+    "specification": false,
+    "a": -1.1731527298466518e-10,
+    "b": -1.1761001101575974e-10,
+    "change": -2.947380310945606e-13,
+    "percent": -0.2512358566757861,
+    "unit": "K/Pa",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Volumetric Fraction (Overall Liquid)",
+    "id": "PROP_MS_47",
+    "specification": false,
+    "a": 1.0,
+    "b": 0.9999999999999998,
+    "change": -2.220446049250313e-16,
+    "percent": -2.220446049250313e-14,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Volumetric Fraction (Liquid 1)",
+    "id": "PROP_MS_65",
+    "specification": false,
+    "a": 1.0,
+    "b": 0.9999999999999998,
+    "change": -2.220446049250313e-16,
+    "percent": -2.220446049250313e-14,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow",
+    "id": "PROP_MS_3",
+    "specification": false,
+    "a": 156.0916972087218,
+    "b": 156.0916972087218,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Flow",
+    "id": "PROP_MS_4",
+    "specification": false,
+    "a": 4.2027954449233995,
+    "b": 4.2027954449233995,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "m3/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Density (Mixture)",
+    "id": "PROP_MS_5",
+    "specification": false,
+    "a": 856.5727376402479,
+    "b": 856.5727376402479,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molecular Weight (Mixture)",
+    "id": "PROP_MS_6",
+    "specification": false,
+    "a": 23.063366369744656,
+    "b": 23.063366369744656,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Enthalpy (Mixture)",
+    "id": "PROP_MS_7",
+    "specification": false,
+    "a": -1778.776540080869,
+    "b": -1778.776540080869,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Entropy (Mixture)",
+    "id": "PROP_MS_8",
+    "specification": false,
+    "a": -4.7320161656434125,
+    "b": -4.7320161656434125,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Enthalpy (Mixture)",
+    "id": "PROP_MS_9",
+    "specification": false,
+    "a": -41024.57503379187,
+    "b": -41024.57503379187,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Entropy (Mixture)",
+    "id": "PROP_MS_10",
+    "specification": false,
+    "a": -109.13622249578835,
+    "b": -109.13622249578835,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/[kmol.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Thermal Conductivity (Mixture)",
+    "id": "PROP_MS_11",
+    "specification": false,
+    "a": 0.34102453706569136,
+    "b": 0.34102453706569136,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "W/[m.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Density (Overall Liquid)",
+    "id": "PROP_MS_30",
+    "specification": false,
+    "a": 856.5727376402479,
+    "b": 856.5727376402479,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molecular Weight (Overall Liquid)",
+    "id": "PROP_MS_31",
+    "specification": false,
+    "a": 23.063366369744656,
+    "b": 23.063366369744656,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Enthalpy (Overall Liquid)",
+    "id": "PROP_MS_32",
+    "specification": false,
+    "a": -1778.776540080869,
+    "b": -1778.776540080869,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Entropy (Overall Liquid)",
+    "id": "PROP_MS_33",
+    "specification": false,
+    "a": -4.7320161656434125,
+    "b": -4.7320161656434125,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Enthalpy (Overall Liquid)",
+    "id": "PROP_MS_34",
+    "specification": false,
+    "a": -41024.57503379187,
+    "b": -41024.57503379187,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Entropy (Overall Liquid)",
+    "id": "PROP_MS_35",
+    "specification": false,
+    "a": -109.13622249578835,
+    "b": -109.13622249578835,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/[kmol.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Thermal Conductivity (Overall Liquid)",
+    "id": "PROP_MS_36",
+    "specification": false,
+    "a": 0.34102453706569136,
+    "b": 0.34102453706569136,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "W/[m.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Kinematic Viscosity (Overall Liquid)",
+    "id": "PROP_MS_37",
+    "specification": false,
+    "a": 0.5187593303495791,
+    "b": 0.5187593303495791,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "cSt",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Dynamic Viscosity (Overall Liquid)",
+    "id": "PROP_MS_38",
+    "specification": false,
+    "a": 0.4443550997739607,
+    "b": 0.4443550997739607,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "cP",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Heat Capacity (Overall Liquid)",
+    "id": "PROP_MS_39",
+    "specification": false,
+    "a": 4.731468149190317,
+    "b": 4.731468149190317,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Heat Capacity Ratio (Overall Liquid)",
+    "id": "PROP_MS_40",
+    "specification": false,
+    "a": 2.017391001308382,
+    "b": 2.017391001308382,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Overall Liquid)",
+    "id": "PROP_MS_41",
+    "specification": false,
+    "a": 3599.9999999999995,
+    "b": 3599.9999999999995,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Overall Liquid)",
+    "id": "PROP_MS_42",
+    "specification": false,
+    "a": 156.0916972087218,
+    "b": 156.0916972087218,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Flow (Overall Liquid)",
+    "id": "PROP_MS_43",
+    "specification": false,
+    "a": 4.202795444923399,
+    "b": 4.202795444923399,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "m3/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Compressibility Factor (Overall Liquid)",
+    "id": "PROP_MS_44",
+    "specification": false,
+    "a": 0.002787151227998958,
+    "b": 0.002787151227998958,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Overall Liquid)",
+    "id": "PROP_MS_45",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Overall Liquid)",
+    "id": "PROP_MS_46",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Fraction (Overall Liquid)",
+    "id": "PROP_MS_47",
+    "specification": false,
+    "a": 0.9999999999999998,
+    "b": 0.9999999999999998,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Density (Liquid 1)",
+    "id": "PROP_MS_48",
+    "specification": false,
+    "a": 856.5727376402479,
+    "b": 856.5727376402479,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Weight (Liquid 1)",
+    "id": "PROP_MS_49",
+    "specification": false,
+    "a": 23.063366369744656,
+    "b": 23.063366369744656,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Enthalpy (Liquid 1)",
+    "id": "PROP_MS_50",
+    "specification": false,
+    "a": -1778.776540080869,
+    "b": -1778.776540080869,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Entropy (Liquid 1)",
+    "id": "PROP_MS_51",
+    "specification": false,
+    "a": -4.7320161656434125,
+    "b": -4.7320161656434125,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Enthalpy (Liquid 1)",
+    "id": "PROP_MS_52",
+    "specification": false,
+    "a": -41024.57503379187,
+    "b": -41024.57503379187,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Entropy (Liquid 1)",
+    "id": "PROP_MS_53",
+    "specification": false,
+    "a": -109.13622249578835,
+    "b": -109.13622249578835,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/[kmol.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Thermal Conductivity (Liquid 1)",
+    "id": "PROP_MS_54",
+    "specification": false,
+    "a": 0.34102453706569136,
+    "b": 0.34102453706569136,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "W/[m.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Kinematic Viscosity (Liquid 1)",
+    "id": "PROP_MS_55",
+    "specification": false,
+    "a": 0.5187593303495791,
+    "b": 0.5187593303495791,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "cSt",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Dynamic Viscosity (Liquid 1)",
+    "id": "PROP_MS_56",
+    "specification": false,
+    "a": 0.4443550997739607,
+    "b": 0.4443550997739607,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "cP",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Heat Capacity (Liquid 1)",
+    "id": "PROP_MS_57",
+    "specification": false,
+    "a": 4.731468149190317,
+    "b": 4.731468149190317,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Heat Capacity Ratio (Liquid 1)",
+    "id": "PROP_MS_58",
+    "specification": false,
+    "a": 2.017391001308382,
+    "b": 2.017391001308382,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Liquid 1)",
+    "id": "PROP_MS_59",
+    "specification": false,
+    "a": 3599.9999999999995,
+    "b": 3599.9999999999995,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Liquid 1)",
+    "id": "PROP_MS_60",
+    "specification": false,
+    "a": 156.0916972087218,
+    "b": 156.0916972087218,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Flow (Liquid 1)",
+    "id": "PROP_MS_61",
+    "specification": false,
+    "a": 4.202795444923399,
+    "b": 4.202795444923399,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "m3/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Compressibility Factor (Liquid 1)",
+    "id": "PROP_MS_62",
+    "specification": false,
+    "a": 0.002787151227998958,
+    "b": 0.002787151227998958,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Liquid 1)",
+    "id": "PROP_MS_63",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Liquid 1)",
+    "id": "PROP_MS_64",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Fraction (Liquid 1)",
+    "id": "PROP_MS_65",
+    "specification": false,
+    "a": 0.9999999999999998,
+    "b": 0.9999999999999998,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Mixture) / Water",
+    "id": "PROP_MS_102/Water",
+    "specification": false,
+    "a": 0.6401056872206442,
+    "b": 0.6401056872206442,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Mixture) / Methanol",
+    "id": "PROP_MS_102/Methanol",
+    "specification": false,
+    "a": 0.35989431277935574,
+    "b": 0.35989431277935574,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Mixture) / Water",
+    "id": "PROP_MS_103/Water",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Mixture) / Methanol",
+    "id": "PROP_MS_103/Methanol",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Mixture) / Water",
+    "id": "PROP_MS_104/Water",
+    "specification": false,
+    "a": 99.91518311122556,
+    "b": 99.91518311122556,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Mixture) / Methanol",
+    "id": "PROP_MS_104/Methanol",
+    "specification": false,
+    "a": 56.1765140974962,
+    "b": 56.1765140974962,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Mixture) / Water",
+    "id": "PROP_MS_105/Water",
+    "specification": false,
+    "a": 1800.0,
+    "b": 1800.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Mixture) / Methanol",
+    "id": "PROP_MS_105/Methanol",
+    "specification": false,
+    "a": 1800.0,
+    "b": 1800.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Vapor) / Water",
+    "id": "PROP_MS_106/Water",
+    "specification": false,
+    "a": 0.29266557963645096,
+    "b": 0.29266557963645096,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Vapor) / Methanol",
+    "id": "PROP_MS_106/Methanol",
+    "specification": false,
+    "a": 0.7073344203635491,
+    "b": 0.7073344203635491,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Overall Liquid) / Water",
+    "id": "PROP_MS_107/Water",
+    "specification": false,
+    "a": 0.6401056872206442,
+    "b": 0.6401056872206442,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Overall Liquid) / Methanol",
+    "id": "PROP_MS_107/Methanol",
+    "specification": false,
+    "a": 0.35989431277935574,
+    "b": 0.35989431277935574,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Liquid 1) / Water",
+    "id": "PROP_MS_108/Water",
+    "specification": false,
+    "a": 0.6401056872206442,
+    "b": 0.6401056872206442,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Liquid 1) / Methanol",
+    "id": "PROP_MS_108/Methanol",
+    "specification": false,
+    "a": 0.35989431277935574,
+    "b": 0.35989431277935574,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Vapor) / Water",
+    "id": "PROP_MS_111/Water",
+    "specification": false,
+    "a": 0.1887281069336861,
+    "b": 0.1887281069336861,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Vapor) / Methanol",
+    "id": "PROP_MS_111/Methanol",
+    "specification": false,
+    "a": 0.8112718930663139,
+    "b": 0.8112718930663139,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Overall Liquid) / Water",
+    "id": "PROP_MS_112/Water",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Overall Liquid) / Methanol",
+    "id": "PROP_MS_112/Methanol",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Liquid 1) / Water",
+    "id": "PROP_MS_113/Water",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Liquid 1) / Methanol",
+    "id": "PROP_MS_113/Methanol",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Overall Liquid) / Water",
+    "id": "PROP_MS_117/Water",
+    "specification": false,
+    "a": 99.91518311122556,
+    "b": 99.91518311122556,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Overall Liquid) / Methanol",
+    "id": "PROP_MS_117/Methanol",
+    "specification": false,
+    "a": 56.1765140974962,
+    "b": 56.1765140974962,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Liquid 1) / Water",
+    "id": "PROP_MS_118/Water",
+    "specification": false,
+    "a": 99.91518311122556,
+    "b": 99.91518311122556,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Liquid 1) / Methanol",
+    "id": "PROP_MS_118/Methanol",
+    "specification": false,
+    "a": 56.1765140974962,
+    "b": 56.1765140974962,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Overall Liquid) / Water",
+    "id": "PROP_MS_122/Water",
+    "specification": false,
+    "a": 1799.9999999999998,
+    "b": 1799.9999999999998,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Overall Liquid) / Methanol",
+    "id": "PROP_MS_122/Methanol",
+    "specification": false,
+    "a": 1799.9999999999998,
+    "b": 1799.9999999999998,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Liquid 1) / Water",
+    "id": "PROP_MS_123/Water",
+    "specification": false,
+    "a": 1799.9999999999998,
+    "b": 1799.9999999999998,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Liquid 1) / Methanol",
+    "id": "PROP_MS_123/Methanol",
+    "specification": false,
+    "a": 1799.9999999999998,
+    "b": 1799.9999999999998,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Bubble Temperature at Stream Pressure",
+    "id": "PROP_MS_128",
+    "specification": false,
+    "a": -273.15,
+    "b": -273.15,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "C",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Dew Temperature at Stream Pressure",
+    "id": "PROP_MS_129",
+    "specification": false,
+    "a": -273.15,
+    "b": -273.15,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "C",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Internal Energy (Overall Liquid)",
+    "id": "PROP_MS_166",
+    "specification": false,
+    "a": -1779.1080998249918,
+    "b": -1779.1080998249918,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Gibbs Free Energy (Overall Liquid)",
+    "id": "PROP_MS_167",
+    "specification": false,
+    "a": -217.2112054185427,
+    "b": -217.2112054185427,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Helmholtz Free Energy (Overall Liquid)",
+    "id": "PROP_MS_168",
+    "specification": false,
+    "a": -217.54276516266555,
+    "b": -217.54276516266555,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Bulk Modulus (Liquid 1)",
+    "id": "PROP_MS_169",
+    "specification": false,
+    "a": -0.017749999956977503,
+    "b": -0.017749999956977503,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Joule-Thomson Coefficient (Liquid 1)",
+    "id": "PROP_MS_171",
+    "specification": false,
+    "a": -1.1594864774513864e-10,
+    "b": -1.1594864774513864e-10,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "K/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Internal Energy (Liquid 1)",
+    "id": "PROP_MS_172",
+    "specification": false,
+    "a": -1779.1080998249918,
+    "b": -1779.1080998249918,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Gibbs Free Energy (Liquid 1)",
+    "id": "PROP_MS_173",
+    "specification": false,
+    "a": -217.2112054185427,
+    "b": -217.2112054185427,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Helmholtz Free Energy (Liquid 1)",
+    "id": "PROP_MS_174",
+    "specification": false,
+    "a": -217.54276516266555,
+    "b": -217.54276516266555,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Isothermal Compressibility (Liquid 1)",
+    "id": "PROP_MS_175",
+    "specification": false,
+    "a": -0.0005633802830556635,
+    "b": -0.0005633802830556635,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "1/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Internal Energy (Mixture)",
+    "id": "PROP_MS_205",
+    "specification": false,
+    "a": -1779.1080998249918,
+    "b": -1779.1080998249918,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Gibbs Free Energy (Mixture)",
+    "id": "PROP_MS_206",
+    "specification": false,
+    "a": -217.2112054185427,
+    "b": -217.2112054185427,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Helmholtz Free Energy (Mixture)",
+    "id": "PROP_MS_207",
+    "specification": false,
+    "a": -217.54276516266555,
+    "b": -217.54276516266555,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Internal Energy (Mixture)",
+    "id": "PROP_MS_208",
+    "specification": false,
+    "a": -41032.221917644034,
+    "b": -41032.221917644034,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Gibbs Free Energy (Mixture)",
+    "id": "PROP_MS_209",
+    "specification": false,
+    "a": -5009.621610181716,
+    "b": -5009.621610181716,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Helmholtz Free Energy (Mixture)",
+    "id": "PROP_MS_210",
+    "specification": false,
+    "a": -5017.26849403388,
+    "b": -5017.26849403388,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Internal Energy (Overall Liquid)",
+    "id": "PROP_MS_214",
+    "specification": false,
+    "a": -41032.221917644034,
+    "b": -41032.221917644034,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Gibbs Free Energy (Overall Liquid)",
+    "id": "PROP_MS_215",
+    "specification": false,
+    "a": -5009.621610181716,
+    "b": -5009.621610181716,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Helmholtz Free Energy (Overall Liquid)",
+    "id": "PROP_MS_216",
+    "specification": false,
+    "a": -5017.26849403388,
+    "b": -5017.26849403388,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Internal Energy (Liquid 1)",
+    "id": "PROP_MS_217",
+    "specification": false,
+    "a": -41032.221917644034,
+    "b": -41032.221917644034,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Gibbs Free Energy (Liquid 1)",
+    "id": "PROP_MS_218",
+    "specification": false,
+    "a": -5009.621610181716,
+    "b": -5009.621610181716,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Helmholtz Free Energy (Liquid 1)",
+    "id": "PROP_MS_219",
+    "specification": false,
+    "a": -5017.26849403388,
+    "b": -5017.26849403388,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molarity (Mixture) / Water",
+    "id": "PROP_MS_239/Water",
+    "specification": false,
+    "a": 23773.506091502535,
+    "b": 23773.506091502535,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "mol/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molarity (Mixture) / Methanol",
+    "id": "PROP_MS_239/Methanol",
+    "specification": false,
+    "a": 13366.46401988286,
+    "b": 13366.46401988286,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "mol/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molarity (Overall Liquid) / Water",
+    "id": "PROP_MS_241/Water",
+    "specification": false,
+    "a": 23773.506091502542,
+    "b": 23773.506091502542,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "mol/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molarity (Overall Liquid) / Methanol",
+    "id": "PROP_MS_241/Methanol",
+    "specification": false,
+    "a": 13366.464019882864,
+    "b": 13366.464019882864,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "mol/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molarity (Liquid Phase 1) / Water",
+    "id": "PROP_MS_242/Water",
+    "specification": false,
+    "a": 23773.506091502542,
+    "b": 23773.506091502542,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "mol/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molarity (Liquid Phase 1) / Methanol",
+    "id": "PROP_MS_242/Methanol",
+    "specification": false,
+    "a": 13366.464019882864,
+    "b": 13366.464019882864,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "mol/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Energy Flow",
+    "id": "PROP_MS_154",
+    "specification": false,
+    "a": -11625.7206599722,
+    "b": -11625.7206599722,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kW",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Activity Coefficient, Liquid Phase 1 / Water",
+    "id": "Activity Coefficient, Liquid Phase 1 / Water",
+    "specification": false,
+    "a": 1.1368510840295805,
+    "b": 1.1368510840295805,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Activity Coefficient, Liquid Phase 1 / Methanol",
+    "id": "Activity Coefficient, Liquid Phase 1 / Methanol",
+    "specification": false,
+    "a": 1.287283863847155,
+    "b": 1.287283863847155,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Fugacity Coefficient, Vapor Phase / Water",
+    "id": "Fugacity Coefficient, Vapor Phase / Water",
+    "specification": false,
+    "a": 1e-05,
+    "b": 1e-05,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Fugacity Coefficient, Vapor Phase / Methanol",
+    "id": "Fugacity Coefficient, Vapor Phase / Methanol",
+    "specification": false,
+    "a": 1e-05,
+    "b": 1e-05,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Fugacity Coefficient, Liquid Phase 1 / Water",
+    "id": "Fugacity Coefficient, Liquid Phase 1 / Water",
+    "specification": false,
+    "a": 6.531305613996088e-07,
+    "b": 6.531305613996088e-07,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Fugacity Coefficient, Liquid Phase 1 / Methanol",
+    "id": "Fugacity Coefficient, Liquid Phase 1 / Methanol",
+    "specification": false,
+    "a": 3.179073707075676e-06,
+    "b": 3.179073707075676e-06,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Diffusion Coefficient, Vapor Phase / Water",
+    "id": "Diffusion Coefficient, Vapor Phase / Water",
+    "specification": false,
+    "a": 1.290224299202656e-10,
+    "b": 1.290224299202656e-10,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "m2/s",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Diffusion Coefficient, Vapor Phase / Methanol",
+    "id": "Diffusion Coefficient, Vapor Phase / Methanol",
+    "specification": false,
+    "a": 5.421614645710438e-11,
+    "b": 5.421614645710438e-11,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "m2/s",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Diffusion Coefficient, Liquid Phase 1 / Water",
+    "id": "Diffusion Coefficient, Liquid Phase 1 / Water",
+    "specification": false,
+    "a": 6.5737332581996594e-09,
+    "b": 6.5737332581996594e-09,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "m2/s",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Diffusion Coefficient, Liquid Phase 1 / Methanol",
+    "id": "Diffusion Coefficient, Liquid Phase 1 / Methanol",
+    "specification": false,
+    "a": 4.536043401339989e-09,
+    "b": 4.536043401339989e-09,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "m2/s",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Ideal Gas Heat Capacity Cp (Liquid 1)",
+    "id": "PROP_MS_251",
+    "specification": false,
+    "a": 1.6682916241756782,
+    "b": 1.6682916241756782,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Ideal Gas Heat Capacity Ratio (Liquid 1)",
+    "id": "PROP_MS_256",
+    "specification": false,
+    "a": 1.2756410042998536,
+    "b": 1.2756410042998536,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Fraction (Overall Liquid)",
+    "id": "PROP_MS_261",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Fraction (Liquid 1)",
+    "id": "PROP_MS_262",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "H",
+    "property": "Flow Conductance",
+    "id": "Flow Conductance",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "[kg/s]/[Pa^0.5]",
+    "changed": false
+   },
+   {
+    "object": "H",
+    "property": "Volume",
+    "id": "Volume",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "m3",
+    "changed": false
+   },
+   {
+    "object": "H",
+    "property": "Minimum Pressure",
+    "id": "Minimum Pressure",
+    "specification": false,
+    "a": 1.01325,
+    "b": 1.01325,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "H",
+    "property": "Initialize using Inlet Stream",
+    "id": "Initialize using Inlet Stream",
+    "specification": false,
+    "a": -1.0,
+    "b": -1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "H",
+    "property": "Ambient Temperature",
+    "id": "Ambient Temperature",
+    "specification": false,
+    "a": 25.0,
+    "b": 25.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "C",
+    "changed": false
+   },
+   {
+    "object": "H",
+    "property": "Wall Temperature",
+    "id": "Wall Temperature",
+    "specification": false,
+    "a": 25.0,
+    "b": 25.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "C",
+    "changed": false
+   },
+   {
+    "object": "H",
+    "property": "Efficiency",
+    "id": "PROP_HT_1",
+    "specification": false,
+    "a": 100.0,
+    "b": 100.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Pressure",
+    "id": "PROP_MS_1",
+    "specification": false,
+    "a": 3.0,
+    "b": 3.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Flow",
+    "id": "PROP_MS_2",
+    "specification": false,
+    "a": 3600.0,
+    "b": 3600.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Flow",
+    "id": "PROP_MS_3",
+    "specification": false,
+    "a": 156.0916972087218,
+    "b": 156.0916972087218,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molecular Weight (Mixture)",
+    "id": "PROP_MS_6",
+    "specification": false,
+    "a": 23.063366369744656,
+    "b": 23.063366369744656,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/kmol",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molecular Weight (Overall Liquid)",
+    "id": "PROP_MS_31",
+    "specification": false,
+    "a": 23.063366369744656,
+    "b": 23.063366369744656,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/kmol",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Flow (Overall Liquid)",
+    "id": "PROP_MS_41",
+    "specification": false,
+    "a": 3599.9999999999995,
+    "b": 3599.9999999999995,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Flow (Overall Liquid)",
+    "id": "PROP_MS_42",
+    "specification": false,
+    "a": 156.0916972087218,
+    "b": 156.0916972087218,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Fraction (Overall Liquid)",
+    "id": "PROP_MS_45",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Fraction (Overall Liquid)",
+    "id": "PROP_MS_46",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Weight (Liquid 1)",
+    "id": "PROP_MS_49",
+    "specification": false,
+    "a": 23.063366369744656,
+    "b": 23.063366369744656,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/kmol",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Flow (Liquid 1)",
+    "id": "PROP_MS_59",
+    "specification": false,
+    "a": 3599.9999999999995,
+    "b": 3599.9999999999995,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Flow (Liquid 1)",
+    "id": "PROP_MS_60",
+    "specification": false,
+    "a": 156.0916972087218,
+    "b": 156.0916972087218,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Fraction (Liquid 1)",
+    "id": "PROP_MS_63",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Fraction (Liquid 1)",
+    "id": "PROP_MS_64",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Fraction (Mixture) / Water",
+    "id": "PROP_MS_102/Water",
+    "specification": false,
+    "a": 0.6401056872206442,
+    "b": 0.6401056872206442,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Fraction (Mixture) / Methanol",
+    "id": "PROP_MS_102/Methanol",
+    "specification": false,
+    "a": 0.35989431277935574,
+    "b": 0.35989431277935574,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Fraction (Mixture) / Water",
+    "id": "PROP_MS_103/Water",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Fraction (Mixture) / Methanol",
+    "id": "PROP_MS_103/Methanol",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Flow (Mixture) / Water",
+    "id": "PROP_MS_104/Water",
+    "specification": false,
+    "a": 99.91518311122556,
+    "b": 99.91518311122556,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Flow (Mixture) / Methanol",
+    "id": "PROP_MS_104/Methanol",
+    "specification": false,
+    "a": 56.1765140974962,
+    "b": 56.1765140974962,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Flow (Mixture) / Water",
+    "id": "PROP_MS_105/Water",
+    "specification": false,
+    "a": 1800.0,
+    "b": 1800.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Flow (Mixture) / Methanol",
+    "id": "PROP_MS_105/Methanol",
+    "specification": false,
+    "a": 1800.0,
+    "b": 1800.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Fraction (Overall Liquid) / Water",
+    "id": "PROP_MS_107/Water",
+    "specification": false,
+    "a": 0.6401056872206442,
+    "b": 0.6401056872206442,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Fraction (Overall Liquid) / Methanol",
+    "id": "PROP_MS_107/Methanol",
+    "specification": false,
+    "a": 0.35989431277935574,
+    "b": 0.35989431277935574,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Fraction (Liquid 1) / Water",
+    "id": "PROP_MS_108/Water",
+    "specification": false,
+    "a": 0.6401056872206442,
+    "b": 0.6401056872206442,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Fraction (Liquid 1) / Methanol",
+    "id": "PROP_MS_108/Methanol",
+    "specification": false,
+    "a": 0.35989431277935574,
+    "b": 0.35989431277935574,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Fraction (Overall Liquid) / Water",
+    "id": "PROP_MS_112/Water",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Fraction (Overall Liquid) / Methanol",
+    "id": "PROP_MS_112/Methanol",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Fraction (Liquid 1) / Water",
+    "id": "PROP_MS_113/Water",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Fraction (Liquid 1) / Methanol",
+    "id": "PROP_MS_113/Methanol",
+    "specification": false,
+    "a": 0.5,
+    "b": 0.5,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Flow (Overall Liquid) / Water",
+    "id": "PROP_MS_117/Water",
+    "specification": false,
+    "a": 99.91518311122556,
+    "b": 99.91518311122556,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Flow (Overall Liquid) / Methanol",
+    "id": "PROP_MS_117/Methanol",
+    "specification": false,
+    "a": 56.1765140974962,
+    "b": 56.1765140974962,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Flow (Liquid 1) / Water",
+    "id": "PROP_MS_118/Water",
+    "specification": false,
+    "a": 99.91518311122556,
+    "b": 99.91518311122556,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Molar Flow (Liquid 1) / Methanol",
+    "id": "PROP_MS_118/Methanol",
+    "specification": false,
+    "a": 56.1765140974962,
+    "b": 56.1765140974962,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Flow (Overall Liquid) / Water",
+    "id": "PROP_MS_122/Water",
+    "specification": false,
+    "a": 1799.9999999999998,
+    "b": 1799.9999999999998,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Flow (Overall Liquid) / Methanol",
+    "id": "PROP_MS_122/Methanol",
+    "specification": false,
+    "a": 1799.9999999999998,
+    "b": 1799.9999999999998,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Flow (Liquid 1) / Water",
+    "id": "PROP_MS_123/Water",
+    "specification": false,
+    "a": 1799.9999999999998,
+    "b": 1799.9999999999998,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Mass Flow (Liquid 1) / Methanol",
+    "id": "PROP_MS_123/Methanol",
+    "specification": false,
+    "a": 1799.9999999999998,
+    "b": 1799.9999999999998,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Bubble Temperature at Stream Pressure",
+    "id": "PROP_MS_128",
+    "specification": false,
+    "a": -273.15,
+    "b": -273.15,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "C",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Dew Temperature at Stream Pressure",
+    "id": "PROP_MS_129",
+    "specification": false,
+    "a": -273.15,
+    "b": -273.15,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "C",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Fugacity Coefficient, Vapor Phase / Water",
+    "id": "Fugacity Coefficient, Vapor Phase / Water",
+    "specification": false,
+    "a": 1e-05,
+    "b": 1e-05,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Fugacity Coefficient, Vapor Phase / Methanol",
+    "id": "Fugacity Coefficient, Vapor Phase / Methanol",
+    "specification": false,
+    "a": 1e-05,
+    "b": 1e-05,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Volumetric Fraction (Overall Liquid)",
+    "id": "PROP_MS_261",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "P",
+    "property": "Volumetric Fraction (Liquid 1)",
+    "id": "PROP_MS_262",
+    "specification": false,
+    "a": 1.0,
+    "b": 1.0,
+    "change": 0.0,
+    "percent": 0.0,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Density (Vapor)",
+    "id": "PROP_MS_12",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molecular Weight (Vapor)",
+    "id": "PROP_MS_13",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Enthalpy (Vapor)",
+    "id": "PROP_MS_14",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Entropy (Vapor)",
+    "id": "PROP_MS_15",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Enthalpy (Vapor)",
+    "id": "PROP_MS_16",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Entropy (Vapor)",
+    "id": "PROP_MS_17",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kmol.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Thermal Conductivity (Vapor)",
+    "id": "PROP_MS_18",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "W/[m.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Kinematic Viscosity (Vapor)",
+    "id": "PROP_MS_19",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "cSt",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Dynamic Viscosity (Vapor)",
+    "id": "PROP_MS_20",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "cP",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Heat Capacity (Vapor)",
+    "id": "PROP_MS_21",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Vapor)",
+    "id": "PROP_MS_23",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Vapor)",
+    "id": "PROP_MS_24",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Flow (Vapor)",
+    "id": "PROP_MS_25",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "m3/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Compressibility Factor (Vapor)",
+    "id": "PROP_MS_26",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Vapor)",
+    "id": "PROP_MS_27",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Vapor)",
+    "id": "PROP_MS_28",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Fraction (Vapor)",
+    "id": "PROP_MS_29",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Density (Liquid 2)",
+    "id": "PROP_MS_66",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Weight (Liquid 2)",
+    "id": "PROP_MS_67",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Enthalpy (Liquid 2)",
+    "id": "PROP_MS_68",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Entropy (Liquid 2)",
+    "id": "PROP_MS_69",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Enthalpy (Liquid 2)",
+    "id": "PROP_MS_70",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Entropy (Liquid 2)",
+    "id": "PROP_MS_71",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kmol.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Thermal Conductivity (Liquid 2)",
+    "id": "PROP_MS_72",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "W/[m.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Kinematic Viscosity (Liquid 2)",
+    "id": "PROP_MS_73",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "cSt",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Dynamic Viscosity (Liquid 2)",
+    "id": "PROP_MS_74",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "cP",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Heat Capacity (Liquid 2)",
+    "id": "PROP_MS_75",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Liquid 2)",
+    "id": "PROP_MS_77",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Liquid 2)",
+    "id": "PROP_MS_78",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Flow (Liquid 2)",
+    "id": "PROP_MS_79",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "m3/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Compressibility Factor (Liquid 2)",
+    "id": "PROP_MS_80",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Liquid 2)",
+    "id": "PROP_MS_81",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Liquid 2)",
+    "id": "PROP_MS_82",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Fraction (Liquid 2)",
+    "id": "PROP_MS_83",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Density (Aqueous)",
+    "id": "PROP_MS_84",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molecular Weight (Aqueous)",
+    "id": "PROP_MS_85",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Enthalpy (Aqueous)",
+    "id": "PROP_MS_86",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Entropy (Aqueous)",
+    "id": "PROP_MS_87",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Enthalpy (Aqueous)",
+    "id": "PROP_MS_88",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Entropy (Aqueous)",
+    "id": "PROP_MS_89",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kmol.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Thermal Conductivity (Aqueous)",
+    "id": "PROP_MS_90",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "W/[m.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Kinematic Viscosity (Aqueous)",
+    "id": "PROP_MS_91",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "cSt",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Dynamic Viscosity (Aqueous)",
+    "id": "PROP_MS_92",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "cP",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Heat Capacity (Aqueous)",
+    "id": "PROP_MS_93",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Aqueous)",
+    "id": "PROP_MS_95",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Aqueous)",
+    "id": "PROP_MS_96",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Flow (Aqueous)",
+    "id": "PROP_MS_97",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "m3/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Compressibility Factor (Aqueous)",
+    "id": "PROP_MS_98",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Aqueous)",
+    "id": "PROP_MS_99",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Aqueous Mass Fraction",
+    "id": "PROP_MS_100",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Aqueous Volumetric Fraction",
+    "id": "PROP_MS_101",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Density (Solid)",
+    "id": "PROP_MS_131",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/m3",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molecular Weight (Solid)",
+    "id": "PROP_MS_132",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Enthalpy (Solid)",
+    "id": "PROP_MS_133",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Specific Entropy (Solid)",
+    "id": "PROP_MS_134",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Enthalpy (Solid)",
+    "id": "PROP_MS_135",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Entropy (Solid)",
+    "id": "PROP_MS_136",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kmol.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Thermal Conductivity (Solid)",
+    "id": "PROP_MS_137",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "W/[m.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Kinematic Viscosity (Solid)",
+    "id": "PROP_MS_138",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "cSt",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Dynamic Viscosity (Solid)",
+    "id": "PROP_MS_139",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "cP",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Solid Heat Capacity (Cp)",
+    "id": "PROP_MS_140",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/[kg.K]",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Solid)",
+    "id": "PROP_MS_142",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Solid)",
+    "id": "PROP_MS_143",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Flow (Solid)",
+    "id": "PROP_MS_144",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "m3/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Compressibility Factor (Solid)",
+    "id": "PROP_MS_145",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Solid)",
+    "id": "PROP_MS_146",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Solid)",
+    "id": "PROP_MS_147",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Volumetric Fraction (Solid)",
+    "id": "PROP_MS_148",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Liquid 2) / Water",
+    "id": "PROP_MS_109/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Liquid 2) / Methanol",
+    "id": "PROP_MS_109/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Aqueous) / Water",
+    "id": "PROP_MS_110/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Fraction (Aqueous) / Methanol",
+    "id": "PROP_MS_110/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Liquid 2) / Water",
+    "id": "PROP_MS_114/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Liquid 2) / Methanol",
+    "id": "PROP_MS_114/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Aqueous) / Water",
+    "id": "PROP_MS_115/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Aqueous) / Methanol",
+    "id": "PROP_MS_115/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Vapor) / Water",
+    "id": "PROP_MS_116/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Vapor) / Methanol",
+    "id": "PROP_MS_116/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Liquid 2) / Water",
+    "id": "PROP_MS_119/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Flow (Liquid 2) / Methanol",
+    "id": "PROP_MS_119/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Vapor) / Water",
+    "id": "PROP_MS_121/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Vapor) / Methanol",
+    "id": "PROP_MS_121/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Liquid 2) / Water",
+    "id": "PROP_MS_124/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Liquid 2) / Methanol",
+    "id": "PROP_MS_124/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Aqueous) / Water",
+    "id": "PROP_MS_125/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Aqueous) / Methanol",
+    "id": "PROP_MS_125/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mole Fraction (Solid) / Water",
+    "id": "PROP_MS_149/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mole Fraction (Solid) / Methanol",
+    "id": "PROP_MS_149/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Solid) / Water",
+    "id": "PROP_MS_150/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Fraction (Solid) / Methanol",
+    "id": "PROP_MS_150/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mole Flow (Solid) / Water",
+    "id": "PROP_MS_151/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mole Flow (Solid) / Methanol",
+    "id": "PROP_MS_151/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kmol/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Solid) / Water",
+    "id": "PROP_MS_152/Water",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mass Flow (Solid) / Methanol",
+    "id": "PROP_MS_152/Methanol",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kg/h",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Bubble Pressure at Stream Temperature",
+    "id": "PROP_MS_126",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Dew Pressure at Stream Temperature",
+    "id": "PROP_MS_127",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Phases",
+    "id": "PROP_MS_130",
+    "specification": false,
+    "a": "L",
+    "b": "L",
+    "change": null,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "pH (Liquid 1)",
+    "id": "PROP_MS_153",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Osmotic Coefficient (Liquid 1)",
+    "id": "PROP_MS_246",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Mean Ionic Activity Coefficient (Liquid 1)",
+    "id": "PROP_MS_247",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Freezing Point (Liquid 1)",
+    "id": "PROP_MS_248",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "C",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Freezing Point Depression (Liquid 1)",
+    "id": "PROP_MS_249",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "C.",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Isothermal Compressibility (Vapor)",
+    "id": "PROP_MS_155",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "1/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Bulk Modulus (Vapor)",
+    "id": "PROP_MS_156",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Speed of Sound (Vapor)",
+    "id": "PROP_MS_157",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "m/s",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Joule-Thomson Coefficient (Vapor)",
+    "id": "PROP_MS_158",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "K/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Internal Energy (Vapor)",
+    "id": "PROP_MS_159",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Gibbs Free Energy (Vapor)",
+    "id": "PROP_MS_160",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Helmholtz Free Energy (Vapor)",
+    "id": "PROP_MS_161",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Isothermal Compressibility (Overall Liquid)",
+    "id": "PROP_MS_162",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "1/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Bulk Modulus (Overall Liquid)",
+    "id": "PROP_MS_163",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Speed of Sound (Overall Liquid)",
+    "id": "PROP_MS_164",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "m/s",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Joule-Thomson Coefficient (Overall Liquid)",
+    "id": "PROP_MS_165",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "K/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Bulk Modulus (Liquid 2)",
+    "id": "PROP_MS_176",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Speed of Sound (Liquid 2)",
+    "id": "PROP_MS_177",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "m/s",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Joule-Thomson Coefficient (Liquid 2)",
+    "id": "PROP_MS_178",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "K/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Internal Energy (Liquid 2)",
+    "id": "PROP_MS_179",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Gibbs Free Energy (Liquid 2)",
+    "id": "PROP_MS_180",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Helmholtz Free Energy (Liquid 2)",
+    "id": "PROP_MS_181",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Isothermal Compressibility (Liquid 2)",
+    "id": "PROP_MS_182",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "1/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Bulk Modulus (Liquid 3)",
+    "id": "PROP_MS_183",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Speed of Sound (Liquid 3)",
+    "id": "PROP_MS_184",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "m/s",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Joule-Thomson Coefficient (Liquid 3)",
+    "id": "PROP_MS_185",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "K/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Internal Energy (Liquid 3)",
+    "id": "PROP_MS_186",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Gibbs Free Energy (Liquid 3)",
+    "id": "PROP_MS_187",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Helmholtz Free Energy (Liquid 3)",
+    "id": "PROP_MS_188",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Isothermal Compressibility (Liquid 3)",
+    "id": "PROP_MS_189",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "1/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Bulk Modulus (Aqueous)",
+    "id": "PROP_MS_190",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Speed of Sound (Aqueous)",
+    "id": "PROP_MS_191",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "m/s",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Joule-Thomson Coefficient (Aqueous)",
+    "id": "PROP_MS_192",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "K/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Internal Energy (Aqueous)",
+    "id": "PROP_MS_193",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Gibbs Free Energy (Aqueous)",
+    "id": "PROP_MS_194",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Helmholtz Free Energy (Aqueous)",
+    "id": "PROP_MS_195",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Isothermal Compressibility (Aqueous)",
+    "id": "PROP_MS_196",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "1/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Bulk Modulus (Solid)",
+    "id": "PROP_MS_198",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "bar",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Speed of Sound (Solid)",
+    "id": "PROP_MS_199",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "m/s",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Joule-Thomson Coefficient (Solid)",
+    "id": "PROP_MS_200",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "K/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Internal Energy (Solid)",
+    "id": "PROP_MS_201",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Gibbs Free Energy (Solid)",
+    "id": "PROP_MS_202",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Helmholtz Free Energy (Solid)",
+    "id": "PROP_MS_203",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kg",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Isothermal Compressibility (Solid)",
+    "id": "PROP_MS_204",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "1/Pa",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Internal Energy (Vapor)",
+    "id": "PROP_MS_211",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Gibbs Free Energy (Vapor)",
+    "id": "PROP_MS_212",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Helmholtz Free Energy (Vapor)",
+    "id": "PROP_MS_213",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Internal Energy (Liquid 2)",
+    "id": "PROP_MS_220",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Gibbs Free Energy (Liquid 2)",
+    "id": "PROP_MS_221",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Helmholtz Free Energy (Liquid 2)",
+    "id": "PROP_MS_222",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Internal Energy (Liquid 3)",
+    "id": "PROP_MS_223",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   },
+   {
+    "object": "F",
+    "property": "Molar Gibbs Free Energy (Liquid 3)",
+    "id": "PROP_MS_224",
+    "specification": false,
+    "a": 0.0,
+    "b": 0.0,
+    "change": 0.0,
+    "percent": null,
+    "unit": "kJ/kmol",
+    "changed": false
+   }
+  ],
+  "text": "Scenario comparison: a against b\n\n1 specification(s) changed from a to b: H Heat Added 50 -> 60 kW.\n72 result(s) moved; the largest relative changes: H Temperature Difference +20.0 %; Q Energy Flow +20.0 %; P Fugacity Coefficient, Liquid Phase 1 / Water +9.6 %; P Fugacity Coefficient, Liquid Phase 1 / Methanol +8.3 %; P Molar Gibbs Free Energy (Mixture) +5.8 %; P Molar Gibbs Free Energy (Overall Liquid) +5.8 %.\n3 object(s) felt the change; 1 did not (F): they sit upstream of the change, or on a branch it does not reach.\nWith one specification changed, every difference below is its effect: read the table as a sensitivity, from the object edited down the flowsheet.\n\nObject                  Property                                             A             B        change        %  unit\nH *                     Heat Added                                          50            60            10   +20.00  kW\nH                       Temperature Difference                          10.573        12.689        2.1163   +20.02  C.\nQ                       Energy Flow                                         50            60            10   +20.00  kW\nP                       Fugacity Coefficient, Liquid Phase 1 /~     1.0533E-06    1.1543E-06    1.0103E-07    +9.59  bar\nP                       Fugacity Coefficient, Liquid Phase 1 /~     4.8298E-06    5.2329E-06    4.0306E-07    +8.35  bar\nP                       Molar Gibbs Free Energy (Mixture)                -3874         -3651        222.97    +5.76  kJ/kmol\nP                       Molar Gibbs Free Energy (Overall Liqui~          -3874         -3651        222.97    +5.76  kJ/kmol\nP                       Molar Gibbs Free Energy (Liquid 1)               -3874         -3651        222.97    +5.76  kJ/kmol\nP                       Gibbs Free Energy (Overall Liquid)             -167.97        -158.3        9.6678    +5.76  kJ/kg\nP                       Gibbs Free Energy (Liquid 1)                   -167.97        -158.3        9.6678    +5.76  kJ/kg\nP                       Gibbs Free Energy (Mixture)                    -167.97        -158.3        9.6678    +5.76  kJ/kg\nP                       Molar Helmholtz Free Energy (Mixture)          -3881.7       -3658.8        222.95    +5.74  kJ/kmol\nP                       Molar Helmholtz Free Energy (Overall L~        -3881.7       -3658.8        222.95    +5.74  kJ/kmol\nP                       Molar Helmholtz Free Energy (Liquid 1)         -3881.7       -3658.8        222.95    +5.74  kJ/kmol\nP                       Helmholtz Free Energy (Overall Liquid)         -168.31       -158.64        9.6669    +5.74  kJ/kg\nP                       Helmholtz Free Energy (Liquid 1)               -168.31       -158.64        9.6669    +5.74  kJ/kg\nP                       Helmholtz Free Energy (Mixture)                -168.31       -158.64        9.6669    +5.74  kJ/kg\nH                       Outlet Temperature                              67.423        69.539        2.1163    +3.14  C\nP                       Temperature                                     67.423        69.539        2.1163    +3.14  C\nP                       Dynamic Viscosity (Overall Liquid)             0.38464       0.37436     -0.010271    -2.67  cP\nP                       Dynamic Viscosity (Liquid 1)                   0.38464       0.37436     -0.010271    -2.67  cP\nP                       Kinematic Viscosity (Overall Liquid)            0.4538       0.44265     -0.011146    -2.46  cSt\nP                       Kinematic Viscosity (Liquid 1)                  0.4538       0.44265     -0.011146    -2.46  cSt\nP                       Bulk Modulus (Liquid 1)                      -0.018658     -0.018835   -0.00017683    -0.95  bar\nP                       Isothermal Compressibility (Liquid 1)      -0.00053595   -0.00053092    5.0317E-06    +0.94  1/Pa\nP                       Mass Fraction (Vapor) / Water                  0.19795       0.19974     0.0017963    +0.91  \nP                       Molar Fraction (Vapor) / Water                 0.30505       0.30745     0.0023956    +0.79  \nP                       Specific Entropy (Mixture)                     -4.5829       -4.5536      0.029271    +0.64  kJ/[kg.K]\nP                       Specific Entropy (Overall Liquid)              -4.5829       -4.5536      0.029271    +0.64  kJ/[kg.K]\nP                       Specific Entropy (Liquid 1)                    -4.5829       -4.5536      0.029271    +0.64  kJ/[kg.K]\nP                       Molar Entropy (Mixture)                         -105.7       -105.02       0.67509    +0.64  kJ/[kmol.K]\nP                       Molar Entropy (Overall Liquid)                  -105.7       -105.02       0.67509    +0.64  kJ/[kmol.K]\nP                       Molar Entropy (Liquid 1)                        -105.7       -105.02       0.67509    +0.64  kJ/[kmol.K]\nP                       Specific Enthalpy (Mixture)                    -1728.8       -1718.8            10    +0.58  kJ/kg\nP                       Specific Enthalpy (Overall Liquid)             -1728.8       -1718.8            10    +0.58  kJ/kg\nP                       Specific Enthalpy (Liquid 1)                   -1728.8       -1718.8            10    +0.58  kJ/kg\nP                       Molar Enthalpy (Mixture)                        -39871        -39641        230.63    +0.58  kJ/kmol\nP                       Molar Enthalpy (Overall Liquid)                 -39871        -39641        230.63    +0.58  kJ/kmol\nP                       Molar Enthalpy (Liquid 1)                       -39871        -39641        230.63    +0.58  kJ/kmol\nP                       Molar Internal Energy (Mixture)                 -39879        -39649        230.61    +0.58  kJ/kmol\nP                       Molar Internal Energy (Overall Liquid)          -39879        -39649        230.61    +0.58  kJ/kmol\nP                       Molar Internal Energy (Liquid 1)                -39879        -39649        230.61    +0.58  kJ/kmol\nP                       Internal Energy (Overall Liquid)               -1729.1       -1719.1        9.9991    +0.58  kJ/kg\nP                       Internal Energy (Liquid 1)                     -1729.1       -1719.1        9.9991    +0.58  kJ/kg\nP                       Internal Energy (Mixture)                      -1729.1       -1719.1        9.9991    +0.58  kJ/kg\nP                       Heat Capacity Ratio (Overall Liquid)            2.0597        2.0677     0.0079384    +0.39  \nP                       Heat Capacity Ratio (Liquid 1)                  2.0597        2.0677     0.0079384    +0.39  \nP                       Compressibility Factor (Overall Liquid)      0.0027364     0.0027267    -9.616E-06    -0.35  \nP                       Compressibility Factor (Liquid 1)            0.0027364     0.0027267    -9.616E-06    -0.35  \nP                       Molar Fraction (Vapor) / Methanol              0.69495       0.69255    -0.0023956    -0.34  \nP                       Mass Fraction (Vapor) / Methanol               0.80205       0.80026    -0.0017963    -0.22  \nP                       Volumetric Flow                                 4.2473        4.2567     0.0093406    +0.22  m3/h\nP                       Volumetric Flow (Overall Liquid)                4.2473        4.2567     0.0093406    +0.22  m3/h\nP                       Volumetric Flow (Liquid 1)                      4.2473        4.2567     0.0093406    +0.22  m3/h\nP                       Molarity (Mixture) / Methanol                    13226         13197       -29.023    -0.22  mol/m3\nP                       Density (Mixture)                               847.59        845.73       -1.8599    -0.22  kg/m3\nP                       Density (Overall Liquid)                        847.59        845.73       -1.8599    -0.22  kg/m3\nP                       Density (Liquid 1)                              847.59        845.73       -1.8599    -0.22  kg/m3\nP                       Molarity (Mixture) / Water                       23524         23473        -51.62    -0.22  mol/m3\nP                       Molarity (Overall Liquid) / Methanol             13226         13197       -29.023    -0.22  mol/m3\nP                       Molarity (Liquid Phase 1) / Methanol             13226         13197       -29.023    -0.22  mol/m3\nP                       Molarity (Overall Liquid) / Water                23524         23473        -51.62    -0.22  mol/m3\nP                       Molarity (Liquid Phase 1) / Water                23524         23473        -51.62    -0.22  mol/m3\nP                       Ideal Gas Heat Capacity Cp (Liquid 1)           1.6819        1.6846      0.002747    +0.16  kJ/kg\nP                       Activity Coefficient, Liquid Phase 1 /~         1.2813          1.28    -0.0012274    -0.10  \nP                       Energy Flow                                     -11576        -11566            10    +0.09  kW\nP                       Activity Coefficient, Liquid Phase 1 /~         1.1322        1.1313   -0.00090066    -0.08  \nP                       Ideal Gas Heat Capacity Ratio (Liquid ~         1.2728        1.2722   -0.00056594    -0.04  \nP                       Heat Capacity (Overall Liquid)                  4.7259        4.7244    -0.0014764    -0.03  kJ/[kg.K]\nP                       Heat Capacity (Liquid 1)                        4.7259        4.7244    -0.0014764    -0.03  kJ/[kg.K]\nP                       Thermal Conductivity (Mixture)                 0.34109       0.34104   -4.2551E-05    -0.01  W/[m.K]\nP                       Thermal Conductivity (Overall Liquid)          0.34109       0.34104   -4.2551E-05    -0.01  W/[m.K]\nP                       Thermal Conductivity (Liquid 1)                0.34109       0.34104   -4.2551E-05    -0.01  W/[m.K]\n\n* specification. 577 value(s) unchanged.\n"
+ },
+ "s_conn": [
+  {
+   "unitop": "S",
+   "connections": [
+    "feed:F->port0"
+   ]
+  },
+  {
+   "unitop": "S",
+   "connections": [
+    "product:P1->port0"
+   ]
+  },
+  {
+   "unitop": "S",
+   "connections": [
+    "product:P2->port1"
+   ]
+  },
+  {
+   "unitop": "S",
+   "connections": [
+    "product:P3->port2"
+   ]
+  }
+ ],
+ "s_set": {
+  "unitop": "S",
+  "applied": [
+   "OperationMode = SplitRatios"
+  ]
+ },
+ "s_set_sr": {
+  "__error__": "{\"error\":\"'S' has no settable property 'SR0'. Available: 'AdjustVarType', 'Calculated', 'DebugMode', 'DynamicsOnly', 'DynamicsSpec', 'EnergyFlow', 'InfoCarrierVarType', 'IsAdjustAttached', 'IsInfoCarrierAttached', 'IsSpecAttached', 'ObjectClass', 'OperationMode', 'OverrideCalculationRoutine', 'PROP_SP_1', 'PROP_SP_2', 'SR1', 'SR2', 'SpecVarType', 'StoreDetailedDebugReport', 'Stream2FlowSpec', 'StreamFlowSpec', 'Visible'.\",\"type\":\"ArgumentException\"}",
+  "structured": null
+ },
+ "s_dof": {
+  "object": "S",
+  "type": "NodeOut",
+  "mode": "",
+  "supported": false,
+  "required": 0,
+  "specified": 0,
+  "remaining": 0,
+  "missing": [],
+  "slots": [],
+  "note": "The specifications of this type are not catalogued; check its editor."
+ },
+ "s_solve": {
+  "ok": true,
+  "error_count": 0,
+  "errors": [],
+  "objects": [
+   {
+    "name": "F",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "P1",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "P2",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "P3",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "S",
+    "type": "NodeOut",
+    "calculated": true,
+    "error": ""
+   }
+  ]
+ },
+ "s_res": {
+  "name": "S",
+  "type": "NodeOut",
+  "calculated": true,
+  "error": "",
+  "properties": {
+   "Stream 1 Flow Spec": {
+    "value": "0",
+    "units": ""
+   },
+   "Stream 2 Flow Spec": {
+    "value": "0",
+    "units": ""
+   },
+   "SR3": {
+    "value": "0",
+    "units": ""
+   }
+  },
+  "calculation_modes": [
+   "SplitRatios",
+   "StreamMassFlowSpec",
+   "StreamMoleFlowSpec",
+   "StreamVolumetricFlowSpec"
+  ],
+  "calculation_mode": ""
+ },
+ "s_P": [
+  1.0,
+  0.0,
+  0.0
+ ],
+ "x_conn": [
+  {
+   "unitop": "X",
+   "connections": [
+    "feed:HOT->port0"
+   ]
+  },
+  {
+   "unitop": "X",
+   "connections": [
+    "feed:COLD->port1"
+   ]
+  },
+  {
+   "unitop": "X",
+   "connections": [
+    "product:HO->port0"
+   ]
+  },
+  {
+   "unitop": "X",
+   "connections": [
+    "product:CO->port1"
+   ]
+  }
+ ],
+ "x_set": {
+  "unitop": "X",
+  "applied": [
+   "CalculationMode = CalcBothTemp_UA",
+   "OverallCoefficient = 800",
+   "Area = 5"
+  ]
+ },
+ "x_hx_bogus": {
+  "__error__": "{\"error\":\"'ZZZ' is not a valid FlowDirection. Use one of: CounterCurrent, CoCurrent.\",\"type\":\"ArgumentException\"}",
+  "structured": null
+ },
+ "x_type_bogus": {
+  "__error__": "{\"error\":\"The input string 'ZZZ' was not in a correct format.\",\"type\":\"FormatException\"}",
+  "structured": null
+ },
+ "x_solve": {
+  "ok": true,
+  "error_count": 0,
+  "errors": [],
+  "objects": [
+   {
+    "name": "HOT",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "COLD",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "HO",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "CO",
+    "type": "MaterialStream",
+    "calculated": true,
+    "error": ""
+   },
+   {
+    "name": "X",
+    "type": "HeatExchanger",
+    "calculated": true,
+    "error": ""
+   }
+  ]
+ },
+ "x_res": {
+  "name": "X",
+  "type": "HeatExchanger",
+  "calculated": true,
+  "error": "",
+  "properties": {
+   "Heat Load": {
+    "value": "154.8293652747845",
+    "units": "kW"
+   },
+   "Cold fluid outlet temperature": {
+    "value": "56.563196410277214",
+    "units": "C"
+   },
+   "Hot fluid outlet temperature": {
+    "value": "64.01353034416718",
+    "units": "C"
+   },
+   "Thermal Efficiency": {
+    "value": "46.83313783782239",
+    "units": "%"
+   },
+   "Maximum Theoretical Heat Exchange": {
+    "value": "330.5978894921375",
+    "units": "kW"
+   },
+   "[Shell and Tube] Fouling Factor (Design)": {
+    "value": "0",
+    "units": "K.m2/W"
+   },
+   "[Shell and Tube] LMTD Correction Factor (F)": {
+    "value": "1",
+    "units": ""
+   },
+   "Logarithmic mean temperature difference LMTD": {
+    "value": "38.70558866166039",
+    "units": "C."
+   },
+   "[Shell and Tube] Resistance heat transfer pipes": {
+    "value": "0",
+    "units": "K.m2/W"
+   },
+   "[Shell and Tube] Resistance thermal conductivity pipes": {
+    "value": "0",
+    "units": "K.m2/W"
+   },
+   "[Shell and Tube] Resistance heat transfer shell": {
+    "value": "0",
+    "units": "K.m2/W"
+   },
+   "[Shell and Tube] Reynolds number shell": {
+    "value": "0",
+    "units": ""
+   },
+   "[Shell and Tube] Reynolds number tubes": {
+    "value": "0",
+    "units": ""
+   },
+   "Calculated MITA": {
+    "value": "0",
+    "units": "C."
+   },
+   "PROP_HX_49": {
+    "value": "0",
+    "units": "mm"
+   },
+   "PROP_HX_50": {
+    "value": "0",
+    "units": "m"
+   },
+   "PROP_HX_51": {
+    "value": "0",
+    "units": "m2"
+   },
+   "PROP_HX_52": {
+    "value": "0",
+    "units": "m2"
+   },
+   "PROP_HX_53": {
+    "value": "0",
+    "units": ""
+   },
+   "PROP_HX_54": {
+    "value": "0",
+    "units": "m2"
+   },
+   "PROP_HX_55": {
+    "value": "0",
+    "units": "m2"
+   },
+   "PROP_HX_56": {
+    "value": "0",
+    "units": "m/s"
+   },
+   "PROP_HX_57": {
+    "value": "0",
+    "units": "m/s"
+   },
+   "PROP_HX_58": {
+    "value": "0",
+    "units": "m/s"
+   },
+   "PROP_HX_59": {
+    "value": "0",
+    "units": "m/s"
+   },
+   "PROP_HX_60": {
+    "value": "0",
+    "units": "m/s"
+   },
+   "PROP_HX_61": {
+    "value": "0",
+    "units": "m/s"
+   },
+   "PROP_HX_62": {
+    "value": "0",
+    "units": "bar"
+   },
+   "PROP_HX_63": {
+    "value": "0",
+    "units": "bar"
+   },
+   "PROP_HX_64": {
+    "value": "0",
+    "units": "bar"
+   },
+   "PROP_HX_65": {
+    "value": "0",
+    "units": "bar"
+   },
+   "PROP_HX_66": {
+    "value": "0",
+    "units": "m3"
+   },
+   "PROP_HX_67": {
+    "value": "0",
+    "units": "m3"
+   },
+   "PROP_HX_68": {
+    "value": "0",
+    "units": "kg"
+   },
+   "PROP_HX_69": {
+    "value": "0",
+    "units": "kg"
+   },
+   "PROP_HX_70": {
+    "value": "0",
+    "units": "kg"
+   }
+  },
+  "calculation_modes": [
+   "CalcTempHotOut",
+   "CalcTempColdOut",
+   "CalcBothTemp",
+   "CalcBothTemp_UA",
+   "CalcArea",
+   "ShellandTube_Rating",
+   "ShellandTube_CalcFoulingFactor",
+   "PinchPoint",
+   "ThermalEfficiency",
+   "OutletVaporFraction1",
+   "OutletVaporFraction2"
+  ],
+  "calculation_mode": ""
+ },
+ "x_T": [
+  337.16353034416716,
+  329.7131964102772
+ ],
+ "x_dof_modes": {
+  "CalcTempHotOut": {
+   "object": "X",
+   "type": "HeatExchanger",
+   "mode": "CalcTempHotOut",
+   "supported": true,
+   "required": 1,
+   "specified": 1,
+   "remaining": 0,
+   "missing": [],
+   "slots": [
+    {
+     "name": "Cold side outlet temperature",
+     "property": "ColdSideOutletTemperature",
+     "required": true,
+     "set": true,
+     "value": 329.7131964102772,
+     "units": "K"
+    },
+    {
+     "name": "Hot side pressure drop",
+     "property": "HotSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Cold side pressure drop",
+     "property": "ColdSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Heat loss",
+     "property": "HeatLoss",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "kW",
+     "note": "0 by default."
+    }
+   ],
+   "note": "Two inlets give four unknowns; the energy balance is one equation, so one more specification closes it, or two when the area and U are the unknowns."
+  },
+  "CalcTempColdOut": {
+   "object": "X",
+   "type": "HeatExchanger",
+   "mode": "CalcTempColdOut",
+   "supported": true,
+   "required": 1,
+   "specified": 1,
+   "remaining": 0,
+   "missing": [],
+   "slots": [
+    {
+     "name": "Hot side outlet temperature",
+     "property": "HotSideOutletTemperature",
+     "required": true,
+     "set": true,
+     "value": 337.16353034416716,
+     "units": "K"
+    },
+    {
+     "name": "Hot side pressure drop",
+     "property": "HotSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Cold side pressure drop",
+     "property": "ColdSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Heat loss",
+     "property": "HeatLoss",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "kW",
+     "note": "0 by default."
+    }
+   ],
+   "note": "Two inlets give four unknowns; the energy balance is one equation, so one more specification closes it, or two when the area and U are the unknowns."
+  },
+  "CalcBothTemp": {
+   "object": "X",
+   "type": "HeatExchanger",
+   "mode": "CalcBothTemp",
+   "supported": true,
+   "required": 1,
+   "specified": 1,
+   "remaining": 0,
+   "missing": [],
+   "slots": [
+    {
+     "name": "Heat exchanged",
+     "property": "Q",
+     "required": true,
+     "set": true,
+     "value": 154.8293652747845,
+     "units": "kW"
+    },
+    {
+     "name": "Hot side pressure drop",
+     "property": "HotSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Cold side pressure drop",
+     "property": "ColdSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Heat loss",
+     "property": "HeatLoss",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "kW",
+     "note": "0 by default."
+    }
+   ],
+   "note": "Two inlets give four unknowns; the energy balance is one equation, so one more specification closes it, or two when the area and U are the unknowns."
+  },
+  "CalcArea": {
+   "object": "X",
+   "type": "HeatExchanger",
+   "mode": "CalcArea",
+   "supported": true,
+   "required": 2,
+   "specified": 2,
+   "remaining": 0,
+   "missing": [],
+   "slots": [
+    {
+     "name": "Cold side outlet temperature",
+     "property": "ColdSideOutletTemperature",
+     "required": true,
+     "set": true,
+     "value": 329.7131964102772,
+     "units": "K"
+    },
+    {
+     "name": "Overall heat transfer coefficient",
+     "property": "OverallCoefficient",
+     "required": true,
+     "set": true,
+     "value": 800.0,
+     "units": "W/[m2.K]"
+    },
+    {
+     "name": "Hot side pressure drop",
+     "property": "HotSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Cold side pressure drop",
+     "property": "ColdSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Heat loss",
+     "property": "HeatLoss",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "kW",
+     "note": "0 by default."
+    }
+   ],
+   "note": "Two inlets give four unknowns; the energy balance is one equation, so one more specification closes it, or two when the area and U are the unknowns."
+  },
+  "PinchPoint": {
+   "object": "X",
+   "type": "HeatExchanger",
+   "mode": "PinchPoint",
+   "supported": true,
+   "required": 1,
+   "specified": 0,
+   "remaining": 1,
+   "missing": [
+    "Minimum temperature approach"
+   ],
+   "slots": [
+    {
+     "name": "Minimum temperature approach",
+     "property": "MITA",
+     "required": true,
+     "set": false,
+     "value": 0.0,
+     "units": "K"
+    },
+    {
+     "name": "Hot side pressure drop",
+     "property": "HotSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Cold side pressure drop",
+     "property": "ColdSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Heat loss",
+     "property": "HeatLoss",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "kW",
+     "note": "0 by default."
+    }
+   ],
+   "note": "Two inlets give four unknowns; the energy balance is one equation, so one more specification closes it, or two when the area and U are the unknowns."
+  },
+  "ThermalEfficiency": {
+   "object": "X",
+   "type": "HeatExchanger",
+   "mode": "ThermalEfficiency",
+   "supported": true,
+   "required": 1,
+   "specified": 1,
+   "remaining": 0,
+   "missing": [],
+   "slots": [
+    {
+     "name": "Thermal efficiency",
+     "property": "ThermalEfficiency",
+     "required": true,
+     "set": true,
+     "value": 46.83313783782239,
+     "units": "%",
+     "note": "Heat exchanged as a fraction of the maximum possible."
+    },
+    {
+     "name": "Hot side pressure drop",
+     "property": "HotSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Cold side pressure drop",
+     "property": "ColdSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Heat loss",
+     "property": "HeatLoss",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "kW",
+     "note": "0 by default."
+    }
+   ],
+   "note": "Two inlets give four unknowns; the energy balance is one equation, so one more specification closes it, or two when the area and U are the unknowns."
+  },
+  "OutletVaporFraction1": {
+   "object": "X",
+   "type": "HeatExchanger",
+   "mode": "OutletVaporFraction1",
+   "supported": true,
+   "required": 1,
+   "specified": 1,
+   "remaining": 0,
+   "missing": [],
+   "slots": [
+    {
+     "name": "Outlet vapour fraction, stream 1",
+     "property": "OutletVaporFraction1",
+     "required": true,
+     "set": true,
+     "value": 0.0
+    },
+    {
+     "name": "Hot side pressure drop",
+     "property": "HotSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Cold side pressure drop",
+     "property": "ColdSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Heat loss",
+     "property": "HeatLoss",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "kW",
+     "note": "0 by default."
+    }
+   ],
+   "note": "Two inlets give four unknowns; the energy balance is one equation, so one more specification closes it, or two when the area and U are the unknowns."
+  },
+  "OutletVaporFraction2": {
+   "object": "X",
+   "type": "HeatExchanger",
+   "mode": "OutletVaporFraction2",
+   "supported": true,
+   "required": 1,
+   "specified": 1,
+   "remaining": 0,
+   "missing": [],
+   "slots": [
+    {
+     "name": "Outlet vapour fraction, stream 2",
+     "property": "OutletVaporFraction2",
+     "required": true,
+     "set": true,
+     "value": 0.0
+    },
+    {
+     "name": "Hot side pressure drop",
+     "property": "HotSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Cold side pressure drop",
+     "property": "ColdSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Heat loss",
+     "property": "HeatLoss",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "kW",
+     "note": "0 by default."
+    }
+   ],
+   "note": "Two inlets give four unknowns; the energy balance is one equation, so one more specification closes it, or two when the area and U are the unknowns."
+  }
+ }
+}

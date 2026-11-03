@@ -1,0 +1,4 @@
+purpose = "System routes: health check, system info and storage initialization."
+status = "live"
+entrypoints = ["/health", "/system/info", "/system/initialize"]
+owner = "maintainer"

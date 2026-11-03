@@ -1,0 +1,17 @@
+{
+  "candidate": "casadi",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "GNU Lesser General Public License v3 or later (LGPLv3+)",
+  "measurements": {
+    "dae_final_biomass_arbitrary": 1.0229803676195244,
+    "dae_max_algebraic_residual": 4.440892098500626e-16,
+    "final_biomass_arbitrary": 1.0225606987736742,
+    "method": "symbolic RHS with fixed-step RK4; IDAS DAE midpoint light; 0.25 hour steps",
+    "symbolic_graph_nodes": 8
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "3.8.1",
+  "wall_time_s": 0.142075
+}

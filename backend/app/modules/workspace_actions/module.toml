@@ -1,0 +1,4 @@
+purpose = "Typed, governed assistant actions over Process and BLUECAD owners, with apply and undo."
+status = "live"
+entrypoints = ["/workspaces/{id}/actions", "service.py"]
+owner = "maintainer"

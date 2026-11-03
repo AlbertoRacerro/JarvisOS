@@ -1,0 +1,443 @@
+.process-stage {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--color-text-primary);
+}
+.process-stage__header {
+  flex: 0 0 auto;
+}
+.dwsim-truth,
+.dwsim-truth__meta {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.dwsim-truth label,
+.dwsim-palette label,
+.dwsim-inspector label {
+  display: grid;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.dwsim-truth input,
+.dwsim-truth select,
+.dwsim-palette input,
+.dwsim-palette select,
+.dwsim-inspector input,
+.dwsim-inspector select,
+.dwsim-inspector textarea {
+  min-width: 0;
+  min-height: 29px;
+  padding: 5px 7px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface-raised);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+.dwsim-truth button,
+.dwsim-palette button,
+.dwsim-inspector button,
+.dwsim-canvas-toolbar button,
+.dwsim-revisions button {
+  min-height: 29px;
+  padding: 5px 8px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface-raised);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.dwsim-truth button:disabled,
+.dwsim-palette button:disabled,
+.dwsim-inspector button:disabled,
+.dwsim-canvas-toolbar button:disabled,
+.dwsim-revisions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.dwsim-truth__meta {
+  align-items: center;
+  gap: 16px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+.dwsim-truth__meta code {
+  color: var(--color-text-primary);
+}
+.dwsim-solve-results {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface-raised);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+}
+.dwsim-solve-results ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 16px;
+  margin: 7px 0;
+  padding-left: 16px;
+}
+.dwsim-solve-results p {
+  margin: 5px 0 0;
+}
+.dwsim-error,
+.dwsim-message,
+.dwsim-warning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-status-warning-text);
+  border-radius: 4px;
+  background: var(--color-bg-surface);
+  color: var(--color-status-warning-text);
+  font-size: 11px;
+}
+.dwsim-error {
+  border-color: var(--color-status-danger-text);
+  background: var(--color-bg-surface);
+  color: var(--color-status-danger-text);
+}
+.dwsim-workbench {
+  display: grid;
+  grid-template-columns: 180px minmax(300px, 1fr) 230px;
+  min-height: 400px;
+  flex: 1 1 auto;
+  border: 1px solid var(--color-border-default);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--color-bg-surface-raised);
+}
+.dwsim-palette,
+.dwsim-inspector {
+  min-width: 0;
+  overflow: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+  background: var(--color-bg-surface);
+}
+.dwsim-palette {
+  border-right: 1px solid var(--color-border-default);
+}
+.dwsim-inspector {
+  border-left: 1px solid var(--color-border-default);
+}
+.dwsim-palette h2,
+.dwsim-inspector h2,
+.dwsim-revisions h2 {
+  margin: 0 0 3px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dwsim-palette h3,
+.dwsim-inspector h3 {
+  margin: 10px 0 0;
+  font-size: 11px;
+}
+.dwsim-palette__types {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.dwsim-palette__types button {
+  padding: 4px;
+  font-size: 10px;
+}
+.dwsim-command-catalogue {
+  display: grid;
+  gap: 4px;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.dwsim-canvas-wrap {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.dwsim-canvas-toolbar {
+  height: 38px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--color-border-default);
+}
+.dwsim-canvas {
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  flex: 1;
+  touch-action: none;
+  background-color: var(--color-bg-surface);
+  background-image: radial-gradient(var(--color-border-default) 0.7px, transparent 0.7px);
+  background-size: 18px 18px;
+}
+.dwsim-edge {
+  fill: none;
+  stroke: var(--color-accent-border-strong);
+  stroke-width: 2.4;
+}
+.dwsim-edge--energy {
+  stroke: var(--color-status-warning-text);
+  stroke-dasharray: 6 4;
+}
+.dwsim-node {
+  cursor: grab;
+  outline: none;
+}
+.dwsim-node:active {
+  cursor: grabbing;
+}
+.dwsim-node rect {
+  fill: var(--color-bg-subtle);
+  stroke: var(--color-border-strong);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 2px 2px #26301d1c);
+}
+.dwsim-node--material_stream rect {
+  fill: var(--color-bg-subtle);
+  stroke: var(--color-status-info-text);
+}
+.dwsim-node--energy_stream rect {
+  fill: var(--color-bg-subtle);
+  stroke: var(--color-status-warning-text);
+}
+.dwsim-node--other rect {
+  fill: var(--color-bg-subtle);
+  stroke: var(--color-status-proposed-text);
+}
+.dwsim-node rect.is-selected,
+.dwsim-node:focus rect {
+  stroke: var(--color-status-info-text);
+  stroke-width: 3;
+}
+.dwsim-node text {
+  fill: var(--color-text-primary);
+  font-size: 11px;
+  pointer-events: none;
+}
+.dwsim-node .dwsim-node__type {
+  fill: var(--color-text-muted);
+  font-size: 8px;
+}
+.dwsim-node .dwsim-node__badge {
+  fill: var(--color-accent-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.dwsim-node .dwsim-node__badge--error {
+  fill: var(--color-status-danger-text);
+}
+.dwsim-empty {
+  flex: 1;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  min-height: 300px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+.dwsim-warning {
+  margin: 6px;
+}
+.dwsim-evidence {
+  flex: 0 0 auto;
+  max-height: 110px;
+  overflow: auto;
+  padding: 6px 9px;
+  border-top: 1px solid var(--color-border-default);
+  font-size: 10px;
+}
+.dwsim-evidence pre,
+.dwsim-inspector pre {
+  overflow: auto;
+  max-height: 150px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dwsim-inspector dl {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 4px;
+  margin: 0;
+  font-size: 10px;
+}
+.dwsim-inspector dt {
+  color: var(--color-text-muted);
+}
+.dwsim-inspector dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.dwsim-sidecar-inspector dl {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+  font-size: 10px;
+}
+.dwsim-sidecar-inspector dl div {
+  display: grid;
+  gap: 2px;
+}
+.dwsim-sidecar-inspector dt {
+  color: var(--color-text-muted);
+}
+.dwsim-sidecar-inspector dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.dwsim-inspector p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.dwsim-error-text {
+  color: var(--color-status-danger-text);
+}
+.dwsim-revisions {
+  flex: 0 0 auto;
+  max-height: 120px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface-raised);
+}
+.dwsim-dynamics {
+  flex: 0 0 auto;
+  max-height: 330px;
+  overflow: auto;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface-raised);
+  font-size: 10px;
+}
+.dwsim-dynamics h2 { margin: 0; font-size: 13px; }
+.dwsim-dynamics > p { margin: 5px 0; color: var(--color-text-muted); }
+.dwsim-dynamics__readback,
+.dwsim-dynamics__controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 8px;
+}
+.dwsim-dynamics__readback > div,
+.dwsim-dynamics fieldset {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+}
+.dwsim-dynamics pre {
+  max-height: 72px;
+  overflow: auto;
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dwsim-dynamics fieldset { display: grid; align-content: start; gap: 5px; }
+.dwsim-dynamics legend { padding: 0 3px; color: var(--color-text-secondary); }
+.dwsim-dynamics label { display: grid; gap: 2px; color: var(--color-text-muted); }
+.dwsim-dynamics input,
+.dwsim-dynamics select {
+  width: 100%;
+  min-height: 26px;
+  padding: 4px 6px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface-raised);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+.dwsim-dynamics button {
+  min-height: 27px;
+  padding: 4px 7px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface-raised);
+  color: var(--color-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.dwsim-dynamics button:disabled { opacity: .55; cursor: not-allowed; }
+.dwsim-revisions > div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 30px;
+  font-size: 10px;
+}
+.dwsim-revisions > div span {
+  flex: 1;
+  color: var(--color-text-secondary);
+}
+.dwsim-revisions a {
+  color: var(--color-accent-foreground);
+}
+@media (max-width: 1000px) {
+  .dwsim-dynamics__readback,
+  .dwsim-dynamics__controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dwsim-workbench {
+    grid-template-columns: 150px minmax(250px, 1fr);
+  }
+  .dwsim-inspector {
+    grid-column: 1 / -1;
+    border: 0;
+    border-top: 1px solid var(--color-border-default);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: end;
+  }
+  .dwsim-inspector h2,
+  .dwsim-inspector h3 {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 650px) {
+  .dwsim-dynamics__readback,
+  .dwsim-dynamics__controls { grid-template-columns: minmax(0, 1fr); }
+  .dwsim-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dwsim-palette {
+    border: 0;
+    border-bottom: 1px solid var(--color-border-default);
+  }
+  .dwsim-palette__types {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .dwsim-inspector {
+    grid-template-columns: 1fr;
+  }
+  .dwsim-canvas {
+    min-height: 280px;
+  }
+}
+.process-advanced { margin-top: 6px; }
+.process-advanced > summary { cursor: pointer; color: var(--color-text-muted, var(--color-text-muted)); font-size: 12px; }
+.process-advanced[open] > .process-mode-tabs { margin-top: 6px; }

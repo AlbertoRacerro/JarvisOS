@@ -1,0 +1,4 @@
+purpose = "Read-only search over project records."
+status = "live"
+entrypoints = ["/workspaces/{id}/project-search"]
+owner = "maintainer"

@@ -1,0 +1,1871 @@
+{
+ "types": {
+  "types": [
+   "AbsorptionColumn",
+   "Adjust",
+   "AnaerobicDigester",
+   "BiogasUpgrader",
+   "BioReactor",
+   "CellLysis",
+   "Centrifuge",
+   "CFBFastPyrolysis",
+   "Chromatography",
+   "ComponentSeparator",
+   "Compressor",
+   "ConversionReactor",
+   "Cooler",
+   "CrossflowUF",
+   "Crystallizer",
+   "CSTR",
+   "DistillationColumn",
+   "EnergyRecycle",
+   "EquilibriumReactor",
+   "Expander",
+   "Filter",
+   "GibbsReactor",
+   "Heater",
+   "HeatExchanger",
+   "HydroelectricTurbine",
+   "Mixer",
+   "OrificePlate",
+   "PEMFuelCell",
+   "PFR",
+   "Pipe",
+   "Pretreatment",
+   "Pump",
+   "ReaktoroGibbsReactor",
+   "Recycle",
+   "ShortcutColumn",
+   "SolarPanel",
+   "SolidsSeparator",
+   "Spec",
+   "Splitter",
+   "Tank",
+   "Valve",
+   "Vessel",
+   "WaterElectrolyzer",
+   "WindTurbine"
+  ],
+  "count": 44
+ },
+ "pp_list": {
+  "property_packages": [
+   "CoolProp",
+   "CoolProp (Incompressible Fluids)",
+   "CoolProp (Incompressible Mixtures)",
+   "Steam Tables (IAPWS-IF97)",
+   "Seawater IAPWS-08",
+   "Ideal Solution (Aqueous Electrolytes)",
+   "Black Oil",
+   "Peng-Robinson-Stryjek-Vera 2 (PRSV2-M)",
+   "Soave-Redlich-Kwong (SRK)",
+   "Peng-Robinson-Stryjek-Vera 2 (PRSV2-VL)",
+   "Soave-Redlich-Kwong (SRK) Advanced",
+   "Peng-Robinson 1978 (PR78)",
+   "GERG-2008",
+   "Peng-Robinson (PR)",
+   "Peng-Robinson 1978 (PR78) Advanced",
+   "Wilson",
+   "PC-SAFT (with Association Support) (.NET Code)",
+   "NRTL",
+   "UNIQUAC",
+   "Chao-Seader",
+   "Grayson-Streed",
+   "Raoult's Law",
+   "UNIFAC",
+   "Lee-Kesler-Pl\u00f6cker",
+   "Modified UNIFAC (Dortmund)",
+   "Modified UNIFAC (NIST)",
+   "UNIFAC-LL",
+   "CAPE-OPEN"
+  ]
+ },
+ "Heater": {
+  "add": {
+   "unitop": "U_Heater",
+   "type": "Heater"
+  },
+  "results": {
+   "name": "U_Heater",
+   "type": "Heater",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Temperature Difference": {
+     "value": "0",
+     "units": "C."
+    }
+   },
+   "calculation_modes": [
+    "HeatAdded",
+    "OutletTemperature",
+    "EnergyStream",
+    "OutletVaporFraction",
+    "TemperatureChange",
+    "HeatAddedRemoved"
+   ],
+   "calculation_mode": "HeatAdded"
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_Heater",
+   "type": "Heater",
+   "mode": "HeatAdded",
+   "supported": true,
+   "required": 1,
+   "specified": 0,
+   "remaining": 1,
+   "missing": [
+    "Heat added"
+   ],
+   "slots": [
+    {
+     "name": "Heat added",
+     "property": "DeltaQ",
+     "required": true,
+     "set": false,
+     "units": "kW",
+     "note": "A duty of zero leaves the stream exactly as it came in."
+    },
+    {
+     "name": "Pressure drop",
+     "property": "DeltaP",
+     "required": false,
+     "set": true,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Efficiency",
+     "property": "Eficiencia",
+     "required": false,
+     "set": true,
+     "value": 100.0,
+     "units": "%",
+     "note": "100 % by default; the duty the stream receives is this fraction of the duty specified."
+    }
+   ],
+   "note": "One thermal specification and one pressure specification fix the outlet."
+  }
+ },
+ "Cooler": {
+  "add": {
+   "unitop": "U_Cooler",
+   "type": "Cooler"
+  },
+  "results": {
+   "name": "U_Cooler",
+   "type": "Cooler",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Outlet Molar Vapor Fraction": {
+     "value": "0",
+     "units": ""
+    },
+    "Temperature Difference": {
+     "value": "0",
+     "units": "C."
+    }
+   },
+   "calculation_modes": [
+    "HeatRemoved",
+    "OutletTemperature",
+    "OutletVaporFraction",
+    "TemperatureChange",
+    "EnergyStream"
+   ],
+   "calculation_mode": "HeatRemoved"
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_Cooler",
+   "type": "Cooler",
+   "mode": "HeatRemoved",
+   "supported": true,
+   "required": 1,
+   "specified": 0,
+   "remaining": 1,
+   "missing": [
+    "Heat removed"
+   ],
+   "slots": [
+    {
+     "name": "Heat removed",
+     "property": "DeltaQ",
+     "required": true,
+     "set": false,
+     "units": "kW",
+     "note": "A duty of zero leaves the stream exactly as it came in."
+    },
+    {
+     "name": "Pressure drop",
+     "property": "DeltaP",
+     "required": false,
+     "set": true,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Efficiency",
+     "property": "Eficiencia",
+     "required": false,
+     "set": true,
+     "value": 100.0,
+     "units": "%",
+     "note": "100 % by default; the duty the stream receives is this fraction of the duty specified."
+    }
+   ],
+   "note": "One thermal specification and one pressure specification fix the outlet."
+  }
+ },
+ "Pump": {
+  "add": {
+   "unitop": "U_Pump",
+   "type": "Pump"
+  },
+  "results": {
+   "name": "U_Pump",
+   "type": "Pump",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Temperature Difference": {
+     "value": "0",
+     "units": "C."
+    },
+    "Power Required": {
+     "value": "0",
+     "units": "kW"
+    },
+    "Available NPSH": {
+     "value": "0",
+     "units": "m"
+    },
+    "Outlet Pressure": {
+     "value": "0",
+     "units": "bar"
+    },
+    "Head": {
+     "value": "0",
+     "units": "m"
+    },
+    "NPSH Available": {
+     "value": "0",
+     "units": "m"
+    },
+    "PROP_PU_8": {
+     "value": "1450",
+     "units": "rpm"
+    }
+   },
+   "calculation_modes": [
+    "Delta_P",
+    "OutletPressure",
+    "EnergyStream",
+    "Curves",
+    "Power"
+   ],
+   "calculation_mode": "Delta_P"
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_Pump",
+   "type": "Pump",
+   "mode": "Delta_P",
+   "supported": true,
+   "required": 1,
+   "specified": 0,
+   "remaining": 1,
+   "missing": [
+    "Pressure increase"
+   ],
+   "slots": [
+    {
+     "name": "Pressure increase",
+     "property": "DeltaP",
+     "required": true,
+     "set": false,
+     "units": "Pa"
+    },
+    {
+     "name": "Efficiency",
+     "property": "Eficiencia",
+     "required": false,
+     "set": true,
+     "value": 75.0,
+     "units": "%",
+     "note": "75 % by default."
+    }
+   ],
+   "note": "One pressure or power specification plus an efficiency fix the outlet."
+  }
+ },
+ "Valve": {
+  "add": {
+   "unitop": "U_Valve",
+   "type": "Valve"
+  },
+  "results": {
+   "name": "U_Valve",
+   "type": "Valve",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Temperature Drop": {
+     "value": "0",
+     "units": "C."
+    },
+    "Actual Flow Coefficient": {
+     "value": "0",
+     "units": ""
+    }
+   },
+   "calculation_modes": [
+    "DeltaP",
+    "OutletPressure",
+    "Kv_Liquid",
+    "Kv_Gas",
+    "Kv_Steam",
+    "Kv_General"
+   ],
+   "calculation_mode": "DeltaP"
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_Valve",
+   "type": "Valve",
+   "mode": "DeltaP",
+   "supported": true,
+   "required": 1,
+   "specified": 0,
+   "remaining": 1,
+   "missing": [
+    "Pressure drop"
+   ],
+   "slots": [
+    {
+     "name": "Pressure drop",
+     "property": "DeltaP",
+     "required": true,
+     "set": false,
+     "units": "Pa",
+     "note": "0 Pa is accepted; the valve then does nothing."
+    }
+   ],
+   "note": "A valve is isenthalpic: the pressure specification alone fixes the outlet."
+  }
+ },
+ "Mixer": {
+  "add": {
+   "unitop": "U_Mixer",
+   "type": "Mixer"
+  },
+  "results": {
+   "name": "U_Mixer",
+   "type": "NodeIn",
+   "calculated": false,
+   "error": "",
+   "properties": {}
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_Mixer",
+   "type": "NodeIn",
+   "mode": "",
+   "supported": false,
+   "required": 0,
+   "specified": 0,
+   "remaining": 0,
+   "missing": [],
+   "slots": [],
+   "note": "The specifications of this type are not catalogued; check its editor."
+  }
+ },
+ "Vessel": {
+  "add": {
+   "unitop": "U_Vessel",
+   "type": "Vessel"
+  },
+  "results": {
+   "name": "U_Vessel",
+   "type": "Vessel",
+   "calculated": false,
+   "error": "",
+   "properties": {}
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_Vessel",
+   "type": "Vessel",
+   "mode": "From the inlet",
+   "supported": true,
+   "required": 0,
+   "specified": 0,
+   "remaining": 0,
+   "missing": [],
+   "slots": [
+    {
+     "name": "Separation temperature",
+     "property": "FlashTemperature",
+     "required": false,
+     "set": true,
+     "value": 298.15,
+     "units": "K",
+     "note": "Read only when Override Temperature is on."
+    },
+    {
+     "name": "Separation pressure",
+     "property": "FlashPressure",
+     "required": false,
+     "set": true,
+     "value": 101325.0,
+     "units": "Pa",
+     "note": "Read only when Override Pressure is on."
+    }
+   ],
+   "note": "A separator needs nothing from you: it splits the phases the inlet already has, unless you override T or P."
+  }
+ },
+ "Splitter": {
+  "add": {
+   "unitop": "U_Splitter",
+   "type": "Splitter"
+  },
+  "results": {
+   "name": "U_Splitter",
+   "type": "NodeOut",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Stream 1 Flow Spec": {
+     "value": "0",
+     "units": ""
+    },
+    "Stream 2 Flow Spec": {
+     "value": "0",
+     "units": ""
+    },
+    "SR0": {
+     "value": "0",
+     "units": ""
+    }
+   },
+   "calculation_modes": [
+    "SplitRatios",
+    "StreamMassFlowSpec",
+    "StreamMoleFlowSpec",
+    "StreamVolumetricFlowSpec"
+   ],
+   "calculation_mode": ""
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_Splitter",
+   "type": "NodeOut",
+   "mode": "",
+   "supported": false,
+   "required": 0,
+   "specified": 0,
+   "remaining": 0,
+   "missing": [],
+   "slots": [],
+   "note": "The specifications of this type are not catalogued; check its editor."
+  }
+ },
+ "HeatExchanger": {
+  "add": {
+   "unitop": "U_HeatExchanger",
+   "type": "HeatExchanger"
+  },
+  "results": {
+   "name": "U_HeatExchanger",
+   "type": "HeatExchanger",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Heat Load": {
+     "value": "0",
+     "units": "kW"
+    },
+    "Cold fluid outlet temperature": {
+     "value": "25",
+     "units": "C"
+    },
+    "Hot fluid outlet temperature": {
+     "value": "25",
+     "units": "C"
+    },
+    "Thermal Efficiency": {
+     "value": "0",
+     "units": "%"
+    },
+    "Maximum Theoretical Heat Exchange": {
+     "value": "0",
+     "units": "kW"
+    },
+    "[Shell and Tube] Fouling Factor (Design)": {
+     "value": "0",
+     "units": "K.m2/W"
+    },
+    "[Shell and Tube] LMTD Correction Factor (F)": {
+     "value": "1",
+     "units": ""
+    },
+    "Logarithmic mean temperature difference LMTD": {
+     "value": "0",
+     "units": "C."
+    },
+    "[Shell and Tube] Resistance heat transfer pipes": {
+     "value": "0",
+     "units": "K.m2/W"
+    },
+    "[Shell and Tube] Resistance thermal conductivity pipes": {
+     "value": "0",
+     "units": "K.m2/W"
+    },
+    "[Shell and Tube] Resistance heat transfer shell": {
+     "value": "0",
+     "units": "K.m2/W"
+    },
+    "[Shell and Tube] Reynolds number shell": {
+     "value": "0",
+     "units": ""
+    },
+    "[Shell and Tube] Reynolds number tubes": {
+     "value": "0",
+     "units": ""
+    },
+    "Calculated MITA": {
+     "value": "0",
+     "units": "C."
+    },
+    "PROP_HX_49": {
+     "value": "0",
+     "units": "mm"
+    },
+    "PROP_HX_50": {
+     "value": "0",
+     "units": "m"
+    },
+    "PROP_HX_51": {
+     "value": "0",
+     "units": "m2"
+    },
+    "PROP_HX_52": {
+     "value": "0",
+     "units": "m2"
+    },
+    "PROP_HX_53": {
+     "value": "0",
+     "units": ""
+    },
+    "PROP_HX_54": {
+     "value": "0",
+     "units": "m2"
+    },
+    "PROP_HX_55": {
+     "value": "0",
+     "units": "m2"
+    },
+    "PROP_HX_56": {
+     "value": "0",
+     "units": "m/s"
+    },
+    "PROP_HX_57": {
+     "value": "0",
+     "units": "m/s"
+    },
+    "PROP_HX_58": {
+     "value": "0",
+     "units": "m/s"
+    },
+    "PROP_HX_59": {
+     "value": "0",
+     "units": "m/s"
+    },
+    "PROP_HX_60": {
+     "value": "0",
+     "units": "m/s"
+    },
+    "PROP_HX_61": {
+     "value": "0",
+     "units": "m/s"
+    },
+    "PROP_HX_62": {
+     "value": "0",
+     "units": "bar"
+    },
+    "PROP_HX_63": {
+     "value": "0",
+     "units": "bar"
+    },
+    "PROP_HX_64": {
+     "value": "0",
+     "units": "bar"
+    },
+    "PROP_HX_65": {
+     "value": "0",
+     "units": "bar"
+    },
+    "PROP_HX_66": {
+     "value": "0",
+     "units": "m3"
+    },
+    "PROP_HX_67": {
+     "value": "0",
+     "units": "m3"
+    },
+    "PROP_HX_68": {
+     "value": "0",
+     "units": "kg"
+    },
+    "PROP_HX_69": {
+     "value": "0",
+     "units": "kg"
+    },
+    "PROP_HX_70": {
+     "value": "0",
+     "units": "kg"
+    }
+   },
+   "calculation_modes": [
+    "CalcTempHotOut",
+    "CalcTempColdOut",
+    "CalcBothTemp",
+    "CalcBothTemp_UA",
+    "CalcArea",
+    "ShellandTube_Rating",
+    "ShellandTube_CalcFoulingFactor",
+    "PinchPoint",
+    "ThermalEfficiency",
+    "OutletVaporFraction1",
+    "OutletVaporFraction2"
+   ],
+   "calculation_mode": ""
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_HeatExchanger",
+   "type": "HeatExchanger",
+   "mode": "CalcBothTemp_UA",
+   "supported": true,
+   "required": 2,
+   "specified": 2,
+   "remaining": 0,
+   "missing": [],
+   "slots": [
+    {
+     "name": "Overall heat transfer coefficient",
+     "property": "OverallCoefficient",
+     "required": true,
+     "set": true,
+     "value": 1000.0,
+     "units": "W/[m2.K]"
+    },
+    {
+     "name": "Heat transfer area",
+     "property": "Area",
+     "required": true,
+     "set": true,
+     "value": 1.0,
+     "units": "m2"
+    },
+    {
+     "name": "Hot side pressure drop",
+     "property": "HotSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Cold side pressure drop",
+     "property": "ColdSidePressureDrop",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "Pa",
+     "note": "0 by default."
+    },
+    {
+     "name": "Heat loss",
+     "property": "HeatLoss",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "kW",
+     "note": "0 by default."
+    }
+   ],
+   "note": "Two inlets give four unknowns; the energy balance is one equation, so one more specification closes it, or two when the area and U are the unknowns."
+  }
+ },
+ "Recycle": {
+  "add": {
+   "unitop": "U_Recycle",
+   "type": "Recycle"
+  },
+  "results": {
+   "name": "U_Recycle",
+   "type": "OT_Recycle",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Mass Flow Error": {
+     "value": "0",
+     "units": "kg/h"
+    },
+    "Temperature Error": {
+     "value": "0",
+     "units": "C."
+    },
+    "Pressure Error": {
+     "value": "0",
+     "units": "bar"
+    }
+   }
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_Recycle",
+   "type": "Recycle",
+   "mode": "",
+   "supported": true,
+   "required": 0,
+   "specified": 0,
+   "remaining": 0,
+   "missing": [],
+   "slots": [],
+   "note": "A recycle needs no specification; it tears the loop and iterates until its inlet matches its outlet."
+  }
+ },
+ "DistillationColumn": {
+  "add": {
+   "unitop": "U_DistillationColumn",
+   "type": "DistillationColumn"
+  },
+  "results": {
+   "name": "U_DistillationColumn",
+   "type": "DistillationColumn",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Condenser Duty": {
+     "value": "0",
+     "units": "kW"
+    },
+    "Reboiler Duty": {
+     "value": "0",
+     "units": "kW"
+    },
+    "Number of Stages": {
+     "value": "12",
+     "units": ""
+    },
+    "Stage_Temperature_1": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_Temperature_2": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_Temperature_3": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_Temperature_4": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_Temperature_5": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_Temperature_6": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_Temperature_7": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_Temperature_8": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_Temperature_9": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_Temperature_10": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_Temperature_11": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_Temperature_12": {
+     "value": "-273.15",
+     "units": "C"
+    },
+    "Stage_VaporFlow_1": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_1": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_VaporFlow_2": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_2": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_VaporFlow_3": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_3": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_VaporFlow_4": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_4": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_VaporFlow_5": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_5": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_VaporFlow_6": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_6": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_VaporFlow_7": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_7": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_VaporFlow_8": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_8": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_VaporFlow_9": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_9": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_VaporFlow_10": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_10": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_VaporFlow_11": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_11": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_VaporFlow_12": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stage_LiquidFlow_12": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Sump_LiquidLevel": {
+     "value": "0",
+     "units": "m"
+    }
+   }
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_DistillationColumn",
+   "type": "DistillationColumn",
+   "mode": "Wang-Henke (Bubble Point)",
+   "supported": true,
+   "required": 5,
+   "specified": 4,
+   "remaining": 1,
+   "missing": [
+    "Reboiler specification"
+   ],
+   "slots": [
+    {
+     "name": "Number of stages",
+     "property": "NumberOfStages",
+     "required": true,
+     "set": true,
+     "value": 12.0
+    },
+    {
+     "name": "Top stage pressure",
+     "property": "Stages[0].P",
+     "required": true,
+     "set": true,
+     "value": 101325.0,
+     "units": "Pa"
+    },
+    {
+     "name": "Bottom stage pressure",
+     "property": "Stages[N].P",
+     "required": true,
+     "set": true,
+     "value": 101325.0,
+     "units": "Pa"
+    },
+    {
+     "name": "Condenser specification",
+     "property": "Specs[C]",
+     "required": true,
+     "set": true,
+     "value": 5.0,
+     "note": "Stream Ratio"
+    },
+    {
+     "name": "Reboiler specification",
+     "property": "Specs[R]",
+     "required": true,
+     "set": false,
+     "value": 0.0,
+     "units": "mol/s",
+     "note": "Product Molar Flow Rate"
+    },
+    {
+     "name": "Condenser type",
+     "property": "CondenserType",
+     "required": false,
+     "set": true,
+     "note": "Total_Condenser"
+    }
+   ],
+   "note": "Stages, two pressures, one condenser specification and one reboiler specification fix a distillation column."
+  }
+ },
+ "ShortcutColumn": {
+  "add": {
+   "unitop": "U_ShortcutColumn",
+   "type": "ShortcutColumn"
+  },
+  "results": {
+   "name": "U_ShortcutColumn",
+   "type": "ShortcutColumn",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Minimun Reflux Ratio": {
+     "value": "0",
+     "units": ""
+    },
+    "Minimum Stages": {
+     "value": "0",
+     "units": ""
+    },
+    "Optimal Feed Stage": {
+     "value": "0",
+     "units": ""
+    },
+    "Stripping Liquid Molar Flow": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Rectify Liquid Molar Flow": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Stripping Vapor Molar Flow": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Rectify Vapor Molar Flow": {
+     "value": "0",
+     "units": "kmol/h"
+    },
+    "Condenser Duty": {
+     "value": "0",
+     "units": "kW"
+    },
+    "Reboiler Duty": {
+     "value": "0",
+     "units": "kW"
+    },
+    "Actual Stages": {
+     "value": "0",
+     "units": ""
+    },
+    "Stage Height": {
+     "value": "0.5",
+     "units": "m"
+    },
+    "Estimated Height": {
+     "value": "NaN",
+     "units": "m"
+    },
+    "Estimated Diameter": {
+     "value": "NaN",
+     "units": "m"
+    }
+   }
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_ShortcutColumn",
+   "type": "ShortcutColumn",
+   "mode": "Fenske-Underwood-Gilliland",
+   "supported": true,
+   "required": 7,
+   "specified": 5,
+   "remaining": 2,
+   "missing": [
+    "Light key compound",
+    "Heavy key compound"
+   ],
+   "slots": [
+    {
+     "name": "Light key compound",
+     "property": "m_lightkey",
+     "required": true,
+     "set": false
+    },
+    {
+     "name": "Heavy key compound",
+     "property": "m_heavykey",
+     "required": true,
+     "set": false
+    },
+    {
+     "name": "Light key mole fraction in the bottoms",
+     "property": "m_lightkeymolarfrac",
+     "required": true,
+     "set": true,
+     "value": 0.01
+    },
+    {
+     "name": "Heavy key mole fraction in the distillate",
+     "property": "m_heavykeymolarfrac",
+     "required": true,
+     "set": true,
+     "value": 0.01
+    },
+    {
+     "name": "Reflux ratio",
+     "property": "m_refluxratio",
+     "required": true,
+     "set": true,
+     "value": 1.5,
+     "note": "Must exceed the minimum reflux ratio Underwood computes."
+    },
+    {
+     "name": "Condenser pressure",
+     "property": "m_condenserpressure",
+     "required": true,
+     "set": true,
+     "value": 101325.0,
+     "units": "Pa"
+    },
+    {
+     "name": "Reboiler pressure",
+     "property": "m_boilerpressure",
+     "required": true,
+     "set": true,
+     "value": 101325.0,
+     "units": "Pa"
+    },
+    {
+     "name": "Condenser type",
+     "property": "condtype",
+     "required": false,
+     "set": true
+    }
+   ],
+   "note": "Two key recoveries, a reflux ratio and two pressures fix the column."
+  }
+ },
+ "PFR": {
+  "add": {
+   "unitop": "U_PFR",
+   "type": "PFR"
+  },
+  "results": {
+   "name": "U_PFR",
+   "type": "RCT_PFR",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Pressure Drop": {
+     "value": "0",
+     "units": "bar"
+    },
+    "Residence time": {
+     "value": "0",
+     "units": "s"
+    },
+    "Volume": {
+     "value": "1",
+     "units": "m3"
+    },
+    "Tube Length": {
+     "value": "1",
+     "units": "m"
+    },
+    "Catalyst loading": {
+     "value": "0",
+     "units": "kg/m3"
+    },
+    "Catalyst diameter": {
+     "value": "0",
+     "units": "mm"
+    },
+    "Catalyst void fraction": {
+     "value": "0",
+     "units": ""
+    },
+    "Temperature delta": {
+     "value": "0",
+     "units": "C."
+    },
+    "Heat load": {
+     "value": "0",
+     "units": "kW"
+    },
+    "Tube Diameter": {
+     "value": "100",
+     "units": "mm"
+    },
+    "Number of Tubes": {
+     "value": "1",
+     "units": ""
+    },
+    "Integration Step": {
+     "value": "0.01",
+     "units": ""
+    },
+    "Outlet Temperature": {
+     "value": "25",
+     "units": "C"
+    },
+    "Overall Heat Transfer Coefficient": {
+     "value": "500",
+     "units": "W/m2.K"
+    },
+    "Heat Exchange Area": {
+     "value": "10",
+     "units": "m2"
+    },
+    "Coolant Inlet Temperature": {
+     "value": "25",
+     "units": "C"
+    },
+    "Coolant Mass Flow Rate": {
+     "value": "3600",
+     "units": "kg/h"
+    },
+    "Coolant Specific Heat": {
+     "value": "4180",
+     "units": "J/kg.K"
+    },
+    "Coolant Flow Direction": {
+     "value": "0",
+     "units": ""
+    },
+    "Area Calculation Mode": {
+     "value": "0",
+     "units": ""
+    },
+    "Use Utility Stream": {
+     "value": "0",
+     "units": ""
+    },
+    "Wall Thickness": {
+     "value": "0.005",
+     "units": "m"
+    },
+    "Internal Heat Transfer Coefficient": {
+     "value": "1000",
+     "units": "W/m2.K"
+    },
+    "External Heat Transfer Coefficient": {
+     "value": "2000",
+     "units": "W/m2.K"
+    },
+    "Use Wall Properties": {
+     "value": "0",
+     "units": ""
+    },
+    "Calculated Overall HTC": {
+     "value": "0",
+     "units": "W/m2.K"
+    },
+    "Calculate Internal HTC": {
+     "value": "0",
+     "units": ""
+    },
+    "Calculate External HTC": {
+     "value": "0",
+     "units": ""
+    },
+    "Jacket Diameter": {
+     "value": "150",
+     "units": "mm"
+    },
+    "Coolant Density": {
+     "value": "998",
+     "units": "kg/m3"
+    },
+    "Coolant Viscosity": {
+     "value": "0.001",
+     "units": "Pa.s"
+    },
+    "Coolant Thermal Conductivity": {
+     "value": "0.6",
+     "units": "W/m.K"
+    },
+    "Calculated Internal HTC": {
+     "value": "0",
+     "units": "W/m2.K"
+    },
+    "Calculated External HTC": {
+     "value": "0",
+     "units": "W/m2.K"
+    },
+    "Catalyst Particle Sphericity": {
+     "value": "0",
+     "units": ""
+    },
+    "Select the calculation mode of this reactor.": {
+     "value": "Adiabatic",
+     "units": ""
+    }
+   }
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_PFR",
+   "type": "PFR reactor",
+   "mode": "Adiabatic",
+   "supported": true,
+   "required": 3,
+   "specified": 2,
+   "remaining": 1,
+   "missing": [
+    "Reaction set"
+   ],
+   "slots": [
+    {
+     "name": "Reaction set",
+     "property": "ReactionSetID",
+     "required": true,
+     "set": false,
+     "value": 0.0,
+     "note": "0 active reaction(s) in the set."
+    },
+    {
+     "name": "Thermal mode",
+     "property": "ReactorOperationMode",
+     "required": false,
+     "set": true,
+     "note": "No duty: the outlet temperature follows from the heat of reaction."
+    },
+    {
+     "name": "Reactor volume",
+     "property": "Volume",
+     "required": true,
+     "set": true,
+     "value": 1.0,
+     "units": "m3"
+    },
+    {
+     "name": "Reactor length",
+     "property": "Length",
+     "required": true,
+     "set": true,
+     "value": 1.0,
+     "units": "m",
+     "note": "Volume and length together fix the diameter."
+    },
+    {
+     "name": "Catalyst loading",
+     "property": "CatalystLoading",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "kg/m3",
+     "note": "Read by heterogeneous kinetics only."
+    },
+    {
+     "name": "Pressure drop",
+     "property": "DeltaP",
+     "required": false,
+     "set": true,
+     "units": "Pa",
+     "note": "0 by default."
+    }
+   ],
+   "note": "Kinetic reactor: the rate expressions on the reactions and the volume fix the conversion."
+  }
+ },
+ "CSTR": {
+  "add": {
+   "unitop": "U_CSTR",
+   "type": "CSTR"
+  },
+  "results": {
+   "name": "U_CSTR",
+   "type": "RCT_CSTR",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Pressure Drop": {
+     "value": "0",
+     "units": "bar"
+    },
+    "Residence time": {
+     "value": "0",
+     "units": "s"
+    },
+    "Volume": {
+     "value": "1",
+     "units": "m3"
+    },
+    "Temperature delta": {
+     "value": "0",
+     "units": "C."
+    },
+    "Heat load": {
+     "value": "0",
+     "units": "kW"
+    },
+    "Outlet Temperature": {
+     "value": "25",
+     "units": "C"
+    },
+    "Headspace": {
+     "value": "0",
+     "units": "m3"
+    },
+    "Vapor residence time": {
+     "value": "0",
+     "units": "s"
+    },
+    "Overall Heat Transfer Coefficient": {
+     "value": "500",
+     "units": "W/m2.K"
+    },
+    "Heat Exchange Area": {
+     "value": "10",
+     "units": "m2"
+    },
+    "Coolant Inlet Temperature": {
+     "value": "25",
+     "units": "C"
+    },
+    "Coolant Mass Flow Rate": {
+     "value": "3600",
+     "units": "kg/h"
+    },
+    "Coolant Specific Heat": {
+     "value": "4180",
+     "units": "J/kg.K"
+    },
+    "Coolant Flow Direction": {
+     "value": "0",
+     "units": ""
+    },
+    "Area Calculation Mode": {
+     "value": "0",
+     "units": ""
+    },
+    "Use Utility Stream": {
+     "value": "0",
+     "units": ""
+    },
+    "Wall Thickness": {
+     "value": "0.005",
+     "units": "m"
+    },
+    "Internal Heat Transfer Coefficient": {
+     "value": "1000",
+     "units": "W/m2.K"
+    },
+    "External Heat Transfer Coefficient": {
+     "value": "2000",
+     "units": "W/m2.K"
+    },
+    "Use Wall Properties": {
+     "value": "0",
+     "units": ""
+    },
+    "Calculated Overall HTC": {
+     "value": "0",
+     "units": "W/m2.K"
+    },
+    "Diameter": {
+     "value": "100",
+     "units": "mm"
+    },
+    "Calculate Internal HTC": {
+     "value": "0",
+     "units": ""
+    },
+    "Calculate External HTC": {
+     "value": "0",
+     "units": ""
+    },
+    "Jacket Diameter": {
+     "value": "150",
+     "units": "mm"
+    },
+    "Coolant Density": {
+     "value": "998",
+     "units": "kg/m3"
+    },
+    "Coolant Viscosity": {
+     "value": "0.001",
+     "units": "Pa.s"
+    },
+    "Coolant Thermal Conductivity": {
+     "value": "0.6",
+     "units": "W/m.K"
+    },
+    "Calculated Internal HTC": {
+     "value": "0",
+     "units": "W/m2.K"
+    },
+    "Calculated External HTC": {
+     "value": "0",
+     "units": "W/m2.K"
+    },
+    "Impeller Diameter": {
+     "value": "50",
+     "units": "mm"
+    },
+    "Impeller Speed": {
+     "value": "100",
+     "units": "RPM"
+    },
+    "Impeller Type": {
+     "value": "0",
+     "units": ""
+    },
+    "Select the calculation mode of this reactor.": {
+     "value": "Adiabatic",
+     "units": ""
+    }
+   }
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_CSTR",
+   "type": "CSTR reactor",
+   "mode": "Adiabatic",
+   "supported": true,
+   "required": 2,
+   "specified": 1,
+   "remaining": 1,
+   "missing": [
+    "Reaction set"
+   ],
+   "slots": [
+    {
+     "name": "Reaction set",
+     "property": "ReactionSetID",
+     "required": true,
+     "set": false,
+     "value": 0.0,
+     "note": "0 active reaction(s) in the set."
+    },
+    {
+     "name": "Thermal mode",
+     "property": "ReactorOperationMode",
+     "required": false,
+     "set": true,
+     "note": "No duty: the outlet temperature follows from the heat of reaction."
+    },
+    {
+     "name": "Reactor volume",
+     "property": "Volume",
+     "required": true,
+     "set": true,
+     "value": 1.0,
+     "units": "m3"
+    },
+    {
+     "name": "Headspace",
+     "property": "Headspace",
+     "required": false,
+     "set": true,
+     "value": 0.0,
+     "units": "m3",
+     "note": "Vapour space above the liquid."
+    },
+    {
+     "name": "Pressure drop",
+     "property": "DeltaP",
+     "required": false,
+     "set": true,
+     "units": "Pa",
+     "note": "0 by default."
+    }
+   ],
+   "note": "Kinetic reactor: the rate expressions on the reactions and the volume fix the conversion."
+  }
+ },
+ "ConversionReactor": {
+  "add": {
+   "unitop": "U_ConversionReactor",
+   "type": "ConversionReactor"
+  },
+  "results": {
+   "name": "U_ConversionReactor",
+   "type": "RCT_Conversion",
+   "calculated": false,
+   "error": "",
+   "properties": {}
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_ConversionReactor",
+   "type": "Conversion reactor",
+   "mode": "Adiabatic",
+   "supported": true,
+   "required": 1,
+   "specified": 0,
+   "remaining": 1,
+   "missing": [
+    "Reaction set"
+   ],
+   "slots": [
+    {
+     "name": "Reaction set",
+     "property": "ReactionSetID",
+     "required": true,
+     "set": false,
+     "value": 0.0,
+     "note": "0 active reaction(s) in the set."
+    },
+    {
+     "name": "Thermal mode",
+     "property": "ReactorOperationMode",
+     "required": false,
+     "set": true,
+     "note": "No duty: the outlet temperature follows from the heat of reaction."
+    },
+    {
+     "name": "Pressure drop",
+     "property": "DeltaP",
+     "required": false,
+     "set": true,
+     "units": "Pa",
+     "note": "0 by default."
+    }
+   ],
+   "note": "The conversion of each reaction is set on the reaction itself, in the reaction manager."
+  }
+ },
+ "Compressor": {
+  "add": {
+   "unitop": "U_Compressor",
+   "type": "Compressor"
+  },
+  "results": {
+   "name": "U_Compressor",
+   "type": "Compressor",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Temperature Difference": {
+     "value": "0",
+     "units": "C."
+    },
+    "Power Required": {
+     "value": "0",
+     "units": "kW"
+    },
+    "Adiabatic Coefficient": {
+     "value": "0",
+     "units": ""
+    },
+    "Polytropic Coefficient": {
+     "value": "0",
+     "units": ""
+    },
+    "Rotation Speed": {
+     "value": "1500",
+     "units": "rpm"
+    }
+   },
+   "calculation_modes": [
+    "OutletPressure",
+    "Delta_P",
+    "EnergyStream",
+    "PowerRequired",
+    "Head",
+    "Curves",
+    "PressureRatio"
+   ],
+   "calculation_mode": "OutletPressure"
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_Compressor",
+   "type": "Compressor",
+   "mode": "OutletPressure (Adiabatic)",
+   "supported": true,
+   "required": 1,
+   "specified": 1,
+   "remaining": 0,
+   "missing": [],
+   "slots": [
+    {
+     "name": "Outlet pressure",
+     "property": "POut",
+     "required": true,
+     "set": true,
+     "value": 101325.0,
+     "units": "Pa"
+    },
+    {
+     "name": "Adiabatic efficiency",
+     "property": "AdiabaticEfficiency",
+     "required": false,
+     "set": true,
+     "value": 75.0,
+     "units": "%",
+     "note": "75 % by default."
+    }
+   ],
+   "note": "One pressure, power or head specification plus an efficiency fix the outlet."
+  }
+ },
+ "Pipe": {
+  "add": {
+   "unitop": "U_Pipe",
+   "type": "Pipe"
+  },
+  "results": {
+   "name": "U_Pipe",
+   "type": "Pipe",
+   "calculated": false,
+   "error": "",
+   "properties": {
+    "Pressure Drop": {
+     "value": "0",
+     "units": "bar"
+    },
+    "Temperature Drop": {
+     "value": "0",
+     "units": "C."
+    },
+    "Heat Exchanged": {
+     "value": "0",
+     "units": "kW"
+    },
+    "Outlet Pressure (Spec)": {
+     "value": "1.01325",
+     "units": "bar"
+    },
+    "Outlet Temperature (Spec)": {
+     "value": "25",
+     "units": "C"
+    },
+    "Overall HTC (Spec)": {
+     "value": "0",
+     "units": "W/[m2.K]"
+    },
+    "External Temperature (Spec)": {
+     "value": "25",
+     "units": "C"
+    },
+    "Ambient Temperature Gradient": {
+     "value": "0",
+     "units": "C./m"
+    },
+    "Total Length (Straight Tubes)": {
+     "value": "0",
+     "units": "m"
+    },
+    "Total Elevation (Straight Tubes)": {
+     "value": "0",
+     "units": "m"
+    },
+    "Pressure Drop (Hydrostatic)": {
+     "value": "0",
+     "units": "bar"
+    },
+    "Pressure Drop (Friction)": {
+     "value": "0",
+     "units": "bar"
+    },
+    "ThermalProfile,CalculationType": {
+     "value": "Definir_CGTC",
+     "units": ""
+    },
+    "ThermalProfile,OverallHTC": {
+     "value": "0",
+     "units": "W/[m2.K]"
+    },
+    "ThermalProfile,ExternalTemperatureDefinedHTC": {
+     "value": "25",
+     "units": "C"
+    },
+    "ThermalProfile,ExternalTemperatureGradientDefinedHTC": {
+     "value": "0",
+     "units": "C./m"
+    },
+    "ThermalProfile,ExternalTemperatureEstimatedHTC": {
+     "value": "25",
+     "units": "C"
+    },
+    "ThermalProfile,ExternalTemperatureGradientEstimatedHTC": {
+     "value": "0",
+     "units": "C./m"
+    },
+    "ThermalProfile,HeatExchanged": {
+     "value": "0",
+     "units": "kW"
+    },
+    "ThermalProfile,IncludeWallHTC": {
+     "value": "False",
+     "units": ""
+    },
+    "ThermalProfile,IncludeInternalHTC": {
+     "value": "False",
+     "units": ""
+    },
+    "ThermalProfile,IncludeInsulationHTC": {
+     "value": "False",
+     "units": ""
+    },
+    "ThermalProfile,InsulationThickness": {
+     "value": "0",
+     "units": "mm"
+    },
+    "ThermalProfile,InsulationThermalConductivity": {
+     "value": "0",
+     "units": "W/[m.K]"
+    },
+    "ThermalProfile,IncludeExternalHTC": {
+     "value": "False",
+     "units": ""
+    },
+    "ThermalProfile,ExternalEnvironmentType": {
+     "value": "0",
+     "units": ""
+    },
+    "ThermalProfile,ExternalEnvironmentVelocityOrDeepness": {
+     "value": "0",
+     "units": "m/s"
+    }
+   }
+  },
+  "bogus_set": {
+   "__error__": "DWSIM MCP tool reported an error",
+   "code": null
+  },
+  "dof": {
+   "object": "U_Pipe",
+   "type": "Pipe",
+   "mode": "",
+   "supported": false,
+   "required": 0,
+   "specified": 0,
+   "remaining": 0,
+   "missing": [],
+   "slots": [],
+   "note": "The specifications of this type are not catalogued; check its editor."
+  }
+ },
+ "energy_add": {
+  "stream": "E1",
+  "type": "EnergyStream"
+ },
+ "energy_results": {
+  "__error__": "DWSIM MCP tool reported an error",
+  "code": null
+ },
+ "energy_set": {
+  "__error__": "DWSIM MCP tool reported an error",
+  "code": null
+ }
+}

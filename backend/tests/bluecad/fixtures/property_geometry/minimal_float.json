@@ -1,0 +1,29 @@
+{
+  "connections": [],
+  "name": "minimal_float",
+  "parts": [
+    {
+      "frame": {
+        "direction": [
+          1,
+          0,
+          0
+        ],
+        "origin": [
+          0,
+          0,
+          0
+        ]
+      },
+      "kind": "float",
+      "params": {
+        "length": 600,
+        "n_mounts": 2,
+        "outer_d": 200,
+        "pad_d": 50
+      },
+      "part_id": "float1"
+    }
+  ],
+  "spec_version": "bluecad_geometry_spec_v0_1"
+}

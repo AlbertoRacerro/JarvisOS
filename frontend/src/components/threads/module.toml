@@ -1,0 +1,4 @@
+purpose = "State logic for AI threads."
+status = "live"
+entrypoints = ["threadState.ts"]
+owner = "maintainer"

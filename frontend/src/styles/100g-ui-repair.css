@@ -1,0 +1,88 @@
+/* 100g final-operator UI repair: peer navigation is secondary navigation,
+ * never a primary action. Scope is intentionally limited to final routes. */
+/* Spec 198 Lumen: peer tabs sit in one segmented capsule; the active peer is a
+ * soft-accent segment, never the lit primary-action fill. */
+.application-shell--final .design-stage__tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  width: max-content;
+  max-width: 100%;
+  padding: 3px;
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--lumen-radius-button);
+  background: var(--lumen-segment-bg);
+}
+
+.application-shell--final .design-stage__tabs button {
+  min-height: var(--control-height-compact);
+  padding: var(--space-1) var(--space-4) !important;
+  border: var(--border-width-default) solid transparent !important;
+  border-radius: var(--lumen-radius-button) !important;
+  background: transparent !important;
+  color: var(--color-text-secondary) !important;
+  box-shadow: none !important;
+  font-size: var(--font-size-label);
+  font-weight: 500;
+}
+
+.application-shell--final .design-stage__tabs button:hover {
+  border-color: transparent !important;
+  background: var(--color-bg-surface-raised) !important;
+  color: var(--color-text-primary) !important;
+}
+
+.application-shell--final .design-stage__tabs button.is-active,
+.application-shell--final .design-stage__tabs button[aria-current="page"] {
+  border-color: var(--color-accent-foreground) !important;
+  background: var(--color-accent-surface) !important;
+  color: var(--color-text-primary) !important;
+  box-shadow: var(--lumen-selected-glow) !important;
+  font-weight: 600;
+}
+
+.application-shell--final .final-settings__tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  width: max-content;
+  max-width: calc(100% - 2 * var(--space-5));
+  margin: 0 var(--space-5) var(--space-3);
+  padding: 3px;
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--lumen-radius-button);
+  background: var(--lumen-segment-bg);
+}
+
+/* Settings tabs are buttons and inherit stronger global primary-button rules.
+ * Use explicit final-shell overrides so secondary navigation cannot regress to
+ * the solid action green reserved for COMMIT/primary actions. */
+.application-shell--final .final-settings__tab {
+  min-height: var(--control-height-compact);
+  padding: var(--space-1) var(--space-4) !important;
+  border: var(--border-width-default) solid transparent !important;
+  border-radius: var(--lumen-radius-button) !important;
+  background: transparent !important;
+  color: var(--color-text-secondary) !important;
+  box-shadow: none !important;
+  font-size: var(--font-size-label);
+  font-weight: 500;
+}
+
+.application-shell--final .final-settings__tab:hover,
+.application-shell--final .final-settings__tab:focus-visible {
+  border-color: transparent !important;
+  background: var(--color-bg-surface-raised) !important;
+  color: var(--color-text-primary) !important;
+}
+
+.application-shell--final .final-settings__tab.is-active,
+.application-shell--final .final-settings__tab[aria-current="page"] {
+  border-color: var(--color-accent-foreground) !important;
+  background: var(--color-accent-surface) !important;
+  color: var(--color-text-primary) !important;
+  box-shadow: var(--lumen-selected-glow) !important;
+  font-weight: 600;
+}

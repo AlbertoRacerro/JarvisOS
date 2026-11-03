@@ -1,0 +1,4 @@
+purpose = "Studio: engineer-authored models (source, units, equations, geometry, procedures), derived documentation and example workspaces."
+status = "live"
+entrypoints = ["/workspaces/{id}/studio", "/studio/documentation"]
+owner = "maintainer"

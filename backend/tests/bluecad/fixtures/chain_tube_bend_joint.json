@@ -1,0 +1,77 @@
+{
+  "connections": [
+    {
+      "from": "run1.port_b",
+      "to": "bend1.port_a"
+    },
+    {
+      "from": "bend1.port_b",
+      "to": "joint1.port_a"
+    }
+  ],
+  "declared": {
+    "bbox_mm": {
+      "abs_tol": 5.0,
+      "max": [
+        1059.0,
+        520.0,
+        59.0
+      ],
+      "min": [
+        0.0,
+        -55.0,
+        -59.0
+      ]
+    },
+    "min_wall_t": 4.0,
+    "total_volume_mm3": {
+      "rel_tol": 0.001,
+      "value": 1808071.5742900546
+    }
+  },
+  "name": "chain_tube_bend_joint",
+  "parts": [
+    {
+      "frame": {
+        "direction": [
+          1,
+          0,
+          0
+        ],
+        "origin": [
+          0,
+          0,
+          0
+        ]
+      },
+      "kind": "tube_run",
+      "params": {
+        "length": 600.0,
+        "outer_d": 110.0,
+        "wall_t": 4.0
+      },
+      "part_id": "run1"
+    },
+    {
+      "kind": "bend",
+      "params": {
+        "angle": 1.5707963267948966,
+        "bend_radius": 400.0,
+        "outer_d": 110.0,
+        "wall_t": 4.0
+      },
+      "part_id": "bend1"
+    },
+    {
+      "kind": "joint",
+      "params": {
+        "joint_type": "socket",
+        "outer_d": 110.0,
+        "socket_len": 120.0,
+        "wall_t": 4.0
+      },
+      "part_id": "joint1"
+    }
+  ],
+  "spec_version": "bluecad_geometry_spec_v0_1"
+}

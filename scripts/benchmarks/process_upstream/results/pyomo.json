@@ -1,0 +1,26 @@
+{
+  "candidate": "pyomo",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "BSD-3-Clause",
+  "measurements": {
+    "mass_balance_error_kg_hr": 0.0,
+    "mixed_kg_hr": 500.0,
+    "product_kg_hr": 90.0,
+    "purge_kg_hr": 10.0,
+    "recycle_kg_hr": 400.0,
+    "solver": "ipopt",
+    "solvers_available": {
+      "appsi_ipopt": true,
+      "cbc": true,
+      "glpk": false,
+      "highs": false,
+      "ipopt": true
+    },
+    "termination": "optimal"
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "6.10.1",
+  "wall_time_s": 0.956356
+}

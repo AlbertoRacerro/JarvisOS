@@ -1,0 +1,210 @@
+{
+  "schema": "bubu-static-assets.v1",
+  "asset_only": true,
+  "runtime_bound": true,
+  "canvas": {
+    "width": 512,
+    "height": 512,
+    "alpha": true,
+    "feet_baseline_px": 472,
+    "anchor_px": [
+      256,
+      472
+    ]
+  },
+  "reference": {
+    "filename": "Immagine ChatGPT 28 ott 2026, 09_11_50.png",
+    "sha256": "ad4ec29198f0eb9d263c3ee669ca4adc9e266515fad6159d5283bf8a05698abc",
+    "origin": "maintainer-provided Bubu reference; no third-party product assets"
+  },
+  "generation": {
+    "mode": "built-in image_gen",
+    "intent": "background-extraction",
+    "prompts": "prompts.json",
+    "postprocess": "Pillow 12.0.0; alpha crop; aspect-preserving LANCZOS normalization; PNG RGBA and lossless WebP",
+    "identity_note": "Generative cutouts derived from reference, not pixel-identical source crops."
+  },
+  "poses": {
+    "listening": {
+      "suggested_use": "Presente / ascolto",
+      "source_selection": "Grande figura standard a sinistra",
+      "alt_it": "Bubu con occhi aperti e germoglio verde.",
+      "png": "bubu-listening.png",
+      "webp": "bubu-listening.webp",
+      "public_png": "/mascots/bubu/bubu-listening.png",
+      "public_webp": "/mascots/bubu/bubu-listening.webp",
+      "width": 512,
+      "height": 512,
+      "alpha_bbox": [
+        91,
+        32,
+        421,
+        472
+      ],
+      "source_generated_file": "exec-6818377f-afa1-4c48-8042-7e2108f8e981.png",
+      "source_generated_sha256": "f79d9817559e9b38410edc3ddf5c961b1044db75504ede5dccbd97272063ccf2",
+      "source_crop_box": [
+        164,
+        12,
+        1084,
+        1240
+      ],
+      "files": {
+        "png": {
+          "bytes": 203366,
+          "sha256": "8cdba84136366cd503b1e843c4aa01906d7633fd519197ef4fc6bd351d868dee"
+        },
+        "webp": {
+          "bytes": 133506,
+          "sha256": "8b16eeb431d3835685208ba6ebaf89bfcaafedae5ac6fd13f0bac6af16a4396b"
+        }
+      }
+    },
+    "thinking": {
+      "suggested_use": "Pensa / progetta / calcola",
+      "source_selection": "Piccola figura in alto a destra, con schermo",
+      "alt_it": "Bubu studia uno schermo olografico verde.",
+      "png": "bubu-thinking.png",
+      "webp": "bubu-thinking.webp",
+      "public_png": "/mascots/bubu/bubu-thinking.png",
+      "public_webp": "/mascots/bubu/bubu-thinking.webp",
+      "width": 512,
+      "height": 512,
+      "alpha_bbox": [
+        77,
+        32,
+        433,
+        471
+      ],
+      "source_generated_file": "exec-2ec9905d-f0ac-461e-9076-0833aed1f495.png",
+      "source_generated_sha256": "ff1ade828536b1906d16b63776fa5dd34fade09d326c0e72df77c6b6241113c7",
+      "source_crop_box": [
+        179,
+        54,
+        1118,
+        1212
+      ],
+      "files": {
+        "png": {
+          "bytes": 221154,
+          "sha256": "47c2ec11697bce4dc18b3d63fdd83642e4e632c26757986155a56ba9604cba6b"
+        },
+        "webp": {
+          "bytes": 152286,
+          "sha256": "401d6157ee7329b737360d11f22d2c677769f40e973f367ddc97ee624d4ff827"
+        }
+      }
+    },
+    "clarifying": {
+      "suggested_use": "Chiede chiarimenti / autorizzazione",
+      "source_selection": "Piccola figura in basso a sinistra, con punto interrogativo",
+      "alt_it": "Bubu porta una mano al mento accanto a un punto interrogativo.",
+      "png": "bubu-clarifying.png",
+      "webp": "bubu-clarifying.webp",
+      "public_png": "/mascots/bubu/bubu-clarifying.png",
+      "public_webp": "/mascots/bubu/bubu-clarifying.webp",
+      "width": 512,
+      "height": 512,
+      "alpha_bbox": [
+        83,
+        32,
+        428,
+        472
+      ],
+      "source_generated_file": "exec-c4d6d982-9d65-4fc1-b6fa-9e86767466ce.png",
+      "source_generated_sha256": "8dafa51fb4800bd1620124bf0279f852834e4ac18fb990609ca3729a7607e93d",
+      "source_crop_box": [
+        232,
+        83,
+        1087,
+        1173
+      ],
+      "files": {
+        "png": {
+          "bytes": 188891,
+          "sha256": "b6964dfcff9a6e88de318f9ef79cc498dd7df9464b0ec81f3bc1ebe633a85033"
+        },
+        "webp": {
+          "bytes": 122114,
+          "sha256": "36dba5b8006f1cfc7bc7d533bf69cfc6c8ee30e45d3866dfd4bd9d30740fb037"
+        }
+      }
+    },
+    "sending-issue": {
+      "suggested_use": "Invia issue",
+      "source_selection": "Piccola figura gioiosa in alto, a sinistra di quella con schermo",
+      "alt_it": "Bubu gioioso con braccia alzate e occhi chiusi.",
+      "png": "bubu-sending-issue.png",
+      "webp": "bubu-sending-issue.webp",
+      "public_png": "/mascots/bubu/bubu-sending-issue.png",
+      "public_webp": "/mascots/bubu/bubu-sending-issue.webp",
+      "width": 512,
+      "height": 512,
+      "alpha_bbox": [
+        63,
+        32,
+        449,
+        472
+      ],
+      "source_generated_file": "exec-d0f2c8d6-6390-4221-b934-2ba88719a02c.png",
+      "source_generated_sha256": "58e9065b6338bf000e479f4f1de517ca530f2a91b226afbfb8e26216957e4d75",
+      "source_crop_box": [
+        147,
+        53,
+        1158,
+        1204
+      ],
+      "files": {
+        "png": {
+          "bytes": 185489,
+          "sha256": "bcf65ceb27df49db43a2b4a26cbc914fa3da04e794d8e2e144a5afa81c4e500e"
+        },
+        "webp": {
+          "bytes": 120470,
+          "sha256": "499c086da1b180d54a15efed457ddc4d25cc9fc901fd4541e97f451e1e1dbc47"
+        }
+      }
+    },
+    "sleeping": {
+      "suggested_use": "Spento / dorme",
+      "source_selection": "Piccola figura in basso a destra, con Z",
+      "alt_it": "Bubu dorme con occhi chiusi e tre Z verdi.",
+      "png": "bubu-sleeping.png",
+      "webp": "bubu-sleeping.webp",
+      "public_png": "/mascots/bubu/bubu-sleeping.png",
+      "public_webp": "/mascots/bubu/bubu-sleeping.webp",
+      "width": 512,
+      "height": 512,
+      "alpha_bbox": [
+        60,
+        148,
+        452,
+        472
+      ],
+      "source_generated_file": "exec-e2f09b1d-a883-433e-8c77-adcb45bf07a9.png",
+      "source_generated_sha256": "ddf86098557bdc89d76b013b758c081d075e57bb05d60e98891be105507eb8e4",
+      "source_crop_box": [
+        173,
+        305,
+        1200,
+        1153
+      ],
+      "files": {
+        "png": {
+          "bytes": 166712,
+          "sha256": "0052dee677f6e272b141cd91554d1ada9d0c95673bcc64ad22b322621e90cf39"
+        },
+        "webp": {
+          "bytes": 109164,
+          "sha256": "4248d6ea1352d32d3ec9437dc5802cce22864c33152e3ad4bd20bc46e98b078d"
+        }
+      }
+    }
+  },
+  "runtime_binding": {
+    "component": "frontend/src/components/shell/BubuLauncher.tsx",
+    "pose": "listening",
+    "meaning": "Static presence / open existing Jarvis; no recording or AI activity implied",
+    "other_poses_bound": false
+  }
+}

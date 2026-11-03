@@ -1,0 +1,6596 @@
+{
+ "cases": {
+  "Cooler_energy_stream": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Cooler_energy_stream_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Cooler_energy_stream_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Cooler_energy_stream_P0"
+     },
+     "result": {
+      "stream": "Cooler_energy_stream_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Cooler_energy_stream_QF0"
+     },
+     "result": {
+      "stream": "Cooler_energy_stream_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "Cooler_energy_stream",
+      "type": "Cooler"
+     },
+     "result": {
+      "type": "Cooler",
+      "unitop": "Cooler_energy_stream"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Cooler_energy_stream",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "RESF-401fec8e-77dd-4d84-b481-df1148bb48b8",
+      "tag": "Cooler_energy_stream",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_energy_stream_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-b8aeb404-b2a0-401c-93a8-ddd65141eec4",
+      "tag": "Cooler_energy_stream_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_energy_stream_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-cda0d4b5-000d-447c-9620-30e865cabab5",
+      "tag": "Cooler_energy_stream_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_energy_stream_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-1f976d4e-24d8-4ef3-8e96-e0cff5a3c236",
+      "tag": "Cooler_energy_stream_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Cooler_energy_stream_F0",
+      "unitop": "Cooler_energy_stream"
+     },
+     "result": {
+      "connections": [
+       "feed:Cooler_energy_stream_F0->port0"
+      ],
+      "unitop": "Cooler_energy_stream"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Cooler_energy_stream_P0",
+      "unitop": "Cooler_energy_stream"
+     },
+     "result": {
+      "connections": [
+       "product:Cooler_energy_stream_P0->port0"
+      ],
+      "unitop": "Cooler_energy_stream"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "Cooler_energy_stream_QF0",
+      "energy_feed_port": 1,
+      "unitop": "Cooler_energy_stream"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:Cooler_energy_stream_QF0->port1"
+      ],
+      "unitop": "Cooler_energy_stream"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Cooler_energy_stream",
+      "properties": {
+       "CalcMode": "EnergyStream",
+       "DeltaP": 0.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = EnergyStream",
+       "DeltaP = 0"
+      ],
+      "unitop": "Cooler_energy_stream"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "Cooler_energy_stream_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "Cooler_energy_stream_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "energy_stream",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "EnergyStream",
+    "calculation_modes": [
+     "HeatRemoved",
+     "OutletTemperature",
+     "OutletVaporFraction",
+     "TemperatureChange",
+     "EnergyStream"
+    ],
+    "error": "",
+    "name": "Cooler_energy_stream",
+    "properties": {
+     "Outlet Molar Vapor Fraction": {
+      "units": "",
+      "value": "0"
+     },
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "3.7784394121259766"
+     }
+    },
+    "type": "Cooler"
+   },
+   "solve": {
+    "blockers": 0,
+    "error_count": 0,
+    "errors": [],
+    "findings": [
+     {
+      "code": "COOLER_HEATED",
+      "fix": "A cooler removes heat, so its duty is positive and its outlet temperature is below its inlet. An outlet temperature above the inlet calls for a heater.",
+      "learn_more": "https://dwsim.org/tutorials/en/beginner/03-heater-cooler.html",
+      "message": "This cooler raised the temperature of its stream by 3.778 K.",
+      "object": "Cooler_energy_stream",
+      "severity": "warning"
+     }
+    ],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_energy_stream_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_energy_stream_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_energy_stream_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_energy_stream",
+      "type": "Cooler"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Cooler"
+  },
+  "Cooler_heat_removed": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Cooler_heat_removed_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Cooler_heat_removed_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Cooler_heat_removed_P0"
+     },
+     "result": {
+      "stream": "Cooler_heat_removed_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Cooler_heat_removed_QF0"
+     },
+     "result": {
+      "stream": "Cooler_heat_removed_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "Cooler_heat_removed",
+      "type": "Cooler"
+     },
+     "result": {
+      "type": "Cooler",
+      "unitop": "Cooler_heat_removed"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Cooler_heat_removed",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "RESF-851c93ab-0c91-4d79-8fae-f4f50198aff0",
+      "tag": "Cooler_heat_removed",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_heat_removed_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-220a75b1-cdea-4408-843a-914fb92f5269",
+      "tag": "Cooler_heat_removed_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_heat_removed_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-fcfab4d4-2ade-4304-851b-4cfaf6529564",
+      "tag": "Cooler_heat_removed_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_heat_removed_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-71222be9-2fb5-4517-ba9e-17dacba7b1c7",
+      "tag": "Cooler_heat_removed_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Cooler_heat_removed_F0",
+      "unitop": "Cooler_heat_removed"
+     },
+     "result": {
+      "connections": [
+       "feed:Cooler_heat_removed_F0->port0"
+      ],
+      "unitop": "Cooler_heat_removed"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Cooler_heat_removed_P0",
+      "unitop": "Cooler_heat_removed"
+     },
+     "result": {
+      "connections": [
+       "product:Cooler_heat_removed_P0->port0"
+      ],
+      "unitop": "Cooler_heat_removed"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "Cooler_heat_removed_QF0",
+      "energy_feed_port": 1,
+      "unitop": "Cooler_heat_removed"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:Cooler_heat_removed_QF0->port1"
+      ],
+      "unitop": "Cooler_heat_removed"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Cooler_heat_removed",
+      "properties": {
+       "CalcMode": "HeatRemoved",
+       "DeltaP": 0.0,
+       "DeltaQ": 20000.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = HeatRemoved",
+       "DeltaP = 0",
+       "DeltaQ = 20000"
+      ],
+      "unitop": "Cooler_heat_removed"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "Cooler_heat_removed_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "Cooler_heat_removed_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "heat_removed",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "HeatRemoved",
+    "calculation_modes": [
+     "HeatRemoved",
+     "OutletTemperature",
+     "OutletVaporFraction",
+     "TemperatureChange",
+     "EnergyStream"
+    ],
+    "error": "",
+    "name": "Cooler_heat_removed",
+    "properties": {
+     "Outlet Molar Vapor Fraction": {
+      "units": "",
+      "value": "0"
+     },
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "-229.40528006336845"
+     }
+    },
+    "type": "Cooler"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_heat_removed_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_heat_removed_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_heat_removed_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_heat_removed",
+      "type": "Cooler"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Cooler"
+  },
+  "Cooler_outlet_temperature": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Cooler_outlet_temperature_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Cooler_outlet_temperature_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_temperature_P0"
+     },
+     "result": {
+      "stream": "Cooler_outlet_temperature_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_temperature_QF0"
+     },
+     "result": {
+      "stream": "Cooler_outlet_temperature_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_temperature",
+      "type": "Cooler"
+     },
+     "result": {
+      "type": "Cooler",
+      "unitop": "Cooler_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_temperature",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "RESF-3e8fa328-dbd0-4c87-ba4e-331789f67b7a",
+      "tag": "Cooler_outlet_temperature",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_temperature_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-cf09a040-b0dd-4e7c-a2a1-94cf6e698e1f",
+      "tag": "Cooler_outlet_temperature_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_temperature_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-e9bd79b8-7796-4257-b29f-b8c724c6e6e2",
+      "tag": "Cooler_outlet_temperature_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_temperature_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-f563f623-8981-4952-bb6a-264cec32d22b",
+      "tag": "Cooler_outlet_temperature_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Cooler_outlet_temperature_F0",
+      "unitop": "Cooler_outlet_temperature"
+     },
+     "result": {
+      "connections": [
+       "feed:Cooler_outlet_temperature_F0->port0"
+      ],
+      "unitop": "Cooler_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Cooler_outlet_temperature_P0",
+      "unitop": "Cooler_outlet_temperature"
+     },
+     "result": {
+      "connections": [
+       "product:Cooler_outlet_temperature_P0->port0"
+      ],
+      "unitop": "Cooler_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "Cooler_outlet_temperature_QF0",
+      "energy_feed_port": 1,
+      "unitop": "Cooler_outlet_temperature"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:Cooler_outlet_temperature_QF0->port1"
+      ],
+      "unitop": "Cooler_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_temperature",
+      "properties": {
+       "CalcMode": "OutletTemperature",
+       "DeltaP": 0.0,
+       "OutletTemperature": 290.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = OutletTemperature",
+       "OutletTemperature = 290",
+       "DeltaP = 0"
+      ],
+      "unitop": "Cooler_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_temperature_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "Cooler_outlet_temperature_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "outlet_temperature",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "OutletTemperature",
+    "calculation_modes": [
+     "HeatRemoved",
+     "OutletTemperature",
+     "OutletVaporFraction",
+     "TemperatureChange",
+     "EnergyStream"
+    ],
+    "error": "",
+    "name": "Cooler_outlet_temperature",
+    "properties": {
+     "Outlet Molar Vapor Fraction": {
+      "units": "",
+      "value": "0"
+     },
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "-10"
+     }
+    },
+    "type": "Cooler"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_outlet_temperature_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_outlet_temperature_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_outlet_temperature_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_outlet_temperature",
+      "type": "Cooler"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Cooler"
+  },
+  "Cooler_outlet_vapor_fraction": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Cooler_outlet_vapor_fraction_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Cooler_outlet_vapor_fraction_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_vapor_fraction_P0"
+     },
+     "result": {
+      "stream": "Cooler_outlet_vapor_fraction_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_vapor_fraction_QF0"
+     },
+     "result": {
+      "stream": "Cooler_outlet_vapor_fraction_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_vapor_fraction",
+      "type": "Cooler"
+     },
+     "result": {
+      "type": "Cooler",
+      "unitop": "Cooler_outlet_vapor_fraction"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_vapor_fraction",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "RESF-645bd279-773f-4586-92cf-9be142b66425",
+      "tag": "Cooler_outlet_vapor_fraction",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_vapor_fraction_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-1af0c49f-367f-4602-86df-b801a624f1bc",
+      "tag": "Cooler_outlet_vapor_fraction_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_vapor_fraction_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-5ac208a9-8e37-468c-a87a-044fe0c43250",
+      "tag": "Cooler_outlet_vapor_fraction_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_vapor_fraction_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-97792be3-5e33-4948-90b1-5b48f67642a9",
+      "tag": "Cooler_outlet_vapor_fraction_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Cooler_outlet_vapor_fraction_F0",
+      "unitop": "Cooler_outlet_vapor_fraction"
+     },
+     "result": {
+      "connections": [
+       "feed:Cooler_outlet_vapor_fraction_F0->port0"
+      ],
+      "unitop": "Cooler_outlet_vapor_fraction"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Cooler_outlet_vapor_fraction_P0",
+      "unitop": "Cooler_outlet_vapor_fraction"
+     },
+     "result": {
+      "connections": [
+       "product:Cooler_outlet_vapor_fraction_P0->port0"
+      ],
+      "unitop": "Cooler_outlet_vapor_fraction"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "Cooler_outlet_vapor_fraction_QF0",
+      "energy_feed_port": 1,
+      "unitop": "Cooler_outlet_vapor_fraction"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:Cooler_outlet_vapor_fraction_QF0->port1"
+      ],
+      "unitop": "Cooler_outlet_vapor_fraction"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_vapor_fraction",
+      "properties": {
+       "CalcMode": "OutletVaporFraction",
+       "DeltaP": 0.0,
+       "OutletVaporFraction": 0.5
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = OutletVaporFraction",
+       "DeltaP = 0",
+       "OutletVaporFraction = 0.5"
+      ],
+      "unitop": "Cooler_outlet_vapor_fraction"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "Cooler_outlet_vapor_fraction_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "Cooler_outlet_vapor_fraction_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "outlet_vapor_fraction",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "OutletVaporFraction",
+    "calculation_modes": [
+     "HeatRemoved",
+     "OutletTemperature",
+     "OutletVaporFraction",
+     "TemperatureChange",
+     "EnergyStream"
+    ],
+    "error": "",
+    "name": "Cooler_outlet_vapor_fraction",
+    "properties": {
+     "Outlet Molar Vapor Fraction": {
+      "units": "",
+      "value": "0.5"
+     },
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "72.76358261581453"
+     }
+    },
+    "type": "Cooler"
+   },
+   "solve": {
+    "blockers": 0,
+    "error_count": 0,
+    "errors": [],
+    "findings": [
+     {
+      "code": "COOLER_HEATED",
+      "fix": "A cooler removes heat, so its duty is positive and its outlet temperature is below its inlet. An outlet temperature above the inlet calls for a heater.",
+      "learn_more": "https://dwsim.org/tutorials/en/beginner/03-heater-cooler.html",
+      "message": "This cooler raised the temperature of its stream by 72.76 K.",
+      "object": "Cooler_outlet_vapor_fraction",
+      "severity": "warning"
+     }
+    ],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_outlet_vapor_fraction_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_outlet_vapor_fraction_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_outlet_vapor_fraction_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_outlet_vapor_fraction",
+      "type": "Cooler"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Cooler"
+  },
+  "Cooler_temperature_change": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Cooler_temperature_change_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Cooler_temperature_change_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Cooler_temperature_change_P0"
+     },
+     "result": {
+      "stream": "Cooler_temperature_change_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Cooler_temperature_change_QF0"
+     },
+     "result": {
+      "stream": "Cooler_temperature_change_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "Cooler_temperature_change",
+      "type": "Cooler"
+     },
+     "result": {
+      "type": "Cooler",
+      "unitop": "Cooler_temperature_change"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Cooler_temperature_change",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "RESF-8fa00a35-f7be-4edf-9d75-7816a1e097d0",
+      "tag": "Cooler_temperature_change",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_temperature_change_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-3f4269a1-7f05-4a56-8958-4e0863911aad",
+      "tag": "Cooler_temperature_change_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_temperature_change_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-3855df70-39a5-43ff-b947-f3f7eb487ea1",
+      "tag": "Cooler_temperature_change_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Cooler_temperature_change_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-9904f62e-f8df-4079-994b-74d84a682a48",
+      "tag": "Cooler_temperature_change_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Cooler_temperature_change_F0",
+      "unitop": "Cooler_temperature_change"
+     },
+     "result": {
+      "connections": [
+       "feed:Cooler_temperature_change_F0->port0"
+      ],
+      "unitop": "Cooler_temperature_change"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Cooler_temperature_change_P0",
+      "unitop": "Cooler_temperature_change"
+     },
+     "result": {
+      "connections": [
+       "product:Cooler_temperature_change_P0->port0"
+      ],
+      "unitop": "Cooler_temperature_change"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "Cooler_temperature_change_QF0",
+      "energy_feed_port": 1,
+      "unitop": "Cooler_temperature_change"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:Cooler_temperature_change_QF0->port1"
+      ],
+      "unitop": "Cooler_temperature_change"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Cooler_temperature_change",
+      "properties": {
+       "CalcMode": "TemperatureChange",
+       "DeltaP": -10.0,
+       "DeltaT": -10.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = TemperatureChange",
+       "DeltaP = -10",
+       "DeltaT = -10"
+      ],
+      "unitop": "Cooler_temperature_change"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "Cooler_temperature_change_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "Cooler_temperature_change_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "temperature_change",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "TemperatureChange",
+    "calculation_modes": [
+     "HeatRemoved",
+     "OutletTemperature",
+     "OutletVaporFraction",
+     "TemperatureChange",
+     "EnergyStream"
+    ],
+    "error": "",
+    "name": "Cooler_temperature_change",
+    "properties": {
+     "Outlet Molar Vapor Fraction": {
+      "units": "",
+      "value": "0"
+     },
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "-10"
+     }
+    },
+    "type": "Cooler"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_temperature_change_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_temperature_change_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_temperature_change_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Cooler_temperature_change",
+      "type": "Cooler"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Cooler"
+  },
+  "Flash_default": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Flash_default_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Flash_default_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Flash_default_P0"
+     },
+     "result": {
+      "stream": "Flash_default_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Flash_default_P1"
+     },
+     "result": {
+      "stream": "Flash_default_P1",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Flash_default",
+      "type": "Vessel"
+     },
+     "result": {
+      "type": "Vessel",
+      "unitop": "Flash_default"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Flash_default",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 50,
+      "name": "SEP-2a67fb0f-3cd7-4544-9b94-954758cbd2a8",
+      "tag": "Flash_default",
+      "width": 50,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Flash_default_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-02ad465c-caca-439d-bdc3-d825df1a23df",
+      "tag": "Flash_default_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Flash_default_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-d9e353d1-44dc-48ae-9cfe-5fb39e32b791",
+      "tag": "Flash_default_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Flash_default_P1",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-f2b3461f-49ae-4124-b59e-33ba4bbbddf4",
+      "tag": "Flash_default_P1",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Flash_default_F0",
+      "unitop": "Flash_default"
+     },
+     "result": {
+      "connections": [
+       "feed:Flash_default_F0->port0"
+      ],
+      "unitop": "Flash_default"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Flash_default_P0",
+      "unitop": "Flash_default"
+     },
+     "result": {
+      "connections": [
+       "product:Flash_default_P0->port0"
+      ],
+      "unitop": "Flash_default"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 1,
+      "product_stream": "Flash_default_P1",
+      "unitop": "Flash_default"
+     },
+     "result": {
+      "connections": [
+       "product:Flash_default_P1->port1"
+      ],
+      "unitop": "Flash_default"
+     },
+     "tool": "dwsim_unitop_connect"
+    }
+   ],
+   "mode": null,
+   "read_back": {
+    "calculated": true,
+    "error": "",
+    "name": "Flash_default",
+    "properties": {},
+    "type": "Vessel"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Flash_default_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Flash_default_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Flash_default_P1",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Flash_default",
+      "type": "Vessel"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Flash"
+  },
+  "Heater_energy_stream": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Heater_energy_stream_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Heater_energy_stream_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_energy_stream_P0"
+     },
+     "result": {
+      "stream": "Heater_energy_stream_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_energy_stream_QF0"
+     },
+     "result": {
+      "stream": "Heater_energy_stream_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "Heater_energy_stream",
+      "type": "Heater"
+     },
+     "result": {
+      "type": "Heater",
+      "unitop": "Heater_energy_stream"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Heater_energy_stream",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "AQ-fef207e6-fa3a-4eca-ad51-8d9f79c709d2",
+      "tag": "Heater_energy_stream",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_energy_stream_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-eb07b249-22d7-48c6-9247-3c0f528ee219",
+      "tag": "Heater_energy_stream_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_energy_stream_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-0642a9a7-f97f-44db-99f6-64294ab12aff",
+      "tag": "Heater_energy_stream_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_energy_stream_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-d0b81c42-64e3-45e5-80a2-8419d0f3b3e1",
+      "tag": "Heater_energy_stream_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Heater_energy_stream_F0",
+      "unitop": "Heater_energy_stream"
+     },
+     "result": {
+      "connections": [
+       "feed:Heater_energy_stream_F0->port0"
+      ],
+      "unitop": "Heater_energy_stream"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Heater_energy_stream_P0",
+      "unitop": "Heater_energy_stream"
+     },
+     "result": {
+      "connections": [
+       "product:Heater_energy_stream_P0->port0"
+      ],
+      "unitop": "Heater_energy_stream"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "Heater_energy_stream_QF0",
+      "energy_feed_port": 1,
+      "unitop": "Heater_energy_stream"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:Heater_energy_stream_QF0->port1"
+      ],
+      "unitop": "Heater_energy_stream"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Heater_energy_stream",
+      "properties": {
+       "CalcMode": "EnergyStream",
+       "DeltaP": 0.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = EnergyStream",
+       "DeltaP = 0"
+      ],
+      "unitop": "Heater_energy_stream"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "Heater_energy_stream_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "Heater_energy_stream_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "energy_stream",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "EnergyStream",
+    "calculation_modes": [
+     "HeatAdded",
+     "OutletTemperature",
+     "EnergyStream",
+     "OutletVaporFraction",
+     "TemperatureChange",
+     "HeatAddedRemoved"
+    ],
+    "error": "",
+    "name": "Heater_energy_stream",
+    "properties": {
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "3.7784394121259766"
+     }
+    },
+    "type": "Heater"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_energy_stream_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_energy_stream_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_energy_stream_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_energy_stream",
+      "type": "Heater"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Heater"
+  },
+  "Heater_heat_added": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Heater_heat_added_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Heater_heat_added_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_P0"
+     },
+     "result": {
+      "stream": "Heater_heat_added_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_QF0"
+     },
+     "result": {
+      "stream": "Heater_heat_added_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added",
+      "type": "Heater"
+     },
+     "result": {
+      "type": "Heater",
+      "unitop": "Heater_heat_added"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "AQ-2fac9d42-440c-4879-80df-8ae2268d5b25",
+      "tag": "Heater_heat_added",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-62fb50ab-5170-4595-97af-16c8df181831",
+      "tag": "Heater_heat_added_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-675ea3dd-a5a1-468b-86ce-99353ec1ac7e",
+      "tag": "Heater_heat_added_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-f592d036-935e-43bf-af04-f5b5d7cf89f5",
+      "tag": "Heater_heat_added_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Heater_heat_added_F0",
+      "unitop": "Heater_heat_added"
+     },
+     "result": {
+      "connections": [
+       "feed:Heater_heat_added_F0->port0"
+      ],
+      "unitop": "Heater_heat_added"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Heater_heat_added_P0",
+      "unitop": "Heater_heat_added"
+     },
+     "result": {
+      "connections": [
+       "product:Heater_heat_added_P0->port0"
+      ],
+      "unitop": "Heater_heat_added"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "Heater_heat_added_QF0",
+      "energy_feed_port": 1,
+      "unitop": "Heater_heat_added"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:Heater_heat_added_QF0->port1"
+      ],
+      "unitop": "Heater_heat_added"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added",
+      "properties": {
+       "CalcMode": "HeatAdded",
+       "DeltaP": 0.0,
+       "DeltaQ": 20000.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = HeatAdded",
+       "DeltaP = 0",
+       "DeltaQ = 20000"
+      ],
+      "unitop": "Heater_heat_added"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "Heater_heat_added_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "heat_added",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "HeatAdded",
+    "calculation_modes": [
+     "HeatAdded",
+     "OutletTemperature",
+     "EnergyStream",
+     "OutletVaporFraction",
+     "TemperatureChange",
+     "HeatAddedRemoved"
+    ],
+    "error": "",
+    "name": "Heater_heat_added",
+    "properties": {
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "1700"
+     }
+    },
+    "type": "Heater"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_heat_added_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_heat_added_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_heat_added_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_heat_added",
+      "type": "Heater"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Heater"
+  },
+  "Heater_heat_added_removed": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Heater_heat_added_removed_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Heater_heat_added_removed_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_removed_P0"
+     },
+     "result": {
+      "stream": "Heater_heat_added_removed_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_removed_QF0"
+     },
+     "result": {
+      "stream": "Heater_heat_added_removed_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_removed",
+      "type": "Heater"
+     },
+     "result": {
+      "type": "Heater",
+      "unitop": "Heater_heat_added_removed"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_removed",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "AQ-76cc49fe-e79f-4d9e-8f69-4034c155659d",
+      "tag": "Heater_heat_added_removed",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_removed_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-344623aa-bb89-40de-9e3c-11e6b49a885c",
+      "tag": "Heater_heat_added_removed_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_removed_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-3ba546c5-db53-4d08-8de8-641961360a9b",
+      "tag": "Heater_heat_added_removed_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_removed_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-f544982f-e4a3-4d51-b3d9-6ce31e20db90",
+      "tag": "Heater_heat_added_removed_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Heater_heat_added_removed_F0",
+      "unitop": "Heater_heat_added_removed"
+     },
+     "result": {
+      "connections": [
+       "feed:Heater_heat_added_removed_F0->port0"
+      ],
+      "unitop": "Heater_heat_added_removed"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Heater_heat_added_removed_P0",
+      "unitop": "Heater_heat_added_removed"
+     },
+     "result": {
+      "connections": [
+       "product:Heater_heat_added_removed_P0->port0"
+      ],
+      "unitop": "Heater_heat_added_removed"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "Heater_heat_added_removed_QF0",
+      "energy_feed_port": 1,
+      "unitop": "Heater_heat_added_removed"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:Heater_heat_added_removed_QF0->port1"
+      ],
+      "unitop": "Heater_heat_added_removed"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_removed",
+      "properties": {
+       "CalcMode": "HeatAddedRemoved",
+       "DeltaP": 0.0,
+       "DeltaQ": 20000.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = HeatAddedRemoved",
+       "DeltaP = 0",
+       "DeltaQ = 20000"
+      ],
+      "unitop": "Heater_heat_added_removed"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "Heater_heat_added_removed_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "Heater_heat_added_removed_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "heat_added_removed",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "HeatAddedRemoved",
+    "calculation_modes": [
+     "HeatAdded",
+     "OutletTemperature",
+     "EnergyStream",
+     "OutletVaporFraction",
+     "TemperatureChange",
+     "HeatAddedRemoved"
+    ],
+    "error": "",
+    "name": "Heater_heat_added_removed",
+    "properties": {
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "1700"
+     }
+    },
+    "type": "Heater"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_heat_added_removed_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_heat_added_removed_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_heat_added_removed_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_heat_added_removed",
+      "type": "Heater"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Heater"
+  },
+  "Heater_outlet_temperature": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Heater_outlet_temperature_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Heater_outlet_temperature_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_temperature_P0"
+     },
+     "result": {
+      "stream": "Heater_outlet_temperature_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_temperature_QF0"
+     },
+     "result": {
+      "stream": "Heater_outlet_temperature_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_temperature",
+      "type": "Heater"
+     },
+     "result": {
+      "type": "Heater",
+      "unitop": "Heater_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_temperature",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "AQ-416d4db8-e425-4859-90e0-b31c65d61e2b",
+      "tag": "Heater_outlet_temperature",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_temperature_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-706d02c0-cdb7-489a-a86d-92db4f56129c",
+      "tag": "Heater_outlet_temperature_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_temperature_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-c0b8bad8-7568-4174-832d-c121542c8ce3",
+      "tag": "Heater_outlet_temperature_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_temperature_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-3b1a57b1-a313-42c6-bbff-e7b1dd1e13a0",
+      "tag": "Heater_outlet_temperature_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Heater_outlet_temperature_F0",
+      "unitop": "Heater_outlet_temperature"
+     },
+     "result": {
+      "connections": [
+       "feed:Heater_outlet_temperature_F0->port0"
+      ],
+      "unitop": "Heater_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Heater_outlet_temperature_P0",
+      "unitop": "Heater_outlet_temperature"
+     },
+     "result": {
+      "connections": [
+       "product:Heater_outlet_temperature_P0->port0"
+      ],
+      "unitop": "Heater_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "Heater_outlet_temperature_QF0",
+      "energy_feed_port": 1,
+      "unitop": "Heater_outlet_temperature"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:Heater_outlet_temperature_QF0->port1"
+      ],
+      "unitop": "Heater_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_temperature",
+      "properties": {
+       "CalcMode": "OutletTemperature",
+       "DeltaP": 0.0,
+       "OutletTemperature": 330.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = OutletTemperature",
+       "OutletTemperature = 330",
+       "DeltaP = 0"
+      ],
+      "unitop": "Heater_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_temperature_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "Heater_outlet_temperature_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "outlet_temperature",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "OutletTemperature",
+    "calculation_modes": [
+     "HeatAdded",
+     "OutletTemperature",
+     "EnergyStream",
+     "OutletVaporFraction",
+     "TemperatureChange",
+     "HeatAddedRemoved"
+    ],
+    "error": "",
+    "name": "Heater_outlet_temperature",
+    "properties": {
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "30"
+     }
+    },
+    "type": "Heater"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_outlet_temperature_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_outlet_temperature_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_outlet_temperature_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_outlet_temperature",
+      "type": "Heater"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Heater"
+  },
+  "Heater_outlet_vapor_fraction": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Heater_outlet_vapor_fraction_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Heater_outlet_vapor_fraction_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_vapor_fraction_P0"
+     },
+     "result": {
+      "stream": "Heater_outlet_vapor_fraction_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_vapor_fraction_QF0"
+     },
+     "result": {
+      "stream": "Heater_outlet_vapor_fraction_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_vapor_fraction",
+      "type": "Heater"
+     },
+     "result": {
+      "type": "Heater",
+      "unitop": "Heater_outlet_vapor_fraction"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_vapor_fraction",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "AQ-3fc58267-b171-40d1-8fe8-999eb4690912",
+      "tag": "Heater_outlet_vapor_fraction",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_vapor_fraction_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-7c535577-7f9d-4e7d-ad4d-6b731ef7974d",
+      "tag": "Heater_outlet_vapor_fraction_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_vapor_fraction_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-230c5cec-0ff6-4604-b263-d593d73bbac4",
+      "tag": "Heater_outlet_vapor_fraction_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_vapor_fraction_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-8bf23bf0-631f-4924-899f-d16a40cf5ebc",
+      "tag": "Heater_outlet_vapor_fraction_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Heater_outlet_vapor_fraction_F0",
+      "unitop": "Heater_outlet_vapor_fraction"
+     },
+     "result": {
+      "connections": [
+       "feed:Heater_outlet_vapor_fraction_F0->port0"
+      ],
+      "unitop": "Heater_outlet_vapor_fraction"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Heater_outlet_vapor_fraction_P0",
+      "unitop": "Heater_outlet_vapor_fraction"
+     },
+     "result": {
+      "connections": [
+       "product:Heater_outlet_vapor_fraction_P0->port0"
+      ],
+      "unitop": "Heater_outlet_vapor_fraction"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "Heater_outlet_vapor_fraction_QF0",
+      "energy_feed_port": 1,
+      "unitop": "Heater_outlet_vapor_fraction"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:Heater_outlet_vapor_fraction_QF0->port1"
+      ],
+      "unitop": "Heater_outlet_vapor_fraction"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_vapor_fraction",
+      "properties": {
+       "CalcMode": "OutletVaporFraction",
+       "DeltaP": 0.0,
+       "OutletVaporFraction": 0.5
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = OutletVaporFraction",
+       "DeltaP = 0",
+       "OutletVaporFraction = 0.5"
+      ],
+      "unitop": "Heater_outlet_vapor_fraction"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "Heater_outlet_vapor_fraction_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "Heater_outlet_vapor_fraction_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "outlet_vapor_fraction",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "OutletVaporFraction",
+    "calculation_modes": [
+     "HeatAdded",
+     "OutletTemperature",
+     "EnergyStream",
+     "OutletVaporFraction",
+     "TemperatureChange",
+     "HeatAddedRemoved"
+    ],
+    "error": "",
+    "name": "Heater_outlet_vapor_fraction",
+    "properties": {
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "72.76358261581453"
+     }
+    },
+    "type": "Heater"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_outlet_vapor_fraction_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_outlet_vapor_fraction_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_outlet_vapor_fraction_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_outlet_vapor_fraction",
+      "type": "Heater"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Heater"
+  },
+  "Heater_temperature_change": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Heater_temperature_change_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Heater_temperature_change_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_temperature_change_P0"
+     },
+     "result": {
+      "stream": "Heater_temperature_change_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Heater_temperature_change_QF0"
+     },
+     "result": {
+      "stream": "Heater_temperature_change_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "Heater_temperature_change",
+      "type": "Heater"
+     },
+     "result": {
+      "type": "Heater",
+      "unitop": "Heater_temperature_change"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Heater_temperature_change",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "AQ-9f0dc21a-283f-431d-af36-259ccaec6fc8",
+      "tag": "Heater_temperature_change",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_temperature_change_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-9d2f33fb-de43-4202-bb25-f05386b01a57",
+      "tag": "Heater_temperature_change_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_temperature_change_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-afa01725-c57a-45df-a687-914043176abb",
+      "tag": "Heater_temperature_change_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Heater_temperature_change_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-3b9fffab-34af-43d7-8d87-ee42e20cade5",
+      "tag": "Heater_temperature_change_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Heater_temperature_change_F0",
+      "unitop": "Heater_temperature_change"
+     },
+     "result": {
+      "connections": [
+       "feed:Heater_temperature_change_F0->port0"
+      ],
+      "unitop": "Heater_temperature_change"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Heater_temperature_change_P0",
+      "unitop": "Heater_temperature_change"
+     },
+     "result": {
+      "connections": [
+       "product:Heater_temperature_change_P0->port0"
+      ],
+      "unitop": "Heater_temperature_change"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "Heater_temperature_change_QF0",
+      "energy_feed_port": 1,
+      "unitop": "Heater_temperature_change"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:Heater_temperature_change_QF0->port1"
+      ],
+      "unitop": "Heater_temperature_change"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Heater_temperature_change",
+      "properties": {
+       "CalcMode": "TemperatureChange",
+       "DeltaP": 10.0,
+       "DeltaT": 10.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = TemperatureChange",
+       "DeltaP = 10",
+       "DeltaT = 10"
+      ],
+      "unitop": "Heater_temperature_change"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "Heater_temperature_change_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "Heater_temperature_change_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "temperature_change",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "TemperatureChange",
+    "calculation_modes": [
+     "HeatAdded",
+     "OutletTemperature",
+     "EnergyStream",
+     "OutletVaporFraction",
+     "TemperatureChange",
+     "HeatAddedRemoved"
+    ],
+    "error": "",
+    "name": "Heater_temperature_change",
+    "properties": {
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "10"
+     }
+    },
+    "type": "Heater"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_temperature_change_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_temperature_change_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_temperature_change_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Heater_temperature_change",
+      "type": "Heater"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Heater"
+  },
+  "Mixer_default": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Mixer_default_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Mixer_default_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Mixer_default_F1",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Mixer_default_F1",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Mixer_default_F2",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Mixer_default_F2",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Mixer_default_P0"
+     },
+     "result": {
+      "stream": "Mixer_default_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Mixer_default",
+      "type": "Mixer"
+     },
+     "result": {
+      "type": "Mixer",
+      "unitop": "Mixer_default"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Mixer_default",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MIST-0d3056df-e416-47c1-aaa9-ce1ae31cca86",
+      "tag": "Mixer_default",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Mixer_default_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-8564d19b-b4f4-42e6-ba67-f8da0d4b6afd",
+      "tag": "Mixer_default_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Mixer_default_F1",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-f17a9cf7-d5fa-4bdb-b20e-b026929dccfe",
+      "tag": "Mixer_default_F1",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Mixer_default_F2",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-96548ec2-ae9e-4beb-991b-e06aafdf8172",
+      "tag": "Mixer_default_F2",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Mixer_default_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-644d9b18-aedc-4eff-a072-902833362118",
+      "tag": "Mixer_default_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Mixer_default_F0",
+      "unitop": "Mixer_default"
+     },
+     "result": {
+      "connections": [
+       "feed:Mixer_default_F0->port0"
+      ],
+      "unitop": "Mixer_default"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "feed_port": 1,
+      "feed_stream": "Mixer_default_F1",
+      "unitop": "Mixer_default"
+     },
+     "result": {
+      "connections": [
+       "feed:Mixer_default_F1->port1"
+      ],
+      "unitop": "Mixer_default"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "feed_port": 2,
+      "feed_stream": "Mixer_default_F2",
+      "unitop": "Mixer_default"
+     },
+     "result": {
+      "connections": [
+       "feed:Mixer_default_F2->port2"
+      ],
+      "unitop": "Mixer_default"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Mixer_default_P0",
+      "unitop": "Mixer_default"
+     },
+     "result": {
+      "connections": [
+       "product:Mixer_default_P0->port0"
+      ],
+      "unitop": "Mixer_default"
+     },
+     "tool": "dwsim_unitop_connect"
+    }
+   ],
+   "mode": null,
+   "read_back": {
+    "calculated": true,
+    "error": "",
+    "name": "Mixer_default",
+    "properties": {},
+    "type": "NodeIn"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Mixer_default_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Mixer_default_F1",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Mixer_default_F2",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Mixer_default_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Mixer_default",
+      "type": "NodeIn"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Mixer"
+  },
+  "PFR_adiabatic": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "PFR_adiabatic_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "PFR_adiabatic_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "PFR_adiabatic_P0"
+     },
+     "result": {
+      "stream": "PFR_adiabatic_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "PFR_adiabatic_QF0"
+     },
+     "result": {
+      "stream": "PFR_adiabatic_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "PFR_adiabatic",
+      "type": "PFR"
+     },
+     "result": {
+      "type": "PFR",
+      "unitop": "PFR_adiabatic"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "PFR_adiabatic",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "PFR-77cf9c21-a6ac-41e2-ad26-7e6edbd8a93d",
+      "tag": "PFR_adiabatic",
+      "width": 70,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_adiabatic_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-f7a3a6a4-1475-4b44-96a6-f92c7246d187",
+      "tag": "PFR_adiabatic_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_adiabatic_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-106393f3-63e2-4077-bd3b-dc9abc7c4289",
+      "tag": "PFR_adiabatic_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_adiabatic_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-6c66f716-ae71-4c3b-9993-060c85d26ed6",
+      "tag": "PFR_adiabatic_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "PFR_adiabatic_F0",
+      "unitop": "PFR_adiabatic"
+     },
+     "result": {
+      "connections": [
+       "feed:PFR_adiabatic_F0->port0"
+      ],
+      "unitop": "PFR_adiabatic"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "PFR_adiabatic_P0",
+      "unitop": "PFR_adiabatic"
+     },
+     "result": {
+      "connections": [
+       "product:PFR_adiabatic_P0->port0"
+      ],
+      "unitop": "PFR_adiabatic"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "PFR_adiabatic_QF0",
+      "energy_feed_port": 1,
+      "unitop": "PFR_adiabatic"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:PFR_adiabatic_QF0->port1"
+      ],
+      "unitop": "PFR_adiabatic"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "PFR_adiabatic",
+      "properties": {
+       "DeltaP": 0.0,
+       "Length": 4.0,
+       "ReactorOperationMode": "Adiabatic",
+       "Volume": 2.0
+      }
+     },
+     "result": {
+      "applied": [
+       "ReactorOperationMode = Adiabatic",
+       "Volume = 2",
+       "Length = 4",
+       "DeltaP = 0"
+      ],
+      "unitop": "PFR_adiabatic"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "PFR_adiabatic_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "PFR_adiabatic_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "adiabatic",
+   "read_back": {
+    "calculated": true,
+    "error": "",
+    "name": "PFR_adiabatic",
+    "properties": {
+     "Area Calculation Mode": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculate External HTC": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculate Internal HTC": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculated External HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Calculated Internal HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Calculated Overall HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Catalyst Particle Sphericity": {
+      "units": "",
+      "value": "0"
+     },
+     "Catalyst diameter": {
+      "units": "mm",
+      "value": "0"
+     },
+     "Catalyst loading": {
+      "units": "kg/m3",
+      "value": "0"
+     },
+     "Catalyst void fraction": {
+      "units": "",
+      "value": "0"
+     },
+     "Coolant Density": {
+      "units": "kg/m3",
+      "value": "998"
+     },
+     "Coolant Flow Direction": {
+      "units": "",
+      "value": "0"
+     },
+     "Coolant Inlet Temperature": {
+      "units": "C",
+      "value": "25"
+     },
+     "Coolant Mass Flow Rate": {
+      "units": "kg/h",
+      "value": "3600"
+     },
+     "Coolant Specific Heat": {
+      "units": "J/kg.K",
+      "value": "4180"
+     },
+     "Coolant Thermal Conductivity": {
+      "units": "W/m.K",
+      "value": "0.6"
+     },
+     "Coolant Viscosity": {
+      "units": "Pa.s",
+      "value": "0.001"
+     },
+     "External Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "2000"
+     },
+     "Heat Exchange Area": {
+      "units": "m2",
+      "value": "10"
+     },
+     "Heat load": {
+      "units": "kW",
+      "value": "0"
+     },
+     "Integration Step": {
+      "units": "",
+      "value": "0.01"
+     },
+     "Internal Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "1000"
+     },
+     "Jacket Diameter": {
+      "units": "mm",
+      "value": "150"
+     },
+     "Number of Tubes": {
+      "units": "",
+      "value": "1"
+     },
+     "Outlet Temperature": {
+      "units": "C",
+      "value": "26.850000000000023"
+     },
+     "Overall Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "500"
+     },
+     "Pressure Drop": {
+      "units": "bar",
+      "value": "3.474197001196444E-09"
+     },
+     "Residence time": {
+      "units": "s",
+      "value": "1991.6377817971618"
+     },
+     "Select the calculation mode of this reactor.": {
+      "units": "",
+      "value": "Adiabatic"
+     },
+     "Temperature delta": {
+      "units": "C.",
+      "value": "0"
+     },
+     "Tube Diameter": {
+      "units": "mm",
+      "value": "797.8845608028654"
+     },
+     "Tube Length": {
+      "units": "m",
+      "value": "4"
+     },
+     "Use Utility Stream": {
+      "units": "",
+      "value": "0"
+     },
+     "Use Wall Properties": {
+      "units": "",
+      "value": "0"
+     },
+     "Volume": {
+      "units": "m3",
+      "value": "2"
+     },
+     "Wall Thickness": {
+      "units": "m",
+      "value": "0.005"
+     }
+    },
+    "type": "RCT_PFR"
+   },
+   "solve": {
+    "blockers": 1,
+    "error_count": 0,
+    "errors": [],
+    "findings": [
+     {
+      "code": "REACTOR_NO_REACTIONS",
+      "fix": "Create the reactions in the reaction manager, put them in a reaction set, and select that set on the reactor.",
+      "learn_more": "https://dwsim.org/tutorials/en/intermediate/03-reaction-systems.html",
+      "message": "This reactor has no active reaction to compute, so it can only pass its feed through.",
+      "object": "PFR_adiabatic",
+      "severity": "blocker"
+     }
+    ],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_adiabatic_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_adiabatic_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_adiabatic_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_adiabatic",
+      "type": "RCT_PFR"
+     }
+    ],
+    "ok": true
+   },
+   "type": "PFR"
+  },
+  "PFR_heat_exchange": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "PFR_heat_exchange_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "PFR_heat_exchange_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "PFR_heat_exchange_P0"
+     },
+     "result": {
+      "stream": "PFR_heat_exchange_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "PFR_heat_exchange_QF0"
+     },
+     "result": {
+      "stream": "PFR_heat_exchange_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "PFR_heat_exchange",
+      "type": "PFR"
+     },
+     "result": {
+      "type": "PFR",
+      "unitop": "PFR_heat_exchange"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "PFR_heat_exchange",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "PFR-8dd36b28-8872-48c5-889b-6e0fd5cd7eeb",
+      "tag": "PFR_heat_exchange",
+      "width": 70,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_heat_exchange_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-e8f7fc36-a0f3-4be3-894a-af54f6d03229",
+      "tag": "PFR_heat_exchange_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_heat_exchange_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-27e8f631-1240-4d78-b6b5-50f63bae43c5",
+      "tag": "PFR_heat_exchange_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_heat_exchange_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-3f9216b8-eb9b-44ba-bd86-a9f224df997b",
+      "tag": "PFR_heat_exchange_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "PFR_heat_exchange_F0",
+      "unitop": "PFR_heat_exchange"
+     },
+     "result": {
+      "connections": [
+       "feed:PFR_heat_exchange_F0->port0"
+      ],
+      "unitop": "PFR_heat_exchange"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "PFR_heat_exchange_P0",
+      "unitop": "PFR_heat_exchange"
+     },
+     "result": {
+      "connections": [
+       "product:PFR_heat_exchange_P0->port0"
+      ],
+      "unitop": "PFR_heat_exchange"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "PFR_heat_exchange_QF0",
+      "energy_feed_port": 1,
+      "unitop": "PFR_heat_exchange"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:PFR_heat_exchange_QF0->port1"
+      ],
+      "unitop": "PFR_heat_exchange"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "PFR_heat_exchange",
+      "properties": {
+       "CoolantInletTemperature": 330.0,
+       "CoolantMassFlowRate": 1.0,
+       "CoolantSpecificHeat": 4180.0,
+       "DeltaP": 0.0,
+       "HeatExchangeArea": 12.0,
+       "Length": 4.0,
+       "OverallHeatTransferCoefficient": 400.0,
+       "ReactorOperationMode": "HeatExchange",
+       "Volume": 2.0
+      }
+     },
+     "result": {
+      "applied": [
+       "ReactorOperationMode = HeatExchange",
+       "Volume = 2",
+       "Length = 4",
+       "DeltaP = 0",
+       "OverallHeatTransferCoefficient = 400",
+       "HeatExchangeArea = 12",
+       "CoolantInletTemperature = 330",
+       "CoolantMassFlowRate = 1",
+       "CoolantSpecificHeat = 4180"
+      ],
+      "unitop": "PFR_heat_exchange"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "PFR_heat_exchange_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "PFR_heat_exchange_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "heat_exchange",
+   "read_back": {
+    "calculated": true,
+    "error": "",
+    "name": "PFR_heat_exchange",
+    "properties": {
+     "Area Calculation Mode": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculate External HTC": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculate Internal HTC": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculated External HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Calculated Internal HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Calculated Overall HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Catalyst Particle Sphericity": {
+      "units": "",
+      "value": "0"
+     },
+     "Catalyst diameter": {
+      "units": "mm",
+      "value": "0"
+     },
+     "Catalyst loading": {
+      "units": "kg/m3",
+      "value": "0"
+     },
+     "Catalyst void fraction": {
+      "units": "",
+      "value": "0"
+     },
+     "Coolant Density": {
+      "units": "kg/m3",
+      "value": "998"
+     },
+     "Coolant Flow Direction": {
+      "units": "",
+      "value": "0"
+     },
+     "Coolant Inlet Temperature": {
+      "units": "C",
+      "value": "56.85000000000002"
+     },
+     "Coolant Mass Flow Rate": {
+      "units": "kg/h",
+      "value": "3600"
+     },
+     "Coolant Specific Heat": {
+      "units": "J/kg.K",
+      "value": "4180"
+     },
+     "Coolant Thermal Conductivity": {
+      "units": "W/m.K",
+      "value": "0.6"
+     },
+     "Coolant Viscosity": {
+      "units": "Pa.s",
+      "value": "0.001"
+     },
+     "External Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "2000"
+     },
+     "Heat Exchange Area": {
+      "units": "m2",
+      "value": "12"
+     },
+     "Heat load": {
+      "units": "kW",
+      "value": "0"
+     },
+     "Integration Step": {
+      "units": "",
+      "value": "0.01"
+     },
+     "Internal Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "1000"
+     },
+     "Jacket Diameter": {
+      "units": "mm",
+      "value": "150"
+     },
+     "Number of Tubes": {
+      "units": "",
+      "value": "1"
+     },
+     "Outlet Temperature": {
+      "units": "C",
+      "value": "26.850000000000023"
+     },
+     "Overall Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "400"
+     },
+     "Pressure Drop": {
+      "units": "bar",
+      "value": "3.474197001196444E-09"
+     },
+     "Residence time": {
+      "units": "s",
+      "value": "1991.6377817971618"
+     },
+     "Select the calculation mode of this reactor.": {
+      "units": "",
+      "value": "Heat Exchange"
+     },
+     "Temperature delta": {
+      "units": "C.",
+      "value": "0"
+     },
+     "Tube Diameter": {
+      "units": "mm",
+      "value": "797.8845608028654"
+     },
+     "Tube Length": {
+      "units": "m",
+      "value": "4"
+     },
+     "Use Utility Stream": {
+      "units": "",
+      "value": "0"
+     },
+     "Use Wall Properties": {
+      "units": "",
+      "value": "0"
+     },
+     "Volume": {
+      "units": "m3",
+      "value": "2"
+     },
+     "Wall Thickness": {
+      "units": "m",
+      "value": "0.005"
+     }
+    },
+    "type": "RCT_PFR"
+   },
+   "solve": {
+    "blockers": 1,
+    "error_count": 0,
+    "errors": [],
+    "findings": [
+     {
+      "code": "REACTOR_NO_REACTIONS",
+      "fix": "Create the reactions in the reaction manager, put them in a reaction set, and select that set on the reactor.",
+      "learn_more": "https://dwsim.org/tutorials/en/intermediate/03-reaction-systems.html",
+      "message": "This reactor has no active reaction to compute, so it can only pass its feed through.",
+      "object": "PFR_heat_exchange",
+      "severity": "blocker"
+     }
+    ],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_heat_exchange_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_heat_exchange_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_heat_exchange_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_heat_exchange",
+      "type": "RCT_PFR"
+     }
+    ],
+    "ok": true
+   },
+   "type": "PFR"
+  },
+  "PFR_isothermic": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "PFR_isothermic_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "PFR_isothermic_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "PFR_isothermic_P0"
+     },
+     "result": {
+      "stream": "PFR_isothermic_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "PFR_isothermic_QF0"
+     },
+     "result": {
+      "stream": "PFR_isothermic_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "PFR_isothermic",
+      "type": "PFR"
+     },
+     "result": {
+      "type": "PFR",
+      "unitop": "PFR_isothermic"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "PFR_isothermic",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "PFR-c219bd68-e769-4895-9e97-77eb60194d79",
+      "tag": "PFR_isothermic",
+      "width": 70,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_isothermic_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-f6a8590e-ae3a-4e68-a42f-bc85e5caf905",
+      "tag": "PFR_isothermic_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_isothermic_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-4328e630-f1f8-40f5-a0f1-21e182ad5292",
+      "tag": "PFR_isothermic_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_isothermic_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-6d04f45c-7eb1-4ae8-9208-454d6c471c37",
+      "tag": "PFR_isothermic_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "PFR_isothermic_F0",
+      "unitop": "PFR_isothermic"
+     },
+     "result": {
+      "connections": [
+       "feed:PFR_isothermic_F0->port0"
+      ],
+      "unitop": "PFR_isothermic"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "PFR_isothermic_P0",
+      "unitop": "PFR_isothermic"
+     },
+     "result": {
+      "connections": [
+       "product:PFR_isothermic_P0->port0"
+      ],
+      "unitop": "PFR_isothermic"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "PFR_isothermic_QF0",
+      "energy_feed_port": 1,
+      "unitop": "PFR_isothermic"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:PFR_isothermic_QF0->port1"
+      ],
+      "unitop": "PFR_isothermic"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "PFR_isothermic",
+      "properties": {
+       "DeltaP": 0.0,
+       "Length": 4.0,
+       "ReactorOperationMode": "Isothermic",
+       "Volume": 2.0
+      }
+     },
+     "result": {
+      "applied": [
+       "ReactorOperationMode = Isothermic",
+       "Volume = 2",
+       "Length = 4",
+       "DeltaP = 0"
+      ],
+      "unitop": "PFR_isothermic"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "PFR_isothermic_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "PFR_isothermic_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "isothermic",
+   "read_back": {
+    "calculated": true,
+    "error": "",
+    "name": "PFR_isothermic",
+    "properties": {
+     "Area Calculation Mode": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculate External HTC": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculate Internal HTC": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculated External HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Calculated Internal HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Calculated Overall HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Catalyst Particle Sphericity": {
+      "units": "",
+      "value": "0"
+     },
+     "Catalyst diameter": {
+      "units": "mm",
+      "value": "0"
+     },
+     "Catalyst loading": {
+      "units": "kg/m3",
+      "value": "0"
+     },
+     "Catalyst void fraction": {
+      "units": "",
+      "value": "0"
+     },
+     "Coolant Density": {
+      "units": "kg/m3",
+      "value": "998"
+     },
+     "Coolant Flow Direction": {
+      "units": "",
+      "value": "0"
+     },
+     "Coolant Inlet Temperature": {
+      "units": "C",
+      "value": "25"
+     },
+     "Coolant Mass Flow Rate": {
+      "units": "kg/h",
+      "value": "3600"
+     },
+     "Coolant Specific Heat": {
+      "units": "J/kg.K",
+      "value": "4180"
+     },
+     "Coolant Thermal Conductivity": {
+      "units": "W/m.K",
+      "value": "0.6"
+     },
+     "Coolant Viscosity": {
+      "units": "Pa.s",
+      "value": "0.001"
+     },
+     "External Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "2000"
+     },
+     "Heat Exchange Area": {
+      "units": "m2",
+      "value": "10"
+     },
+     "Heat load": {
+      "units": "kW",
+      "value": "0"
+     },
+     "Integration Step": {
+      "units": "",
+      "value": "0.01"
+     },
+     "Internal Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "1000"
+     },
+     "Jacket Diameter": {
+      "units": "mm",
+      "value": "150"
+     },
+     "Number of Tubes": {
+      "units": "",
+      "value": "1"
+     },
+     "Outlet Temperature": {
+      "units": "C",
+      "value": "26.850000000000023"
+     },
+     "Overall Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "500"
+     },
+     "Pressure Drop": {
+      "units": "bar",
+      "value": "3.474197001196444E-09"
+     },
+     "Residence time": {
+      "units": "s",
+      "value": "1991.6377817971618"
+     },
+     "Select the calculation mode of this reactor.": {
+      "units": "",
+      "value": "Isothermic"
+     },
+     "Temperature delta": {
+      "units": "C.",
+      "value": "0"
+     },
+     "Tube Diameter": {
+      "units": "mm",
+      "value": "797.8845608028654"
+     },
+     "Tube Length": {
+      "units": "m",
+      "value": "4"
+     },
+     "Use Utility Stream": {
+      "units": "",
+      "value": "0"
+     },
+     "Use Wall Properties": {
+      "units": "",
+      "value": "0"
+     },
+     "Volume": {
+      "units": "m3",
+      "value": "2"
+     },
+     "Wall Thickness": {
+      "units": "m",
+      "value": "0.005"
+     }
+    },
+    "type": "RCT_PFR"
+   },
+   "solve": {
+    "blockers": 1,
+    "error_count": 0,
+    "errors": [],
+    "findings": [
+     {
+      "code": "REACTOR_NO_REACTIONS",
+      "fix": "Create the reactions in the reaction manager, put them in a reaction set, and select that set on the reactor.",
+      "learn_more": "https://dwsim.org/tutorials/en/intermediate/03-reaction-systems.html",
+      "message": "This reactor has no active reaction to compute, so it can only pass its feed through.",
+      "object": "PFR_isothermic",
+      "severity": "blocker"
+     }
+    ],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_isothermic_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_isothermic_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_isothermic_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_isothermic",
+      "type": "RCT_PFR"
+     }
+    ],
+    "ok": true
+   },
+   "type": "PFR"
+  },
+  "PFR_nonisothermal_nonadiabatic": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "PFR_nonisothermal_nonadiabatic_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "PFR_nonisothermal_nonadiabatic_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "PFR_nonisothermal_nonadiabatic_P0"
+     },
+     "result": {
+      "stream": "PFR_nonisothermal_nonadiabatic_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "PFR_nonisothermal_nonadiabatic_QF0"
+     },
+     "result": {
+      "stream": "PFR_nonisothermal_nonadiabatic_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "PFR_nonisothermal_nonadiabatic",
+      "type": "PFR"
+     },
+     "result": {
+      "type": "PFR",
+      "unitop": "PFR_nonisothermal_nonadiabatic"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "PFR_nonisothermal_nonadiabatic",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "PFR-0dd46f9b-15e5-4428-81e9-44288e2aca89",
+      "tag": "PFR_nonisothermal_nonadiabatic",
+      "width": 70,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_nonisothermal_nonadiabatic_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-23f3aa22-240b-411f-bd44-b619293b2f1b",
+      "tag": "PFR_nonisothermal_nonadiabatic_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_nonisothermal_nonadiabatic_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-f4c66dcc-bc21-402b-bd9b-0ed7d96b4639",
+      "tag": "PFR_nonisothermal_nonadiabatic_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_nonisothermal_nonadiabatic_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-4089e63e-c5a3-4199-bfa3-7b6acbdbcf51",
+      "tag": "PFR_nonisothermal_nonadiabatic_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "PFR_nonisothermal_nonadiabatic_F0",
+      "unitop": "PFR_nonisothermal_nonadiabatic"
+     },
+     "result": {
+      "connections": [
+       "feed:PFR_nonisothermal_nonadiabatic_F0->port0"
+      ],
+      "unitop": "PFR_nonisothermal_nonadiabatic"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "PFR_nonisothermal_nonadiabatic_P0",
+      "unitop": "PFR_nonisothermal_nonadiabatic"
+     },
+     "result": {
+      "connections": [
+       "product:PFR_nonisothermal_nonadiabatic_P0->port0"
+      ],
+      "unitop": "PFR_nonisothermal_nonadiabatic"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "PFR_nonisothermal_nonadiabatic_QF0",
+      "energy_feed_port": 1,
+      "unitop": "PFR_nonisothermal_nonadiabatic"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:PFR_nonisothermal_nonadiabatic_QF0->port1"
+      ],
+      "unitop": "PFR_nonisothermal_nonadiabatic"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "PFR_nonisothermal_nonadiabatic",
+      "properties": {
+       "DeltaP": 0.0,
+       "Length": 4.0,
+       "ReactorOperationMode": "NonIsothermalNonAdiabatic",
+       "Volume": 2.0
+      }
+     },
+     "result": {
+      "applied": [
+       "ReactorOperationMode = NonIsothermalNonAdiabatic",
+       "Volume = 2",
+       "Length = 4",
+       "DeltaP = 0"
+      ],
+      "unitop": "PFR_nonisothermal_nonadiabatic"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "PFR_nonisothermal_nonadiabatic_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "PFR_nonisothermal_nonadiabatic_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "nonisothermal_nonadiabatic",
+   "read_back": {
+    "calculated": true,
+    "error": "",
+    "name": "PFR_nonisothermal_nonadiabatic",
+    "properties": {
+     "Area Calculation Mode": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculate External HTC": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculate Internal HTC": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculated External HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Calculated Internal HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Calculated Overall HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Catalyst Particle Sphericity": {
+      "units": "",
+      "value": "0"
+     },
+     "Catalyst diameter": {
+      "units": "mm",
+      "value": "0"
+     },
+     "Catalyst loading": {
+      "units": "kg/m3",
+      "value": "0"
+     },
+     "Catalyst void fraction": {
+      "units": "",
+      "value": "0"
+     },
+     "Coolant Density": {
+      "units": "kg/m3",
+      "value": "998"
+     },
+     "Coolant Flow Direction": {
+      "units": "",
+      "value": "0"
+     },
+     "Coolant Inlet Temperature": {
+      "units": "C",
+      "value": "25"
+     },
+     "Coolant Mass Flow Rate": {
+      "units": "kg/h",
+      "value": "3600"
+     },
+     "Coolant Specific Heat": {
+      "units": "J/kg.K",
+      "value": "4180"
+     },
+     "Coolant Thermal Conductivity": {
+      "units": "W/m.K",
+      "value": "0.6"
+     },
+     "Coolant Viscosity": {
+      "units": "Pa.s",
+      "value": "0.001"
+     },
+     "External Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "2000"
+     },
+     "Heat Exchange Area": {
+      "units": "m2",
+      "value": "10"
+     },
+     "Heat load": {
+      "units": "kW",
+      "value": "20"
+     },
+     "Integration Step": {
+      "units": "",
+      "value": "0.01"
+     },
+     "Internal Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "1000"
+     },
+     "Jacket Diameter": {
+      "units": "mm",
+      "value": "150"
+     },
+     "Number of Tubes": {
+      "units": "",
+      "value": "1"
+     },
+     "Outlet Temperature": {
+      "units": "C",
+      "value": "26.850000000000023"
+     },
+     "Overall Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "500"
+     },
+     "Pressure Drop": {
+      "units": "bar",
+      "value": "3.474197001196444E-09"
+     },
+     "Residence time": {
+      "units": "s",
+      "value": "1991.6377817971618"
+     },
+     "Select the calculation mode of this reactor.": {
+      "units": "",
+      "value": "0"
+     },
+     "Temperature delta": {
+      "units": "C.",
+      "value": "0"
+     },
+     "Tube Diameter": {
+      "units": "mm",
+      "value": "797.8845608028654"
+     },
+     "Tube Length": {
+      "units": "m",
+      "value": "4"
+     },
+     "Use Utility Stream": {
+      "units": "",
+      "value": "0"
+     },
+     "Use Wall Properties": {
+      "units": "",
+      "value": "0"
+     },
+     "Volume": {
+      "units": "m3",
+      "value": "2"
+     },
+     "Wall Thickness": {
+      "units": "m",
+      "value": "0.005"
+     }
+    },
+    "type": "RCT_PFR"
+   },
+   "solve": {
+    "blockers": 1,
+    "error_count": 0,
+    "errors": [],
+    "findings": [
+     {
+      "code": "REACTOR_NO_REACTIONS",
+      "fix": "Create the reactions in the reaction manager, put them in a reaction set, and select that set on the reactor.",
+      "learn_more": "https://dwsim.org/tutorials/en/intermediate/03-reaction-systems.html",
+      "message": "This reactor has no active reaction to compute, so it can only pass its feed through.",
+      "object": "PFR_nonisothermal_nonadiabatic",
+      "severity": "blocker"
+     }
+    ],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_nonisothermal_nonadiabatic_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_nonisothermal_nonadiabatic_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_nonisothermal_nonadiabatic_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_nonisothermal_nonadiabatic",
+      "type": "RCT_PFR"
+     }
+    ],
+    "ok": true
+   },
+   "type": "PFR"
+  },
+  "PFR_outlet_temperature": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "PFR_outlet_temperature_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "PFR_outlet_temperature_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "PFR_outlet_temperature_P0"
+     },
+     "result": {
+      "stream": "PFR_outlet_temperature_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "PFR_outlet_temperature_QF0"
+     },
+     "result": {
+      "stream": "PFR_outlet_temperature_QF0",
+      "type": "EnergyStream"
+     },
+     "tool": "dwsim_stream_add_energy"
+    },
+    {
+     "args": {
+      "name": "PFR_outlet_temperature",
+      "type": "PFR"
+     },
+     "result": {
+      "type": "PFR",
+      "unitop": "PFR_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "PFR_outlet_temperature",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "PFR-8caa7775-0701-42e0-8b65-8e75098f53e4",
+      "tag": "PFR_outlet_temperature",
+      "width": 70,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_outlet_temperature_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-88ebad3a-bdc7-490c-bd9b-fff8257de104",
+      "tag": "PFR_outlet_temperature_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_outlet_temperature_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-9135be77-6e62-4811-830e-a7aad18ff42d",
+      "tag": "PFR_outlet_temperature_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "PFR_outlet_temperature_QF0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "EN-036edd52-c277-4b01-8aec-c7c7669d1852",
+      "tag": "PFR_outlet_temperature_QF0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "PFR_outlet_temperature_F0",
+      "unitop": "PFR_outlet_temperature"
+     },
+     "result": {
+      "connections": [
+       "feed:PFR_outlet_temperature_F0->port0"
+      ],
+      "unitop": "PFR_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "PFR_outlet_temperature_P0",
+      "unitop": "PFR_outlet_temperature"
+     },
+     "result": {
+      "connections": [
+       "product:PFR_outlet_temperature_P0->port0"
+      ],
+      "unitop": "PFR_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "energy_feed": "PFR_outlet_temperature_QF0",
+      "energy_feed_port": 1,
+      "unitop": "PFR_outlet_temperature"
+     },
+     "result": {
+      "connections": [
+       "energy_feed:PFR_outlet_temperature_QF0->port1"
+      ],
+      "unitop": "PFR_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "PFR_outlet_temperature",
+      "properties": {
+       "DeltaP": 0.0,
+       "Length": 4.0,
+       "ReactorOperationMode": "OutletTemperature",
+       "Volume": 2.0
+      }
+     },
+     "result": {
+      "applied": [
+       "ReactorOperationMode = OutletTemperature",
+       "Volume = 2",
+       "Length = 4",
+       "DeltaP = 0"
+      ],
+      "unitop": "PFR_outlet_temperature"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "name": "PFR_outlet_temperature_QF0",
+      "properties": {
+       "EnergyFlow": 20.0
+      }
+     },
+     "result": {
+      "applied": [
+       "EnergyFlow = 20"
+      ],
+      "unitop": "PFR_outlet_temperature_QF0"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "outlet_temperature",
+   "read_back": {
+    "calculated": true,
+    "error": "",
+    "name": "PFR_outlet_temperature",
+    "properties": {
+     "Area Calculation Mode": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculate External HTC": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculate Internal HTC": {
+      "units": "",
+      "value": "0"
+     },
+     "Calculated External HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Calculated Internal HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Calculated Overall HTC": {
+      "units": "W/m2.K",
+      "value": "0"
+     },
+     "Catalyst Particle Sphericity": {
+      "units": "",
+      "value": "0"
+     },
+     "Catalyst diameter": {
+      "units": "mm",
+      "value": "0"
+     },
+     "Catalyst loading": {
+      "units": "kg/m3",
+      "value": "0"
+     },
+     "Catalyst void fraction": {
+      "units": "",
+      "value": "0"
+     },
+     "Coolant Density": {
+      "units": "kg/m3",
+      "value": "998"
+     },
+     "Coolant Flow Direction": {
+      "units": "",
+      "value": "0"
+     },
+     "Coolant Inlet Temperature": {
+      "units": "C",
+      "value": "25"
+     },
+     "Coolant Mass Flow Rate": {
+      "units": "kg/h",
+      "value": "3600"
+     },
+     "Coolant Specific Heat": {
+      "units": "J/kg.K",
+      "value": "4180"
+     },
+     "Coolant Thermal Conductivity": {
+      "units": "W/m.K",
+      "value": "0.6"
+     },
+     "Coolant Viscosity": {
+      "units": "Pa.s",
+      "value": "0.001"
+     },
+     "External Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "2000"
+     },
+     "Heat Exchange Area": {
+      "units": "m2",
+      "value": "10"
+     },
+     "Heat load": {
+      "units": "kW",
+      "value": "-2.810338628478348E-10"
+     },
+     "Integration Step": {
+      "units": "",
+      "value": "0.01"
+     },
+     "Internal Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "1000"
+     },
+     "Jacket Diameter": {
+      "units": "mm",
+      "value": "150"
+     },
+     "Number of Tubes": {
+      "units": "",
+      "value": "1"
+     },
+     "Outlet Temperature": {
+      "units": "C",
+      "value": "25"
+     },
+     "Overall Heat Transfer Coefficient": {
+      "units": "W/m2.K",
+      "value": "500"
+     },
+     "Pressure Drop": {
+      "units": "bar",
+      "value": "3.474197001196444E-09"
+     },
+     "Residence time": {
+      "units": "s",
+      "value": "1991.6377817971618"
+     },
+     "Select the calculation mode of this reactor.": {
+      "units": "",
+      "value": "Defined Temperature"
+     },
+     "Temperature delta": {
+      "units": "C.",
+      "value": "-1.8500000000000227"
+     },
+     "Tube Diameter": {
+      "units": "mm",
+      "value": "797.8845608028654"
+     },
+     "Tube Length": {
+      "units": "m",
+      "value": "4"
+     },
+     "Use Utility Stream": {
+      "units": "",
+      "value": "0"
+     },
+     "Use Wall Properties": {
+      "units": "",
+      "value": "0"
+     },
+     "Volume": {
+      "units": "m3",
+      "value": "2"
+     },
+     "Wall Thickness": {
+      "units": "m",
+      "value": "0.005"
+     }
+    },
+    "type": "RCT_PFR"
+   },
+   "solve": {
+    "blockers": 1,
+    "error_count": 0,
+    "errors": [],
+    "findings": [
+     {
+      "code": "REACTOR_NO_REACTIONS",
+      "fix": "Create the reactions in the reaction manager, put them in a reaction set, and select that set on the reactor.",
+      "learn_more": "https://dwsim.org/tutorials/en/intermediate/03-reaction-systems.html",
+      "message": "This reactor has no active reaction to compute, so it can only pass its feed through.",
+      "object": "PFR_outlet_temperature",
+      "severity": "blocker"
+     }
+    ],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_outlet_temperature_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_outlet_temperature_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_outlet_temperature_QF0",
+      "type": "EnergyStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "PFR_outlet_temperature",
+      "type": "RCT_PFR"
+     }
+    ],
+    "ok": true
+   },
+   "type": "PFR"
+  },
+  "Pump_outlet_pressure": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Pump_outlet_pressure_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Pump_outlet_pressure_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Pump_outlet_pressure_P0"
+     },
+     "result": {
+      "stream": "Pump_outlet_pressure_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Pump_outlet_pressure",
+      "type": "Pump"
+     },
+     "result": {
+      "type": "Pump",
+      "unitop": "Pump_outlet_pressure"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Pump_outlet_pressure",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "BB-d34a3263-b03e-4cd5-9ce3-1447ee4c9e01",
+      "tag": "Pump_outlet_pressure",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Pump_outlet_pressure_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-7eecee14-68e6-47eb-b107-3553ca428867",
+      "tag": "Pump_outlet_pressure_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Pump_outlet_pressure_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-fa23a6d8-5caa-4e61-bb79-dd00ba8b2937",
+      "tag": "Pump_outlet_pressure_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Pump_outlet_pressure_F0",
+      "unitop": "Pump_outlet_pressure"
+     },
+     "result": {
+      "connections": [
+       "feed:Pump_outlet_pressure_F0->port0"
+      ],
+      "unitop": "Pump_outlet_pressure"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Pump_outlet_pressure_P0",
+      "unitop": "Pump_outlet_pressure"
+     },
+     "result": {
+      "connections": [
+       "product:Pump_outlet_pressure_P0->port0"
+      ],
+      "unitop": "Pump_outlet_pressure"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Pump_outlet_pressure",
+      "properties": {
+       "CalcMode": "OutletPressure",
+       "Efficiency": 75.0,
+       "Pout": 300000.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = OutletPressure",
+       "Pout = 300000",
+       "Efficiency = 75"
+      ],
+      "unitop": "Pump_outlet_pressure"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "outlet_pressure",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "OutletPressure",
+    "calculation_modes": [
+     "Delta_P",
+     "OutletPressure",
+     "EnergyStream",
+     "Curves",
+     "Power"
+    ],
+    "error": "",
+    "name": "Pump_outlet_pressure",
+    "properties": {
+     "Available NPSH": {
+      "units": "m",
+      "value": "9.873984231958962"
+     },
+     "Head": {
+      "units": "m",
+      "value": "20.472959514259177"
+     },
+     "NPSH Available": {
+      "units": "m",
+      "value": "9.873984231958962"
+     },
+     "PROP_PU_8": {
+      "units": "rpm",
+      "value": "1450"
+     },
+     "Power Required": {
+      "units": "kW",
+      "value": "0.26778631044651"
+     },
+     "Pressure Increase": {
+      "units": "bar",
+      "value": "2"
+     },
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "0.02012132580114212"
+     }
+    },
+    "type": "Pump"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Pump_outlet_pressure_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Pump_outlet_pressure_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Pump_outlet_pressure",
+      "type": "Pump"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Pump"
+  },
+  "Pump_pressure_increase": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Pump_pressure_increase_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Pump_pressure_increase_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Pump_pressure_increase_P0"
+     },
+     "result": {
+      "stream": "Pump_pressure_increase_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Pump_pressure_increase",
+      "type": "Pump"
+     },
+     "result": {
+      "type": "Pump",
+      "unitop": "Pump_pressure_increase"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Pump_pressure_increase",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 25,
+      "name": "BB-5227a9e4-0592-4786-88cf-cab22cd1b8a5",
+      "tag": "Pump_pressure_increase",
+      "width": 25,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Pump_pressure_increase_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-34e49eb1-7698-4dce-a1c7-c6b47ec40843",
+      "tag": "Pump_pressure_increase_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Pump_pressure_increase_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-876088d2-16fe-43c1-b6f8-e202e90fdf80",
+      "tag": "Pump_pressure_increase_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Pump_pressure_increase_F0",
+      "unitop": "Pump_pressure_increase"
+     },
+     "result": {
+      "connections": [
+       "feed:Pump_pressure_increase_F0->port0"
+      ],
+      "unitop": "Pump_pressure_increase"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Pump_pressure_increase_P0",
+      "unitop": "Pump_pressure_increase"
+     },
+     "result": {
+      "connections": [
+       "product:Pump_pressure_increase_P0->port0"
+      ],
+      "unitop": "Pump_pressure_increase"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Pump_pressure_increase",
+      "properties": {
+       "CalcMode": "Delta_P",
+       "DeltaP": 50000.0,
+       "Efficiency": 75.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = Delta_P",
+       "DeltaP = 50000",
+       "Efficiency = 75"
+      ],
+      "unitop": "Pump_pressure_increase"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "pressure_increase",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "Delta_P",
+    "calculation_modes": [
+     "Delta_P",
+     "OutletPressure",
+     "EnergyStream",
+     "Curves",
+     "Power"
+    ],
+    "error": "",
+    "name": "Pump_pressure_increase",
+    "properties": {
+     "Available NPSH": {
+      "units": "m",
+      "value": "9.873984231958962"
+     },
+     "Head": {
+      "units": "m",
+      "value": "5.118239878564794"
+     },
+     "NPSH Available": {
+      "units": "m",
+      "value": "9.873984231958962"
+     },
+     "Outlet Pressure": {
+      "units": "bar",
+      "value": "1.5"
+     },
+     "PROP_PU_8": {
+      "units": "rpm",
+      "value": "1450"
+     },
+     "Power Required": {
+      "units": "kW",
+      "value": "0.0669465776116275"
+     },
+     "Temperature Difference": {
+      "units": "C.",
+      "value": "0.005030316415115976"
+     }
+    },
+    "type": "Pump"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Pump_pressure_increase_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Pump_pressure_increase_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Pump_pressure_increase",
+      "type": "Pump"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Pump"
+  },
+  "Recycle_default": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Recycle_default_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Recycle_default_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Recycle_default_P0"
+     },
+     "result": {
+      "stream": "Recycle_default_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Recycle_default",
+      "type": "Recycle"
+     },
+     "result": {
+      "type": "Recycle",
+      "unitop": "Recycle_default"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Recycle_default",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "REC-db0a9f33-218e-49a5-a47e-db3a2975f2dd",
+      "tag": "Recycle_default",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Recycle_default_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-99261f80-b7c6-4f56-b3c9-96235fb184ea",
+      "tag": "Recycle_default_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Recycle_default_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-8fe80d86-f0c2-40a4-91c2-f187eb10b0c5",
+      "tag": "Recycle_default_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Recycle_default_F0",
+      "unitop": "Recycle_default"
+     },
+     "result": {
+      "connections": [
+       "feed:Recycle_default_F0->port0"
+      ],
+      "unitop": "Recycle_default"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Recycle_default_P0",
+      "unitop": "Recycle_default"
+     },
+     "result": {
+      "connections": [
+       "product:Recycle_default_P0->port0"
+      ],
+      "unitop": "Recycle_default"
+     },
+     "tool": "dwsim_unitop_connect"
+    }
+   ],
+   "mode": null,
+   "read_back": {
+    "calculated": true,
+    "error": "",
+    "name": "Recycle_default",
+    "properties": {
+     "Mass Flow Error": {
+      "units": "kg/h",
+      "value": "0"
+     },
+     "Pressure Error": {
+      "units": "bar",
+      "value": "0"
+     },
+     "Temperature Error": {
+      "units": "C.",
+      "value": "3.694822225952521E-12"
+     }
+    },
+    "type": "OT_Recycle"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Recycle_default_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Recycle_default_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Recycle_default",
+      "type": "OT_Recycle"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Recycle"
+  },
+  "Valve_outlet_pressure": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Valve_outlet_pressure_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Valve_outlet_pressure_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Valve_outlet_pressure_P0"
+     },
+     "result": {
+      "stream": "Valve_outlet_pressure_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Valve_outlet_pressure",
+      "type": "Valve"
+     },
+     "result": {
+      "type": "Valve",
+      "unitop": "Valve_outlet_pressure"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Valve_outlet_pressure",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "VALV-cf380ffa-f01c-4f53-bb2a-bf339198e862",
+      "tag": "Valve_outlet_pressure",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Valve_outlet_pressure_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-4d2f3740-dd40-4b67-b233-a3e52ed285b4",
+      "tag": "Valve_outlet_pressure_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Valve_outlet_pressure_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-d6b534f1-f179-40b4-98ec-e1dbde722339",
+      "tag": "Valve_outlet_pressure_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Valve_outlet_pressure_F0",
+      "unitop": "Valve_outlet_pressure"
+     },
+     "result": {
+      "connections": [
+       "feed:Valve_outlet_pressure_F0->port0"
+      ],
+      "unitop": "Valve_outlet_pressure"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Valve_outlet_pressure_P0",
+      "unitop": "Valve_outlet_pressure"
+     },
+     "result": {
+      "connections": [
+       "product:Valve_outlet_pressure_P0->port0"
+      ],
+      "unitop": "Valve_outlet_pressure"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Valve_outlet_pressure",
+      "properties": {
+       "CalcMode": "OutletPressure",
+       "OutletPressure": 50000.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = OutletPressure",
+       "OutletPressure = 50000"
+      ],
+      "unitop": "Valve_outlet_pressure"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "outlet_pressure",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "OutletPressure",
+    "calculation_modes": [
+     "DeltaP",
+     "OutletPressure",
+     "Kv_Liquid",
+     "Kv_Gas",
+     "Kv_Steam",
+     "Kv_General"
+    ],
+    "error": "",
+    "name": "Valve_outlet_pressure",
+    "properties": {
+     "Actual Flow Coefficient": {
+      "units": "",
+      "value": "100"
+     },
+     "Temperature Drop": {
+      "units": "C.",
+      "value": "0.007632407457037971"
+     }
+    },
+    "type": "Valve"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Valve_outlet_pressure_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Valve_outlet_pressure_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Valve_outlet_pressure",
+      "type": "Valve"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Valve"
+  },
+  "Valve_pressure_drop": {
+   "calls": [
+    {
+     "args": {
+      "names": [
+       "Water"
+      ]
+     },
+     "result": {
+      "added": [
+       "Water"
+      ]
+     },
+     "tool": "dwsim_thermo_add_compounds"
+    },
+    {
+     "args": {
+      "name": "NRTL"
+     },
+     "result": {
+      "property_package": "NRTL"
+     },
+     "tool": "dwsim_thermo_set_property_package"
+    },
+    {
+     "args": {
+      "composition": {
+       "Water": 1.0
+      },
+      "mass_flow_kg_s": 1.0,
+      "name": "Valve_pressure_drop_F0",
+      "pressure_Pa": 100000.0,
+      "temperature_K": 300.0
+     },
+     "result": {
+      "stream": "Valve_pressure_drop_F0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Valve_pressure_drop_P0"
+     },
+     "result": {
+      "stream": "Valve_pressure_drop_P0",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "name": "Valve_pressure_drop",
+      "type": "Valve"
+     },
+     "result": {
+      "type": "Valve",
+      "unitop": "Valve_pressure_drop"
+     },
+     "tool": "dwsim_unitop_add"
+    },
+    {
+     "args": {
+      "name": "Valve_pressure_drop",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "VALV-b54f91b4-eb31-4d87-bf7d-e5e07595f8db",
+      "tag": "Valve_pressure_drop",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Valve_pressure_drop_F0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-81969a80-9e8f-477e-b48b-e14208b344a7",
+      "tag": "Valve_pressure_drop_F0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "name": "Valve_pressure_drop_P0",
+      "x": 0,
+      "y": 0
+     },
+     "result": {
+      "height": 20,
+      "name": "MAT-aaaf9ce1-4ac3-4de2-9ebb-3b431c6f9b61",
+      "tag": "Valve_pressure_drop_P0",
+      "width": 20,
+      "x": 0.0,
+      "y": 0.0
+     },
+     "tool": "dwsim_graphic_edit"
+    },
+    {
+     "args": {
+      "feed_port": 0,
+      "feed_stream": "Valve_pressure_drop_F0",
+      "unitop": "Valve_pressure_drop"
+     },
+     "result": {
+      "connections": [
+       "feed:Valve_pressure_drop_F0->port0"
+      ],
+      "unitop": "Valve_pressure_drop"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "product_port": 0,
+      "product_stream": "Valve_pressure_drop_P0",
+      "unitop": "Valve_pressure_drop"
+     },
+     "result": {
+      "connections": [
+       "product:Valve_pressure_drop_P0->port0"
+      ],
+      "unitop": "Valve_pressure_drop"
+     },
+     "tool": "dwsim_unitop_connect"
+    },
+    {
+     "args": {
+      "name": "Valve_pressure_drop",
+      "properties": {
+       "CalcMode": "DeltaP",
+       "DeltaP": 50000.0
+      }
+     },
+     "result": {
+      "applied": [
+       "CalcMode = DeltaP",
+       "DeltaP = 50000"
+      ],
+      "unitop": "Valve_pressure_drop"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ],
+   "mode": "pressure_drop",
+   "read_back": {
+    "calculated": true,
+    "calculation_mode": "DeltaP",
+    "calculation_modes": [
+     "DeltaP",
+     "OutletPressure",
+     "Kv_Liquid",
+     "Kv_Gas",
+     "Kv_Steam",
+     "Kv_General"
+    ],
+    "error": "",
+    "name": "Valve_pressure_drop",
+    "properties": {
+     "Actual Flow Coefficient": {
+      "units": "",
+      "value": "100"
+     },
+     "Temperature Drop": {
+      "units": "C.",
+      "value": "0.007632407457037971"
+     }
+    },
+    "type": "Valve"
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "objects": [
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Valve_pressure_drop_F0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Valve_pressure_drop_P0",
+      "type": "MaterialStream"
+     },
+     {
+      "calculated": true,
+      "error": "",
+      "name": "Valve_pressure_drop",
+      "type": "Valve"
+     }
+    ],
+    "ok": true
+   },
+   "type": "Valve"
+  }
+ },
+ "runtime_sha256": "d20f97426c264ac91114240b085b3c4e7877dfda83ecb487c0125f838cf66cfa"
+}

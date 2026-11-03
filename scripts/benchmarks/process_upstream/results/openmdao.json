@@ -1,0 +1,15 @@
+{
+  "candidate": "openmdao",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "Apache-2.0",
+  "measurements": {
+    "driver": "ScipyOptimizeDriver",
+    "flow": 0.1000000000006569,
+    "power": 1.2500000000082112
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "3.45.1",
+  "wall_time_s": 0.359542
+}

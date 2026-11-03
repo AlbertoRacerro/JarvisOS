@@ -1,0 +1,174 @@
+version: 1
+providers:
+  fake:
+    kind: fake
+    execution_class: synthetic
+    enabled: true
+    requires_network: false
+    base_url: null
+    api_key_ref: null
+    timeout_seconds: 0
+    monthly_token_cap: 0
+    monthly_cost_cap_usd: 0
+    models:
+      fake-deterministic-v1:
+        provider_model_name: fake-deterministic-v1
+        route_classes: [local:fake]
+        # Bounded fixture limit, not real-model capability evidence.
+        context_window_tokens: 4096
+        max_output_tokens: 256
+  local_ollama:
+    kind: local
+    execution_class: local_compute
+    enabled: true
+    requires_network: false
+    base_url: null
+    api_key_ref: null
+    timeout_seconds: 0
+    monthly_token_cap: 0
+    monthly_cost_cap_usd: 0
+    models:
+      qwen3:8b:
+        provider_model_name: qwen3:8b
+        route_classes: [local:fast]
+        # Conservative JarvisOS operating bound, not a vendor maximum claim.
+        context_window_tokens: 8192
+        max_output_tokens: 2048
+      gemma4:12b-it-qat:
+        provider_model_name: gemma4:12b-it-qat
+        route_classes: [local:general, local:gemma]
+        context_window_tokens: 8192
+        max_output_tokens: 2048
+      deepseek-coder-v2:16b:
+        provider_model_name: deepseek-coder-v2:16b
+        route_classes: [local:coder]
+        context_window_tokens: 8192
+        max_output_tokens: 2048
+      qwen3-coder:30b:
+        provider_model_name: qwen3-coder:30b
+        route_classes: [local:coder_heavy]
+        context_window_tokens: 8192
+        max_output_tokens: 512
+  local_llamacpp:
+    kind: local
+    execution_class: local_compute
+    enabled: true
+    requires_network: false
+    base_url: null  # endpoint is owned by the llama.cpp runtime owner config
+    api_key_ref: null
+    timeout_seconds: 0
+    monthly_token_cap: 0
+    monthly_cost_cap_usd: 0
+    models:
+      qwen3.8-27b-q4kxl:
+        provider_model_name: qwen3.8-27b-q4kxl
+        route_classes: [local:llamacpp]
+        context_window_tokens: 8192
+        max_output_tokens: 2048
+  scaleway:
+    kind: scaleway
+    execution_class: external_provider
+    enabled: true
+    requires_network: true
+    base_url: https://api.scaleway.ai/v1
+    api_key_ref: env:SCALEWAY_API_KEY
+    timeout_seconds: 20
+    monthly_token_cap: 1000000
+    monthly_cost_cap_usd: 25
+    models:
+      deepseek-v4-flash-0731:
+        provider_model_name: deepseek-v4-flash-0731
+        route_classes: [external:scaleway]
+        # Conservative JarvisOS operating bound; Scaleway documents 256k context.
+        context_window_tokens: 8192
+        max_output_tokens: 512
+        # Scaleway €0.40/€0.80 per million, converted at ECB 2026-09-25 1.1403 USD/EUR.
+        # https://www.scaleway.com/en/pricing/model-as-a-service/ reviewed 2026-09-28.
+        pricing:
+          currency: USD
+          input_usd_per_1m_tokens: 0.45612
+          output_usd_per_1m_tokens: 0.91224
+          pricing_version: scaleway-eur-2026-09-28-ecb-2026-09-25
+          pricing_effective_at: "2026-09-28T00:00:00Z"
+  deepseek:
+    kind: openai_compatible
+    execution_class: external_provider
+    enabled: true
+    requires_network: true
+    base_url: https://api.deepseek.com
+    api_key_ref: env:DEEPSEEK_API_KEY
+    timeout_seconds: 20
+    monthly_token_cap: 1000000
+    monthly_cost_cap_usd: 25
+    models:
+      deepseek-flash:
+        provider_model_name: deepseek-flash
+        route_classes: [external:deepseek_flash]
+        context_window_tokens: 8192
+        max_output_tokens: 512
+        # Peak-rate ceiling; off-peak billing may be lower.
+        # https://api-docs.deepseek.com/quick_start/pricing/ checked 2026-09-28.
+        pricing:
+          currency: USD
+          input_usd_per_1m_tokens: 0.30
+          output_usd_per_1m_tokens: 1.20
+          pricing_version: deepseek-peak-2026-09-28
+          pricing_effective_at: "2026-08-16T16:00:00Z"
+      deepseek-v4-pro:
+        provider_model_name: deepseek-v4-pro
+        route_classes: [external:cheap, external:deepseek]
+        # Conservative accepted JarvisOS bound, not a live-provider capability claim.
+        context_window_tokens: 8192
+        max_output_tokens: 512
+        # Peak-rate ceiling; off-peak billing may be lower.
+        # https://api-docs.deepseek.com/quick_start/pricing/ checked 2026-09-28.
+        pricing:
+          currency: USD
+          input_usd_per_1m_tokens: 1.32
+          output_usd_per_1m_tokens: 3.96
+          pricing_version: deepseek-peak-2026-09-28
+          pricing_effective_at: "2026-08-16T16:00:00Z"
+  glm:
+    kind: openai_compatible
+    execution_class: external_provider
+    enabled: true
+    requires_network: true
+    base_url: https://api.z.ai/api/paas/v4
+    api_key_ref: env:GLM_API_KEY
+    timeout_seconds: 20
+    monthly_token_cap: 500000
+    monthly_cost_cap_usd: 50
+    models:
+      glm-5.2:
+        provider_model_name: glm-5.2
+        route_classes: [external:reasoning]
+        # Conservative accepted JarvisOS bound, not a live-provider capability claim.
+        context_window_tokens: 8192
+        max_output_tokens: 1024
+        # Conservative operator upper bound, not a live-provider price claim.
+        pricing:
+          currency: USD
+          input_usd_per_1m_tokens: 5.0
+          output_usd_per_1m_tokens: 20.0
+          pricing_version: operator-conservative-v1
+          pricing_effective_at: "2026-07-13T00:00:00Z"
+  kimi:
+    kind: openai_compatible
+    execution_class: external_provider
+    enabled: false
+    requires_network: true
+    base_url: https://api.moonshot.ai/v1
+    api_key_ref: env:KIMI_API_KEY
+    timeout_seconds: 20
+    monthly_token_cap: 250000
+    monthly_cost_cap_usd: 25
+    models:
+      kimi-placeholder:
+        # Confirm model id, reviewed pricing, and capability before enabling.
+        provider_model_name: kimi-placeholder
+        route_classes: [external:kimi]
+        context_window_tokens: 8192
+        max_output_tokens: 1024
+fallback_chains:
+  external:cheap: [deepseek/deepseek-v4-pro, glm/glm-5.2]
+  external:reasoning: [glm/glm-5.2, deepseek/deepseek-v4-pro]

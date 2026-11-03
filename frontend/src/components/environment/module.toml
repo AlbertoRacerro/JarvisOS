@@ -1,0 +1,4 @@
+purpose = "Environment profile UI: site form, import wizard, generators, profile chart and table, provenance."
+status = "live"
+entrypoints = ["ImportWizard.tsx", "ProfileList.tsx"]
+owner = "maintainer"

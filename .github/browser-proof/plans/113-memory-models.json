@@ -1,0 +1,26 @@
+{
+  "schema": "jarvisos.browser-proof-plan.v1",
+  "id": "113-memory-models",
+  "fixture": "model-version-selection",
+  "steps": [
+    {"op":"run-fixture","name":"113:trusted-workspace-seed","fixture":"model-version-selection","phase":"workspace"},
+    {"op":"navigate","name":"113:memory-models","route":"/memory/models"},
+    {"op":"assert-visible","name":"113:empty-state","locator":{"kind":"text","text":"No model versions","exact":true}},
+    {"op":"screenshot","name":"113:empty-screenshot","file":"empty"},
+    {"op":"run-fixture","name":"113:trusted-version-seed","fixture":"model-version-selection","phase":"versions"},
+    {"op":"reload","name":"113:reload-after-seed"},
+    {"op":"assert-count","name":"113:version-a-once","locator":{"kind":"role","role":"button","name":"Version A exact","regex":true},"equals":1},
+    {"op":"assert-count","name":"113:version-b-once","locator":{"kind":"role","role":"button","name":"Version B exact","regex":true},"equals":1},
+    {"op":"click","name":"113:select-a-click","locator":{"kind":"role","role":"button","name":"Version A exact","regex":true}},
+    {"op":"assert-attribute","name":"113:select-a","locator":{"kind":"role","role":"button","name":"Version A exact","regex":true},"attribute":"aria-pressed","equals":"true"},
+    {"op":"open-technical-details","name":"113:a-technical-details","locator":{"kind":"within","parent":{"kind":"role","role":"region","name":"Version dossier","exact":true},"child":{"kind":"css","selector":"details"},"first":true}},
+    {"op":"assert-visible","name":"113:a-exact-identity","locator":{"kind":"within","parent":{"kind":"within","parent":{"kind":"role","role":"region","name":"Version dossier","exact":true},"child":{"kind":"css","selector":"details"},"first":true},"child":{"kind":"text","text":"proof-version-a","exact":true}}},
+    {"op":"click","name":"113:select-b-click","locator":{"kind":"role","role":"button","name":"Version B exact","regex":true}},
+    {"op":"assert-attribute","name":"113:select-b","locator":{"kind":"role","role":"button","name":"Version B exact","regex":true},"attribute":"aria-pressed","equals":"true"},
+    {"op":"assert-attribute","name":"113:a-deselected","locator":{"kind":"role","role":"button","name":"Version A exact","regex":true},"attribute":"aria-pressed","equals":"false"},
+    {"op":"open-technical-details","name":"113:b-technical-details","locator":{"kind":"within","parent":{"kind":"role","role":"region","name":"Version dossier","exact":true},"child":{"kind":"css","selector":"details"},"first":true}},
+    {"op":"assert-visible","name":"113:b-exact-identity","locator":{"kind":"within","parent":{"kind":"within","parent":{"kind":"role","role":"region","name":"Version dossier","exact":true},"child":{"kind":"css","selector":"details"},"first":true},"child":{"kind":"text","text":"proof-version-b","exact":true}}},
+    {"op":"assert-body-absent","name":"113:no-mutation-affordance","forbidden":["edit model","save model","approve model","run model","provider key","git push","filesystem"],"caseInsensitive":true},
+    {"op":"screenshot","name":"113:exact-version-b-screenshot","file":"exact-version-b"}
+  ]
+}

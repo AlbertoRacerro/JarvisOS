@@ -1,0 +1,4 @@
+purpose = "BLUECAD workbench: project tree, 3D scene binding and selection."
+status = "live"
+entrypoints = ["BluecadWorkbench.tsx", "sceneBinding.ts"]
+owner = "maintainer"

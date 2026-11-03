@@ -1,0 +1,58 @@
+.ui-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  max-width: min(320px, calc(100vw - 8px));
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  background: var(--color-bg-surface-raised);
+  box-shadow: 0 10px 28px rgba(40, 38, 30, .16);
+  font-size: 13px;
+}
+
+.ui-context-menu button {
+  min-height: 30px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ui-context-menu button:hover:not(:disabled),
+.ui-context-menu button:focus-visible {
+  outline: none;
+  background: var(--color-bg-subtle);
+}
+
+.ui-context-menu button:disabled {
+  color: var(--color-text-muted);
+  cursor: default;
+}
+
+.ui-menu-button {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ui-menu-button:hover:not(:disabled),
+.ui-menu-button:focus-visible,
+.ui-menu-button[aria-expanded="true"] {
+  border-color: var(--color-border-default);
+  background: var(--color-bg-surface-raised);
+}

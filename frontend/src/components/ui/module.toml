@@ -1,0 +1,4 @@
+purpose = "Shared UI primitives: button, field, surface, status badge, numeric input, context menu."
+status = "live"
+entrypoints = ["Button.tsx", "Field.tsx", "Surface.tsx"]
+owner = "maintainer"

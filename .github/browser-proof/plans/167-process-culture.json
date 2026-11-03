@@ -1,0 +1,17 @@
+{
+  "schema": "jarvisos.browser-proof-plan.v1",
+  "id": "167-process-culture",
+  "fixture": "none",
+  "artifactMode": "full",
+  "viewport": { "width": 1440, "height": 1000 },
+  "forbidMutatingRequests": false,
+  "steps": [
+    { "op": "navigate", "name": "167:process-editor", "route": "/design/process" },
+    { "op": "assert-visible", "name": "167:process-editor-surface", "locator": { "kind": "testid", "testid": "process-editor-surface" } },
+    { "op": "assert-visible", "name": "167:culture-feed-section", "locator": { "kind": "text", "text": "Culture medium", "exact": true } },
+    { "op": "assert-visible", "name": "167:feed-culture-toggle", "locator": { "kind": "text", "text": "This feed carries a culture", "exact": true } },
+    { "op": "assert-visible", "name": "167:owner-badge", "locator": { "kind": "text", "text": "DWSIM", "exact": true } },
+    { "op": "assert-body-absent", "name": "167:no-raw-culture-json", "forbidden": ["mass_specific", "propagation_version", "\"culture\":"] },
+    { "op": "screenshot", "name": "167:culture-medium", "file": "167-culture-medium" }
+  ]
+}

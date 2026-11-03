@@ -1,0 +1,4 @@
+purpose = "Backend test suite (pytest): offline, fake providers, isolated data root, a fake project pack."
+status = "live"
+entrypoints = ["conftest.py", "scripts/test_backend_sharded.sh"]
+owner = "maintainer"

@@ -1,0 +1,86 @@
+name: Merge Authority Verify
+
+on:
+  pull_request:
+    paths:
+      - ".github/merge-authority-policy.json"
+      - ".github/workflows/merge-authority-verify.yml"
+      - "scripts/verify_merge_authority.py"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/merge-authority-policy.json"
+      - ".github/workflows/merge-authority-verify.yml"
+      - "scripts/verify_merge_authority.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  offline:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout PR head without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate declaration and verifier fixtures
+        run: |
+          python scripts/verify_merge_authority.py --self-test
+          python -c "from scripts.verify_merge_authority import load_policy; load_policy()"
+
+  live:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate trusted declaration and verifier
+        run: |
+          python scripts/verify_merge_authority.py --self-test
+          python -c "from scripts.verify_merge_authority import load_policy; load_policy()"
+
+      - name: Live merge-authority verification
+        id: verify
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          python scripts/verify_merge_authority.py --live --json | tee "$RUNNER_TEMP/merge-authority.json"
+
+      - name: Publish truthful state
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/merge-authority.json" ]; then
+            echo '### Merge Authority Verification' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat "$RUNNER_TEMP/merge-authority.json" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Merge-authority verifier did not produce a report.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Require VERIFIED
+        if: steps.verify.outcome != 'success'
+        run: |
+          echo "Live merge-authority state is not VERIFIED. No enforcement or merge permission is implied."
+          exit 1

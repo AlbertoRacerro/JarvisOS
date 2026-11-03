@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="860" viewBox="0 0 1200 860" role="img" aria-labelledby="title desc">
+  <title id="title">JarvisOS control, context and memory architecture</title>
+  <desc id="desc">Canonical state, derived retrieval, external sources, code intelligence and runs/evidence are parallel context sources. A deterministic broker assembles a candidate context pack. JarvisOS policy controls egress, capability use, return results and state transitions. AI runtimes and capability interfaces cannot write canonical state directly.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#475569"/></marker>
+    <style>.frame{fill:#fff;stroke:#cbd5e1;stroke-width:2}.implemented{fill:#ecfdf5;stroke:#16a34a;stroke-width:2.5}.partial{fill:#fffbeb;stroke:#d97706;stroke-width:2.5}.planned{fill:#eff6ff;stroke:#0284c7;stroke-width:2.5}.optional{fill:#f8fafc;stroke:#64748b;stroke-width:2}.title{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f172a;font-size:27px;font-weight:750}.boxTitle{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f172a;font-size:16px;font-weight:700}.sub{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#475569;font-size:11.5px}.tag{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:10.5px;font-weight:800}.line{stroke:#475569;stroke-width:2.2;fill:none;marker-end:url(#arrow)}.dash{stroke:#64748b;stroke-width:2;fill:none;stroke-dasharray:7 6;marker-end:url(#arrow)}.rail{stroke:#16a34a;stroke-width:2.2;fill:none;marker-end:url(#arrow)}</style>
+  </defs>
+  <rect id="frame" x="30" y="30" width="1140" height="800" rx="22" class="frame"/>
+  <text x="65" y="74" class="title">Control, context and memory are different layers</text>
+  <text x="65" y="101" class="sub">Context sources are parallel. The broker assembles a candidate pack; JarvisOS policy decides what may leave, execute, return and become canonical.</text>
+
+  <g id="card-canonical"><rect id="rect-canonical" x="55" y="145" width="200" height="115" rx="16" class="implemented"/>
+    <text x="155" y="180" text-anchor="middle" class="boxTitle">Canonical state</text><text x="155" y="208" text-anchor="middle" class="sub">accepted engineering records</text><text x="155" y="231" text-anchor="middle" class="sub">provenance · freshness</text><text x="155" y="250" text-anchor="middle" class="tag" fill="#15803d">AUTHORITATIVE</text></g>
+
+  <g id="card-retrieval"><rect id="rect-retrieval" x="275" y="145" width="200" height="115" rx="16" class="planned"/>
+    <text x="375" y="180" text-anchor="middle" class="boxTitle">Derived retrieval</text><text x="375" y="208" text-anchor="middle" class="sub">semantic / temporal index</text><text x="375" y="231" text-anchor="middle" class="sub">rebuildable · non-authoritative</text><text x="375" y="250" text-anchor="middle" class="tag" fill="#0369a1">PLANNED</text></g>
+
+  <g id="card-external"><rect id="rect-external" x="495" y="145" width="200" height="115" rx="16" class="optional"/>
+    <text x="595" y="180" text-anchor="middle" class="boxTitle">External sources</text><text x="595" y="208" text-anchor="middle" class="sub">notes · documents</text><text x="595" y="231" text-anchor="middle" class="sub">literature · imports</text><text x="595" y="250" text-anchor="middle" class="tag" fill="#475569">SOURCE MATERIAL</text></g>
+
+  <g id="card-code"><rect id="rect-code" x="715" y="145" width="200" height="115" rx="16" class="planned"/>
+    <text x="815" y="180" text-anchor="middle" class="boxTitle">Code intelligence</text><text x="815" y="208" text-anchor="middle" class="sub">Serena / LSP-style</text><text x="815" y="231" text-anchor="middle" class="sub">parallel context source</text><text x="815" y="250" text-anchor="middle" class="tag" fill="#0369a1">PLANNED</text></g>
+
+  <g id="card-evidence"><rect id="rect-evidence" x="935" y="145" width="200" height="115" rx="16" class="implemented"/>
+    <text x="1035" y="180" text-anchor="middle" class="boxTitle">Runs + evidence</text><text x="1035" y="208" text-anchor="middle" class="sub">inputs · outputs · artifacts</text><text x="1035" y="231" text-anchor="middle" class="sub">diagnostics · provenance</text><text x="1035" y="250" text-anchor="middle" class="tag" fill="#15803d">CURRENT FOUNDATION</text></g>
+
+  <g id="card-broker"><rect id="rect-broker" x="350" y="335" width="500" height="105" rx="17" class="partial"/>
+    <text x="600" y="370" text-anchor="middle" class="boxTitle">Context Broker</text><text x="600" y="398" text-anchor="middle" class="sub">selection · budget · digest · source manifest</text><text x="600" y="421" text-anchor="middle" class="tag" fill="#b45309">DETERMINISTIC PACKS EXIST · SEMANTIC RETRIEVAL FUTURE</text></g>
+
+  <path d="M155 260 C155 305 430 300 470 335" class="line"/>
+  <path d="M375 260 C375 305 490 305 520 335" class="dash"/>
+  <path d="M595 260 V335" class="dash"/>
+  <path d="M815 260 C815 305 710 305 680 335" class="dash"/>
+  <path d="M1035 260 C1035 305 770 300 730 335" class="line"/>
+
+  <g id="card-policy"><rect id="rect-policy" x="440" y="500" width="320" height="125" rx="17" class="implemented"/>
+    <text x="600" y="536" text-anchor="middle" class="boxTitle">JarvisOS policy + commit gate</text><text x="600" y="565" text-anchor="middle" class="sub">context / egress · capability · validation</text><text x="600" y="588" text-anchor="middle" class="sub">promotion · audit · fail closed</text><text x="600" y="610" text-anchor="middle" class="tag" fill="#15803d">NO DIRECT AGENT → STATE PATH</text></g>
+
+  <path d="M600 440 V500" class="line"/><text x="614" y="475" class="sub">candidate context pack</text>
+
+  <g id="card-ai"><rect id="rect-ai" x="100" y="685" width="260" height="110" rx="16" class="planned"/>
+    <text x="230" y="720" text-anchor="middle" class="boxTitle">AI / AgentRuntime</text><text x="230" y="748" text-anchor="middle" class="sub">Hermes or another runtime</text><text x="230" y="772" text-anchor="middle" class="sub">response · proposal · ToolIntent</text></g>
+
+  <g id="card-capability"><rect id="rect-capability" x="840" y="685" width="260" height="110" rx="16" class="planned"/>
+    <text x="970" y="720" text-anchor="middle" class="boxTitle">Capability interface</text><text x="970" y="748" text-anchor="middle" class="sub">MCP where useful</text><text x="970" y="772" text-anchor="middle" class="sub">tools / resources · not authority</text></g>
+
+  <path d="M500 625 V650 H300 V685" class="line"/><text x="330" y="646" class="sub">authorized task + context</text>
+  <path d="M260 685 V655 H540 V625" class="line"/><text x="285" y="674" class="sub">response / proposal / intent</text>
+  <path d="M700 625 V650 H900 V685" class="line"/><text x="760" y="646" class="sub">authorized request</text>
+  <path d="M940 685 V655 H660 V625" class="line"/><text x="762" y="674" class="sub">result / error / artifact</text>
+
+  <path d="M440 548 H50 V202 H55" class="rail"/><text x="66" y="476" class="sub" fill="#15803d">accepted transition</text>
+  <path d="M760 576 H1150 V202 H1135" class="rail"/><text x="1012" y="476" class="sub" fill="#15803d">record run / evidence</text>
+</svg>

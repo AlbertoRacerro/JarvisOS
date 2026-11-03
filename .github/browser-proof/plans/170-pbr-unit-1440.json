@@ -1,0 +1,1051 @@
+{
+  "schema": "jarvisos.browser-proof-plan.v1",
+  "id": "170-pbr-unit-1440",
+  "fixture": "none",
+  "artifactMode": "full",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "forbidMutatingRequests": false,
+  "steps": [
+    {
+      "op": "navigate",
+      "name": "170:1440:process-editor",
+      "route": "/design/process"
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:process-editor-surface",
+      "locator": {
+        "kind": "testid",
+        "testid": "process-editor-surface"
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:create-process-draft",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Create process draft",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:open-biology-library",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Biology models…",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:library-panel",
+      "locator": {
+        "kind": "testid",
+        "testid": "biology-model-library"
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:new-empty-set",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "New empty template",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-mu_max",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"Maximum specific growth rate\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-mu_max",
+      "locator": {
+        "kind": "label",
+        "text": "Maximum specific growth rate value",
+        "exact": true
+      },
+      "value": "0.08"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-mu_max",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-K_I",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"Light half saturation\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-K_I",
+      "locator": {
+        "kind": "label",
+        "text": "Light half saturation value",
+        "exact": true
+      },
+      "value": "120"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-K_I",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-T_min",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"Minimum cardinal temperature\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-T_min",
+      "locator": {
+        "kind": "label",
+        "text": "Minimum cardinal temperature value",
+        "exact": true
+      },
+      "value": "278"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-T_min",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-T_opt",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"Optimum cardinal temperature\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-T_opt",
+      "locator": {
+        "kind": "label",
+        "text": "Optimum cardinal temperature value",
+        "exact": true
+      },
+      "value": "298"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-T_opt",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-T_max",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"Maximum cardinal temperature\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-T_max",
+      "locator": {
+        "kind": "label",
+        "text": "Maximum cardinal temperature value",
+        "exact": true
+      },
+      "value": "310"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-T_max",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-K_j_0",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"Nutrient 1 half saturation\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-K_j_0",
+      "locator": {
+        "kind": "label",
+        "text": "Nutrient 1 half saturation value",
+        "exact": true
+      },
+      "value": "0.01"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-K_j_0",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-k_d",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"Specific biomass loss\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-k_d",
+      "locator": {
+        "kind": "label",
+        "text": "Specific biomass loss value",
+        "exact": true
+      },
+      "value": "0.001"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-k_d",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-k_X",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"k_X\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-k_X",
+      "locator": {
+        "kind": "label",
+        "text": "Specific light extinction k_X — PBR input value",
+        "exact": true
+      },
+      "value": "120"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-k_X",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-a",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"coefficient a,\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-a",
+      "locator": {
+        "kind": "label",
+        "text": "Biomass formula coefficient a, H per C-mol — PBR input value",
+        "exact": true
+      },
+      "value": "1.7"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-a",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-b",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"coefficient b,\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-b",
+      "locator": {
+        "kind": "label",
+        "text": "Biomass formula coefficient b, O per C-mol — PBR input value",
+        "exact": true
+      },
+      "value": "0.4"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-b",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-c",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"coefficient c,\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-c",
+      "locator": {
+        "kind": "label",
+        "text": "Biomass formula coefficient c, N per C-mol — PBR input value",
+        "exact": true
+      },
+      "value": "0.15"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-c",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-d",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"coefficient d,\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-d",
+      "locator": {
+        "kind": "label",
+        "text": "Biomass formula coefficient d, P per C-mol — PBR input value",
+        "exact": true
+      },
+      "value": "0.015"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-d",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:edit-w_ash",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "tr:has-text(\"w_ash\")"
+        },
+        "child": {
+          "kind": "role",
+          "role": "button",
+          "name": "Edit",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:value-w_ash",
+      "locator": {
+        "kind": "label",
+        "text": "Ash mass fraction w_ash — PBR input value",
+        "exact": true
+      },
+      "value": "0.05"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-w_ash",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:pbr-input-label-k_X",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "table.bio-parameter-table"
+        },
+        "child": {
+          "kind": "text",
+          "text": "Specific light extinction k_X — PBR input",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:pbr-input-label-stoichiometry",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "table.bio-parameter-table"
+        },
+        "child": {
+          "kind": "text",
+          "text": "Ash mass fraction w_ash — PBR input",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:card-name",
+      "locator": {
+        "kind": "label",
+        "text": "Model card name",
+        "exact": true
+      },
+      "value": "PBR synthetic card"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:save-card",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save model card",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:card-created",
+      "locator": {
+        "kind": "text",
+        "text": "Model card created with pinned form versions.",
+        "exact": true
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "170:1440:biology-library",
+      "file": "170-library-1440"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:close-library",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Close biology model library",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:add-heater",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Heater",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:pbr-palette",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Photobioreactor (T1)",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:add-pbr",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Photobioreactor (T1)",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:inspector",
+      "locator": {
+        "kind": "role",
+        "role": "region",
+        "name": "Photobioreactor inspector",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-count",
+      "name": "170:1440:six-tabs",
+      "locator": {
+        "kind": "css",
+        "selector": ".pbr-tabs button[role=\"tab\"]"
+      },
+      "equals": 6
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:owner-from-registry",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "dl.pbr-rows"
+        },
+        "child": {
+          "kind": "text",
+          "text": "Jarvis · biology",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:overview-after-run-placeholder",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "div[role=\"tabpanel\"]:not([hidden])"
+        },
+        "child": {
+          "kind": "text",
+          "text": "after Run",
+          "exact": false
+        },
+        "first": true
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "170:1440:pbr-overview",
+      "file": "170-pbr-overview-1440"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:biology-tab",
+      "locator": {
+        "kind": "css",
+        "selector": "button[role=\"tab\"]:has-text(\"Biology\")"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:card-listed",
+      "locator": {
+        "kind": "css",
+        "selector": ".pbr-card h5:has-text(\"PBR synthetic card\")"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:verification-chips",
+      "locator": {
+        "kind": "css",
+        "selector": ".pbr-card ul.pbr-chips"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:n-source-assumed",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": ".pbr-card"
+        },
+        "child": {
+          "kind": "text",
+          "text": "N source assumed: NH₃ — inlet N speciation unverified",
+          "exact": true
+        },
+        "first": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:pin-card",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Use model card PBR synthetic card",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:card-pinned",
+      "locator": {
+        "kind": "css",
+        "selector": ".pbr-card.is-pinned"
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "170:1440:pbr-biology",
+      "file": "170-pbr-biology-1440"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:geometry-tab",
+      "locator": {
+        "kind": "css",
+        "selector": "button[role=\"tab\"]:has-text(\"Geometry\")"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:diameter-off-range",
+      "locator": {
+        "kind": "label",
+        "text": "Tube inner diameter",
+        "exact": true
+      },
+      "value": "1"
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:off-range-warning",
+      "locator": {
+        "kind": "text",
+        "text": "Tube inner diameter must be between 5 mm and 0.5 m",
+        "exact": true
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "170:1440:pbr-off-range",
+      "file": "170-pbr-off-range-1440"
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:diameter",
+      "locator": {
+        "kind": "label",
+        "text": "Tube inner diameter",
+        "exact": true
+      },
+      "value": "50"
+    },
+    {
+      "op": "assert-count",
+      "name": "170:1440:off-range-cleared",
+      "locator": {
+        "kind": "css",
+        "selector": ".draft-quantity__error"
+      },
+      "equals": 0
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:tube-length",
+      "locator": {
+        "kind": "label",
+        "text": "Tube length",
+        "exact": true
+      },
+      "value": "10"
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:tube-count",
+      "locator": {
+        "kind": "label",
+        "text": "Number of tubes",
+        "exact": true
+      },
+      "value": "4"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:apply-geometry",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Apply geometry inputs",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:overview-tab",
+      "locator": {
+        "kind": "css",
+        "selector": "button[role=\"tab\"]:has-text(\"Overview\")"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:derived-volume",
+      "locator": {
+        "kind": "text",
+        "text": "0.07854 m³ (78.54 L)",
+        "exact": false
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:light-tab",
+      "locator": {
+        "kind": "css",
+        "selector": "button[role=\"tab\"]:has-text(\"environment\")"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:temperature-amplitude-input",
+      "locator": {
+        "kind": "label",
+        "text": "Temperature amplitude",
+        "exact": true
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "170:1440:pbr-light",
+      "file": "170-pbr-light-1440"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:results-tab",
+      "locator": {
+        "kind": "css",
+        "selector": "button[role=\"tab\"]:has-text(\"Results\")"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:results-before-run",
+      "locator": {
+        "kind": "text",
+        "text": "No results yet. Press Run to solve this unit.",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:sidecar-add-pbr",
+      "locator": {
+        "kind": "label",
+        "text": "Message",
+        "exact": true
+      },
+      "value": "add a photobioreactor after the heater"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:sidecar-send-add",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "^Send",
+        "regex": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:add-pbr-apply-card",
+      "locator": {
+        "kind": "css",
+        "selector": ".jarvis-action-card--pending"
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:apply-add-pbr",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "^Apply Add Photobioreactor",
+        "regex": true
+      }
+    },
+    {
+      "op": "assert-count",
+      "name": "170:1440:two-pbr-on-canvas",
+      "locator": {
+        "kind": "css",
+        "selector": "text.draft-node__type:has-text(\"Photobioreactor\")"
+      },
+      "equals": 2
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:sidecar-use-card",
+      "locator": {
+        "kind": "label",
+        "text": "Message",
+        "exact": true
+      },
+      "value": "use model card PBR synthetic card for PBR-1"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:sidecar-send-use-card",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "^Send",
+        "regex": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:use-card-apply-card",
+      "locator": {
+        "kind": "css",
+        "selector": ".jarvis-action-card--pending"
+      }
+    },
+    {
+      "op": "click",
+      "name": "170:1440:apply-use-card",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "^Apply Use model card",
+        "regex": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "170:1440:use-card-applied",
+      "locator": {
+        "kind": "css",
+        "selector": ".jarvis-action-card--success"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "170:1440:sidecar-why-washout",
+      "locator": {
+        "kind": "label",
+        "text": "Message",
+        "exact": true
+      },
+      "value": "why is the PBR washing out?"
+    },
+    {
+      "op": "click",
+      "name": "170:1440:sidecar-send-why",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "^Send",
+        "regex": true
+      }
+    },
+    {
+      "op": "assert-count",
+      "name": "170:1440:no-apply-card-for-question",
+      "locator": {
+        "kind": "css",
+        "selector": ".jarvis-action-card--pending"
+      },
+      "equals": 0
+    },
+    {
+      "op": "screenshot",
+      "name": "170:1440:pbr-sidecar",
+      "file": "170-pbr-sidecar-1440"
+    },
+    {
+      "op": "assert-body-absent",
+      "name": "170:1440:no-raw-json",
+      "forbidden": [
+        "\"card_id\"",
+        "\"card_digest\"",
+        "\"reported\"",
+        "\"unit_balances\"",
+        "\"set_unit_model\"",
+        "\"model\": {",
+        "schema_version",
+        "parameter_set_id"
+      ],
+      "caseInsensitive": false
+    }
+  ]
+}

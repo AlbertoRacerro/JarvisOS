@@ -1,0 +1,4 @@
+purpose = "Static frontend tests (node .mjs) run by `npm run build`; they assert literal strings and source patterns."
+status = "live"
+entrypoints = ["package.json (scripts.build)"]
+owner = "maintainer"

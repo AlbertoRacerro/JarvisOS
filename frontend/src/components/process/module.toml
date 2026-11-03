@@ -1,0 +1,4 @@
+purpose = "Process workspace panels: PBR model picker, inspector and results, biology model library, reactor kinetics, dynamic runs and proposals."
+status = "live"
+entrypoints = ["PbrInspector.tsx", "ReactorKinetics.tsx", "BiologyModelLibrary.tsx"]
+owner = "maintainer"

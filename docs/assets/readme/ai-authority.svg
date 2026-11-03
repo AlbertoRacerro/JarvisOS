@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc">
+  <title id="title">JarvisOS AI authority flow</title>
+  <desc id="desc">The human sends intent to the JarvisOS authority boundary. JarvisOS may send bounded context to an AI runtime or authorize a tool execution. AI responses and tool results return to JarvisOS. Only an explicit commit or promotion transition can update canonical state.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#475569"/></marker>
+    <style>.frame{fill:#fff;stroke:#cbd5e1;stroke-width:2}.implemented{fill:#ecfdf5;stroke:#16a34a;stroke-width:2.5}.partial{fill:#fffbeb;stroke:#d97706;stroke-width:2.5}.planned{fill:#eff6ff;stroke:#0284c7;stroke-width:2.5}.optional{fill:#f8fafc;stroke:#64748b;stroke-width:2}.title{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f172a;font-size:26px;font-weight:750}.boxTitle{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#0f172a;font-size:17px;font-weight:700}.sub{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:#475569;font-size:11.5px}.tag{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:10.5px;font-weight:800}.line{stroke:#475569;stroke-width:2.2;fill:none;marker-end:url(#arrow)}.dash{stroke:#64748b;stroke-width:2;fill:none;stroke-dasharray:7 6;marker-end:url(#arrow)}</style>
+  </defs>
+  <rect id="frame" x="30" y="30" width="1140" height="590" rx="22" class="frame"/>
+  <text x="65" y="74" class="title">AI is useful without owning project truth</text>
+  <text x="65" y="101" class="sub">JarvisOS controls context, execution and commit boundaries. AI and tools can propose or compute; they do not silently become project truth.</text>
+
+  <g id="card-human"><rect id="rect-human" x="60" y="220" width="180" height="120" rx="15" class="optional"/>
+    <text x="150" y="258" text-anchor="middle" class="boxTitle">Human / UI</text><text x="150" y="288" text-anchor="middle" class="sub">intent · review</text><text x="150" y="313" text-anchor="middle" class="sub">final responsibility</text></g>
+
+  <g id="card-policy"><rect id="rect-policy" x="360" y="175" width="310" height="210" rx="17" class="implemented"/>
+    <text x="515" y="215" text-anchor="middle" class="boxTitle">JarvisOS authority boundary</text><text x="515" y="247" text-anchor="middle" class="sub">context selection · privacy / egress</text><text x="515" y="272" text-anchor="middle" class="sub">capability · budget · validation</text><text x="515" y="297" text-anchor="middle" class="sub">confirmation · provenance · audit</text><text x="515" y="322" text-anchor="middle" class="sub">commit / promotion policy</text><text x="515" y="354" text-anchor="middle" class="tag" fill="#15803d">AUTHORITY STAYS HERE</text></g>
+
+  <g id="card-ai"><rect id="rect-ai" x="815" y="130" width="285" height="135" rx="15" class="partial"/>
+    <text x="958" y="169" text-anchor="middle" class="boxTitle">AI / AgentRuntime</text><text x="958" y="199" text-anchor="middle" class="sub">bounded context in</text><text x="958" y="224" text-anchor="middle" class="sub">response · proposal · ToolIntent out</text><text x="958" y="247" text-anchor="middle" class="tag" fill="#b45309">ADVISORY</text></g>
+
+  <g id="card-tool"><rect id="rect-tool" x="815" y="320" width="285" height="135" rx="15" class="optional"/>
+    <text x="958" y="359" text-anchor="middle" class="boxTitle">Tool / solver</text><text x="958" y="389" text-anchor="middle" class="sub">authorized bounded execution</text><text x="958" y="414" text-anchor="middle" class="sub">result · error · artifact</text><text x="958" y="438" text-anchor="middle" class="sub">may fail or remain partial</text></g>
+
+  <path d="M240 260 H360" class="line"/><text x="275" y="245" class="sub">request</text>
+  <path d="M360 315 H240" class="line"/><text x="274" y="334" class="sub">explanation / decision</text>
+
+  <path d="M670 215 C720 205 760 198 815 198" class="line"/><text x="702" y="181" class="sub">bounded task + context</text>
+  <path d="M815 240 C760 255 720 265 670 265" class="line"/><text x="718" y="284" class="sub">response / proposal</text>
+
+  <path d="M670 315 C730 325 760 388 815 388" class="line"/><text x="704" y="352" class="sub">authorized execution</text>
+  <path d="M815 430 C760 455 715 435 670 360" class="line"/><text x="713" y="474" class="sub">result / error / artifact</text>
+
+  <g id="card-evidence"><rect id="rect-evidence" x="815" y="500" width="285" height="90" rx="15" class="implemented"/>
+    <text x="958" y="533" text-anchor="middle" class="boxTitle">Run / evidence</text><text x="958" y="560" text-anchor="middle" class="sub">result · provenance · diagnostics</text><text x="958" y="580" text-anchor="middle" class="tag" fill="#15803d">RECORDED BEFORE ACCEPTANCE</text></g>
+  <path d="M958 455 V500" class="line"/>
+  <path d="M815 545 C745 545 710 430 650 385" class="line"/><text x="682" y="525" class="sub">recorded outcome returns</text>
+
+  <g id="card-commit"><rect id="rect-commit" x="330" y="475" width="270" height="105" rx="15" class="implemented"/>
+    <text x="465" y="511" text-anchor="middle" class="boxTitle">Commit / promotion gate</text><text x="465" y="540" text-anchor="middle" class="sub">explicit transition · provenance · audit</text><text x="465" y="564" text-anchor="middle" class="sub">human-owned in many current flows</text></g>
+
+  <g id="card-canonical"><rect id="rect-canonical" x="60" y="475" width="220" height="105" rx="15" class="implemented"/>
+    <text x="170" y="511" text-anchor="middle" class="boxTitle">Canonical state</text><text x="170" y="540" text-anchor="middle" class="sub">accepted records · project truth</text><text x="170" y="564" text-anchor="middle" class="sub">never raw AI/tool output</text></g>
+
+  <path d="M515 385 V475" class="line"/><path d="M330 527 H280" class="line"/>
+  <path d="M170 475 C170 430 300 425 360 370" class="dash"/><text x="100" y="430" class="sub">accepted state can inform future context</text>
+</svg>

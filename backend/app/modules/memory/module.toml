@@ -1,0 +1,4 @@
+purpose = "Proposal and promotion lifecycle for engineering records, literature records and search, and the Jarvis knowledge actions."
+status = "live"
+entrypoints = ["/memory", "/workspaces/{id}/literature"]
+owner = "maintainer"

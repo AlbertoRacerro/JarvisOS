@@ -1,0 +1,14 @@
+{"subtype": "init", "type": "system"}
+{"subtype": "task_started", "task_id": "b1nyc1448", "tool_use_id": "toolu_013ahtTg5upMAR5zPVZeSJKz", "type": "system"}
+{"attempt": 1, "error": "unknown", "error_status": null, "max_retries": 10, "subtype": "api_retry", "type": "system"}
+{"attempt": 2, "error": "unknown", "error_status": null, "max_retries": 10, "subtype": "api_retry", "type": "system"}
+{"attempt": 3, "error": "unknown", "error_status": null, "max_retries": 10, "subtype": "api_retry", "type": "system"}
+{"attempt": 4, "error": "unknown", "error_status": null, "max_retries": 10, "subtype": "api_retry", "type": "system"}
+{"attempt": 5, "error": "unknown", "error_status": null, "max_retries": 10, "subtype": "api_retry", "type": "system"}
+{"attempt": 6, "error": "unknown", "error_status": null, "max_retries": 10, "subtype": "api_retry", "type": "system"}
+{"attempt": 7, "error": "unknown", "error_status": null, "max_retries": 10, "subtype": "api_retry", "type": "system"}
+{"attempt": 8, "error": "unknown", "error_status": null, "max_retries": 10, "subtype": "api_retry", "type": "system"}
+{"attempt": 9, "error": "unknown", "error_status": null, "max_retries": 10, "subtype": "api_retry", "type": "system"}
+{"attempt": 10, "error": "unknown", "error_status": null, "max_retries": 10, "subtype": "api_retry", "type": "system"}
+{"message": {"content": [{"text": "API Error: Can't reach the API server \u2014 check your internet or DNS (EAI_AGAIN)", "type": "text"}], "model": "<synthetic>"}, "type": "assistant"}
+{"api_error_status": null, "is_error": true, "num_turns": 145, "result": "API Error: Can't reach the API server \u2014 check your internet or DNS (EAI_AGAIN)", "stop_reason": "stop_sequence", "subtype": "success", "terminal_reason": "api_error", "type": "result"}

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvisos.local/schemas/jarvis_records_v0.schema.json",
+  "title": "JarvisOS proposed records v0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["record_version", "records"],
+  "properties": {
+    "record_version": {"const": "jarvis_records_v0"},
+    "records": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/decision"},
+          {"$ref": "#/$defs/assumption"},
+          {"$ref": "#/$defs/parameter"}
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "nullable_string": {"type": ["string", "null"]},
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_kind", "title", "decision_text"],
+      "properties": {
+        "record_kind": {"const": "decision"},
+        "title": {"type": "string", "minLength": 1},
+        "decision_text": {"type": "string", "minLength": 1},
+        "rationale": {"$ref": "#/$defs/nullable_string"},
+        "linked_run_id": {"$ref": "#/$defs/nullable_string"},
+        "notes": {"$ref": "#/$defs/nullable_string"}
+      }
+    },
+    "assumption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_kind", "statement"],
+      "properties": {
+        "record_kind": {"const": "assumption"},
+        "statement": {"type": "string", "minLength": 1},
+        "scope": {"$ref": "#/$defs/nullable_string"},
+        "confidence": {"type": ["string", "number", "null"]},
+        "source_ref": {"$ref": "#/$defs/nullable_string"},
+        "notes": {"$ref": "#/$defs/nullable_string"}
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_kind", "name"],
+      "properties": {
+        "record_kind": {"const": "parameter"},
+        "name": {"type": "string", "minLength": 1},
+        "symbol": {"$ref": "#/$defs/nullable_string"},
+        "value": {"$ref": "#/$defs/nullable_string"},
+        "unit": {"type": "string", "minLength": 1, "default": "unspecified"},
+        "value_status": {"enum": ["candidate", "literature", "measured", "validated", "accepted"]},
+        "value_min": {"type": ["number", "null"]},
+        "value_max": {"type": ["number", "null"]},
+        "source_ref": {"$ref": "#/$defs/nullable_string"},
+        "confidence": {"type": ["number", "null"]},
+        "notes": {"$ref": "#/$defs/nullable_string"}
+      }
+    }
+  }
+}

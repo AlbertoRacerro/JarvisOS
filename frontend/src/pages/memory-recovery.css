@@ -1,0 +1,48 @@
+/* Expandable source library and supporting model version list. */
+.literature-recovery .literature-library { padding: 16px; }
+.literature-recovery.literature-recovery--with-search { grid-template-columns: 240px minmax(0, 1fr) var(--jarvis-width, 315px); }
+.literature-recovery .literature-search { padding: 14px; }
+.literature-recovery .final-fusion__panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 14px; padding: 0; }
+.literature-recovery .final-fusion__panel-heading p { margin: 4px 0 12px; }
+.literature-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 10px 0; }
+.literature-toolbar select { max-width: 220px; }.literature-toolbar button { margin-left: auto; }
+.literature-recovery :is(.literature-context-note, .memory-technical) { font-size: 11px; color: var(--fusion-muted); }
+.literature-recovery form { display: block; padding: 12px; border: 1px solid var(--fusion-line); background: var(--fusion-panel-warm); margin: 12px 0; }
+.literature-recovery label, .models-recovery .model-filter { display: grid; gap: 5px; margin: 10px 0; }
+.literature-recovery :is(input, textarea), .models-recovery .model-filter input { width: 100%; box-sizing: border-box; padding: 8px; }
+.literature-recovery textarea { min-height: 85px; resize: vertical; }.literature-recovery form > button { margin-right: 8px; }
+.literature-recovery .final-fusion__source-list { padding: 0; overflow: visible; }
+.literature-recovery .final-fusion__disclosure-row { grid-template-columns: minmax(0, 1fr) auto; padding: 12px 4px; cursor: pointer; list-style: disclosure-closed inside; }
+.literature-recovery .final-fusion__disclosure-row > span { min-width: 0; }
+.literature-recovery .final-fusion__disclosure-row :is(strong, small) { display: block; white-space: normal; overflow-wrap: anywhere; }
+.literature-recovery .final-fusion__disclosure-row strong { font-size: 13px; text-transform: none; letter-spacing: normal; }
+.literature-recovery .final-fusion__disclosure-row :is(small, em) { font-size: 11px; text-transform: none; }
+.literature-recovery .final-fusion__disclosure[open] > summary { background: var(--fusion-green-soft); }
+.literature-recovery .final-fusion__disclosure-body { padding: 12px; }
+.literature-source-content { display: grid; grid-template-columns: minmax(0, 1fr) 210px; gap: 16px; }.literature-source-content > * { min-width: 0; }
+.literature-preview { border: 1px solid var(--fusion-line); background: var(--color-bg-subtle); padding: 10px; align-self: start; }
+.literature-preview iframe { width: 100%; height: 320px; margin-top: 10px; border: 0; }.literature-preview p { color: var(--fusion-muted); }
+.literature-entry { border-block-start: 1px solid var(--fusion-line); padding: 10px 0; }.literature-entry > summary { cursor: pointer; overflow-wrap: anywhere; }
+.literature-entry > summary span { display: block; font-size: 11px; color: var(--fusion-muted); }.literature-add-finding { margin: 14px 0; }
+.memory-technical { margin: 12px 0; }.memory-technical small { display: block; overflow-wrap: anywhere; }
+.models-recovery .model-version-row { display: grid; gap: 3px; width: 100%; text-align: left; padding: 10px 8px; border: 0; border-bottom: 1px solid var(--fusion-line); border-radius: 0; background: transparent; color: inherit; }
+.models-recovery .model-version-row strong { font-weight: 500; overflow-wrap: anywhere; }.models-recovery .model-version-row span { font-size: 11px; color: var(--fusion-muted); }
+.models-recovery .model-version-row[aria-pressed=true] { background: var(--fusion-green-soft); }.models-recovery .model-filter { padding: 0 12px; }
+.models-recovery .model-create { margin: 12px; padding: 12px; border: 1px solid var(--fusion-line); background: var(--fusion-panel-warm); }
+.models-recovery .model-create h3 { margin: 0 0 4px; }.models-recovery .model-create p { margin: 4px 0 10px; color: var(--fusion-muted); font-size: 12px; }
+.models-recovery .model-create label { display: grid; gap: 5px; margin: 10px 0; }.models-recovery .model-create :is(input, textarea) { width: 100%; box-sizing: border-box; padding: 8px; }.models-recovery .model-create textarea { min-height: 70px; resize: vertical; }
+.models-recovery .model-create button { margin-right: 8px; }.models-recovery .model-notice { margin: 8px 12px; font-size: 12px; color: var(--fusion-muted); }
+.models-recovery .model-create-error { margin: 8px 12px; color: var(--fusion-danger, var(--color-status-danger-text)); font-size: 12px; overflow-wrap: anywhere; }
+.models-recovery .model-definition-empty { padding: 24px; }.models-recovery .model-revision-history { margin: 12px; border-top: 1px solid var(--fusion-line); padding-top: 12px; }
+.models-recovery .model-revision-history > summary { cursor: pointer; }.models-recovery .model-revision-history > .final-fusion__basis { padding: 8px; }
+@media (max-width: 1350px) {
+  .literature-recovery.literature-recovery--with-search { grid-template-columns: 210px minmax(0, 1fr) var(--jarvis-width, 285px); }
+  .literature-source-content { grid-template-columns: minmax(0, 1fr); }.literature-preview { min-height: 70px; }
+}
+@media (max-width: 1050px) {
+  .literature-recovery.literature-recovery--with-search { grid-template-columns: 210px minmax(0, 1fr); }
+  .literature-recovery--with-search > .final-fusion__jarvis { grid-column: 1 / -1; }
+}
+
+/* Keep model guidance legible beside the compact version list. */
+.models-recovery :is(.final-fusion__searchbox, .final-fusion__context-strip, .final-fusion__lineage-slot, .final-fusion__panel-head > span) { font-size: 11px; line-height: 1.45; }

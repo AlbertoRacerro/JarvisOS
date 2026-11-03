@@ -1,0 +1,49 @@
+/* Reactor inspector (spec 180): Setup / Kinetics / Results tabs, reaction cards and editor. */
+.reactor-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; margin: 8px 0; }
+.reactor-tabs button { min-width: 0; padding: 6px 4px; font-size: 11px; white-space: normal; line-height: 1.2; }
+.reactor-tabs button[aria-selected="true"] { font-weight: 700; border-bottom: 2px solid currentColor; }
+.reactor-tabs button:focus-visible, .reactor-inspector-panel:focus-visible, .reactor-kinetics button:focus-visible,
+.reactor-kinetics select:focus-visible, .reactor-kinetics input:focus-visible { outline: 2px solid var(--color-focus, var(--color-status-info-text)); outline-offset: 1px; }
+.reactor-kinetics, .reactor-results, .reactor-editor, .reactor-reaction-list, .reactor-reaction-card, .reactor-compilation, .reactor-unsupported { display: grid; gap: 8px; min-width: 0; }
+.reactor-kinetics h4, .reactor-results h4, .reactor-results h5, .reactor-unsupported h4 { margin: 4px 0; }
+.reactor-kinetics p, .reactor-results p { margin: 2px 0; line-height: 1.45; overflow-wrap: anywhere; }
+.reactor-reaction-card, .reactor-editor, .reactor-compilation, .reactor-unsupported { border: 1px solid var(--color-border-default, var(--color-border-default)); border-radius: 6px; padding: 10px; }
+.reactor-reaction-card header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px; }
+.reactor-reaction-card h4 { margin: 0; overflow-wrap: anywhere; }
+.reactor-badge, .reactor-chip { display: inline-flex; padding: 1px 8px; border: 1px solid var(--color-border-default, var(--color-border-default)); border-radius: 999px; font-size: 11px; }
+.reactor-chip--good { background: var(--color-bg-subtle); color: var(--color-status-success-text); }
+.reactor-chip--warn { background: var(--color-bg-subtle); color: var(--color-status-warning-text); }
+.reactor-stoich { font-variant-numeric: tabular-nums; }
+.reactor-equation { overflow-x: auto; max-width: 100%; background: var(--color-surface-muted, var(--color-bg-subtle)); padding: 6px; border-radius: 4px; }
+.reactor-equation math { font-size: 1rem; }
+.reactor-facts, .reactor-rows { margin: 0; }
+.reactor-facts > div, .reactor-rows > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--color-border-default, var(--color-border-default)); }
+.reactor-facts dt, .reactor-rows dt { color: var(--color-text-muted, var(--color-text-muted)); overflow-wrap: anywhere; }
+.reactor-facts dd, .reactor-rows dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.reactor-explain { color: var(--color-text-muted, var(--color-text-secondary)); font-size: 12px; }
+.reactor-note { color: var(--color-status-warning-text); font-size: 12px; }
+.reactor-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.reactor-assign { display: grid; gap: 2px; flex: 1 1 160px; min-width: 0; }
+.reactor-confirm { border: 1px solid var(--color-status-danger-text); border-radius: 4px; padding: 8px; display: grid; gap: 6px; }
+.reactor-editor fieldset { display: grid; gap: 8px; min-width: 0; margin: 0; }
+.reactor-field, .reactor-inhibition label { display: grid; gap: 3px; min-width: 0; }
+.reactor-editor input, .reactor-editor select, .reactor-editor textarea, .reactor-assign select { box-sizing: border-box; width: 100%; min-width: 0; }
+.reactor-editor input[aria-invalid="true"], .reactor-editor select[aria-invalid="true"] { border-color: var(--color-status-danger-text); }
+.reactor-editor small[role="alert"] { color: var(--color-status-danger-text); font-size: 11px; }
+.reactor-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.8fr) auto; gap: 4px; align-items: center; }
+.reactor-inhibition { display: grid; gap: 6px; padding: 8px; background: var(--color-surface-muted, var(--color-bg-subtle)); border-radius: 4px; }
+.reactor-substrate { display: flex; justify-content: space-between; gap: 8px; }
+.reactor-check { display: flex !important; flex-direction: row; align-items: center; gap: 6px; }
+.reactor-check input { width: auto !important; }
+.reactor-findings { margin: 0; padding-left: 16px; display: grid; gap: 2px; }
+.reactor-finding--blocker { color: var(--color-status-danger-text); }
+.reactor-finding--warning { color: var(--color-status-warning-text); }
+.reactor-finding--info { color: var(--color-text-muted, var(--color-text-muted)); }
+.reactor-failure { border: 1px solid var(--color-status-danger-text); border-radius: 4px; padding: 8px; color: var(--color-status-danger-text); }
+.reactor-compile--ok { color: var(--color-status-success-text); }
+.reactor-compile--failed { color: var(--color-status-danger-text); }
+.reactor-compile--stale { color: var(--color-status-warning-text); font-style: italic; }
+.reactor-compilation code { overflow-wrap: anywhere; }
+.reactor-compilation pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; font-size: 11px; }
+.reactor-unsupported ul { margin: 0; padding-left: 16px; }
+.reactor-results.is-stale .reactor-rows dd { color: var(--color-status-warning-text); font-style: italic; }

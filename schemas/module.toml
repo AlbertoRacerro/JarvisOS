@@ -1,0 +1,4 @@
+purpose = "JSON schemas for BLUECAD specs, results and tool registry, and Jarvis records."
+status = "live"
+entrypoints = ["bluecad_geometry_spec_v0_1.schema.json"]
+owner = "maintainer"

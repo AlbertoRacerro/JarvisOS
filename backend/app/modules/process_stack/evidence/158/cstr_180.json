@@ -1,0 +1,29 @@
+{
+  "provenance": "/home/user/jarvis-control/work/evidence/pbr/pDWSIM4/q1b_raw.json",
+  "CSTR": {
+    "add": {
+      "type": "CSTR"
+    },
+    "results": {
+      "name": "R",
+      "type": "RCT_CSTR",
+      "calculation_modes": [
+        "Isothermic",
+        "OutletTemperature"
+      ]
+    },
+    "set": {
+      "unitop": "R",
+      "applied": [
+        "ReactorOperationMode = Isothermic",
+        "ReactorOperationMode = OutletTemperature",
+        "OutletTemperature = 338.15"
+      ],
+      "connections": [
+        "feed:F->port0",
+        "product:P->port0",
+        "energy_feed:Q->port1"
+      ]
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "candidate": "CoolProp",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "MIT",
+  "measurements": {
+    "co2_density_kg_m3": 1.8079703036340105,
+    "water_density_kg_m3": 997.047636760347,
+    "water_saturation_pressure_Pa": 3169.9293389430873,
+    "water_viscosity_Pa_s": 0.0008900224890776964
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "8.0.0",
+  "wall_time_s": 2.661822
+}

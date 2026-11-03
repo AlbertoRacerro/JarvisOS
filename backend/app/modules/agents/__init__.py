@@ -1,0 +1,2 @@
+"""Agent registry module boundary."""
+

@@ -1,0 +1,2 @@
+"""Minimal Modeling Foundation module."""
+

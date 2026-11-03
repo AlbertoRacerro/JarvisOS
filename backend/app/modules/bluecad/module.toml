@@ -1,0 +1,4 @@
+purpose = "Physical design: typed GeometrySpec to build123d CAD with STEP/STL/GLB export, Gmsh meshing, OpenFOAM pipe CFD, validation and evidence. Static FEM with CalculiX (fem_*) is in development."
+status = "live"
+entrypoints = ["/workspaces/{id}/bluecad", "service.py", "cfd_pipe/"]
+owner = "maintainer"

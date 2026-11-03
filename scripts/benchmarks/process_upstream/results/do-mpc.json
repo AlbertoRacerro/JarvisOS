@@ -1,0 +1,24 @@
+{
+  "candidate": "do-mpc",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "GNU Lesser General Public License version 3",
+  "measurements": {
+    "controls": [
+      8.205465238822163e-09,
+      1.983307093976358e-08,
+      8.98719869698667e-08,
+      0.018422277775682137
+    ],
+    "estimator": "StateFeedback",
+    "final_inventory_arbitrary": 0.9980595340438995,
+    "fixture": "synthetic day/night; not biology validation",
+    "model_state_count": 1,
+    "mpc_horizon": 3,
+    "solver_execution": "four closed-loop IPOPT steps"
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "5.1.2",
+  "wall_time_s": 0.685837
+}

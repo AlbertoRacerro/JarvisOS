@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvisos.local/schemas/bluecad_result_summary_v0_1.schema.json",
+  "title": "BLUECAD ResultSummary v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "verdict", "errors", "solver", "artifacts"],
+  "properties": {
+    "schema_version": {"const": "bluecad_result_summary_v0_1"},
+    "verdict": {"enum": ["pass", "fail", "error"]},
+    "analysis_type": {"const": "static"},
+    "solver": {"type": "object", "additionalProperties": false, "required": ["tool_id", "version", "returncode"], "properties": {"tool_id": {"const": "calculix"}, "version": {"type": ["string", "null"]}, "returncode": {"type": ["integer", "null"]}}},
+    "max_displacement": {"$ref": "#/$defs/node_quantity"},
+    "max_von_mises": {"type": "object", "additionalProperties": false, "required": ["element_id", "node_id", "value"], "properties": {"element_id": {"type": "integer"}, "node_id": {"type": "integer"}, "value": {"type": "number"}}},
+    "reactions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["node_id", "force"], "properties": {"node_id": {"type": "integer"}, "force": {"$ref": "#/$defs/vector3"}}}},
+    "reaction_resultant": {"oneOf": [{"$ref": "#/$defs/vector3"}, {"type": "null"}]},
+    "errors": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["code", "detail"], "properties": {"code": {"enum": ["SOLVE_ERROR", "SOLVE_DIVERGED", "PARSE_ERROR", "TIMEOUT"]}, "detail": {"type": "object"}}}},
+    "artifacts": {"type": "object", "additionalProperties": {"$ref": "#/$defs/artifact"}}
+  },
+  "$defs": {
+    "node_quantity": {"type": "object", "additionalProperties": false, "required": ["node_id", "value"], "properties": {"node_id": {"type": "integer"}, "value": {"type": "number"}}},
+    "vector3": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}},
+    "artifact": {"type": "object", "additionalProperties": false, "required": ["path", "sha256", "bytes"], "properties": {"path": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "bytes": {"type": "integer", "minimum": 0}}}
+  }
+}

@@ -1,0 +1,6267 @@
+{
+  "schemas": {
+    "AgentControlCommand": {
+      "additionalProperties": false,
+      "description": "Idempotent (by ``command_id``) CAS command against the thread's session mapping.\n\n``start`` addresses the thread (no Hermes session exists yet or it is being\nreplaced); interrupt/resume/close address the exact current Hermes session.\n``expected_generation`` is the mapping generation the sender observed; 0\nmeans \"no session was ever bound\".",
+      "properties": {
+        "cancellation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancellation Id"
+        },
+        "command_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "correlation_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Correlation Id",
+          "type": "string"
+        },
+        "deadline_at": {
+          "format": "date-time",
+          "title": "Deadline At",
+          "type": "string"
+        },
+        "expected_generation": {
+          "minimum": 0,
+          "title": "Expected Generation",
+          "type": "integer"
+        },
+        "hermes_session_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hermes Session Id"
+        },
+        "jarvis_thread_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Jarvis Thread Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "start",
+            "interrupt",
+            "resume",
+            "close"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "agent_contracts.v1",
+          "default": "agent_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "deadline_at",
+        "command_id",
+        "kind",
+        "correlation_id",
+        "jarvis_thread_id",
+        "workspace_id",
+        "profile_id",
+        "expected_generation",
+        "requested_at"
+      ],
+      "title": "AgentControlCommand",
+      "type": "object"
+    },
+    "AgentEvent": {
+      "$defs": {
+        "AgentSessionRef": {
+          "additionalProperties": false,
+          "description": "Jarvis-owned mapping of one AI thread to one Hermes session generation.\n\n``jarvis_thread_id`` is ``ai_threads.id``. ``generation`` increases every\ntime Jarvis (re)binds a Hermes session to the thread (start or recovery).\n``upstream_revision`` is the pinned Hermes release/commit serving it.",
+          "properties": {
+            "generation": {
+              "minimum": 1,
+              "title": "Generation",
+              "type": "integer"
+            },
+            "hermes_session_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Hermes Session Id",
+              "type": "string"
+            },
+            "jarvis_thread_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Jarvis Thread Id",
+              "type": "string"
+            },
+            "profile_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Profile Id",
+              "type": "string"
+            },
+            "upstream_revision": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Upstream Revision",
+              "type": "string"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "jarvis_thread_id",
+            "hermes_session_id",
+            "profile_id",
+            "workspace_id",
+            "generation",
+            "upstream_revision"
+          ],
+          "title": "AgentSessionRef",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Bounded session event; content lives behind ``payload_ref`` in a Jarvis owner.\n\n``sequence`` is strictly increasing per (hermes_session_id, generation) so\nreplay after worker loss is ordered and ``event_id`` deduplicates.",
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation Id"
+        },
+        "event_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "kind": {
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*){0,3}$",
+          "title": "Kind",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "payload_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Payload Digest"
+        },
+        "payload_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "const": "agent_contracts.v1",
+          "default": "agent_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "session_ref": {
+          "$ref": "#/$defs/AgentSessionRef"
+        }
+      },
+      "required": [
+        "event_id",
+        "session_ref",
+        "sequence",
+        "kind",
+        "occurred_at"
+      ],
+      "title": "AgentEvent",
+      "type": "object"
+    },
+    "AgentSessionRef": {
+      "additionalProperties": false,
+      "description": "Jarvis-owned mapping of one AI thread to one Hermes session generation.\n\n``jarvis_thread_id`` is ``ai_threads.id``. ``generation`` increases every\ntime Jarvis (re)binds a Hermes session to the thread (start or recovery).\n``upstream_revision`` is the pinned Hermes release/commit serving it.",
+      "properties": {
+        "generation": {
+          "minimum": 1,
+          "title": "Generation",
+          "type": "integer"
+        },
+        "hermes_session_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Hermes Session Id",
+          "type": "string"
+        },
+        "jarvis_thread_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Jarvis Thread Id",
+          "type": "string"
+        },
+        "profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "upstream_revision": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Upstream Revision",
+          "type": "string"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "jarvis_thread_id",
+        "hermes_session_id",
+        "profile_id",
+        "workspace_id",
+        "generation",
+        "upstream_revision"
+      ],
+      "title": "AgentSessionRef",
+      "type": "object"
+    },
+    "AuthoritativeResolution": {
+      "$defs": {
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Result of re-reading a ref from its canonical owner.\n\n``current`` means the owner still holds exactly the ref's revision/digest;\na moved revision or digest mismatch is ``stale`` and exposes no content.",
+      "properties": {
+        "content": {
+          "anyOf": [
+            {
+              "maxLength": 200000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content"
+        },
+        "current_content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Content Digest"
+        },
+        "current_revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Revision"
+        },
+        "ref": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "state": {
+          "enum": [
+            "current",
+            "stale",
+            "unavailable",
+            "unknown"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "state"
+      ],
+      "title": "AuthoritativeResolution",
+      "type": "object"
+    },
+    "CapabilityGrantRef": {
+      "$defs": {
+        "CapabilityScope": {
+          "additionalProperties": false,
+          "properties": {
+            "jarvis_thread_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Jarvis Thread Id"
+            },
+            "object_refs": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SourceRef"
+              },
+              "maxItems": 32,
+              "title": "Object Refs",
+              "type": "array"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id"
+          ],
+          "title": "CapabilityScope",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Reference to a server-issued grant for one registered capability.\n\nIssued only by Jarvis policy or the operator; a model/agent cannot mint or\nwiden it. The broker re-checks the live grant, so this ref is never\nsufficient authority by itself.",
+      "properties": {
+        "capability_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "constraints": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "title": "Constraints",
+          "type": "object"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "grant_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "title": "Issued At",
+          "type": "string"
+        },
+        "issuer": {
+          "enum": [
+            "jarvis_policy",
+            "operator"
+          ],
+          "title": "Issuer",
+          "type": "string"
+        },
+        "revocation_reason": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revocation Reason"
+        },
+        "revoked_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revoked At"
+        },
+        "scope": {
+          "$ref": "#/$defs/CapabilityScope"
+        }
+      },
+      "required": [
+        "grant_id",
+        "capability_id",
+        "issuer",
+        "scope",
+        "issued_at",
+        "expires_at"
+      ],
+      "title": "CapabilityGrantRef",
+      "type": "object"
+    },
+    "ComponentRegistryRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "component_registry",
+          "default": "component_registry",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "ComponentRegistryRef",
+      "type": "object"
+    },
+    "ContextBundle": {
+      "$defs": {
+        "ContextBundleItem": {
+          "additionalProperties": false,
+          "description": "One authoritatively re-read ref, in bundle order.",
+          "properties": {
+            "content_digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Content Digest",
+              "type": "string"
+            },
+            "expansion_level": {
+              "maximum": 8,
+              "minimum": 0,
+              "title": "Expansion Level",
+              "type": "integer"
+            },
+            "source_ref": {
+              "$ref": "#/$defs/SourceRef"
+            },
+            "token_estimate": {
+              "minimum": 0,
+              "title": "Token Estimate",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "source_ref",
+            "content_digest",
+            "token_estimate",
+            "expansion_level"
+          ],
+          "title": "ContextBundleItem",
+          "type": "object"
+        },
+        "ContextManifestEntry": {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "enum": [
+                "included",
+                "dropped_budget",
+                "stale",
+                "unavailable",
+                "unknown"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reason"
+            },
+            "source_ref": {
+              "$ref": "#/$defs/SourceRef"
+            }
+          },
+          "required": [
+            "source_ref",
+            "outcome"
+          ],
+          "title": "ContextManifestEntry",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Ordered resolved refs plus the evidence manifest of every ref considered.\n\n``expansion_level`` is the deepest progressive-expansion level used; items\nnever exceed it. ``bundle_digest`` is ``context_bundle_digest(items)`` and is\nwhat an ``InferenceEnvelope.context_bundle_digest`` pins.",
+      "properties": {
+        "bundle_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Bundle Digest",
+          "type": "string"
+        },
+        "bundle_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Bundle Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "evidence_manifest": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ContextManifestEntry"
+          },
+          "maxItems": 256,
+          "title": "Evidence Manifest",
+          "type": "array"
+        },
+        "expansion_level": {
+          "maximum": 8,
+          "minimum": 0,
+          "title": "Expansion Level",
+          "type": "integer"
+        },
+        "index_revision": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Index Revision"
+        },
+        "items": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ContextBundleItem"
+          },
+          "maxItems": 64,
+          "title": "Items",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "retrieval_contracts.v1",
+          "default": "retrieval_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "token_budget": {
+          "minimum": 0,
+          "title": "Token Budget",
+          "type": "integer"
+        },
+        "token_estimate": {
+          "minimum": 0,
+          "title": "Token Estimate",
+          "type": "integer"
+        },
+        "workspace_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace Id"
+        }
+      },
+      "required": [
+        "bundle_id",
+        "token_estimate",
+        "token_budget",
+        "expansion_level",
+        "bundle_digest",
+        "created_at"
+      ],
+      "title": "ContextBundle",
+      "type": "object"
+    },
+    "DecisionRequest": {
+      "$defs": {
+        "CpuState": {
+          "additionalProperties": false,
+          "properties": {
+            "logical_cores": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Logical Cores"
+            },
+            "utilization": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Utilization"
+            }
+          },
+          "title": "CpuState",
+          "type": "object"
+        },
+        "DecisionOutputSpec": {
+          "additionalProperties": false,
+          "properties": {
+            "enum_values": {
+              "default": [],
+              "items": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 32,
+              "title": "Enum Values",
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "bool",
+                "enum",
+                "score"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "name": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "kind"
+          ],
+          "title": "DecisionOutputSpec",
+          "type": "object"
+        },
+        "GpuState": {
+          "additionalProperties": false,
+          "properties": {
+            "index": {
+              "minimum": 0,
+              "title": "Index",
+              "type": "integer"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Name"
+            },
+            "vram_total_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Vram Total Bytes"
+            },
+            "vram_used_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Vram Used Bytes"
+            }
+          },
+          "required": [
+            "index"
+          ],
+          "title": "GpuState",
+          "type": "object"
+        },
+        "LoadedModelState": {
+          "additionalProperties": false,
+          "description": "One loaded local model, typable from ``get_local_ai_runtime_status()['loaded_models']``.",
+          "properties": {
+            "keep_alive_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Keep Alive Until"
+            },
+            "name": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "processor": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Processor"
+            },
+            "size_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Size Bytes"
+            },
+            "vram_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Vram Bytes"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "LoadedModelState",
+          "type": "object"
+        },
+        "MemoryState": {
+          "additionalProperties": false,
+          "properties": {
+            "available_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Available Bytes"
+            },
+            "total_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Total Bytes"
+            }
+          },
+          "title": "MemoryState",
+          "type": "object"
+        },
+        "RuntimeResourceSnapshot": {
+          "additionalProperties": false,
+          "description": "Observed resource truth. ``None`` means unobserved, never zero.\n\n``generation`` is issued by the arbiter and increases whenever observed\nstate or the active lease set changes; requests ranked against an older\ngeneration are refused at reservation time.",
+          "properties": {
+            "active_lease_ids": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+                "type": "string"
+              },
+              "maxItems": 64,
+              "title": "Active Lease Ids",
+              "type": "array"
+            },
+            "cpu": {
+              "$ref": "#/$defs/CpuState",
+              "default": {
+                "logical_cores": null,
+                "utilization": null
+              }
+            },
+            "generation": {
+              "minimum": 0,
+              "title": "Generation",
+              "type": "integer"
+            },
+            "gpus": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/GpuState"
+              },
+              "maxItems": 64,
+              "title": "Gpus",
+              "type": "array"
+            },
+            "loaded_models": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/LoadedModelState"
+              },
+              "maxItems": 64,
+              "title": "Loaded Models",
+              "type": "array"
+            },
+            "memory": {
+              "$ref": "#/$defs/MemoryState",
+              "default": {
+                "available_bytes": null,
+                "total_bytes": null
+              }
+            },
+            "observed_at": {
+              "format": "date-time",
+              "title": "Observed At",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "resource_contracts.v1",
+              "default": "resource_contracts.v1",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "workers": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/WorkerOccupancy"
+              },
+              "maxItems": 64,
+              "title": "Workers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "generation",
+            "observed_at"
+          ],
+          "title": "RuntimeResourceSnapshot",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        },
+        "WorkerOccupancy": {
+          "additionalProperties": false,
+          "properties": {
+            "lease_ids": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+                "type": "string"
+              },
+              "maxItems": 64,
+              "title": "Lease Ids",
+              "type": "array"
+            },
+            "state": {
+              "enum": [
+                "idle",
+                "busy",
+                "unavailable",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "worker_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Worker Id",
+              "type": "string"
+            },
+            "worker_kind": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Worker Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "worker_kind",
+            "state"
+          ],
+          "title": "WorkerOccupancy",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "candidate_set": {
+          "default": [],
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Candidate Set",
+          "type": "array"
+        },
+        "constraints": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "title": "Constraints",
+          "type": "object"
+        },
+        "deadline_at": {
+          "format": "date-time",
+          "title": "Deadline At",
+          "type": "string"
+        },
+        "decision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "decision_type": {
+          "pattern": "^[a-z][a-z0-9_.]{0,95}$",
+          "title": "Decision Type",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "output_specs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DecisionOutputSpec"
+          },
+          "maxItems": 16,
+          "title": "Output Specs",
+          "type": "array"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "resource_snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeResourceSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "const": "decision_contracts.v1",
+          "default": "decision_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision_id",
+        "decision_type",
+        "requested_at",
+        "deadline_at"
+      ],
+      "title": "DecisionRequest",
+      "type": "object"
+    },
+    "DecisionResult": {
+      "$defs": {
+        "BoolDecisionOutput": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "bool",
+              "default": "bool",
+              "title": "Kind",
+              "type": "string"
+            },
+            "name": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "title": "Name",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "name",
+            "value"
+          ],
+          "title": "BoolDecisionOutput",
+          "type": "object"
+        },
+        "EnumDecisionOutput": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "enum",
+              "default": "enum",
+              "title": "Kind",
+              "type": "string"
+            },
+            "name": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "title": "Name",
+              "type": "string"
+            },
+            "value": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "value"
+          ],
+          "title": "EnumDecisionOutput",
+          "type": "object"
+        },
+        "ScoreDecisionOutput": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "score",
+              "default": "score",
+              "title": "Kind",
+              "type": "string"
+            },
+            "name": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "title": "Name",
+              "type": "string"
+            },
+            "value": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Value",
+              "type": "number"
+            }
+          },
+          "required": [
+            "name",
+            "value"
+          ],
+          "title": "ScoreDecisionOutput",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "``model_ref`` names the exact model revision (or deterministic rule) that decided.",
+      "properties": {
+        "calibration_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "decided_at": {
+          "format": "date-time",
+          "title": "Decided At",
+          "type": "string"
+        },
+        "decision_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "model_ref": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Model Ref",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "decided",
+            "abstained"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "outputs": {
+          "default": [],
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "bool": "#/$defs/BoolDecisionOutput",
+                "enum": "#/$defs/EnumDecisionOutput",
+                "score": "#/$defs/ScoreDecisionOutput"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/BoolDecisionOutput"
+              },
+              {
+                "$ref": "#/$defs/EnumDecisionOutput"
+              },
+              {
+                "$ref": "#/$defs/ScoreDecisionOutput"
+              }
+            ]
+          },
+          "maxItems": 16,
+          "title": "Outputs",
+          "type": "array"
+        },
+        "reason_code": {
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "decision_contracts.v1",
+          "default": "decision_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selected_candidate": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selected Candidate"
+        }
+      },
+      "required": [
+        "decision_id",
+        "outcome",
+        "model_ref",
+        "reason_code",
+        "decided_at"
+      ],
+      "title": "DecisionResult",
+      "type": "object"
+    },
+    "DynamicModelRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "dynamic_model",
+          "default": "dynamic_model",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "DynamicModelRef",
+      "type": "object"
+    },
+    "EngineeringProjectRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "engineering_project",
+          "default": "engineering_project",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "EngineeringProjectRef",
+      "type": "object"
+    },
+    "EngineeringRef": {
+      "additionalProperties": false,
+      "description": "Any engineering object ref; ``location`` is not part of engineering identity.",
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "enum": [
+            "engineering_project",
+            "engineering_revision",
+            "component_registry",
+            "property_basis",
+            "material_state",
+            "process_model_ir",
+            "dynamic_model",
+            "environmental_scenario",
+            "process_design_envelope",
+            "geometry_asset",
+            "mesh_artifact",
+            "physics_case",
+            "evaluation_request",
+            "evaluation_result",
+            "study",
+            "validity_envelope"
+          ],
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_type",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "EngineeringRef",
+      "type": "object"
+    },
+    "EngineeringRevisionRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "engineering_revision",
+          "default": "engineering_revision",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "EngineeringRevisionRef",
+      "type": "object"
+    },
+    "EnvironmentalScenarioRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "environmental_scenario",
+          "default": "environmental_scenario",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "EnvironmentalScenarioRef",
+      "type": "object"
+    },
+    "EvaluationRequestRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "evaluation_request",
+          "default": "evaluation_request",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "EvaluationRequestRef",
+      "type": "object"
+    },
+    "EvaluationResultRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "evaluation_result",
+          "default": "evaluation_result",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "EvaluationResultRef",
+      "type": "object"
+    },
+    "GeometryAssetRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "geometry_asset",
+          "default": "geometry_asset",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "GeometryAssetRef",
+      "type": "object"
+    },
+    "IndexDocument": {
+      "$defs": {
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "source_ref": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "text": {
+          "maxLength": 200000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        }
+      },
+      "required": [
+        "source_ref",
+        "text"
+      ],
+      "title": "IndexDocument",
+      "type": "object"
+    },
+    "InferenceEnvelope": {
+      "$defs": {
+        "AgentSessionRef": {
+          "additionalProperties": false,
+          "description": "Jarvis-owned mapping of one AI thread to one Hermes session generation.\n\n``jarvis_thread_id`` is ``ai_threads.id``. ``generation`` increases every\ntime Jarvis (re)binds a Hermes session to the thread (start or recovery).\n``upstream_revision`` is the pinned Hermes release/commit serving it.",
+          "properties": {
+            "generation": {
+              "minimum": 1,
+              "title": "Generation",
+              "type": "integer"
+            },
+            "hermes_session_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Hermes Session Id",
+              "type": "string"
+            },
+            "jarvis_thread_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Jarvis Thread Id",
+              "type": "string"
+            },
+            "profile_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Profile Id",
+              "type": "string"
+            },
+            "upstream_revision": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Upstream Revision",
+              "type": "string"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "jarvis_thread_id",
+            "hermes_session_id",
+            "profile_id",
+            "workspace_id",
+            "generation",
+            "upstream_revision"
+          ],
+          "title": "AgentSessionRef",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "A request for Jarvis to run inference; never a provider call by itself.\n\n``route_class`` and ``model_candidate`` are requests/recommendations: the\nbinding, sensitivity, egress and budget authority inside ``run_ai_task``\ndecide. ``agent_session`` marks Hermes-originated (including auxiliary)\ninference, which is governed identically.",
+      "properties": {
+        "agent_session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentSessionRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cancellation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancellation Id"
+        },
+        "context_bundle_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Bundle Digest"
+        },
+        "context_bundle_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Bundle Id"
+        },
+        "correlation_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Correlation Id",
+          "type": "string"
+        },
+        "deadline_at": {
+          "format": "date-time",
+          "title": "Deadline At",
+          "type": "string"
+        },
+        "envelope_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Envelope Id",
+          "type": "string"
+        },
+        "flow_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Flow Id"
+        },
+        "max_output_tokens": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Output Tokens"
+        },
+        "model_candidate": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Candidate"
+        },
+        "policy_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Policy Refs",
+          "type": "array"
+        },
+        "prompt": {
+          "maxLength": 128000,
+          "minLength": 1,
+          "title": "Prompt",
+          "type": "string"
+        },
+        "provenance_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Provenance Refs",
+          "type": "array"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "route_class": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route Class"
+        },
+        "schema_version": {
+          "const": "agent_contracts.v1",
+          "default": "agent_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sensitivity_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Sensitivity Refs",
+          "type": "array"
+        },
+        "task_kind": {
+          "default": "general",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+          "title": "Task Kind",
+          "type": "string"
+        },
+        "workspace_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace Id"
+        }
+      },
+      "required": [
+        "deadline_at",
+        "envelope_id",
+        "correlation_id",
+        "prompt",
+        "requested_at"
+      ],
+      "title": "InferenceEnvelope",
+      "type": "object"
+    },
+    "MaterialStateRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "material_state",
+          "default": "material_state",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "MaterialStateRef",
+      "type": "object"
+    },
+    "MeshArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "mesh_artifact",
+          "default": "mesh_artifact",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "MeshArtifactRef",
+      "type": "object"
+    },
+    "PhysicsCaseRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "physics_case",
+          "default": "physics_case",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "PhysicsCaseRef",
+      "type": "object"
+    },
+    "ProcessDesignEnvelopeRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "process_design_envelope",
+          "default": "process_design_envelope",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "ProcessDesignEnvelopeRef",
+      "type": "object"
+    },
+    "ProcessModelIRRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "process_model_ir",
+          "default": "process_model_ir",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "ProcessModelIRRef",
+      "type": "object"
+    },
+    "PropertyBasisRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "property_basis",
+          "default": "property_basis",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "PropertyBasisRef",
+      "type": "object"
+    },
+    "Quantity": {
+      "$defs": {
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "A finite magnitude in a unit understood by the single Pint owner.\n\nCompound units use Pint syntax (``W/(m**2*K)``); compact exponents such as\n``m2`` are accepted only as whole reviewed tokens (``m2``, ``kg/m3``).",
+      "properties": {
+        "basis_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "unit": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Unit",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value",
+        "unit"
+      ],
+      "title": "Quantity",
+      "type": "object"
+    },
+    "ResourceLease": {
+      "$defs": {
+        "ResourceAmounts": {
+          "additionalProperties": false,
+          "properties": {
+            "cpu_cores": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cpu Cores",
+              "type": "integer"
+            },
+            "gpu_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gpu Index"
+            },
+            "model_name": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Name"
+            },
+            "ram_bytes": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Ram Bytes",
+              "type": "integer"
+            },
+            "vram_bytes": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Vram Bytes",
+              "type": "integer"
+            },
+            "worker_kind": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Worker Kind"
+            }
+          },
+          "title": "ResourceAmounts",
+          "type": "object"
+        },
+        "ResourceReservationRequest": {
+          "additionalProperties": false,
+          "description": "``snapshot_generation`` is the generation the requester ranked against.",
+          "properties": {
+            "correlation_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Correlation Id",
+              "type": "string"
+            },
+            "deadline_at": {
+              "format": "date-time",
+              "title": "Deadline At",
+              "type": "string"
+            },
+            "evidence_refs": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SourceRef"
+              },
+              "maxItems": 32,
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "max_hold_seconds": {
+              "maximum": 86400,
+              "minimum": 1,
+              "title": "Max Hold Seconds",
+              "type": "integer"
+            },
+            "owner_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Owner Id",
+              "type": "string"
+            },
+            "owner_kind": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Owner Kind",
+              "type": "string"
+            },
+            "request_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Request Id",
+              "type": "string"
+            },
+            "requested_at": {
+              "format": "date-time",
+              "title": "Requested At",
+              "type": "string"
+            },
+            "resources": {
+              "$ref": "#/$defs/ResourceAmounts"
+            },
+            "schema_version": {
+              "const": "resource_contracts.v1",
+              "default": "resource_contracts.v1",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "snapshot_generation": {
+              "minimum": 0,
+              "title": "Snapshot Generation",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "request_id",
+            "owner_kind",
+            "owner_id",
+            "correlation_id",
+            "resources",
+            "snapshot_generation",
+            "requested_at",
+            "deadline_at",
+            "max_hold_seconds"
+          ],
+          "title": "ResourceReservationRequest",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Granted reservation. ``version`` is the CAS token for every transition.",
+      "properties": {
+        "ended_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ended At"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "granted_at": {
+          "format": "date-time",
+          "title": "Granted At",
+          "type": "string"
+        },
+        "granted_generation": {
+          "minimum": 0,
+          "title": "Granted Generation",
+          "type": "integer"
+        },
+        "lease_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "release_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "completed",
+                "cancelled",
+                "failed",
+                "deadline_exceeded",
+                "revoked",
+                "owner_lost",
+                "expired"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Release Reason"
+        },
+        "request": {
+          "$ref": "#/$defs/ResourceReservationRequest"
+        },
+        "schema_version": {
+          "const": "resource_contracts.v1",
+          "default": "resource_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "active",
+            "released",
+            "expired"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "lease_id",
+        "request",
+        "state",
+        "version",
+        "granted_generation",
+        "granted_at",
+        "expires_at"
+      ],
+      "title": "ResourceLease",
+      "type": "object"
+    },
+    "ResourceReservationRequest": {
+      "$defs": {
+        "ResourceAmounts": {
+          "additionalProperties": false,
+          "properties": {
+            "cpu_cores": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cpu Cores",
+              "type": "integer"
+            },
+            "gpu_index": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gpu Index"
+            },
+            "model_name": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Name"
+            },
+            "ram_bytes": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Ram Bytes",
+              "type": "integer"
+            },
+            "vram_bytes": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Vram Bytes",
+              "type": "integer"
+            },
+            "worker_kind": {
+              "anyOf": [
+                {
+                  "maxLength": 96,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Worker Kind"
+            }
+          },
+          "title": "ResourceAmounts",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "``snapshot_generation`` is the generation the requester ranked against.",
+      "properties": {
+        "correlation_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Correlation Id",
+          "type": "string"
+        },
+        "deadline_at": {
+          "format": "date-time",
+          "title": "Deadline At",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "max_hold_seconds": {
+          "maximum": 86400,
+          "minimum": 1,
+          "title": "Max Hold Seconds",
+          "type": "integer"
+        },
+        "owner_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "owner_kind": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Owner Kind",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "resources": {
+          "$ref": "#/$defs/ResourceAmounts"
+        },
+        "schema_version": {
+          "const": "resource_contracts.v1",
+          "default": "resource_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "snapshot_generation": {
+          "minimum": 0,
+          "title": "Snapshot Generation",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "request_id",
+        "owner_kind",
+        "owner_id",
+        "correlation_id",
+        "resources",
+        "snapshot_generation",
+        "requested_at",
+        "deadline_at",
+        "max_hold_seconds"
+      ],
+      "title": "ResourceReservationRequest",
+      "type": "object"
+    },
+    "RetrievalHit": {
+      "$defs": {
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Derived-index candidate. Scores are index-relative and only comparable within one search.",
+      "properties": {
+        "excerpt": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excerpt"
+        },
+        "fused_score": {
+          "title": "Fused Score",
+          "type": "number"
+        },
+        "graph_score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Graph Score"
+        },
+        "index_revision": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Index Revision",
+          "type": "string"
+        },
+        "lexical_score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lexical Score"
+        },
+        "schema_version": {
+          "const": "retrieval_contracts.v1",
+          "default": "retrieval_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_ref": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "vector_score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vector Score"
+        }
+      },
+      "required": [
+        "source_ref",
+        "fused_score",
+        "index_revision"
+      ],
+      "title": "RetrievalHit",
+      "type": "object"
+    },
+    "RuntimeResourceSnapshot": {
+      "$defs": {
+        "CpuState": {
+          "additionalProperties": false,
+          "properties": {
+            "logical_cores": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Logical Cores"
+            },
+            "utilization": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Utilization"
+            }
+          },
+          "title": "CpuState",
+          "type": "object"
+        },
+        "GpuState": {
+          "additionalProperties": false,
+          "properties": {
+            "index": {
+              "minimum": 0,
+              "title": "Index",
+              "type": "integer"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Name"
+            },
+            "vram_total_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Vram Total Bytes"
+            },
+            "vram_used_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Vram Used Bytes"
+            }
+          },
+          "required": [
+            "index"
+          ],
+          "title": "GpuState",
+          "type": "object"
+        },
+        "LoadedModelState": {
+          "additionalProperties": false,
+          "description": "One loaded local model, typable from ``get_local_ai_runtime_status()['loaded_models']``.",
+          "properties": {
+            "keep_alive_until": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Keep Alive Until"
+            },
+            "name": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "processor": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Processor"
+            },
+            "size_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Size Bytes"
+            },
+            "vram_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Vram Bytes"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "LoadedModelState",
+          "type": "object"
+        },
+        "MemoryState": {
+          "additionalProperties": false,
+          "properties": {
+            "available_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Available Bytes"
+            },
+            "total_bytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Total Bytes"
+            }
+          },
+          "title": "MemoryState",
+          "type": "object"
+        },
+        "WorkerOccupancy": {
+          "additionalProperties": false,
+          "properties": {
+            "lease_ids": {
+              "default": [],
+              "items": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+                "type": "string"
+              },
+              "maxItems": 64,
+              "title": "Lease Ids",
+              "type": "array"
+            },
+            "state": {
+              "enum": [
+                "idle",
+                "busy",
+                "unavailable",
+                "unknown"
+              ],
+              "title": "State",
+              "type": "string"
+            },
+            "worker_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Worker Id",
+              "type": "string"
+            },
+            "worker_kind": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Worker Kind",
+              "type": "string"
+            }
+          },
+          "required": [
+            "worker_id",
+            "worker_kind",
+            "state"
+          ],
+          "title": "WorkerOccupancy",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Observed resource truth. ``None`` means unobserved, never zero.\n\n``generation`` is issued by the arbiter and increases whenever observed\nstate or the active lease set changes; requests ranked against an older\ngeneration are refused at reservation time.",
+      "properties": {
+        "active_lease_ids": {
+          "default": [],
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Active Lease Ids",
+          "type": "array"
+        },
+        "cpu": {
+          "$ref": "#/$defs/CpuState",
+          "default": {
+            "logical_cores": null,
+            "utilization": null
+          }
+        },
+        "generation": {
+          "minimum": 0,
+          "title": "Generation",
+          "type": "integer"
+        },
+        "gpus": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/GpuState"
+          },
+          "maxItems": 64,
+          "title": "Gpus",
+          "type": "array"
+        },
+        "loaded_models": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LoadedModelState"
+          },
+          "maxItems": 64,
+          "title": "Loaded Models",
+          "type": "array"
+        },
+        "memory": {
+          "$ref": "#/$defs/MemoryState",
+          "default": {
+            "available_bytes": null,
+            "total_bytes": null
+          }
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "resource_contracts.v1",
+          "default": "resource_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "workers": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkerOccupancy"
+          },
+          "maxItems": 64,
+          "title": "Workers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "generation",
+        "observed_at"
+      ],
+      "title": "RuntimeResourceSnapshot",
+      "type": "object"
+    },
+    "SourceRef": {
+      "$defs": {
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceLocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace Id"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_type",
+        "object_id"
+      ],
+      "title": "SourceRef",
+      "type": "object"
+    },
+    "StructuredToolCall": {
+      "$defs": {
+        "AgentSessionRef": {
+          "additionalProperties": false,
+          "description": "Jarvis-owned mapping of one AI thread to one Hermes session generation.\n\n``jarvis_thread_id`` is ``ai_threads.id``. ``generation`` increases every\ntime Jarvis (re)binds a Hermes session to the thread (start or recovery).\n``upstream_revision`` is the pinned Hermes release/commit serving it.",
+          "properties": {
+            "generation": {
+              "minimum": 1,
+              "title": "Generation",
+              "type": "integer"
+            },
+            "hermes_session_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Hermes Session Id",
+              "type": "string"
+            },
+            "jarvis_thread_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Jarvis Thread Id",
+              "type": "string"
+            },
+            "profile_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "title": "Profile Id",
+              "type": "string"
+            },
+            "upstream_revision": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Upstream Revision",
+              "type": "string"
+            },
+            "workspace_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "jarvis_thread_id",
+            "hermes_session_id",
+            "profile_id",
+            "workspace_id",
+            "generation",
+            "upstream_revision"
+          ],
+          "title": "AgentSessionRef",
+          "type": "object"
+        },
+        "JsonValue": {},
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "argument_artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Arguments",
+          "type": "object"
+        },
+        "call_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Call Id",
+          "type": "string"
+        },
+        "cancellation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancellation Id"
+        },
+        "capability_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "correlation_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Correlation Id",
+          "type": "string"
+        },
+        "deadline_at": {
+          "format": "date-time",
+          "title": "Deadline At",
+          "type": "string"
+        },
+        "grant_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Grant Id",
+          "type": "string"
+        },
+        "provenance_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Provenance Refs",
+          "type": "array"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "agent_contracts.v1",
+          "default": "agent_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "session_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentSessionRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "deadline_at",
+        "call_id",
+        "capability_id",
+        "grant_id",
+        "correlation_id",
+        "requested_at"
+      ],
+      "title": "StructuredToolCall",
+      "type": "object"
+    },
+    "StructuredToolResult": {
+      "$defs": {
+        "JsonValue": {},
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Call Id",
+          "type": "string"
+        },
+        "capability_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Code"
+        },
+        "evidence_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result"
+        },
+        "result_artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "const": "agent_contracts.v1",
+          "default": "agent_contracts.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "refused",
+            "cancelled",
+            "deadline_exceeded"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "capability_id",
+        "status",
+        "completed_at"
+      ],
+      "title": "StructuredToolResult",
+      "type": "object"
+    },
+    "StudyRef": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "study",
+          "default": "study",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id"
+      ],
+      "title": "StudyRef",
+      "type": "object"
+    },
+    "ValidityEnvelopeRef": {
+      "$defs": {
+        "DomainBound": {
+          "additionalProperties": false,
+          "properties": {
+            "lower": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Quantity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "upper": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Quantity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "variable": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Variable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "variable"
+          ],
+          "title": "DomainBound",
+          "type": "object"
+        },
+        "Quantity": {
+          "additionalProperties": false,
+          "description": "A finite magnitude in a unit understood by the single Pint owner.\n\nCompound units use Pint syntax (``W/(m**2*K)``); compact exponents such as\n``m2`` are accepted only as whole reviewed tokens (``m2``, ``kg/m3``).",
+          "properties": {
+            "basis_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "unit": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Unit",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "number"
+            }
+          },
+          "required": [
+            "value",
+            "unit"
+          ],
+          "title": "Quantity",
+          "type": "object"
+        },
+        "SourceLocation": {
+          "additionalProperties": false,
+          "description": "Position inside an already-identified object; applied after authoritative reread.",
+          "properties": {
+            "end_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "End Line"
+            },
+            "fragment": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Fragment"
+            },
+            "start_line": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Start Line"
+            }
+          },
+          "title": "SourceLocation",
+          "type": "object"
+        },
+        "SourceRef": {
+          "additionalProperties": false,
+          "description": "Exact reference to one object in its canonical SQL/Git/artifact owner.\n\nThe single shared ref for retrieval hits, context bundles, evidence refs and\nengineering envelopes. A ref identifies; it never carries authority. Git and\nrepository objects may omit workspace_id; ``revision`` is the owner's native\nrevision (commit SHA, record version) and ``content_digest`` is\n``canonical_digest`` of the object content when the owner provides one.",
+          "properties": {
+            "authority_owner": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Authority Owner",
+              "type": "string"
+            },
+            "content_digest": {
+              "anyOf": [
+                {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Content Digest"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SourceLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "object_id": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "title": "Object Id",
+              "type": "string"
+            },
+            "object_type": {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Object Type",
+              "type": "string"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Revision"
+            },
+            "workspace_id": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Workspace Id"
+            }
+          },
+          "required": [
+            "authority_owner",
+            "object_type",
+            "object_id"
+          ],
+          "title": "SourceRef",
+          "type": "object"
+        },
+        "UncertaintyBound": {
+          "additionalProperties": false,
+          "properties": {
+            "absolute": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Quantity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "confidence_level": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0.0,
+                  "maximum": 1.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Confidence Level"
+            },
+            "relative": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Relative"
+            },
+            "variable": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,95}$",
+              "title": "Variable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "variable"
+          ],
+          "title": "UncertaintyBound",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Where a model/result may be used, how uncertain it is, and its qualification state.\n\nThere is no default status; anything beyond ``candidate`` must cite evidence.\nRecording a status here is metadata, not a qualification decision.",
+      "properties": {
+        "authority_owner": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+          "title": "Authority Owner",
+          "type": "string"
+        },
+        "content_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Digest"
+        },
+        "domain": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DomainBound"
+          },
+          "maxItems": 32,
+          "title": "Domain",
+          "type": "array"
+        },
+        "evidence_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "maxItems": 32,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "location": {
+          "default": null,
+          "title": "Location",
+          "type": "null"
+        },
+        "object_id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_type": {
+          "const": "validity_envelope",
+          "default": "validity_envelope",
+          "title": "Object Type",
+          "type": "string"
+        },
+        "qualification_status": {
+          "enum": [
+            "unqualified",
+            "candidate",
+            "calibrated",
+            "benchmarked",
+            "qualified"
+          ],
+          "title": "Qualification Status",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "uncertainty": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UncertaintyBound"
+          },
+          "maxItems": 32,
+          "title": "Uncertainty",
+          "type": "array"
+        },
+        "workspace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_owner",
+        "object_id",
+        "workspace_id",
+        "qualification_status"
+      ],
+      "title": "ValidityEnvelopeRef",
+      "type": "object"
+    }
+  },
+  "versions": {
+    "agent_contracts": "agent_contracts.v1",
+    "decision_contracts": "decision_contracts.v1",
+    "engineering_refs": "engineering_refs.v1",
+    "resource_contracts": "resource_contracts.v1",
+    "retrieval_contracts": "retrieval_contracts.v1"
+  }
+}

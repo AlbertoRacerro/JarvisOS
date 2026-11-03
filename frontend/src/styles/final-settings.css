@@ -1,0 +1,136 @@
+.final-settings {
+  min-width: 0;
+  min-height: 100%;
+}
+
+.final-settings__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-4) var(--space-5) var(--space-3);
+}
+
+.final-settings__header h1 {
+  margin: 0;
+  font-size: var(--font-size-page-title);
+  line-height: 1.2;
+}
+
+.final-settings__tabs {
+  display: flex;
+  align-items: end;
+  gap: 4px;
+  margin: 0 22px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.final-settings__tab {
+  appearance: none;
+  min-width: 84px;
+  padding: 10px 16px 9px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 3px 3px 0 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.final-settings__tab:hover,
+.final-settings__tab:focus-visible {
+  color: var(--color-text);
+  background: var(--color-bg-surface-raised);
+}
+
+.final-settings__tab.is-active {
+  margin-bottom: -1px;
+  border-color: var(--color-border-subtle);
+  border-bottom-color: var(--color-bg-surface);
+  background: var(--color-bg-surface);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.final-settings .settings-page {
+  padding-top: 12px;
+}
+
+.final-settings .settings-page > .page-header {
+  display: none;
+}
+
+.final-settings .settings-grid > .settings-card {
+  display: none;
+}
+
+.final-settings--appearance .settings-grid > .settings-card--visual,
+.final-settings--ai .settings-grid > .settings-card:nth-child(2),
+.final-settings--ai .settings-grid > .settings-card:nth-child(3),
+.final-settings--ai .settings-grid > .settings-card:nth-child(4),
+.final-settings--ai .settings-grid > .settings-card:nth-child(5),
+.final-settings--system .settings-grid > .settings-card:nth-child(6) {
+  display: block;
+}
+
+.final-settings--appearance .settings-grid,
+.final-settings--system .settings-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.final-settings--ai .settings-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.78fr);
+  align-items: start;
+}
+
+.final-settings--ai .settings-grid > .settings-card:nth-child(2) {
+  grid-row: span 2;
+}
+
+.final-settings .settings-legacy {
+  margin-inline: 22px;
+}
+
+@media (max-width: 900px) {
+  .final-settings--ai .settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.final-settings__projects {
+  display: grid;
+  gap: var(--space-2);
+  margin-block-end: var(--space-4);
+}
+
+.final-settings__project-list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.final-settings__project-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.final-settings__project-actions,
+.final-settings__project-rename {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.final-settings__project-rename {
+  flex: 1;
+}
+
+.final-settings__project-rename input {
+  flex: 1;
+  min-width: 0;
+}

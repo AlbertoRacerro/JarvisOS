@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>JarvisOS — Development / Calendar beta</title>
+<style>
+:root{
+  --bg:#FBFAF6;--panel:#FFFEFC;--line:#DDD5C8;--line2:#EEE7DB;--text:#23241F;--muted:#6D6F66;
+  --green:#467E2A;--green-deep:#28581A;--green-soft:#EDF7E7;--stone-rail:#FAF6EE;
+  --red:#9B463F;--red-soft:#FBEDEC;--blue:#416E82;--blue-soft:#EAF2F5;--amber:#A8741E;--amber-soft:#FAF0D8;
+  --orange:#A95F2F;--orange-soft:#FBEDE4;--purple:#695878;--purple-soft:#F1ECF4;
+}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font-family:'Inter Display','Inter','Segoe UI',Arial,sans-serif;color:var(--text);background:var(--bg)}body{overflow:hidden;-webkit-font-smoothing:antialiased;font-weight:400}button,input,textarea,select{font:inherit;color:inherit}.app{height:100vh;display:grid;grid-template-columns:170px minmax(0,1fr)}
+.rail{border-right:1px solid #E5DCCE;background:linear-gradient(180deg,#FAF7F0 0%,var(--stone-rail) 100%);padding:20px 9px 12px;position:relative}.brand{padding:0 4px 23px}.brandline{font-size:16px;font-weight:500;letter-spacing:.01em;display:flex;align-items:center;gap:7px}.health{width:7px;height:7px;border-radius:50%;background:#4E8A35;box-shadow:0 0 0 3px rgba(70,126,42,.08)}.brandsub{font-size:10px;color:#7d847d;margin-top:4px}.nav{height:40px;border-radius:4px;padding:10px 12px;font-size:15px;margin:2px 0;color:#596159;display:flex;align-items:center}.nav.active{font-weight:400;background:#FFFEFC;border:1px solid rgba(75,142,47,.65);color:#1f2720;position:relative}.nav.active:before{content:"";position:absolute;left:-1px;top:0;bottom:0;width:3px;background:var(--green);border-radius:4px 0 0 4px}.rail-note{position:absolute;bottom:16px;left:13px;right:14px;font-size:9.5px;line-height:1.4;color:#939a93}
+.main{padding:16px 16px 18px;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:10px}.header{height:102px;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;column-gap:20px;align-items:end}.heading{align-self:start}.eyebrow{font-size:11px;font-weight:300;color:#6e7368;text-transform:uppercase;letter-spacing:.14em}.title{font-size:30px;font-weight:500;margin-top:4px;line-height:1.04;letter-spacing:-.018em}.subtitle{font-size:13px;color:#6A6C63;margin-top:7px}.tabs{display:flex;gap:6px;align-self:end;margin-bottom:4px}.tab{font-size:14px;padding:9px 16px;border:1px solid #DDD6CA;background:linear-gradient(180deg,#FFFDFC 0%,#FBF8F2 100%);color:#667066;border-radius:4px}.tab.active{background:linear-gradient(180deg,#F7FCF3 0%,var(--green-soft) 100%);border-color:rgba(70,126,42,.72);color:var(--green-deep)}.header-meta{align-self:start;justify-self:end;font-size:10px;color:#858c83;margin-top:6px}.appearance{margin-top:3px;text-align:right;font-size:10px;color:#676e66}.appearance b{color:#343a34}
+.workbench{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:10px}.panel{border:1px solid var(--line);border-radius:5px;background:linear-gradient(180deg,#FFFDFC 0%,#FCF8F2 100%);min-height:0;box-shadow:0 12px 30px rgba(60,58,41,.055),0 1px 0 rgba(255,255,255,.9) inset}.calendar{display:flex;flex-direction:column;overflow:hidden;background:#FFFEFC}.calendar-top{padding:11px 13px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}.viewset{display:flex;gap:5px}.viewbtn{font-size:11.5px;padding:7px 10px;border:1px solid #DED7CB;background:#FFFEFC;color:#697069;border-radius:4px;cursor:pointer}.viewbtn.active{background:var(--green-soft);border-color:rgba(70,126,42,.55);color:var(--green-deep)}.toolbar-right{display:flex;align-items:center;gap:6px}.search{height:31px;width:210px;border:1px solid #DDD5C8;border-radius:4px;background:#FFFEFC;padding:0 9px;font-size:11.5px}.addbtn{height:31px;border:1px solid rgba(70,126,42,.65);background:var(--green-soft);color:var(--green-deep);border-radius:4px;padding:0 11px;font-size:10.5px;cursor:pointer}.calendar-nav{display:grid;grid-template-columns:auto 1fr auto;align-items:center;padding:8px 13px;border-bottom:1px solid #EEE7DB;background:#FCFAF6;gap:10px}.mode{display:flex;gap:4px}.mode button{font-size:9px;border:1px solid #E1D9CC;background:#FFFEFC;border-radius:4px;padding:5px 7px;color:#727A72}.mode button.active{color:var(--green-deep);background:#F3F9EF;border-color:rgba(70,126,42,.35)}.weeknav{justify-self:center;display:flex;align-items:center;gap:10px}.arrow{border:0;background:transparent;font-size:18px;color:#6E756E;cursor:pointer}.range{font-size:12px;font-weight:500}.todaybtn{justify-self:end;border:1px solid #DDD5C8;background:#FFFEFC;border-radius:4px;padding:5px 8px;font-size:9px;color:#687068}
+.week-shell{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}.week-head{display:grid;grid-template-columns:58px repeat(7,minmax(105px,1fr));border-bottom:1px solid #E8E1D6;background:#FFFEFC}.time-head{border-right:1px solid #EEE7DB}.day-head{height:50px;padding:8px 7px 6px;border-right:1px solid #EEE7DB;position:relative}.day-head:last-child{border-right:0}.dow{font-size:8px;color:#8B928A;text-transform:uppercase;letter-spacing:.08em}.date{font-size:14px;margin-top:3px;font-weight:500}.day-head.today{background:#F8FBF5}.day-head.today .date{color:var(--green-deep)}.all-day{display:grid;grid-template-columns:58px repeat(7,minmax(105px,1fr));border-bottom:1px solid #E9E2D7;min-height:38px;background:#FCFAF6}.all-label{font-size:7.5px;color:#969C94;padding:11px 6px;border-right:1px solid #EEE7DB;text-align:right}.all-cell{border-right:1px solid #EEE7DB;position:relative;padding:5px}.all-cell:last-child{border-right:0}.deadline{height:25px;border-radius:4px;padding:6px 7px;font-size:8.5px;background:#F8E7E5;border:1px solid #C88882;color:#6E302C;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}.milestone{display:flex;align-items:center;gap:5px;font-size:8.5px;color:#355B2D;padding-top:4px;cursor:pointer}.diamond{width:11px;height:11px;transform:rotate(45deg);background:#79A965;border:1px solid #547E45}
+.gridwrap{flex:1;height:0;min-height:0;overflow:auto;position:relative;background:#FFFEFC}.timegrid{position:relative;display:grid;grid-template-columns:58px repeat(7,minmax(105px,1fr));grid-template-rows:repeat(24,58px);min-height:1392px}.hour-label{grid-column:1;border-right:1px solid #E8E1D6;border-top:1px solid #F0EADF;padding:3px 7px 0 0;text-align:right;font-size:8px;color:#929990;position:relative}.hour-label:after{content:"";position:absolute;right:-1px;top:29px;width:7px;border-top:1px solid #F1ECE4}.daycol{position:absolute;top:0;bottom:0;border-right:1px solid #EEE7DB;background-image:linear-gradient(to bottom,#F0EADF 1px,transparent 1px,transparent 29px,#F7F2EB 30px,transparent 30px);background-size:100% 58px}.daycol.today{background-color:#FBFDF9}.nowline{position:absolute;left:58px;right:0;height:1px;background:#78A562;z-index:3}.nowline:before{content:"";position:absolute;left:-4px;top:-3px;width:7px;height:7px;border-radius:50%;background:#78A562}.nowtag{position:absolute;left:3px;top:-8px;font-size:7px;background:#F3F9EF;color:#39602E;padding:1px 3px;border:1px solid #B8D1AC;border-radius:3px}
+.event{position:absolute;border-radius:5px;border:1px solid;padding:8px 9px 7px;overflow:hidden;cursor:pointer;z-index:4;box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 1px 2px rgba(42,45,38,.06)}.event .etime{font-size:8px;opacity:.78}.event .etitle{font-size:10.5px;font-weight:500;line-height:1.22;margin-top:2px}.event .elink{font-size:7.5px;margin-top:5px;opacity:.78;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.event.work{background:linear-gradient(180deg,#EAF2F5 0%,#DCE9EE 100%);border-color:#84A4B2;color:#2E5666}.event.call{background:linear-gradient(180deg,#F3ECF5 0%,#E9DFF0 100%);border-color:#A899B3;color:#564563}.event.review{background:linear-gradient(180deg,#F8EEDF 0%,#F1E2C9 100%);border-color:#CBA66D;color:#74501A}.event.lab{background:linear-gradient(180deg,#ECF4E8 0%,#DEEBD8 100%);border-color:#95B687;color:#3F6535}.event.unavailable{background:linear-gradient(180deg,#F3F1EE 0%,#EAE7E1 100%);border-color:#BEB8AE;color:#6B675F}.event.critical{background:linear-gradient(180deg,#F7E8E6 0%,#EFD9D6 100%);border-color:#C98F89;color:#783D37}
+.legend{display:flex;gap:12px;align-items:center;padding:8px 13px;border-top:1px solid #ECE5DA;background:#FCFAF6;font-size:8px;color:#838A82}.legend span{display:flex;align-items:center;gap:4px}.dot{width:6px;height:6px;border-radius:50%}.dot.work{background:#416E82}.dot.call{background:#695878}.dot.review{background:#A8741E}.dot.lab{background:#467E2A}.dot.unavailable{background:#938E85}
+.rightstack{min-height:0;display:grid;grid-template-rows:minmax(0,1fr) 285px;gap:10px}.jarvis{display:flex;flex-direction:column;overflow:hidden}.jarvis-head,.filter-head{padding:13px 13px 10px;border-bottom:1px solid var(--line)}.jarvis-head h3,.filter-head h3{font-size:18px;font-weight:500;margin:0;display:flex;align-items:center;gap:7px}.accent-dot{width:7px;height:7px;background:var(--green);border-radius:50%}.context{font-size:10px;color:#7C847A;margin-top:5px}.jarvis-body{padding:10px 11px;display:flex;flex-direction:column;gap:8px;flex:1;min-height:0}.bubble{font-size:11px;line-height:1.45;padding:9px 10px;border:1px solid rgba(70,126,42,.20);border-radius:4px;background:linear-gradient(180deg,#FCFEFB 0%,#F6FBF3 100%)}.promptlist{display:flex;flex-direction:column;gap:5px}.prompt{font-size:10px;line-height:1.3;border:1px solid #E4DDD1;border-radius:4px;background:#FFFEFC;padding:6px 7px;color:#596159}.proposal{margin-top:2px;border:1px solid #E4CFA8;background:#FFF8EA;border-radius:4px;padding:8px 9px}.proposal .phead{font-size:9px;font-weight:500;letter-spacing:.07em;color:#8A621F;text-transform:uppercase}.proposal p{font-size:9.5px;line-height:1.4;margin:5px 0 7px}.actions{display:flex;gap:6px}.btn{font-size:9px;border:1px solid #D9C399;background:#FFFEFC;border-radius:4px;padding:6px 8px;cursor:pointer}.btn.primary{border-color:rgba(70,126,42,.65);background:var(--green-soft);color:var(--green-deep)}.composer{height:38px;border:1px solid #DFD8CC;border-radius:4px;background:#FFFEFC;display:flex;align-items:center;padding:0 6px 0 10px;gap:6px;margin-top:auto}.composer span{font-size:9px;color:#8A928A;flex:1}.send{font-size:9px;border:1px solid rgba(70,126,42,.7);color:var(--green-deep);background:var(--green-soft);border-radius:4px;padding:6px 10px}.filters{display:flex;flex-direction:column;overflow:hidden}.filter-body{padding:9px 11px;overflow:auto}.fgroup{padding:8px 0;border-top:1px solid #EDE5D9}.fgroup:first-child{border-top:0;padding-top:0}.flabel{font-size:7px;text-transform:uppercase;letter-spacing:.08em;color:#929890;margin-bottom:6px}.checks{display:flex;gap:4px;flex-wrap:wrap}.pill{font-size:8px;border:1px solid #DED7CB;background:#FFFEFC;border-radius:4px;padding:4px 6px;color:#747B73}.pill.on{border-color:rgba(70,126,42,.45);background:#F2F8EE;color:#3D6533}.selectline{display:grid;grid-template-columns:1fr 1fr;gap:5px}.selectline select{height:29px;border:1px solid #DED7CB;background:#FFFEFC;border-radius:4px;font-size:8px;padding:0 6px}.toggleline{display:flex;align-items:center;justify-content:space-between;font-size:8px;color:#696F68;margin:6px 0}.toggle{width:25px;height:14px;border-radius:10px;background:#D6D2CA;position:relative}.toggle:after{content:"";position:absolute;width:10px;height:10px;border-radius:50%;background:#fff;top:2px;left:2px;box-shadow:0 1px 2px rgba(0,0,0,.12)}.toggle.on{background:#6FA055}.toggle.on:after{left:13px}.clear{width:100%;border:1px solid #E1D9CC;background:#FFFEFC;border-radius:4px;padding:6px;font-size:8px;color:#777E76;margin-top:4px}
+.popover{position:fixed;width:300px;background:#FFFEFC;border:1px solid #D8D0C4;border-radius:5px;box-shadow:0 18px 40px rgba(53,48,39,.18);padding:11px;z-index:50;display:none}.popover.show{display:block}.pop-head{display:flex;justify-content:space-between;gap:10px}.pop-title{font-size:14px;font-weight:500}.pop-meta{font-size:8.5px;color:#858C83;margin-top:3px}.closex{border:0;background:transparent;font-size:18px;color:#858C83;cursor:pointer}.pop-grid{display:grid;grid-template-columns:70px 1fr;gap:6px 8px;margin-top:10px;font-size:8.5px}.pk{color:#8B918A}.pv{color:#424842}.pop-actions{display:flex;gap:5px;margin-top:11px;flex-wrap:wrap}.pop-actions button{font-size:8.5px;border-radius:4px;padding:6px 8px;cursor:pointer}.openbtn{border:1px solid #C7D9C0;background:#F3F8F0;color:#365D2E}.editbtn{border:1px solid #DAD2C6;background:#FFFEFC}.deletebtn{border:1px solid #E0B8B4;background:#FFF4F2;color:#874139}.roadmapbtn{border:1px solid #BFD0D7;background:#EEF4F6;color:#355D6E}
+.backdrop{position:fixed;inset:0;background:rgba(48,45,38,.18);z-index:60;display:none}.backdrop.show{display:block}.modal{position:fixed;z-index:61;width:590px;max-height:86vh;overflow:hidden;left:50%;top:50%;transform:translate(-50%,-50%);background:#FFFEFC;border:1px solid #D5CCBF;border-radius:6px;box-shadow:0 24px 70px rgba(50,46,38,.22);display:none}.modal.show{display:block}.modal-head{padding:14px 16px;border-bottom:1px solid #E8E1D5;display:flex;justify-content:space-between;align-items:start}.modal-head h3{font-size:17px;font-weight:500;margin:0}.modal-head p{font-size:9px;color:#81877F;margin:4px 0 0}.modal-body{padding:13px 16px;overflow:auto;max-height:64vh}.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field{display:flex;flex-direction:column;gap:4px}.field.full{grid-column:1/-1}.field label{font-size:7.5px;text-transform:uppercase;letter-spacing:.07em;color:#858C83}.field input,.field select,.field textarea{border:1px solid #DDD5C8;border-radius:4px;background:#FFFEFC;font-size:10px;padding:7px 8px;outline:none}.field textarea{min-height:62px;resize:vertical}.chipsel{display:flex;gap:5px;flex-wrap:wrap}.choice{font-size:8px;border:1px solid #DED7CB;background:#FFFEFC;border-radius:4px;padding:5px 6px;color:#737A72}.choice.on{background:#F2F8EE;color:#3A6230;border-color:#BED1B4}.advanced-toggle{margin-top:12px;border:0;background:transparent;color:#456A3A;padding:0;font-size:9px;cursor:pointer}.advanced{display:none;margin-top:10px;padding-top:10px;border-top:1px solid #EAE3D8}.advanced.show{display:block}.modal-foot{padding:10px 16px;border-top:1px solid #E8E1D5;display:flex;justify-content:flex-end;gap:7px}.modal-foot button{font-size:9px;padding:7px 10px;border-radius:4px;cursor:pointer}.cancel{border:1px solid #DCD4C8;background:#FFFEFC}.save{border:1px solid rgba(70,126,42,.7);background:#EDF7E7;color:#2F5D25}.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#30362F;color:#fff;padding:8px 12px;border-radius:4px;font-size:9px;z-index:80;display:none}.toast.show{display:block}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brand"><div class="brandline">JARVIS OS <span class="health"></span></div><div class="brandsub">engineering operator workspace</div></div>
+    <div class="nav">Design</div><div class="nav">Memory</div><div class="nav active">Development</div><div class="nav">Coding</div><div class="nav">Settings</div>
+    <div class="rail-note">Development is non-authoritative until roadmap or memory changes are explicitly accepted.</div>
+  </aside>
+  <main class="main">
+    <section class="header">
+      <div class="heading"><div class="eyebrow">JarvisOS operator workspace</div><div class="title">Development</div><div class="subtitle">Plan project work at roadmap scale, then schedule the actual hours needed to execute it.</div></div>
+      <div class="header-meta">Project · Photobioreactor Alpha<div class="appearance">Appearance · <b>Light</b></div></div>
+      <div class="tabs"><button class="tab active">Roadmap</button><button class="tab">Brainstorm</button></div>
+    </section>
+
+    <section class="workbench">
+      <section class="panel calendar">
+        <div class="calendar-top">
+          <div class="viewset"><button class="viewbtn">Timeline</button><button class="viewbtn active">Calendar</button><button class="viewbtn">Board</button></div>
+          <div class="toolbar-right"><input class="search" placeholder="Search calendar..."/><button class="addbtn" id="addEvent">+ Add event</button></div>
+        </div>
+        <div class="calendar-nav">
+          <div class="mode"><button>Day</button><button class="active">Week</button><button>Month</button><button>Agenda</button></div>
+          <div class="weeknav"><button class="arrow">‹</button><div class="range">31 Aug – 6 Sep 2026</div><button class="arrow">›</button></div>
+          <button class="todaybtn">Today</button>
+        </div>
+        <div class="week-shell">
+          <div class="week-head">
+            <div class="time-head"></div>
+            <div class="day-head"><div class="dow">Mon</div><div class="date">31 Aug</div></div>
+            <div class="day-head"><div class="dow">Tue</div><div class="date">1 Sep</div></div>
+            <div class="day-head"><div class="dow">Wed</div><div class="date">2 Sep</div></div>
+            <div class="day-head"><div class="dow">Thu</div><div class="date">3 Sep</div></div>
+            <div class="day-head today"><div class="dow">Fri</div><div class="date">4 Sep</div></div>
+            <div class="day-head"><div class="dow">Sat</div><div class="date">5 Sep</div></div>
+            <div class="day-head"><div class="dow">Sun</div><div class="date">6 Sep</div></div>
+          </div>
+          <div class="all-day">
+            <div class="all-label">ALL DAY</div>
+            <div class="all-cell"></div>
+            <div class="all-cell"></div>
+            <div class="all-cell"><div class="milestone workitem" data-title="Validate v13.01" data-type="Milestone" data-time="All day" data-date="2 Sep 2026" data-link="Roadmap · Model reconciliation" data-location="—"><span class="diamond"></span><span>Validate v13.01</span></div></div>
+            <div class="all-cell"></div>
+            <div class="all-cell"><div class="deadline workitem" data-title="Prototype geometry approval" data-type="Deadline" data-time="All day" data-date="4 Sep 2026" data-link="Roadmap · Finalize tube geometry" data-location="—">Prototype geometry approval</div></div>
+            <div class="all-cell"></div><div class="all-cell"></div>
+          </div>
+          <div class="gridwrap" id="gridwrap">
+            <div class="timegrid" id="timegrid">
+              <div class="daycol" style="left:calc(58px + (100% - 58px)/7*1);width:calc((100% - 58px)/7)"></div>
+              <div class="daycol" style="left:calc(58px + (100% - 58px)/7*2);width:calc((100% - 58px)/7)"></div>
+              <div class="daycol" style="left:calc(58px + (100% - 58px)/7*3);width:calc((100% - 58px)/7)"></div>
+              <div class="daycol" style="left:calc(58px + (100% - 58px)/7*4);width:calc((100% - 58px)/7)"></div>
+              <div class="daycol today" style="left:calc(58px + (100% - 58px)/7*5);width:calc((100% - 58px)/7)"></div>
+              <div class="daycol" style="left:calc(58px + (100% - 58px)/7*6);width:calc((100% - 58px)/7)"></div>
+              <div class="daycol" style="left:calc(58px + (100% - 58px)/7*7);width:calc((100% - 58px)/7)"></div>
+              <div class="nowline" style="top:870px"><span class="nowtag">15:00</span></div>
+              <script>
+                for(let h=0;h<24;h++){document.write(`<div class="hour-label" style="grid-row:${h+1}">${String(h).padStart(2,'0')}:00</div>`) }
+              </script>
+
+              <div class="event review workitem" style="left:calc(58px + (100% - 58px)/7*2 + 6px);width:calc((100% - 58px)/7 - 12px);top:522px;height:116px" data-title="Review pressure-drop model" data-type="Review" data-time="09:00–11:00" data-date="1 Sep 2026" data-link="Roadmap · Hydraulic redesign" data-location="Desk / Process"><div class="etime">09:00–11:00</div><div class="etitle">Review pressure-drop model</div><div class="elink">↗ Hydraulic redesign</div></div>
+
+              <div class="event work workitem" style="left:calc(58px + (100% - 58px)/7*3 + 6px);width:calc((100% - 58px)/7 - 12px);top:812px;height:145px" data-title="Hydraulic redesign work session" data-type="Work session" data-time="14:00–16:30" data-date="2 Sep 2026" data-link="Roadmap · Hydraulic redesign" data-location="Process workspace"><div class="etime">14:00–16:30</div><div class="etitle">Hydraulic redesign work session</div><div class="elink">↗ Hydraulic redesign</div></div>
+
+              <div class="event call workitem" style="left:calc(58px + (100% - 58px)/7*4 + 6px);width:calc((100% - 58px)/7 - 12px);top:870px;height:58px" data-title="Supplier call" data-type="Call / Meeting" data-time="15:00–16:00" data-date="3 Sep 2026" data-link="Roadmap · Prototype fabrication" data-location="Teams"><div class="etime">15:00–16:00</div><div class="etitle">Supplier call</div><div class="elink">↗ Prototype fabrication</div></div>
+
+              <div class="event lab workitem" style="left:calc(58px + (100% - 58px)/7*5 + 6px);width:calc((100% - 58px)/7 - 12px);top:464px;height:174px" data-title="BLUECAD geometry session" data-type="Work session" data-time="08:00–11:00" data-date="4 Sep 2026" data-link="Roadmap · Finalize tube geometry" data-location="BLUECAD"><div class="etime">08:00–11:00</div><div class="etitle">BLUECAD geometry session</div><div class="elink">↗ Finalize tube geometry</div></div>
+
+              <div class="event critical workitem" style="left:calc(58px + (100% - 58px)/7*5 + 6px);width:calc((100% - 58px)/7 - 12px);top:754px;height:87px" data-title="Geometry approval review" data-type="Review" data-time="13:00–14:30" data-date="4 Sep 2026" data-link="Roadmap · Finalize tube geometry" data-location="Project review"><div class="etime">13:00–14:30</div><div class="etitle">Geometry approval review</div><div class="elink">↗ Finalize tube geometry</div></div>
+
+              <div class="event unavailable workitem" style="left:calc(58px + (100% - 58px)/7*6 + 6px);width:calc((100% - 58px)/7 - 12px);top:696px;height:116px" data-title="Unavailable" data-type="Personal / unavailable" data-time="12:00–14:00" data-date="5 Sep 2026" data-link="No roadmap link" data-location="—"><div class="etime">12:00–14:00</div><div class="etitle">Unavailable</div><div class="elink">Protected time</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="legend"><span><i class="dot work"></i>Work session</span><span><i class="dot call"></i>Call / meeting</span><span><i class="dot review"></i>Review</span><span><i class="dot lab"></i>Lab / technical</span><span><i class="dot unavailable"></i>Unavailable</span></div>
+      </section>
+
+      <aside class="rightstack">
+        <section class="panel jarvis">
+          <div class="jarvis-head"><h3><span class="accent-dot"></span>Jarvis</h3><div class="context">Context · Development / Roadmap / Calendar / Week</div></div>
+          <div class="jarvis-body">
+            <div class="bubble">Hydraulic redesign still needs about 5 hours before the 4 Sep geometry approval. You currently have 4.5 hours scheduled against it.</div>
+            <div class="promptlist"><div class="prompt">Find another 30 minutes for Hydraulic redesign this week.</div><div class="prompt">What becomes impossible if Thursday's supplier call slips?</div><div class="prompt">Show only time linked to Prototype fabrication.</div></div>
+            <div class="proposal"><div class="phead">Schedule proposal</div><p>Add 30 min on Fri 4 Sep, 11:30–12:00, linked to Hydraulic redesign.</p><div class="actions"><button class="btn">Inspect</button><button class="btn primary">Approve schedule</button></div></div>
+            <div class="composer"><span>Ask Jarvis about calendar…</span><button class="send">Send</button></div>
+          </div>
+        </section>
+        <section class="panel filters">
+          <div class="filter-head"><h3>Focus & filters</h3><div class="context">Presentation only · does not mutate calendar</div></div>
+          <div class="filter-body">
+            <div class="fgroup"><div class="flabel">Type</div><div class="checks"><button class="pill on">Work</button><button class="pill on">Calls</button><button class="pill on">Reviews</button><button class="pill on">Lab</button><button class="pill">Unavailable</button></div></div>
+            <div class="fgroup"><div class="flabel">Priority</div><div class="checks"><button class="pill on">Critical</button><button class="pill on">High</button><button class="pill on">Normal</button><button class="pill">Opportunity</button></div></div>
+            <div class="fgroup"><div class="flabel">Scope</div><div class="selectline"><select><option>All domains</option><option>Process</option><option>BLUECAD</option><option>Literature</option><option>Experimental</option></select><select><option>All roadmap links</option><option>Hydraulic redesign</option><option>Prototype fabrication</option></select></div></div>
+            <div class="fgroup"><div class="toggleline"><span>Only linked to Roadmap</span><span class="toggle on"></span></div><div class="toggleline"><span>Only uncompleted</span><span class="toggle on"></span></div><div class="toggleline"><span>Show protected time</span><span class="toggle"></span></div></div>
+            <button class="clear">Clear filters</button>
+          </div>
+        </section>
+      </aside>
+    </section>
+  </main>
+</div>
+
+<div class="popover" id="popover">
+  <div class="pop-head"><div><div class="pop-title" id="popTitle">Supplier call</div><div class="pop-meta" id="popMeta">Call / Meeting · 15:00–16:00</div></div><button class="closex" id="closePop">×</button></div>
+  <div class="pop-grid"><div class="pk">Date</div><div class="pv" id="popDate"></div><div class="pk">Roadmap</div><div class="pv" id="popLink"></div><div class="pk">Location</div><div class="pv" id="popLocation"></div><div class="pk">Reminder</div><div class="pv">15 min before</div></div>
+  <div class="pop-actions"><button class="openbtn">Open details</button><button class="roadmapbtn">Open roadmap item</button><button class="editbtn" id="editEvent">Edit</button><button class="deletebtn" id="deleteEvent">Delete</button></div>
+</div>
+
+<div class="backdrop" id="backdrop"></div>
+<div class="modal" id="modal">
+  <div class="modal-head"><div><h3 id="modalTitle">New calendar event</h3><p>Schedule actual project time. Link it to a Roadmap item when relevant.</p></div><button class="closex" id="closeModal">×</button></div>
+  <div class="modal-body">
+    <div class="formgrid">
+      <div class="field full"><label>Title</label><input id="fTitle" value="Supplier call"/></div>
+      <div class="field"><label>Type</label><select id="fType"><option>Work session</option><option selected>Call / Meeting</option><option>Experiment / Lab session</option><option>Review</option><option>Deadline</option><option>Reminder</option><option>Personal / unavailable</option></select></div>
+      <div class="field"><label>Priority</label><select><option>Critical</option><option selected>High</option><option>Normal</option><option>Opportunity</option></select></div>
+      <div class="field"><label>Date</label><input id="fDate" type="date" value="2026-09-03"/></div>
+      <div class="field"><label>Start</label><input id="fStart" type="time" value="15:00"/></div>
+      <div class="field"><label>End</label><input id="fEnd" type="time" value="16:00"/></div>
+      <div class="field"><label>Linked Roadmap item</label><select id="fLink"><option>None</option><option>Hydraulic redesign</option><option selected>Prototype fabrication</option><option>Finalize tube geometry</option></select></div>
+      <div class="field full"><label>Description</label><textarea>Discuss tube stock availability, lead time and compatible fittings for the first prototype loop.</textarea></div>
+    </div>
+    <button class="advanced-toggle" id="advancedToggle">Advanced ▸</button>
+    <div class="advanced" id="advanced"><div class="formgrid">
+      <div class="field"><label>Domain</label><select><option>Process</option><option>BLUECAD</option><option>Experimental</option><option selected>Manufacturing</option><option>General</option></select></div>
+      <div class="field"><label>Location / meeting link</label><input value="Teams"/></div>
+      <div class="field full"><label>Participants</label><input value="Supplier contact · Alex"/></div>
+      <div class="field"><label>Reminder</label><select><option>None</option><option selected>15 minutes before</option><option>30 minutes before</option><option>1 hour before</option><option>1 day before</option></select></div>
+      <div class="field"><label>Done when</label><input value="Lead time and tube specification confirmed"/></div>
+      <div class="field full"><label>Tags</label><div class="chipsel"><span class="choice on">supplier</span><span class="choice on">prototype</span><span class="choice">critical-path</span><span class="choice">call</span></div></div>
+    </div></div>
+  </div>
+  <div class="modal-foot"><button class="cancel" id="cancelModal">Cancel</button><button class="save" id="saveEvent">Add to calendar</button></div>
+</div>
+<div class="toast" id="toast">Calendar event updated.</div>
+<script>
+const pop=document.getElementById('popover'),modal=document.getElementById('modal'),back=document.getElementById('backdrop'),toast=document.getElementById('toast');let current=null;let editMode=false;
+function showToast(msg){toast.textContent=msg;toast.classList.add('show');setTimeout(()=>toast.classList.remove('show'),1400)}
+function bindItems(){document.querySelectorAll('.workitem').forEach(el=>el.onclick=e=>{e.stopPropagation();current=el;document.getElementById('popTitle').textContent=el.dataset.title;document.getElementById('popMeta').textContent=`${el.dataset.type} · ${el.dataset.time}`;document.getElementById('popDate').textContent=el.dataset.date;document.getElementById('popLink').textContent=el.dataset.link;document.getElementById('popLocation').textContent=el.dataset.location;const r=el.getBoundingClientRect();pop.style.left=Math.min(r.right+8,window.innerWidth-316)+'px';pop.style.top=Math.min(r.top,window.innerHeight-225)+'px';pop.classList.add('show')})}bindItems();
+document.addEventListener('click',e=>{if(!pop.contains(e.target))pop.classList.remove('show')});document.getElementById('closePop').onclick=()=>pop.classList.remove('show');
+function openModal(mode){editMode=mode==='edit';document.getElementById('modalTitle').textContent=editMode?'Edit calendar event':'New calendar event';document.getElementById('saveEvent').textContent=editMode?'Save changes':'Add to calendar';if(editMode&&current){document.getElementById('fTitle').value=current.dataset.title}back.classList.add('show');modal.classList.add('show');pop.classList.remove('show')}
+document.getElementById('addEvent').onclick=()=>openModal('new');document.getElementById('editEvent').onclick=()=>openModal('edit');function closeModal(){back.classList.remove('show');modal.classList.remove('show')}document.getElementById('closeModal').onclick=closeModal;document.getElementById('cancelModal').onclick=closeModal;back.onclick=closeModal;
+document.getElementById('advancedToggle').onclick=()=>{const a=document.getElementById('advanced');a.classList.toggle('show');document.getElementById('advancedToggle').textContent=a.classList.contains('show')?'Advanced ▾':'Advanced ▸'};
+document.getElementById('saveEvent').onclick=()=>{showToast(editMode?'Calendar event updated.':'Calendar event added.');closeModal()};document.getElementById('deleteEvent').onclick=()=>{if(current){current.style.opacity='.18';current.style.pointerEvents='none';pop.classList.remove('show');showToast('Calendar event deleted.')}};
+document.querySelectorAll('.pill,.toggle').forEach(x=>x.addEventListener('click',()=>x.classList.toggle('on')));
+window.addEventListener('load',()=>{document.getElementById('gridwrap').scrollTop=390});
+</script>
+</body>
+</html>

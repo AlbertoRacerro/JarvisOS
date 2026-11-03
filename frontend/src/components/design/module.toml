@@ -1,0 +1,4 @@
+purpose = "Design workspace pieces: component tree, splitter, node status and labels."
+status = "live"
+entrypoints = ["DesignComponentTree.tsx"]
+owner = "maintainer"

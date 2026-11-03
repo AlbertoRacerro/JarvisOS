@@ -1,0 +1,180 @@
+/* 100f final shared-shell overlay.
+ * The eleven canonical operator references use a rail-only shell with the
+ * screen-local heading/tabs inside the workspace. Normal final routes therefore
+ * suppress the legacy global top bar instead of stacking a second header above
+ * the normative composition. Compatibility/diagnostic routes keep the old shell.
+ */
+.application-shell--final {
+  /* 161: one shared Jarvis width for the shell Sidecar and in-page Jarvis
+   * columns (~345 px at 1440 CSS px), and a narrower rail. */
+  --shell-rail-width: 140px;
+  --jarvis-width: clamp(300px, 24vw, 420px);
+  grid-template-columns: var(--shell-rail-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "rail workspace"
+    "rail dock";
+  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--color-bg-canvas);
+  font-family: "Inter Display", "Inter", "Instrument Sans", "Segoe UI", Arial, sans-serif;
+}
+
+.application-shell--final .shell-topbar {
+  display: none;
+}
+
+.application-shell--final .shell-rail {
+  padding: 20px 9px 12px;
+  gap: 23px;
+  background: var(--color-bg-shell);
+  border-inline-end-color: var(--color-border-default);
+}
+
+.application-shell--final .shell-rail__identity {
+  gap: 4px;
+  padding-inline: 4px;
+}
+
+.application-shell--final .shell-rail__identity strong {
+  font-size: var(--font-size-body);
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.application-shell--final .shell-rail__identity span {
+  display: none;
+}
+
+.application-shell--final .shell-rail__links {
+  gap: 2px;
+}
+
+.application-shell--final .shell-nav-link {
+  min-height: 36px;
+  padding: 9px 10px;
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+  text-decoration: none;
+}
+
+.application-shell--final .shell-nav-link:hover {
+  background: var(--color-bg-surface-raised);
+  border-color: var(--color-border-default);
+}
+
+.application-shell--final .shell-nav-link[aria-current] {
+  color: var(--color-text-primary);
+  background: var(--color-bg-surface-raised);
+  border-color: var(--color-accent-foreground);
+  box-shadow: inset var(--space-1) 0 0 var(--color-accent-foreground);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.application-shell--final .shell-workspace {
+  min-height: 0;
+  height: 100vh;
+  align-items: stretch;
+  overflow: hidden;
+  background: var(--color-bg-canvas);
+}
+
+.application-shell--final .shell-main {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  padding: 16px 16px 18px;
+}
+
+.application-shell--final .shell-main > * {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.application-shell--final .shell-sidecar,
+.application-shell--final .shell-navigator {
+  align-self: stretch;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+}
+
+/* 161: closing a shell region leaves a slim, labelled, keyboard-reachable tab
+ * on the current screen instead of requiring navigation to reopen it. */
+.application-shell--final .shell-reopen {
+  align-self: start;
+  margin: 12px 0 0;
+  padding: 10px 6px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-surface-raised);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(60, 58, 41, .06);
+}
+.application-shell--final .shell-reopen span { writing-mode: vertical-rl; letter-spacing: .02em; }
+.application-shell--final .shell-reopen:hover,
+.application-shell--final .shell-reopen:focus-visible { border-color: color-mix(in srgb, var(--color-accent-border-strong) 65%, transparent); color: var(--color-text-primary); }
+.application-shell--final .shell-reopen--navigator { grid-column: 1; border-inline-start: 0; border-radius: 0 6px 6px 0; }
+.application-shell--final .shell-reopen--sidecar { grid-column: 3; border-inline-end: 0; border-radius: 6px 0 0 6px; }
+
+/* Process/BLUECAD approved 1365×768 references use a slightly tighter main
+ * inset while retaining the same 170 px rail. */
+@media (max-width: 1400px) {
+  .application-shell--final .shell-main {
+    padding: 12px 14px 16px;
+  }
+}
+
+@media (max-width: 760px) {
+  .application-shell--final {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "rail"
+      "workspace"
+      "dock";
+  }
+
+  .application-shell--final .shell-rail {
+    min-height: auto;
+    border-inline-end: 0;
+    border-block-end: 1px solid var(--color-border-default);
+  }
+
+  .application-shell--final .shell-rail__links {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .application-shell--final .shell-reopen {
+    grid-column: 1;
+    flex-direction: row;
+    justify-content: center;
+    margin: 8px 12px 0;
+    border-radius: 6px;
+    border: 1px solid var(--color-border-default);
+  }
+  .application-shell--final .shell-reopen span { writing-mode: horizontal-tb; }
+
+  .application-shell--final .shell-workspace,
+  .application-shell--final .shell-main {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+}

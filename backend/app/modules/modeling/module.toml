@@ -1,0 +1,4 @@
+purpose = "Model specs, dossiers, assumptions, parameters (with lifecycle), requirements and decisions: the project's modeling records."
+status = "live"
+entrypoints = ["/workspaces/{id}/model-specs", "/workspaces/{id}/parameters", "/workspaces/{id}/model-dossiers"]
+owner = "maintainer"

@@ -1,0 +1,4 @@
+purpose = "Operator surfaces shared across workspaces: workspace header, settings surface, project archive, knowledge and search panels."
+status = "live"
+entrypoints = ["FinalWorkspaceHeader.tsx", "FinalSettingsSurface.tsx"]
+owner = "maintainer"

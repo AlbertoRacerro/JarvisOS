@@ -1,0 +1,65 @@
+{
+  "build123d_version": "0.11.1",
+  "fixtures": [
+    {
+      "dimensions_mm": {
+        "height": 10.0,
+        "length": 200.0,
+        "width": 10.0
+      },
+      "files": {
+        "manifest": {
+          "path": "cantilever/manifest.json",
+          "sha256": "2929a97f42cc09f71f37cf6911e1e70db61296fbc7ec476931571ab17130db04"
+        },
+        "step": {
+          "path": "cantilever/model.step",
+          "sha256": "b32fb1a1ef683feec7a2c077e62e1e234511a2d04b7c0e1657f6f407109f083f"
+        }
+      },
+      "name": "cantilever"
+    },
+    {
+      "dimensions_mm": {
+        "bore_band_count": 8,
+        "bore_band_length": 20.0,
+        "inner_radius": 20.0,
+        "length": 160.0,
+        "outer_radius": 40.0,
+        "selection_half_side": 20.5
+      },
+      "files": {
+        "manifest": {
+          "path": "segmented_cylinder/manifest.json",
+          "sha256": "20dd9f4652c753305b0bcc85cbfd60b00e34c7ac893b4a842b57d3604bbfb71e"
+        },
+        "step": {
+          "path": "segmented_cylinder/model.step",
+          "sha256": "94725a0fce831e71029f9f55c047d4f5112adf2bc7f883ba1e874d839813bd62"
+        }
+      },
+      "name": "segmented_cylinder"
+    },
+    {
+      "dimensions_mm": {
+        "hole_diameter": 20.0,
+        "length": 200.0,
+        "thickness": 5.0,
+        "width": 100.0
+      },
+      "files": {
+        "manifest": {
+          "path": "plate_with_hole/manifest.json",
+          "sha256": "d354d99205ff4c49e630c37a7d359d0f3988e0d93b2057f764e850fc0e780d30"
+        },
+        "step": {
+          "path": "plate_with_hole/model.step",
+          "sha256": "35ae39f0b95cb57ddee9d7b853a2166f5755cd33f2f7d936dbe3756968153e43"
+        }
+      },
+      "name": "plate_with_hole"
+    }
+  ],
+  "generator_version": "bluecad_fem_verification_fixtures_v0_1",
+  "schema_version": "bluecad_fem_verification_fixture_index_v0_1"
+}

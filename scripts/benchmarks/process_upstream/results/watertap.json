@@ -1,0 +1,14 @@
+{
+  "candidate": "watertap",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "BSD-3-Clause",
+  "measurements": {
+    "imported": true,
+    "ipopt_available": true
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "1.7.0",
+  "wall_time_s": 0.001587
+}

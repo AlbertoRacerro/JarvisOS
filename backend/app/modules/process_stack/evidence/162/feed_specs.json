@@ -1,0 +1,2358 @@
+{
+ "cases": {
+  "invalid_spec_type": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "properties": {
+       "SpecType": "Bogus"
+      }
+     },
+     "response": {
+      "__error__": "{\"error\":\"'Bogus' is not a valid StreamSpec. Use one of: Temperature_and_Pressure, Pressure_and_Enthalpy, Pressure_and_Entropy, Pressure_and_VaporFraction, Temperature_and_VaporFraction, Pressure_and_SolidFraction, Volume_and_Temperature, Volume_and_Enthalpy, Volume_and_Entropy.\",\"type\":\"ArgumentException\"}",
+      "structured": null
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ]
+  },
+  "mass_and_molar_in_add": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "mass_flow_kg_s": 1.5,
+      "molar_flow_mol_s": 40.0,
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    }
+   ]
+  },
+  "mass_flow_in_add": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "mass_flow_kg_s": 1.5,
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    }
+   ]
+  },
+  "mass_flow_set_conditions": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.5,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 62.98169221975511,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.5,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.5,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 62.98169221975511,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "mass_flow_kg_s": 1.5
+     },
+     "response": {
+      "updated": "F"
+     },
+     "tool": "dwsim_stream_set_conditions"
+    }
+   ]
+  },
+  "molar_flow_in_add": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "molar_flow_mol_s": 40.0,
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    }
+   ]
+  },
+  "molar_flow_set_conditions": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 0.9526577944372879,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 40.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 0.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 40.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mole",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 0.9526577944372879,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 39.99999999999999,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "molar_flow_mol_s": 40.0
+     },
+     "response": {
+      "updated": "F"
+     },
+     "tool": "dwsim_stream_set_conditions"
+    }
+   ]
+  },
+  "molar_flow_then_vapor_fraction": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 0.9526577944372879,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 40.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 359.55295642625276,
+    "vapor_fraction": 0.3
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 0.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 40.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 298.15,
+    "vapor_fraction": 0.3
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mole",
+    "SpecType": "Pressure_and_VaporFraction"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 0.9526577944372879,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 39.99999999999999,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "pressure_Pa": 101325.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "molar_flow_mol_s": 40.0
+     },
+     "response": {
+      "updated": "F"
+     },
+     "tool": "dwsim_stream_set_conditions"
+    },
+    {
+     "args": {
+      "properties": {
+       "PROP_MS_27": 0.3,
+       "SpecType": "Pressure_and_VaporFraction"
+      }
+     },
+     "response": {
+      "applied": [
+       "SpecType = Pressure_and_VaporFraction",
+       "PROP_MS_27 = 0.3"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ]
+  },
+  "molar_flow_unitop_PROP_MS_3": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 0.2646271651214689,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 11.11111111111111,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 0.2646271651214689,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 11.11111111111111,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mole",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 0.2646271651214689,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 11.11111111111111,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "properties": {
+       "PROP_MS_3": 40.0
+      }
+     },
+     "response": {
+      "applied": [
+       "PROP_MS_3 = 40"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ]
+  },
+  "molar_then_mass_set_conditions": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 2.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 83.97558962634014,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 2.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 2.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 83.97558962634014,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "molar_flow_mol_s": 40.0
+     },
+     "response": {
+      "updated": "F"
+     },
+     "tool": "dwsim_stream_set_conditions"
+    },
+    {
+     "args": {
+      "mass_flow_kg_s": 2.0
+     },
+     "response": {
+      "updated": "F"
+     },
+     "tool": "dwsim_stream_set_conditions"
+    }
+   ]
+  },
+  "mole_fractions_PROP_MS_102": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 31.20917449860901,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 31.20917449860901,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "mass_flow_kg_s": 1.0,
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "properties": {
+       "PROP_MS_102/Ethanol": 0.5,
+       "PROP_MS_102/Water": 0.5
+      }
+     },
+     "response": {
+      "applied": [
+       "PROP_MS_102/Water = 0.5",
+       "PROP_MS_102/Ethanol = 0.5"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ]
+  },
+  "mole_fractions_mass_flow_vapor_fraction": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.5,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 46.81376174791351,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 353.3847247448506,
+    "vapor_fraction": 0.3
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.5,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 298.15,
+    "vapor_fraction": 0.3
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Pressure_and_VaporFraction"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.5,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 46.81376174791351,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "pressure_Pa": 101325.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "properties": {
+       "PROP_MS_102/Ethanol": 0.5,
+       "PROP_MS_102/Water": 0.5
+      }
+     },
+     "response": {
+      "applied": [
+       "PROP_MS_102/Water = 0.5",
+       "PROP_MS_102/Ethanol = 0.5"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "mass_flow_kg_s": 1.5
+     },
+     "response": {
+      "updated": "F"
+     },
+     "tool": "dwsim_stream_set_conditions"
+    },
+    {
+     "args": {
+      "properties": {
+       "PROP_MS_27": 0.3,
+       "SpecType": "Pressure_and_VaporFraction"
+      }
+     },
+     "response": {
+      "applied": [
+       "SpecType = Pressure_and_VaporFraction",
+       "PROP_MS_27 = 0.3"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ]
+  },
+  "mole_fractions_then_mass_set_conditions": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.5,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 46.81376174791351,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.5,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.5,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 46.81376174791351,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "properties": {
+       "PROP_MS_102/Ethanol": 0.5,
+       "PROP_MS_102/Water": 0.5
+      }
+     },
+     "response": {
+      "applied": [
+       "PROP_MS_102/Water = 0.5",
+       "PROP_MS_102/Ethanol = 0.5"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "mass_flow_kg_s": 1.5
+     },
+     "response": {
+      "updated": "F"
+     },
+     "tool": "dwsim_stream_set_conditions"
+    }
+   ]
+  },
+  "mole_fractions_then_molar_flow": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.2816743999999998,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 40.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 0.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 40.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mole",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.2816743999999998,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.7188789914193496,
+      "mole_fraction": 0.5
+     },
+     "Water": {
+      "mass_fraction": 0.2811210085806504,
+      "mole_fraction": 0.5
+     }
+    },
+    "molar_flow_mol_s": 39.99999999999999,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "properties": {
+       "PROP_MS_102/Ethanol": 0.5,
+       "PROP_MS_102/Water": 0.5
+      }
+     },
+     "response": {
+      "applied": [
+       "PROP_MS_102/Water = 0.5",
+       "PROP_MS_102/Ethanol = 0.5"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "molar_flow_mol_s": 40.0
+     },
+     "response": {
+      "updated": "F"
+     },
+     "tool": "dwsim_stream_set_conditions"
+    }
+   ]
+  },
+  "no_flow_given": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    }
+   ]
+  },
+  "vapor_fraction_PROP_MS_27_spec_PVF_after_flow": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 359.55295642625276,
+    "vapor_fraction": 0.3
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 298.15,
+    "vapor_fraction": 0.3
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Pressure_and_VaporFraction"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "mass_flow_kg_s": 2.0,
+      "pressure_Pa": 101325.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "properties": {
+       "PROP_MS_27": 0.3,
+       "SpecType": "Pressure_and_VaporFraction"
+      }
+     },
+     "response": {
+      "applied": [
+       "SpecType = Pressure_and_VaporFraction",
+       "PROP_MS_27 = 0.3"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ]
+  },
+  "vapor_fraction_PROP_MS_27_then_set_conditions": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 0.9526577944372879,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 40.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 359.55295642625276,
+    "vapor_fraction": 0.3
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 0.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 40.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 298.15,
+    "vapor_fraction": 0.3
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mole",
+    "SpecType": "Pressure_and_VaporFraction"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 0.9526577944372879,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 39.99999999999999,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "pressure_Pa": 101325.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "properties": {
+       "PROP_MS_27": 0.3,
+       "SpecType": "Pressure_and_VaporFraction"
+      }
+     },
+     "response": {
+      "applied": [
+       "SpecType = Pressure_and_VaporFraction",
+       "PROP_MS_27 = 0.3"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    },
+    {
+     "args": {
+      "molar_flow_mol_s": 40.0
+     },
+     "response": {
+      "updated": "F"
+     },
+     "tool": "dwsim_stream_set_conditions"
+    }
+   ]
+  },
+  "vapor_fraction_in_add_only": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 298.15,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 298.15,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "mass_flow_kg_s": 2.0,
+      "pressure_Pa": 101325.0,
+      "vapor_fraction": 0.3
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    }
+   ]
+  },
+  "vapor_fraction_in_add_spec_PVF": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 356.07149519248827,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 298.15,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Pressure_and_VaporFraction"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "mass_flow_kg_s": 2.0,
+      "pressure_Pa": 101325.0,
+      "vapor_fraction": 0.3
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "properties": {
+       "SpecType": "Pressure_and_VaporFraction"
+      }
+     },
+     "response": {
+      "applied": [
+       "SpecType = Pressure_and_VaporFraction"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ]
+  },
+  "zero_mass_in_add": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "mass_flow_kg_s": 0.0,
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    }
+   ]
+  },
+  "zero_mass_set_conditions": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [],
+    "findings": [],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 0
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 1.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 41.98779481317007,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "mass_flow_kg_s": 0.0
+     },
+     "response": {
+      "updated": "F"
+     },
+     "tool": "dwsim_stream_set_conditions"
+    }
+   ]
+  },
+  "zero_mass_unitop_PROP_MS_2": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [
+     {
+      "code": "FEED_NO_FLOW",
+      "how_to_fix": "Enter a mass, molar or volumetric flow. One basis is enough; the others follow.",
+      "learn_more": "https://dwsim.org/tutorials/en/beginner/01-your-first-simulation.html",
+      "meaning": "A feed stream carries no material, so everything downstream of it is empty.",
+      "title": "Feed without a flow",
+      "why": "Flow is the extensive variable of a stream. The state (temperature, pressure, composition) says what the material is; the flow says how much of it. Zero flow gives zero duties and zero products everywhere downstream, with no error."
+     }
+    ],
+    "findings": [
+     {
+      "code": "FEED_NO_FLOW",
+      "fix": "Set a mass or a molar flow.",
+      "learn_more": "https://dwsim.org/tutorials/en/beginner/01-your-first-simulation.html",
+      "message": "This feed carries no flow, so everything downstream of it will be empty.",
+      "object": "F",
+      "severity": "warning"
+     }
+    ],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 1
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 0.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 0.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mass",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 0.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "properties": {
+       "PROP_MS_2": 0.0
+      }
+     },
+     "response": {
+      "applied": [
+       "PROP_MS_2 = 0"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ]
+  },
+  "zero_molar_unitop_PROP_MS_3": {
+   "check": {
+    "blockers": 0,
+    "compound_count": 2,
+    "explanations": [
+     {
+      "code": "FEED_NO_FLOW",
+      "how_to_fix": "Enter a mass, molar or volumetric flow. One basis is enough; the others follow.",
+      "learn_more": "https://dwsim.org/tutorials/en/beginner/01-your-first-simulation.html",
+      "meaning": "A feed stream carries no material, so everything downstream of it is empty.",
+      "title": "Feed without a flow",
+      "why": "Flow is the extensive variable of a stream. The state (temperature, pressure, composition) says what the material is; the flow says how much of it. Zero flow gives zero duties and zero products everywhere downstream, with no error."
+     }
+    ],
+    "findings": [
+     {
+      "code": "FEED_NO_FLOW",
+      "fix": "Set a mass or a molar flow.",
+      "learn_more": "https://dwsim.org/tutorials/en/beginner/01-your-first-simulation.html",
+      "message": "This feed carries no flow, so everything downstream of it will be empty.",
+      "object": "F",
+      "severity": "warning"
+     }
+    ],
+    "object_count": 3,
+    "ready": true,
+    "warnings": 1
+   },
+   "feed_after_solve": {
+    "mass_flow_kg_s": 0.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "feed_before_solve": {
+    "mass_flow_kg_s": 0.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.4,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 330.0,
+    "vapor_fraction": 0.0
+   },
+   "native_feed_before_solve": {
+    "CompositionBasis": "Molar_Fractions",
+    "DefinedFlow": "Mole",
+    "SpecType": "Temperature_and_Pressure"
+   },
+   "product_after_solve": {
+    "mass_flow_kg_s": 0.0,
+    "mixture": {
+     "Ethanol": {
+      "mass_fraction": 0.39999999999999997,
+      "mole_fraction": 0.20679185022051713
+     },
+     "Water": {
+      "mass_fraction": 0.6000000000000001,
+      "mole_fraction": 0.7932081497794828
+     }
+    },
+    "molar_flow_mol_s": 0.0,
+    "pressure_Pa": 101325.0,
+    "temperature_K": 380.0,
+    "vapor_fraction": 1.0
+   },
+   "solve": {
+    "error_count": 0,
+    "errors": [],
+    "ok": true
+   },
+   "steps": [
+    {
+     "args": {
+      "composition": {
+       "Ethanol": 0.4,
+       "Water": 0.6
+      },
+      "pressure_Pa": 101325.0,
+      "temperature_K": 330.0
+     },
+     "response": {
+      "stream": "F",
+      "type": "MaterialStream"
+     },
+     "tool": "dwsim_stream_add_material"
+    },
+    {
+     "args": {
+      "properties": {
+       "PROP_MS_3": 0.0
+      }
+     },
+     "response": {
+      "applied": [
+       "PROP_MS_3 = 0"
+      ],
+      "unitop": "F"
+     },
+     "tool": "dwsim_unitop_set"
+    }
+   ]
+  }
+ },
+ "composition_input": {
+  "Ethanol": 0.4,
+  "Water": 0.6
+ },
+ "runtime_sha256": "d20f97426c264ac91114240b085b3c4e7877dfda83ecb487c0125f838cf66cfa",
+ "tool_schemas": {
+  "dwsim_stream_add_material": {
+   "properties": {
+    "composition": {
+     "description": "Composition as {compound: mass_fraction} object",
+     "type": "object"
+    },
+    "flowsheet_id": {
+     "description": "Flowsheet handle",
+     "type": "string"
+    },
+    "mass_flow_kg_s": {
+     "description": "Mass flow in kg/s",
+     "type": "number"
+    },
+    "molar_flow_mol_s": {
+     "description": "Molar flow in mol/s",
+     "type": "number"
+    },
+    "name": {
+     "description": "Tag/name for the stream",
+     "type": "string"
+    },
+    "pressure_Pa": {
+     "description": "Pressure in Pascal",
+     "type": "number"
+    },
+    "temperature_K": {
+     "description": "Temperature in Kelvin",
+     "type": "number"
+    },
+    "vapor_fraction": {
+     "description": "Vapor fraction (0-1)",
+     "type": "number"
+    }
+   },
+   "required": [
+    "flowsheet_id",
+    "name"
+   ],
+   "type": "object"
+  },
+  "dwsim_stream_set_conditions": {
+   "properties": {
+    "composition": {
+     "description": "Composition as {compound: mass_fraction} object",
+     "type": "object"
+    },
+    "flowsheet_id": {
+     "description": "Flowsheet handle",
+     "type": "string"
+    },
+    "mass_flow_kg_s": {
+     "description": "Mass flow in kg/s",
+     "type": "number"
+    },
+    "molar_flow_mol_s": {
+     "description": "Molar flow in mol/s",
+     "type": "number"
+    },
+    "name": {
+     "description": "Stream tag/name",
+     "type": "string"
+    },
+    "pressure_Pa": {
+     "description": "Pressure in Pascal",
+     "type": "number"
+    },
+    "temperature_K": {
+     "description": "Temperature in Kelvin",
+     "type": "number"
+    }
+   },
+   "required": [
+    "flowsheet_id",
+    "name"
+   ],
+   "type": "object"
+  }
+ }
+}

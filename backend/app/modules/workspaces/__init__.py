@@ -1,0 +1,2 @@
+"""Workspace module boundary."""
+

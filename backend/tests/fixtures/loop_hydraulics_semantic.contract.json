@@ -1,0 +1,120 @@
+{
+  "schema_version": 3,
+  "evaluation_mode": "forward",
+  "semantic_context": {
+    "applicable_part_kinds": ["tube_run"],
+    "model_family_key": "geometry_hydraulics",
+    "model_family_label": "Geometry and hydraulics model",
+    "model_option_label": "Reviewed 047 tubular-loop V0"
+  },
+  "variables": [
+    {
+      "name": "tube_length",
+      "label": "Tube length",
+      "unit": "m",
+      "physical_dimension": "length",
+      "required": true,
+      "category": "design",
+      "property_group": "Geometry",
+      "applicable_part_kinds": ["tube_run"],
+      "description": "Total hydraulic tube length used by the reviewed 047 model.",
+      "domain": {"exclusive_min": 0.0}
+    },
+    {
+      "name": "tube_inner_diameter",
+      "label": "Tube inner diameter",
+      "unit": "mm",
+      "physical_dimension": "length",
+      "required": true,
+      "category": "design",
+      "property_group": "Geometry",
+      "applicable_part_kinds": ["tube_run"],
+      "description": "Tube hydraulic inner diameter used by the reviewed 047 model.",
+      "domain": {"exclusive_min": 0.0}
+    },
+    {
+      "name": "tube_outer_diameter",
+      "label": "Tube outer diameter",
+      "unit": "mm",
+      "physical_dimension": "length",
+      "required": true,
+      "category": "design",
+      "property_group": "Geometry",
+      "applicable_part_kinds": ["tube_run"],
+      "description": "Tube outer diameter used by the reviewed 047 illuminated-area proxy.",
+      "domain": {"exclusive_min": 0.0}
+    },
+    {
+      "name": "reservoir_liquid_volume",
+      "label": "Reservoir liquid volume",
+      "unit": "L",
+      "physical_dimension": "volume",
+      "required": true,
+      "category": "design",
+      "property_group": "Model configuration",
+      "applicable_part_kinds": [],
+      "description": "Caller-owned reservoir liquid volume used by the reviewed 047 model.",
+      "domain": {"min": 0.0}
+    },
+    {
+      "name": "target_liquid_velocity",
+      "label": "Target liquid velocity",
+      "unit": "m/s",
+      "physical_dimension": "velocity",
+      "required": true,
+      "category": "operating",
+      "property_group": "Operating",
+      "applicable_part_kinds": [],
+      "description": "Imposed tube liquid velocity for the acyclic 047 computational cut.",
+      "domain": {"exclusive_min": 0.0}
+    },
+    {
+      "name": "liquid_density",
+      "label": "Liquid density",
+      "unit": "kg/m3",
+      "physical_dimension": "density",
+      "required": true,
+      "category": "property",
+      "property_group": "Properties",
+      "applicable_part_kinds": [],
+      "description": "Caller-supplied liquid density; no property package is implied.",
+      "domain": {"exclusive_min": 0.0}
+    },
+    {
+      "name": "dynamic_viscosity",
+      "label": "Dynamic viscosity",
+      "unit": "Pa*s",
+      "physical_dimension": "dynamic_viscosity",
+      "required": true,
+      "category": "property",
+      "property_group": "Properties",
+      "applicable_part_kinds": [],
+      "description": "Caller-supplied dynamic viscosity; no property package is implied.",
+      "domain": {"exclusive_min": 0.0}
+    },
+    {
+      "name": "minor_loss_coefficient",
+      "label": "Minor loss coefficient",
+      "unit": "1",
+      "physical_dimension": "dimensionless",
+      "required": true,
+      "category": "model_parameter",
+      "property_group": "Model parameters",
+      "applicable_part_kinds": [],
+      "description": "Aggregate dimensionless minor-loss coefficient used by the reviewed 047 model.",
+      "domain": {"min": 0.0}
+    },
+    {
+      "name": "pump_efficiency",
+      "label": "Pump efficiency",
+      "unit": "1",
+      "physical_dimension": "dimensionless",
+      "required": true,
+      "category": "equipment",
+      "property_group": "Equipment",
+      "applicable_part_kinds": [],
+      "description": "Dimensionless pump efficiency used to convert hydraulic to electric power.",
+      "domain": {"exclusive_min": 0.0, "max": 1.0}
+    }
+  ]
+}

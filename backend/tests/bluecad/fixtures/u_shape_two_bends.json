@@ -1,0 +1,77 @@
+{
+  "connections": [
+    {
+      "from": "run1.port_b",
+      "to": "bend1.port_a"
+    },
+    {
+      "from": "bend1.port_b",
+      "to": "bend2.port_a"
+    }
+  ],
+  "declared": {
+    "bbox_mm": {
+      "abs_tol": 5.0,
+      "max": [
+        540.0,
+        540.0,
+        40.0
+      ],
+      "min": [
+        0.0,
+        -40.0,
+        -40.0
+      ]
+    },
+    "min_wall_t": 3.0,
+    "total_volume_mm3": {
+      "rel_tol": 0.001,
+      "value": 1502793.259815442
+    }
+  },
+  "name": "u_shape_two_bends",
+  "parts": [
+    {
+      "frame": {
+        "direction": [
+          1,
+          0,
+          0
+        ],
+        "origin": [
+          0,
+          0,
+          0
+        ]
+      },
+      "kind": "tube_run",
+      "params": {
+        "length": 500.0,
+        "outer_d": 80.0,
+        "wall_t": 3.0
+      },
+      "part_id": "run1"
+    },
+    {
+      "kind": "bend",
+      "params": {
+        "angle": 3.141592653589793,
+        "bend_radius": 250.0,
+        "outer_d": 80.0,
+        "wall_t": 3.0
+      },
+      "part_id": "bend1"
+    },
+    {
+      "kind": "bend",
+      "params": {
+        "angle": 3.141592653589793,
+        "bend_radius": 250.0,
+        "outer_d": 80.0,
+        "wall_t": 3.0
+      },
+      "part_id": "bend2"
+    }
+  ],
+  "spec_version": "bluecad_geometry_spec_v0_1"
+}

@@ -1,0 +1,4 @@
+purpose = "Engineering properties panel, Jarvis engineering actions and previous-run loading."
+status = "live"
+entrypoints = ["EngineeringProperties.tsx"]
+owner = "maintainer"

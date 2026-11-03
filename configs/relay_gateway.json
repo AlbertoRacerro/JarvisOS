@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "enabled": false,
+  "repository": {
+    "level": "S1",
+    "note": "JarvisOS v1 is open source, so its source is cloud-safe. A proprietary successor sets S2 or higher: agents then get a derivative workspace without source."
+  },
+  "private_domain_data": {
+    "enabled": false,
+    "sandbox_isolation_accepted": false,
+    "note": "Pre-IP gate. Before any strategic/private domain data is populated into JarvisOS, Relay sandbox hardening and isolation acceptance must be completed and made mandatory. While enabled is false the sandbox is used but its hardening is not a release blocker. enabled=true without sandbox_isolation_accepted=true makes the gateway refuse every run."
+  },
+  "escalation_agent": "claude",
+  "agents": {
+    "claude": {
+      "command": "claude",
+      "model": "claude-opus-5-5",
+      "credentials": [".claude/.credentials.json"],
+      "egress": ["api.anthropic.com", "mcp-proxy.anthropic.com", "platform.claude.com", "claude.ai"],
+      "environment": {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1"},
+      "sandbox_args": ["--permission-mode", "bypassPermissions"]
+    },
+    "codex": {
+      "command": "codex",
+      "credentials": [".codex/auth.json"],
+      "egress": ["chatgpt.com", "api.openai.com", "auth.openai.com"],
+      "environment": {}
+    }
+  },
+  "common_egress": [
+    "github.com",
+    "api.github.com",
+    "codeload.github.com",
+    "objects.githubusercontent.com",
+    "raw.githubusercontent.com",
+    "registry.npmjs.org",
+    "pypi.org",
+    "files.pythonhosted.org"
+  ],
+  "dependency_mounts": [
+    {"source": "backend/.venv", "target": "backend/.venv"},
+    {"source": "frontend/node_modules", "target": "frontend/node_modules"}
+  ],
+  "stable_context_dir": "docs/relay-context",
+  "max_turns": 10,
+  "run_timeout_seconds": 3600,
+  "result_max_chars": 20000
+}

@@ -1,0 +1,4 @@
+purpose = "Isolated execution of explicitly submitted engineering Python (bubblewrap sandbox)."
+status = "live"
+entrypoints = ["/studio/runtime", "runtime.py"]
+owner = "maintainer"

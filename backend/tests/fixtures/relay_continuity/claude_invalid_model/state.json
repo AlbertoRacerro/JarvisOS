@@ -1,0 +1,7 @@
+{
+ "agent_key": "claude",
+ "status": "continue",
+ "turn_number": 1,
+ "kind": "relay_resumable_state",
+ "summary": "<coordinator narrative removed from fixture>"
+}

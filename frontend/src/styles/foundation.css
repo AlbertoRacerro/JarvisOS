@@ -1,0 +1,543 @@
+/* Spec 070 semantic migration layered after the legacy stylesheet. */
+:root {
+  font-family: var(--font-sans);
+  /* Keep rem tokens anchored to the browser preference: body size is not the root size. */
+  font-size: 100%;
+  line-height: var(--line-height-body);
+  color: var(--color-text-primary);
+  background: var(--color-bg-canvas);
+}
+
+body {
+  font-size: var(--font-size-body);
+  font-variant-numeric: tabular-nums;
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+}
+
+button,
+input,
+select,
+textarea,
+summary {
+  font: inherit;
+}
+
+button,
+input,
+select,
+textarea,
+summary,
+.nav-button,
+.ui-button {
+  transition:
+    border-color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-standard) var(--ease-standard);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+.nav-button:focus-visible,
+.ui-button:focus-visible {
+  outline: 2px solid var(--color-focus-separator);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 5px var(--color-focus-ring);
+}
+
+.app-shell {
+  grid-template-columns: var(--layout-sidebar-width) minmax(0, 1fr);
+  background: var(--color-bg-canvas);
+}
+
+.sidebar {
+  gap: var(--space-7);
+  padding: var(--space-7);
+  background: var(--color-bg-shell);
+  color: var(--color-text-inverse);
+}
+
+.sidebar h1 {
+  font-size: var(--font-size-section-title);
+}
+
+/* Spec 198 Lumen: eyebrows keep their authored case (product names such as
+ * BlueCad must not be re-uppercased by CSS). */
+.eyebrow {
+  color: var(--color-accent-foreground);
+  font-size: var(--font-size-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.sidebar .eyebrow {
+  color: var(--color-text-inverse);
+}
+
+.nav {
+  gap: var(--space-2);
+}
+
+.nav-button,
+.nav-button.ui-button {
+  width: 100%;
+  min-height: var(--control-height-default);
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-width-default) solid var(--color-border-default) !important;
+  border-radius: var(--radius-md);
+  background: transparent !important;
+  color: var(--color-text-inverse) !important;
+  text-align: left;
+}
+
+.nav-button:hover,
+.nav-button.active,
+.nav-button.ui-button:hover,
+.nav-button.ui-button.active {
+  border-color: var(--color-focus-ring) !important;
+  background: var(--color-accent-primary) !important;
+  color: var(--color-text-on-accent) !important;
+}
+
+.nav-button--dev,
+.nav-button--dev.ui-button {
+  border-style: dashed !important;
+  color: var(--color-text-inverse) !important;
+}
+
+.nav-button--dev:hover,
+.nav-button--dev.active,
+.nav-button--dev.ui-button:hover,
+.nav-button--dev.ui-button.active {
+  border-color: var(--color-status-warning-text) !important;
+  background: var(--color-status-warning-bg) !important;
+  color: var(--color-status-warning-text) !important;
+}
+
+.appearance-control {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: auto;
+  color: var(--color-text-inverse);
+  font-size: var(--font-size-label);
+  font-weight: 700;
+}
+
+.appearance-control .ui-field__label {
+  color: var(--color-text-inverse);
+}
+
+.appearance-control select {
+  width: 100%;
+  min-height: var(--control-height-default);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+}
+
+.main-panel {
+  padding: var(--space-8);
+  background: var(--color-bg-canvas);
+}
+
+.page {
+  gap: var(--space-6);
+  max-width: var(--layout-content-max-width);
+}
+
+.page-header h2 {
+  font-size: var(--font-size-page-title);
+}
+
+.metric-card,
+.panel,
+.ui-surface {
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+}
+
+.metric-card {
+  gap: var(--space-3);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-raised);
+}
+
+.panel,
+.ui-surface {
+  padding: var(--space-6);
+}
+
+.metric-label,
+.panel-subtitle,
+.details dt,
+.settings-form label,
+.draft-form label,
+.secret-key-form label,
+.smoke-console-form label,
+.ai-task-form label,
+.ai-context-workspace,
+.bluecad-toolbar label,
+.bluecad-new-form label,
+.scenario-model-select,
+.scenario-actions label,
+.scenario-variable label,
+.character-count,
+.ai-task-route-help,
+.ai-draft-advanced-metadata summary,
+.bluecad-candidate small,
+.parked-reason,
+.budget-meter-label,
+.budget-chars {
+  color: var(--color-text-secondary);
+}
+
+.budget-empty {
+  color: var(--color-text-muted);
+}
+
+.details dd,
+.metadata-block,
+.bluecad-detail-json,
+.scenario-output-list dd {
+  font-family: var(--font-mono);
+}
+
+.scope-list span,
+.record-list li,
+.token-meter,
+.diagnostics-panel,
+.diagnostics-card,
+.budget-meter,
+.scenario-variable,
+.binding-state,
+.dof-strip span,
+.dof-strip strong {
+  border-color: var(--color-border-default);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-primary);
+}
+
+input:not([type="checkbox"]):not([type="radio"]),
+select:not([data-ui-foundation-exempt]),
+textarea:not([data-ui-foundation-exempt]) {
+  min-height: var(--control-height-default);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-text-muted);
+}
+
+.checkbox-line {
+  color: var(--color-text-primary) !important;
+}
+
+/* Spec 213 Lumen control family: one capsule shape, one accent hue family. The default button is a quiet tonal
+ * fill (Design may stay filled); primary actions use the lit accent fill (lumen.css); secondary/ghost are outlined. */
+button:not(.nav-button):not(.bluecad-candidate),
+.ui-button:not(.nav-button) {
+  min-height: var(--control-height-default);
+  padding: var(--space-2) var(--space-4);
+  border: var(--border-width-default) solid var(--color-accent-border);
+  border-radius: var(--lumen-radius-button);
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-foreground);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+button:not(.nav-button):not(.bluecad-candidate):hover:not(:disabled),
+.ui-button:not(.nav-button):hover:not(:disabled) {
+  border-color: var(--color-accent-border-strong);
+  background: var(--color-accent-surface);
+}
+
+.secondary-button,
+.ui-button--secondary,
+.ui-button--ghost {
+  border-color: var(--color-border-strong) !important;
+  background: var(--color-bg-surface) !important;
+  color: var(--color-text-primary) !important;
+}
+
+.secondary-button:hover:not(:disabled),
+.ui-button--secondary:hover:not(:disabled),
+.ui-button--ghost:hover:not(:disabled) {
+  border-color: var(--color-accent-primary) !important;
+  background: var(--color-bg-subtle) !important;
+}
+
+.ui-button--danger {
+  border-color: var(--color-status-danger-text) !important;
+  background: var(--color-status-danger-bg) !important;
+  color: var(--color-status-danger-text) !important;
+}
+
+button:disabled,
+.ui-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.ui-inline-notice,
+.error-banner,
+.warning-banner {
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-width-default) solid currentColor;
+  border-radius: var(--radius-md);
+}
+
+.ui-inline-notice strong {
+  margin-right: var(--space-1);
+}
+
+.ui-inline-notice--info {
+  background: var(--color-status-info-bg);
+  color: var(--color-status-info-text);
+}
+
+.ui-inline-notice--success,
+.response-box {
+  border-color: var(--color-status-success-text);
+  background: var(--color-status-success-bg);
+  color: var(--color-status-success-text);
+}
+
+.ui-inline-notice--warning,
+.warning-banner,
+.budget-warn {
+  border-color: var(--color-status-warning-text);
+  background: var(--color-status-warning-bg);
+  color: var(--color-status-warning-text);
+}
+
+.ui-inline-notice--danger,
+.error-banner,
+.chat-warn {
+  border-color: var(--color-status-danger-text);
+  background: var(--color-status-danger-bg);
+  color: var(--color-status-danger-text);
+}
+
+.ui-inline-notice--neutral {
+  background: var(--color-status-neutral-bg);
+  color: var(--color-status-neutral-text);
+}
+
+.ui-status-badge,
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: var(--space-1);
+  min-height: var(--control-height-compact);
+  padding: var(--space-1) var(--space-3);
+  border: var(--border-width-default) solid currentColor;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-caption);
+  font-weight: 800;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.ui-status-badge::before {
+  content: "•";
+}
+
+.ui-status-badge--info {
+  background: var(--color-status-info-bg);
+  color: var(--color-status-info-text);
+}
+
+.ui-status-badge--success,
+.status-valid {
+  background: var(--color-status-success-bg);
+  color: var(--color-status-success-text);
+}
+
+.ui-status-badge--warning,
+.status-parked {
+  background: var(--color-status-warning-bg);
+  color: var(--color-status-warning-text);
+}
+
+.ui-status-badge--danger {
+  background: var(--color-status-danger-bg);
+  color: var(--color-status-danger-text);
+}
+
+.ui-status-badge--neutral {
+  background: var(--color-status-neutral-bg);
+  color: var(--color-status-neutral-text);
+}
+
+.ui-status-badge--proposed {
+  border-style: dashed;
+  background: var(--color-status-proposed-bg);
+  color: var(--color-status-proposed-text);
+}
+
+.ui-status-badge--stale {
+  border-style: double;
+  background: var(--color-status-stale-bg);
+  color: var(--color-status-stale-text);
+}
+
+.ui-status-badge--unavailable {
+  border-style: dotted;
+  background: var(--color-status-unavailable-bg);
+  color: var(--color-status-unavailable-text);
+}
+
+.ui-status-badge--synthetic {
+  border-style: dashed;
+  border-radius: var(--radius-sm);
+  background: var(--color-status-synthetic-bg);
+  color: var(--color-status-synthetic-text);
+}
+
+.ui-status-badge--archived,
+.status-archived {
+  border-style: double;
+  background: var(--color-status-archived-bg);
+  color: var(--color-status-archived-text);
+}
+
+.ui-field {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+}
+
+.ui-field__label {
+  color: var(--color-text-primary);
+  font-weight: 700;
+}
+
+.ui-field__hint {
+  color: var(--color-text-muted);
+}
+
+.ui-field__error {
+  color: var(--color-status-danger-text);
+  font-weight: 700;
+}
+
+.ui-field [aria-invalid="true"] {
+  border-color: var(--color-status-danger-text);
+}
+
+.ai-draft-route-pill {
+  border-color: var(--color-border-default);
+  background: var(--color-status-neutral-bg);
+  color: var(--color-status-neutral-text);
+}
+
+.bluecad-candidate {
+  border-color: var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface-raised);
+  color: var(--color-text-primary);
+}
+
+.bluecad-candidate.active,
+.bluecad-candidate:hover {
+  border-color: var(--color-focus-ring);
+  box-shadow: 0 0 0 3px var(--color-focus-separator), 0 0 0 5px var(--color-focus-ring);
+}
+
+.bluecad-viewer {
+  border-color: var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-technical-viewport);
+}
+
+.bluecad-promoted {
+  color: var(--color-status-success-text);
+}
+
+.bluecad-table details summary {
+  color: var(--color-focus-ring);
+}
+
+.binding-state.invalid {
+  border-color: var(--color-status-danger-text);
+  color: var(--color-status-danger-text);
+}
+
+.binding-state.manual,
+.binding-state.parameter {
+  border-color: var(--color-status-success-text);
+  color: var(--color-status-success-text);
+}
+
+.scenario-result,
+.scenario-output-list div {
+  border-color: var(--color-border-default);
+}
+
+.token-meter-track,
+.budget-bar-outer {
+  background: var(--color-bg-subtle);
+}
+
+.token-meter-fill,
+.budget-bar-inner {
+  background: var(--color-accent-primary);
+}
+
+.smoke-table th,
+.smoke-table td {
+  border-color: var(--color-border-default);
+}
+
+.smoke-table th {
+  background: var(--color-bg-subtle);
+  color: var(--color-text-secondary);
+}
+
+.metadata-block {
+  background: var(--color-bg-technical-viewport);
+  color: var(--color-text-inverse);
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    padding: var(--space-5);
+  }
+
+  .main-panel {
+    padding: var(--space-6);
+  }
+}
+
+@media (max-width: 780px) {
+  .appearance-control {
+    margin-top: var(--space-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0ms !important;
+  }
+}

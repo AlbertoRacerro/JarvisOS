@@ -1,0 +1,113 @@
+{
+  "$id": "https://jarvisos.local/schemas/bluecad_validation_report_v0_1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "report_version": {
+      "const": "bluecad_validation_report_v0_1"
+    },
+    "spec_id": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "manifest_sha256": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "error"
+      ]
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/error"
+      },
+      "default": []
+    }
+  },
+  "required": [
+    "report_version",
+    "spec_id",
+    "verdict",
+    "checks",
+    "errors"
+  ],
+  "type": "object",
+  "$defs": {
+    "check": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tier": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "error",
+            "skip"
+          ]
+        },
+        "detail": {
+          "type": "object"
+        },
+        "hint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "tier",
+        "status",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "error": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "enum": [
+            "SPEC_INVALID",
+            "PORT_MISMATCH",
+            "KERNEL_ERROR",
+            "EXPORT_ERROR",
+            "TIMEOUT",
+            "UNKNOWN_METRIC"
+          ]
+        },
+        "detail": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "code",
+        "detail"
+      ],
+      "type": "object"
+    }
+  }
+}

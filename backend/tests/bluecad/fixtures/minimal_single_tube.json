@@ -1,0 +1,48 @@
+{
+  "connections": [],
+  "declared": {
+    "bbox_mm": {
+      "abs_tol": 1.0,
+      "max": [
+        1000,
+        50,
+        50
+      ],
+      "min": [
+        0,
+        -50,
+        -50
+      ]
+    },
+    "min_wall_t": 5.0,
+    "total_volume_mm3": {
+      "rel_tol": 0.001,
+      "value": 1492256.5104551518
+    }
+  },
+  "name": "minimal_single_tube",
+  "parts": [
+    {
+      "frame": {
+        "direction": [
+          1,
+          0,
+          0
+        ],
+        "origin": [
+          0,
+          0,
+          0
+        ]
+      },
+      "kind": "tube_run",
+      "params": {
+        "length": 1000.0,
+        "outer_d": 100.0,
+        "wall_t": 5.0
+      },
+      "part_id": "tube1"
+    }
+  ],
+  "spec_version": "bluecad_geometry_spec_v0_1"
+}

@@ -1,0 +1,1166 @@
+{
+  "schema": "jarvisos.browser-proof-plan.v1",
+  "id": "180-rate-law-kinetics",
+  "fixture": "engineering-workspace",
+  "artifactMode": "full",
+  "viewport": {
+    "width": 1280,
+    "height": 1000
+  },
+  "forbidMutatingRequests": false,
+  "steps": [
+    {
+      "op": "run-fixture",
+      "name": "180:1280:workspace",
+      "fixture": "engineering-workspace",
+      "phase": "workspace"
+    },
+    {
+      "op": "navigate",
+      "name": "180:1280:process-editor",
+      "route": "/design/process"
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:process-editor-surface",
+      "locator": {
+        "kind": "testid",
+        "testid": "process-draft-surface"
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:create-process-draft",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Create process draft",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pick-nrtl",
+      "locator": {
+        "kind": "label",
+        "text": "Property package",
+        "exact": true
+      },
+      "value": "NRTL"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:compound-water",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "div[aria-label=\"Compounds\"]"
+        },
+        "child": {
+          "kind": "label",
+          "text": "Water",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:compound-ethylene-oxide",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "div[aria-label=\"Compounds\"]"
+        },
+        "child": {
+          "kind": "label",
+          "text": "Ethylene oxide",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:compound-ethylene-glycol",
+      "locator": {
+        "kind": "within",
+        "parent": {
+          "kind": "css",
+          "selector": "div[aria-label=\"Compounds\"]"
+        },
+        "child": {
+          "kind": "label",
+          "text": "Ethylene glycol",
+          "exact": true
+        }
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-cstr",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Continuous stirred tank reactor",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:reactor-energy-missing-finding",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Connect an energy stream",
+        "exact": false
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-feed-stream",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Material stream",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:feed-temperature",
+      "locator": {
+        "kind": "label",
+        "text": "Temperature",
+        "exact": true
+      },
+      "value": "328.15"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:feed-temperature-unit",
+      "locator": {
+        "kind": "label",
+        "text": "Temperature unit",
+        "exact": true
+      },
+      "value": "K"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:feed-pressure",
+      "locator": {
+        "kind": "label",
+        "text": "Pressure",
+        "exact": true
+      },
+      "value": "200"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:feed-pressure-unit",
+      "locator": {
+        "kind": "label",
+        "text": "Pressure unit",
+        "exact": true
+      },
+      "value": "kPa"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:feed-mass-flow",
+      "locator": {
+        "kind": "label",
+        "text": "Mass flow",
+        "exact": true
+      },
+      "value": "1"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:feed-mass-flow-unit",
+      "locator": {
+        "kind": "label",
+        "text": "Mass flow unit",
+        "exact": true
+      },
+      "value": "kg/s"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:apply-feed-conditions",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Apply conditions",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:feed-conditions-saved",
+      "locator": {
+        "kind": "css",
+        "selector": ".draft-revision:has-text(\"revision 8\")"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:feed-water-fraction",
+      "locator": {
+        "kind": "label",
+        "text": "Water mass fraction",
+        "exact": true
+      },
+      "value": "0.7"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:feed-eo-fraction",
+      "locator": {
+        "kind": "label",
+        "text": "Ethylene oxide mass fraction",
+        "exact": true
+      },
+      "value": "0.3"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:feed-eg-fraction",
+      "locator": {
+        "kind": "label",
+        "text": "Ethylene glycol mass fraction",
+        "exact": true
+      },
+      "value": "0"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:apply-feed-composition",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Apply mass composition",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:feed-target",
+      "locator": {
+        "kind": "label",
+        "text": "Stream target",
+        "exact": true
+      },
+      "value": "CSTR-1 · inlet"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-product-stream",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Material stream",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:product-source",
+      "locator": {
+        "kind": "label",
+        "text": "Stream source",
+        "exact": true
+      },
+      "value": "CSTR-1 · outlet"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-energy-stream",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Energy stream",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:select-energy-stream",
+      "locator": {
+        "kind": "css",
+        "selector": "g[data-testid^=\"node-E1\"]"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:energy-target",
+      "locator": {
+        "kind": "label",
+        "text": "Stream target",
+        "exact": true
+      },
+      "value": "CSTR-1 · energy feed"
+    },
+    {
+      "op": "assert-count",
+      "name": "180:1280:energy-finding-cleared",
+      "locator": {
+        "kind": "text",
+        "text": "REACTOR_ENERGY_STREAM_MISSING",
+        "exact": false
+      },
+      "equals": 0
+    },
+    {
+      "op": "screenshot",
+      "name": "180:1280:flowsheet-connected",
+      "file": "180-flowsheet-1280"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:select-cstr",
+      "locator": {
+        "kind": "css",
+        "selector": "g[data-testid^=\"node-CSTR\"]"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:volume",
+      "locator": {
+        "kind": "label",
+        "text": "Volume",
+        "exact": true
+      },
+      "value": "2"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:apply-volume",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Apply inputs",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:kinetics-tab",
+      "locator": {
+        "kind": "css",
+        "selector": "button[role=\"tab\"]:has-text(\"Kinetics\")"
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-reaction",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Add reaction",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:reaction-name",
+      "locator": {
+        "kind": "label",
+        "text": "Reaction name",
+        "exact": true
+      },
+      "value": "EO hydrolysis"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-participant-eo",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Add participant",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:participant-eo",
+      "locator": {
+        "kind": "label",
+        "text": "Participant 1",
+        "exact": true
+      },
+      "value": "Ethylene oxide"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:coefficient-eo",
+      "locator": {
+        "kind": "label",
+        "text": "Participant 1 coefficient",
+        "exact": true
+      },
+      "value": "-1"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-participant-water",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Add participant",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:participant-water",
+      "locator": {
+        "kind": "label",
+        "text": "Participant 2",
+        "exact": true
+      },
+      "value": "Water"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:coefficient-water",
+      "locator": {
+        "kind": "label",
+        "text": "Participant 2 coefficient",
+        "exact": true
+      },
+      "value": "-1"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-participant-eg",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Add participant",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:participant-eg",
+      "locator": {
+        "kind": "label",
+        "text": "Participant 3",
+        "exact": true
+      },
+      "value": "Ethylene glycol"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:coefficient-eg",
+      "locator": {
+        "kind": "label",
+        "text": "Participant 3 coefficient",
+        "exact": true
+      },
+      "value": "1"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:base-reactant",
+      "locator": {
+        "kind": "label",
+        "text": "Base reactant",
+        "exact": true
+      },
+      "value": "Ethylene oxide"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:maximum-rate",
+      "locator": {
+        "kind": "label",
+        "text": "Maximum rate V_max",
+        "exact": true
+      },
+      "value": "5"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:ks-zero",
+      "locator": {
+        "kind": "label",
+        "text": "Half-saturation K_S",
+        "exact": true
+      },
+      "value": "0"
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:ks-inline-error",
+      "locator": {
+        "kind": "css",
+        "selector": ".draft-quantity__error"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:ks",
+      "locator": {
+        "kind": "label",
+        "text": "Half-saturation K_S",
+        "exact": true
+      },
+      "value": "2"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:provenance-note",
+      "locator": {
+        "kind": "label",
+        "text": "Provenance note",
+        "exact": true
+      },
+      "value": "Synthetic browser acceptance"
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:equation-rendered",
+      "locator": {
+        "kind": "css",
+        "selector": ".reactor-editor .reactor-equation"
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:save-reaction",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save reaction",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:reaction-card",
+      "locator": {
+        "kind": "css",
+        "selector": ".reactor-reaction-card:has-text(\"EO hydrolysis\")"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:compilation-state",
+      "locator": {
+        "kind": "css",
+        "selector": ".reactor-compilation:has-text(\"Evaluated by DWSIM\")"
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "180:1280:kinetics-monod",
+      "file": "180-kinetics-monod-1280"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:run-monod",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Run",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:results-current",
+      "locator": {
+        "kind": "css",
+        "selector": "[data-testid=\"results-state\"]:has-text(\"Results current\")"
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:results-tab",
+      "locator": {
+        "kind": "css",
+        "selector": "button[role=\"tab\"]:has-text(\"Results\")"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:verified-chip",
+      "locator": {
+        "kind": "css",
+        "selector": ".reactor-chip--good:has-text(\"Verified by Jarvis\")"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:conversion-a1",
+      "locator": {
+        "kind": "text",
+        "text": "28.53 %",
+        "exact": true
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "180:1280:results-monod",
+      "file": "180-results-monod-1280"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:kinetics-tab-again",
+      "locator": {
+        "kind": "css",
+        "selector": "button[role=\"tab\"]:has-text(\"Kinetics\")"
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:edit-reaction",
+      "locator": {
+        "kind": "css",
+        "selector": ".reactor-reaction-card button:has-text(\"Edit\")"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:vmax-edit",
+      "locator": {
+        "kind": "label",
+        "text": "Maximum rate V_max",
+        "exact": true
+      },
+      "value": "4"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:save-vmax",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save reaction",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:results-stale",
+      "locator": {
+        "kind": "css",
+        "selector": "[data-testid=\"results-state\"]:has-text(\"Results stale\")"
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "180:1280:results-stale",
+      "file": "180-results-stale-1280"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:rerun",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Run",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:results-current-again",
+      "locator": {
+        "kind": "css",
+        "selector": "[data-testid=\"results-state\"]:has-text(\"Results current\")"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:verified-again",
+      "locator": {
+        "kind": "css",
+        "selector": ".reactor-compile--ok:has-text(\"Verified by Jarvis\")"
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:edit-to-haldane",
+      "locator": {
+        "kind": "css",
+        "selector": ".reactor-reaction-card button:has-text(\"Edit\")"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:form-haldane",
+      "locator": {
+        "kind": "label",
+        "text": "Rate-law type",
+        "exact": true
+      },
+      "value": "haldane"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:vmax-restore",
+      "locator": {
+        "kind": "label",
+        "text": "Maximum rate V_max",
+        "exact": true
+      },
+      "value": "5"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:haldane-ki",
+      "locator": {
+        "kind": "label",
+        "text": "Substrate inhibition K_I",
+        "exact": true
+      },
+      "value": "10"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-inhibition",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Add inhibition term",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:inhibition-compound",
+      "locator": {
+        "kind": "label",
+        "text": "Inhibition 1 inhibitor",
+        "exact": true
+      },
+      "value": "Ethylene glycol"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:inhibition-ki",
+      "locator": {
+        "kind": "label",
+        "text": "Inhibition 1 K_i",
+        "exact": true
+      },
+      "value": "4"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:save-haldane",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Save reaction",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:haldane-card",
+      "locator": {
+        "kind": "css",
+        "selector": ".reactor-reaction-card:has-text(\"Haldane\")"
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "180:1280:kinetics-haldane",
+      "file": "180-kinetics-haldane-1280"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:run-haldane",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Run",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:verified-haldane",
+      "locator": {
+        "kind": "css",
+        "selector": ".reactor-compile--ok:has-text(\"Verified by Jarvis\")"
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-pfr",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Plug flow reactor",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:select-pfr",
+      "locator": {
+        "kind": "css",
+        "selector": "g[data-testid^=\"node-PFR\"]"
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:pfr-kinetics-tab",
+      "locator": {
+        "kind": "css",
+        "selector": "button[role=\"tab\"]:has-text(\"Kinetics\")"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:assign-existing",
+      "locator": {
+        "kind": "label",
+        "text": "Assign existing reaction",
+        "exact": true
+      },
+      "value": "r1"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:assign-reaction",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Assign",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:shared-with",
+      "locator": {
+        "kind": "css",
+        "selector": ".reactor-reaction-card:has-text(\"Shared with\")"
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "180:1280:pfr-shared",
+      "file": "180-pfr-shared-1280"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:pfr-setup-tab",
+      "locator": {
+        "kind": "css",
+        "selector": "button[role=\"tab\"]:has-text(\"Setup\")"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-mode",
+      "locator": {
+        "kind": "label",
+        "text": "Unit mode",
+        "exact": true
+      },
+      "value": "isothermic"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-volume",
+      "locator": {
+        "kind": "label",
+        "text": "Volume",
+        "exact": true
+      },
+      "value": "2"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-length",
+      "locator": {
+        "kind": "label",
+        "text": "Length",
+        "exact": true
+      },
+      "value": "10"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:apply-pfr-inputs",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Apply inputs",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-pfr-feed",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Material stream",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-feed-temperature",
+      "locator": {
+        "kind": "label",
+        "text": "Temperature",
+        "exact": true
+      },
+      "value": "328.15"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-feed-temperature-unit",
+      "locator": {
+        "kind": "label",
+        "text": "Temperature unit",
+        "exact": true
+      },
+      "value": "K"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-feed-pressure",
+      "locator": {
+        "kind": "label",
+        "text": "Pressure",
+        "exact": true
+      },
+      "value": "200"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-feed-pressure-unit",
+      "locator": {
+        "kind": "label",
+        "text": "Pressure unit",
+        "exact": true
+      },
+      "value": "kPa"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-feed-flow",
+      "locator": {
+        "kind": "label",
+        "text": "Mass flow",
+        "exact": true
+      },
+      "value": "1"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-feed-flow-unit",
+      "locator": {
+        "kind": "label",
+        "text": "Mass flow unit",
+        "exact": true
+      },
+      "value": "kg/s"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:apply-pfr-feed-conditions",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Apply conditions",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:pfr-feed-conditions-saved",
+      "locator": {
+        "kind": "css",
+        "selector": ".draft-revision:has-text(\"revision 23\")"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-feed-water",
+      "locator": {
+        "kind": "label",
+        "text": "Water mass fraction",
+        "exact": true
+      },
+      "value": "0.7"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-feed-eo",
+      "locator": {
+        "kind": "label",
+        "text": "Ethylene oxide mass fraction",
+        "exact": true
+      },
+      "value": "0.3"
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:pfr-feed-eg",
+      "locator": {
+        "kind": "label",
+        "text": "Ethylene glycol mass fraction",
+        "exact": true
+      },
+      "value": "0"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:apply-pfr-feed-composition",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Apply mass composition",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:connect-pfr-feed",
+      "locator": {
+        "kind": "label",
+        "text": "Stream target",
+        "exact": true
+      },
+      "value": "PFR-1 · inlet"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-pfr-product",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Material stream",
+        "exact": true
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:connect-pfr-product",
+      "locator": {
+        "kind": "label",
+        "text": "Stream source",
+        "exact": true
+      },
+      "value": "PFR-1 · outlet"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:add-pfr-energy",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Energy stream",
+        "exact": true
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:select-pfr-energy",
+      "locator": {
+        "kind": "css",
+        "selector": "g[data-testid^=\"node-E2\"]"
+      }
+    },
+    {
+      "op": "fill",
+      "name": "180:1280:connect-pfr-energy",
+      "locator": {
+        "kind": "label",
+        "text": "Stream target",
+        "exact": true
+      },
+      "value": "PFR-1 · energy feed"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:run-shared-pfr",
+      "locator": {
+        "kind": "role",
+        "role": "button",
+        "name": "Run",
+        "exact": true
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:shared-pfr-results-current",
+      "locator": {
+        "kind": "css",
+        "selector": "[data-testid=\"results-state\"]:has-text(\"Results current\")"
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:select-pfr-results",
+      "locator": {
+        "kind": "css",
+        "selector": "g[data-testid^=\"node-PFR\"]"
+      }
+    },
+    {
+      "op": "click",
+      "name": "180:1280:pfr-results-tab",
+      "locator": {
+        "kind": "css",
+        "selector": "button[role=\"tab\"]:has-text(\"Results\")"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:pfr-verified",
+      "locator": {
+        "kind": "css",
+        "selector": ".reactor-chip--good:has-text(\"Verified by Jarvis\")"
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "180:1280:pfr-verified",
+      "file": "180-pfr-verified-1280"
+    },
+    {
+      "op": "click",
+      "name": "180:1280:deselect",
+      "locator": {
+        "kind": "css",
+        "selector": ".draft-canvas"
+      }
+    },
+    {
+      "op": "assert-visible",
+      "name": "180:1280:thermo-hint",
+      "locator": {
+        "kind": "text",
+        "text": "Reactions are defined on each reactor",
+        "exact": false
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "180:1280:thermo",
+      "file": "180-thermo-1280"
+    },
+    {
+      "op": "assert-body-absent",
+      "name": "180:1280:no-raw-json",
+      "forbidden": [
+        "{\"rate_law\":",
+        "{\"stoichiometry\":"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+purpose = "Local model runtime (llama.cpp, Ollama), advisory classification and the local-model selection and resource arbiter."
+status = "live"
+entrypoints = ["/local-ai/runtime", "local_router.py"]
+owner = "maintainer"

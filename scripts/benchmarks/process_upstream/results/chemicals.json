@@ -1,0 +1,14 @@
+{
+  "candidate": "chemicals",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "MIT",
+  "measurements": {
+    "water_density_kg_m3": 997.0476367603438,
+    "water_saturation_pressure_Pa": 3157.9200277257605
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "1.5.2",
+  "wall_time_s": 0.14654
+}

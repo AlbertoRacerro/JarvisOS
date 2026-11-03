@@ -1,0 +1,20 @@
+{
+  "candidate": "scikit-sundae",
+  "environment": "base",
+  "interpreter": "/home/user/jarvis-control/work/venvs/q103/bin/python",
+  "license": "BSD-3-Clause",
+  "measurements": {
+    "dae_final_biomass_arbitrary": 1.0225605523275005,
+    "dae_max_algebraic_residual": 9.094280883914507e-12,
+    "dae_success": true,
+    "final_biomass_arbitrary": 1.022560700726125,
+    "fixture": "synthetic periodic growth/loss ODE; not biology validation",
+    "minimum_biomass_arbitrary": 0.9855181779094628,
+    "success": true,
+    "time_points": 97
+  },
+  "numba_disable_jit": false,
+  "status": "succeeded",
+  "version": "1.1.3",
+  "wall_time_s": 1.001453
+}

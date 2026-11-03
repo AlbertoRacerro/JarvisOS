@@ -1,0 +1,4 @@
+purpose = "Artifact records and a small artifact registry."
+status = "live"
+entrypoints = ["service.py"]
+owner = "maintainer"

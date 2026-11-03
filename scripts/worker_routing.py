@@ -1,0 +1,611 @@
+#!/usr/bin/env python3
+"""Quota-aware worker router for coordinators (difficulty x risk x capability).
+
+Coordinators plan, review and integrate; bounded implementation goes to the cheapest worker that is adequate for
+the task and whose subscription pool still has headroom. Required tier = max(difficulty, risk), low=1, medium=2,
+high=3. A model qualifies when its capability is at least that tier and its pool's free fraction (the minimum over
+the pool's 5-hour and weekly windows) is at least the pool's reserve (RESERVES). A pool that is disabled or unreadable is skipped
+(fail-closed per pool). Candidates are ordered by smallest capability surplus (cheapest adequate), then pool priority
+(gemini, codex, claude last), then most free quota, then table order. Nothing qualifying exits 3 with reason `no_worker`: the coordinator then does the work
+itself or waits.
+
+Quota is read without a model turn: Codex through `codex app-server` `account/rateLimits/read`, Gemini through
+`agy -p /quota`, Claude through `agent-relay --json limits --refresh`. This tool only reads quota and prints a decision; it launches nothing, writes nothing and holds no
+credentials. Stdlib only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import math
+import os
+import queue
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+RESERVE = 0.10
+# Per-pool reserve. The Claude pool is also what the coordinator spends: if it is skipped the coordinator would do
+# the work itself at higher cost, so delegating to a cheaper Claude worker beats `no_worker`; it is skipped only
+# when practically exhausted. Below CLAUDE_LOW_FREE a chosen Claude worker carries a warning note.
+RESERVES = {"claude": 0.03, "codex": RESERVE, "gemini": RESERVE}
+CLAUDE_LOW_FREE = 0.40
+CLAUDE_LOW_NOTE = ("claude_pool_low — keep worker task small; coordinator should prefer waiting for a cheaper "
+                   "pool reset if the task is not urgent")
+# Among equally adequate models the cheaper-to-spend pool goes first; the coordinator's own pool goes last.
+POOL_PRIORITY = ("gemini", "codex", "claude")
+FRESHNESS = 900  # seconds a Claude (agent-relay) reading may be old, as the supervisor's reading_freshness
+READ_TIMEOUT = 15  # each reader; the readers run in parallel and the whole read is bounded by TOTAL_TIMEOUT
+TOTAL_TIMEOUT = 20
+CACHE_TTL = 900  # seconds a summary stays valid inside a long-lived supervisor
+FAILED_CACHE_TTL = 60
+LEVELS = {"low": 1, "medium": 2, "high": 3}
+REVIEW = {"high": "coordinator_full_diff_review", "medium": "coordinator_spot_check", "low": "tests_only"}
+NO_WORKER_EXIT = 3
+GEMINI_BUCKETS = {"gemini-5h": "5h", "gemini-weekly": "weekly"}
+CODEX_WINDOWS = {"primary": "5h", "secondary": "weekly"}
+CLAUDE_FIVE_HOUR = {"session", "five_hour", "5h"}
+CLAUDE_WEEKLY = {"weekly", "seven_day", "week", "7d"}
+UNREADABLE = "worker quota: unreadable"
+# The supervisor persists its last good reading here so a coordinator whose sandbox cannot read the quotas live
+# still routes on a recent value. Per-pool entries, each aged on its own `as_of`.
+SNAPSHOT_SCHEMA = "worker-quota.v1"
+SNAPSHOT_NAME = Path(".agent-relay") / "worker-quota.json"
+SNAPSHOT_MAX_AGE = 1800
+RISK_GUIDE = ("risk = harm if the worker is wrong: low docs/tests/UI copy; medium feature code covered by tests; "
+              "high security, auth, egress, migrations/data loss, supervisor/relay/sandbox code, irreversible ops")
+
+
+@dataclass(frozen=True)
+class Model:
+    key: str
+    kind: str  # launch kind: codex | agy
+    model: str
+    pool: str
+    capability: int  # 1..3, the highest required tier it may take
+    cost: int  # relative cost, informational (the ordering uses capability surplus, then headroom)
+
+
+# Argon is deliberately absent: spec 221 allows it as an agy worker only under --coordinator-fallback.
+# Flash has a single allowlisted id in agy_worker.py, so there is no higher-effort Flash entry.
+MODELS: tuple[Model, ...] = (
+    Model("luna", "codex", "gpt-6-luna", "codex", 1, 1),
+    Model("flash", "agy", "gemini-3.8-flash-low", "gemini", 1, 1),
+    Model("haiku", "claude", "claude-haiku-5-5", "claude", 1, 2),
+    Model("terra", "codex", "gpt-6.1-terra", "codex", 2, 3),
+    Model("sonnet", "claude", "claude-sonnet-5-5", "claude", 2, 5),
+    Model("sol", "codex", "gpt-6-sol", "codex", 3, 8),
+)
+
+
+@dataclass(frozen=True)
+class Pool:
+    """A subscription pool reading: windows maps a window label to its free fraction. free is None when the pool
+    is unreadable or disabled (reason says why); otherwise it is the minimum over the windows."""
+
+    name: str
+    windows: dict[str, float]
+    free: float | None
+    reason: str | None = None
+    source: str = "live"  # live | snapshot
+
+
+def tier(difficulty: str, risk: str) -> int:
+    return max(LEVELS[difficulty], LEVELS[risk])
+
+
+def unreadable(name: str, reason: str) -> Pool:
+    return Pool(name, {}, None, reason)
+
+
+def _fraction(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or not 0 <= value <= 1:
+        return None
+    return float(value)
+
+
+def _json_document(text: str) -> dict[str, Any] | None:
+    for candidate in [text, *reversed(text.strip().splitlines())]:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
+def _host_which(command: str) -> str | None:
+    """Resolve a CLI as the Relay gateway does: services do not inherit a login PATH."""
+    entries = [str(Path.home() / ".local" / "bin")]
+    entries += sorted(glob.glob(str(Path.home() / ".nvm" / "versions" / "node" / "*" / "bin")), reverse=True)
+    entries.append(os.environ.get("PATH", "/usr/bin:/bin"))
+    return shutil.which(command, path=os.pathsep.join(entries))
+
+
+def _buckets(node: Any, depth: int = 0) -> list[dict[str, Any]]:
+    if depth > 8:
+        return []
+    if isinstance(node, list):
+        return [b for item in node for b in _buckets(item, depth + 1)]
+    if not isinstance(node, dict):
+        return []
+    own = node.get("buckets")
+    found = [b for b in own if isinstance(b, dict)] if isinstance(own, list) else []
+    return found + [b for key, value in node.items() if key != "buckets" for b in _buckets(value, depth + 1)]
+
+
+def parse_gemini(reading: dict[str, Any] | None) -> Pool:
+    """The gemini pool from an `agy /quota` document: both its 5h and weekly buckets must be present and enabled."""
+    if reading is None:
+        return unreadable("gemini", "no_reading")
+    found = {b.get("id"): b for b in _buckets(reading) if b.get("id") in GEMINI_BUCKETS}
+    if set(found) != set(GEMINI_BUCKETS):
+        return unreadable("gemini", "bucket_missing")
+    windows: dict[str, float] = {}
+    for bucket_id, label in GEMINI_BUCKETS.items():
+        bucket = found[bucket_id]
+        fraction = _fraction(bucket.get("remaining_fraction"))
+        if fraction is None or not isinstance(bucket.get("disabled", False), bool):
+            return unreadable("gemini", "invalid_reading")
+        if bucket.get("disabled"):
+            return Pool("gemini", {}, None, f"{label}_disabled")
+        windows[label] = fraction
+    return Pool("gemini", windows, min(windows.values()))
+
+
+def parse_codex(limits: dict[str, Any] | None) -> Pool:
+    """The codex pool from the `rateLimits` object: every window present must be valid, and at least one present."""
+    if not isinstance(limits, dict):
+        return unreadable("codex", "no_reading")
+    windows: dict[str, float] = {}
+    for key, label in CODEX_WINDOWS.items():
+        window = limits.get(key)
+        if window is None:
+            continue
+        used = window.get("usedPercent") if isinstance(window, dict) else None
+        if isinstance(used, bool) or not isinstance(used, int | float) or not math.isfinite(used) or not 0 <= used <= 100:
+            return unreadable("codex", "invalid_reading")
+        windows[label] = 1 - used / 100
+    if not windows:
+        return unreadable("codex", "no_windows")
+    return Pool("codex", windows, min(windows.values()))
+
+
+def _parse_instant(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def parse_claude(entry: Any, now: datetime | None = None) -> Pool:
+    """The claude pool from the `claude` entry of `agent-relay --json limits`: status ok, an `as_of` no older than
+    FRESHNESS, and every window with a valid used_percent. Anything else (e.g. an expired session) is unreadable."""
+    if not isinstance(entry, dict):
+        return unreadable("claude", "no_reading")
+    if entry.get("status") not in (None, "ok"):
+        return unreadable("claude", "unavailable")
+    as_of = _parse_instant(entry.get("as_of"))
+    if as_of is None:
+        return unreadable("claude", "no_as_of")
+    if abs(((now or datetime.now(UTC)) - as_of).total_seconds()) > FRESHNESS:
+        return unreadable("claude", "stale")
+    raw = entry.get("windows")
+    if not isinstance(raw, list) or not raw:
+        return unreadable("claude", "no_windows")
+    windows: dict[str, float] = {}
+    for window in raw:
+        used = window.get("used_percent") if isinstance(window, dict) else None
+        if isinstance(used, bool) or not isinstance(used, int | float) or not math.isfinite(used) or not 0 <= used <= 100:
+            return unreadable("claude", "invalid_reading")
+        ident = str(window.get("id", ""))
+        label = "5h" if ident in CLAUDE_FIVE_HOUR else "weekly" if ident in CLAUDE_WEEKLY else ident or "window"
+        windows[label] = min(windows.get(label, 1.0), 1 - used / 100)
+    return Pool("claude", windows, min(windows.values()))
+
+
+def read_claude() -> Pool:
+    """Claude windows from the same source the supervisor uses (`agent-relay --json limits --refresh`)."""
+    binary = os.environ.get("JARVISOS_AGENT_RELAY_BIN") or _host_which("agent-relay")
+    if not binary:
+        return unreadable("claude", "relay_missing")
+    try:
+        done = subprocess.run([binary, "--json", "limits", "--refresh"], capture_output=True, text=True,
+                              timeout=READ_TIMEOUT, check=False, cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return unreadable("claude", "timeout")
+    except OSError:
+        return unreadable("claude", "relay_missing")
+    data = _json_document(done.stdout)
+    agents = data.get("agents") if data else None
+    entry = next((a for a in agents if isinstance(a, dict) and a.get("agent_key") == "claude"), None) \
+        if isinstance(agents, list) else None
+    return parse_claude(entry)
+
+
+def read_gemini() -> Pool:
+    binary = os.environ.get("JARVISOS_AGY_BIN") or _host_which("agy")
+    if not binary:
+        return unreadable("gemini", "agy_missing")
+    try:
+        done = subprocess.run([binary, "-p", "/quota", "--output-format", "json"], capture_output=True, text=True,
+                              timeout=READ_TIMEOUT, check=False, cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return unreadable("gemini", "timeout")
+    except OSError:
+        return unreadable("gemini", "agy_missing")
+    reading = _json_document(done.stdout)
+    if reading is None or reading.get("status") != "SUCCESS":
+        return unreadable("gemini", "no_reading")
+    return parse_gemini(reading)
+
+
+def read_codex() -> Pool:
+    """Ask the Codex CLI for current account limits; never creates a thread, runs a turn or touches credentials."""
+    binary = os.environ.get("JARVISOS_CODEX_BIN") or _host_which("codex")
+    if not binary:
+        return unreadable("codex", "codex_missing")
+    try:
+        proc = subprocess.Popen([binary, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                                cwd=tempfile.gettempdir())
+    except OSError:
+        return unreadable("codex", "codex_missing")
+    messages: queue.Queue[dict[str, Any] | None] = queue.Queue()
+
+    def collect() -> None:
+        assert proc.stdout is not None
+        try:
+            for line in proc.stdout:
+                data = _json_document(line)
+                if data is not None:
+                    messages.put(data)
+        finally:
+            messages.put(None)
+
+    reader = threading.Thread(target=collect, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + READ_TIMEOUT
+
+    def send(message: dict[str, Any]) -> None:
+        assert proc.stdin is not None
+        proc.stdin.write(json.dumps(message) + "\n")
+        proc.stdin.flush()
+
+    def response(request_id: int) -> dict[str, Any] | None:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise queue.Empty
+            message = messages.get(timeout=remaining)
+            if message is None or (message.get("id") == request_id and "error" in message):
+                return None
+            if message.get("id") == request_id:
+                result = message.get("result")
+                return result if isinstance(result, dict) else None
+
+    try:
+        send({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "worker_routing", "version": "0.1.0"}}})
+        if response(1) is None:
+            return unreadable("codex", "no_reading")
+        send({"method": "initialized", "params": {}})
+        send({"id": 2, "method": "account/rateLimits/read", "params": {}})
+        result = response(2)
+        if result is None:
+            return unreadable("codex", "no_reading")
+        by_id = result.get("rateLimitsByLimitId")
+        limits = by_id.get("codex") if isinstance(by_id, dict) else None
+        return parse_codex(limits if isinstance(limits, dict) else result.get("rateLimits"))
+    except queue.Empty:
+        return unreadable("codex", "timeout")
+    except (OSError, ValueError):
+        return unreadable("codex", "no_reading")
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        reader.join(timeout=1)
+        for stream in (proc.stdin, proc.stdout):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+
+
+READERS: dict[str, Callable[[], Pool]] = {"codex": read_codex, "gemini": read_gemini, "claude": read_claude}
+
+
+def _iso(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        return None
+
+
+def default_snapshot_paths() -> list[Path]:
+    """Where the supervisor's snapshot may be: this checkout's `.agent-relay`, and, when this is a linked
+    worktree, the main checkout's (the supervisor runs against the main checkout)."""
+    root = Path(__file__).resolve().parent.parent
+    paths = [root / SNAPSHOT_NAME]
+    marker = root / ".git"
+    if marker.is_file():
+        try:
+            text = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            text = ""
+        if text.startswith("gitdir:"):
+            gitdir = (root / text[len("gitdir:"):].strip()).resolve()
+            if gitdir.parent.name == "worktrees" and gitdir.parent.parent.name == ".git":
+                paths.append(gitdir.parent.parent.parent / SNAPSHOT_NAME)
+    return paths
+
+
+def load_snapshot(paths: list[Path]) -> dict[str, tuple[datetime, dict[str, float]]]:
+    """Valid per-pool entries (as_of, windows) from the given snapshot files, the freshest per pool. Anything
+    malformed is ignored."""
+    best: dict[str, tuple[datetime, dict[str, float]]] = {}
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or data.get("schema") != SNAPSHOT_SCHEMA or not isinstance(data.get("pools"), dict):
+            continue
+        for name, entry in data["pools"].items():
+            if not isinstance(entry, dict) or not isinstance(entry.get("windows"), dict) or not entry["windows"]:
+                continue
+            at = _parse_ts(entry.get("as_of"))
+            windows = {str(k): _fraction(v) for k, v in entry["windows"].items()}
+            if at is None or any(v is None for v in windows.values()):
+                continue
+            if name not in best or at > best[name][0]:
+                best[name] = (at, {k: v for k, v in windows.items() if v is not None})
+    return best
+
+
+def apply_snapshot(pools: dict[str, Pool], snapshot: dict[str, tuple[datetime, dict[str, float]]],
+                   now: datetime, max_age: float = SNAPSHOT_MAX_AGE) -> dict[str, Pool]:
+    """Pools that could not be read live fall back to a snapshot entry no older than `max_age`. A live reading
+    always wins, and a pool the provider reported as disabled never falls back. Older or missing: unchanged."""
+    out = dict(pools)
+    for name, pool in pools.items():
+        if pool.free is not None or name not in snapshot or (pool.reason or "").endswith("_disabled"):
+            continue
+        at, windows = snapshot[name]
+        if -60 <= (now - at).total_seconds() <= max_age:
+            out[name] = Pool(name, windows, min(windows.values()), None, "snapshot")
+    return out
+
+
+def write_snapshot(path: Path, pools: dict[str, Pool], now: datetime | None = None) -> bool:
+    """Persist the live-read pools atomically, keeping other pools' older entries. Writes nothing when no pool
+    was read live. Never raises."""
+    live = {n: p for n, p in pools.items() if p.free is not None and p.source == "live"}
+    if not live:
+        return False
+    moment = now or datetime.now(UTC)
+    entries: dict[str, Any] = {n: {"as_of": _iso(at), "windows": w} for n, (at, w) in load_snapshot([path]).items()}
+    for name, pool in live.items():
+        entries[name] = {"as_of": _iso(moment), "windows": {k: round(v, 4) for k, v in pool.windows.items()}}
+    document = {"schema": SNAPSHOT_SCHEMA, "as_of": _iso(moment), "pools": entries}
+    temp: str | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=".worker-quota.",
+                                         suffix=".tmp", delete=False) as handle:
+            temp = handle.name
+            json.dump(document, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.chmod(temp, 0o644)
+        os.replace(temp, path)
+        return True
+    except OSError:
+        if temp is not None:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+        return False
+
+
+def read_pools(readers: dict[str, Callable[[], Pool]] | None = None, timeout: float = TOTAL_TIMEOUT) -> dict[str, Pool]:
+    """Every pool that MODELS uses, read in parallel within one bounded wait. A reader that raises or is still
+    running at the deadline leaves its pool unreadable; nothing here ever hangs or raises."""
+    chosen = READERS if readers is None else readers
+    names = list(dict.fromkeys(m.pool for m in MODELS))
+    out: dict[str, Pool] = {name: unreadable(name, "timeout") for name in names}
+
+    def run(name: str) -> None:
+        try:
+            reader = chosen.get(name)
+            out[name] = reader() if reader else unreadable(name, "no_reader")
+        except Exception:  # noqa: BLE001 - a broken reader makes only its pool unavailable
+            out[name] = unreadable(name, "reader_error")
+
+    threads = [threading.Thread(target=run, args=(name,), daemon=True) for name in names]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + timeout
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    return dict(out)
+
+
+def resolve_pools(quota_files: list[Path] | None = None, now: datetime | None = None) -> dict[str, Pool]:
+    """Live readings first; a pool unreadable live falls back to the supervisor's snapshot when fresh enough."""
+    pools = read_pools()
+    if all(p.free is not None for p in pools.values()):
+        return pools
+    return apply_snapshot(pools, load_snapshot(quota_files or default_snapshot_paths()), now or datetime.now(UTC))
+
+
+def pct(value: float) -> str:
+    return f"{round(value * 100)}%"
+
+
+def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODELS) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(eligible, skipped) for a required tier. Eligible is ordered cheapest adequate first."""
+    eligible: list[tuple[tuple[int, int, float, int], dict[str, Any]]] = []
+    skipped: list[dict[str, Any]] = []
+    for index, model in enumerate(models):
+        if model.capability < required:
+            continue
+        pool = pools.get(model.pool) or unreadable(model.pool, "no_reading")
+        entry: dict[str, Any] = {"worker": model.key, "kind": model.kind, "model": model.model, "pool": model.pool,
+                                 "capability": model.capability, "cost": model.cost,
+                                 "free": None if pool.free is None else round(pool.free, 4), "source": pool.source}
+        if pool.free is None:
+            skipped.append({**entry, "skipped": pool.reason or "unreadable"})
+        elif pool.free < RESERVES.get(model.pool, RESERVE):
+            skipped.append({**entry, "skipped": "below_reserve"})
+        else:
+            priority = POOL_PRIORITY.index(model.pool) if model.pool in POOL_PRIORITY else len(POOL_PRIORITY)
+            eligible.append(((model.capability - required, priority, -pool.free, index), entry))
+    return [entry for _, entry in sorted(eligible, key=lambda item: item[0])], skipped
+
+
+def launch_command(model: Model) -> str:
+    if model.kind == "codex":
+        return f'codex exec --model {model.model} --cd "$WORKTREE" - < "$TASK_FILE"'
+    if model.kind == "claude":
+        # Headless, edits only: acceptEdits plus no permission prompts (anything that would prompt is denied).
+        # Never bypassPermissions or --dangerously-skip-permissions for a worker.
+        return (f'cd "$WORKTREE" && claude -p --model {model.model} --permission-mode acceptEdits '
+                '--permission-prompts none --output-format json < "$TASK_FILE"')
+    return 'python3 scripts/agy_worker.py run --task-file "$TASK_FILE" --worktree "$WORKTREE" --model flash'
+
+
+def decide(difficulty: str, risk: str, pools: dict[str, Pool]) -> dict[str, Any]:
+    required = tier(difficulty, risk)
+    eligible, skipped = rank(required, pools)
+    decision: dict[str, Any] = {"difficulty": difficulty, "risk": risk, "required_tier": required,
+                                "review": REVIEW[risk], "reserves": RESERVES}
+    by_key = {m.key: m for m in MODELS}
+    if not eligible:
+        return {**decision, "status": "no_worker", "reason": "no_worker", "skipped": skipped}
+    chosen = eligible[0]
+    low = chosen["pool"] == "claude" and chosen["free"] < CLAUDE_LOW_FREE
+    return {**decision, "status": "ok", "worker": chosen["worker"], "model": chosen["model"], "pool": chosen["pool"],
+            "source": chosen["source"], "command": launch_command(by_key[chosen["worker"]]),
+            "claude_pool_low": low, **({"note": CLAUDE_LOW_NOTE} if low else {}),
+            "alternatives": eligible[1:], "skipped": skipped}
+
+
+def summary_line(pools: dict[str, Pool]) -> str:
+    parts = []
+    for name in dict.fromkeys(m.pool for m in MODELS):
+        pool = pools.get(name) or unreadable(name, "no_reading")
+        if pool.free is None:
+            parts.append(f"{name} unavailable ({pool.reason or 'unreadable'})")
+            continue
+        short = f" (5h {pct(pool.windows['5h'])})" if "5h" in pool.windows else ""
+        low = " [below reserve]" if pool.free < RESERVES.get(name, RESERVE) else ""
+        stale = " [snapshot]" if pool.source == "snapshot" else ""
+        parts.append(f"{name} {pct(pool.free)} free{short}{low}{stale}")
+    return "worker quota: " + " · ".join(parts) + " — prefer cheapest adequate pool"
+
+
+_cache: dict[str, Any] = {"at": None, "line": None, "ttl": 0.0}
+
+
+def cached_summary(ttl: float = CACHE_TTL, clock: Callable[[], float] = time.monotonic,
+                   read: Callable[[], dict[str, Pool]] | None = None, snapshot_file: Path | None = None) -> str:
+    """One compact quota line for a supervisor prompt, cached for `ttl` seconds. Never raises: any failure is the
+    line `worker quota: unreadable`, itself cached briefly so a broken reader is not retried on every turn.
+    With `snapshot_file` (the supervisor), a successful live reading is also persisted there for coordinators."""
+    now = clock()
+    if _cache["at"] is not None and now - _cache["at"] < _cache["ttl"]:
+        return str(_cache["line"])
+    try:
+        pools = (read or read_pools)()
+        if snapshot_file is not None:
+            write_snapshot(snapshot_file, pools)
+        line = summary_line(pools)
+        lifetime = ttl if any(p.free is not None for p in pools.values()) else min(ttl, FAILED_CACHE_TTL)
+    except Exception:  # noqa: BLE001 - the prompt must never depend on a reading
+        line, lifetime = UNREADABLE, min(ttl, FAILED_CACHE_TTL)
+    _cache.update(at=now, line=line, ttl=lifetime)
+    return line
+
+
+def render(decision: dict[str, Any]) -> str:
+    if decision["status"] != "ok":
+        skipped = ", ".join(f"{s['worker']}({s['skipped']})" for s in decision["skipped"]) or "none adequate"
+        return (f"no_worker: nothing adequate for tier {decision['required_tier']} "
+                f"(difficulty {decision['difficulty']}, risk {decision['risk']}); skipped: {skipped}\n"
+                "The coordinator does the work itself or waits.")
+    lines = [f"worker: {decision['worker']} ({decision['model']}, pool {decision['pool']}"
+             + (", quota from snapshot)" if decision["source"] == "snapshot" else ")"),
+             f"tier: {decision['required_tier']} (difficulty {decision['difficulty']}, risk {decision['risk']})",
+             f"launch: {decision['command']}",
+             f"review: {decision['review']}"]
+    if decision.get("note"):
+        lines.append(f"note: {decision['note']}")
+    if decision["alternatives"]:
+        lines.append("alternatives: " + ", ".join(
+            f"{a['worker']} ({a['pool']} {pct(a['free'])} free{' snapshot' if a['source'] == 'snapshot' else ''})"
+            for a in decision["alternatives"]))
+    if decision["skipped"]:
+        lines.append("skipped: " + ", ".join(f"{s['worker']}({s['skipped']})" for s in decision["skipped"]))
+    return "\n".join(lines)
+
+
+def cmd_pick(args: argparse.Namespace) -> int:
+    decision = decide(args.difficulty, args.risk, resolve_pools(args.quota_file))
+    print(json.dumps(decision, indent=2, sort_keys=True) if args.json else render(decision))
+    return 0 if decision["status"] == "ok" else NO_WORKER_EXIT
+
+
+def cmd_summary(args: argparse.Namespace) -> int:
+    print(cached_summary(read=lambda: resolve_pools(args.quota_file)))
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+    quota_file = {"type": Path, "action": "append", "help": "snapshot file to fall back on (default: the supervisor's "
+                                                           ".agent-relay/worker-quota.json)"}
+    pick = sub.add_parser("pick", help="choose the cheapest adequate worker with quota headroom",
+                          description=RISK_GUIDE)
+    pick.add_argument("--difficulty", required=True, choices=sorted(LEVELS, key=LEVELS.get))
+    pick.add_argument("--risk", required=True, choices=sorted(LEVELS, key=LEVELS.get), help=RISK_GUIDE)
+    pick.add_argument("--json", action="store_true")
+    pick.add_argument("--quota-file", **quota_file)
+    pick.set_defaults(func=cmd_pick)
+    summary = sub.add_parser("summary", help="one compact line of pool headroom")
+    summary.add_argument("--quota-file", **quota_file)
+    summary.set_defaults(func=cmd_summary)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    return int(args.func(args))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

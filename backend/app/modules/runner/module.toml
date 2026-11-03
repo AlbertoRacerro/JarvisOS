@@ -1,0 +1,4 @@
+purpose = "Bounded local Python runner: model implementations, runner jobs, simulation runs, logs and artifacts. Not a hostile-code sandbox."
+status = "live"
+entrypoints = ["/workspaces/{id}/runner-jobs", "/workspaces/{id}/simulation-runs", "local_python.py"]
+owner = "maintainer"

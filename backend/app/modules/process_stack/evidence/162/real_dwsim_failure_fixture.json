@@ -1,0 +1,166 @@
+{
+  "case": {
+    "bottoms_spec_molar_flow_mol_s": 1000,
+    "feed_molar_flow_mol_s": 40,
+    "jarvis_blockers": [],
+    "physical_motivation": "40 mol/s feed with a 1000 mol/s bottoms product specification",
+    "reflux_ratio": 2,
+    "validation_path": "process draft run"
+  },
+  "dwsim_version": "10.2.9",
+  "process_run": {
+    "dwsim_check": {
+      "findings": [
+        {
+          "code": "ENERGY_STREAM_HALF_CONNECTED",
+          "fix": "Connect both ends, or delete it if the unit computes its own duty.",
+          "message": "This energy stream is attached at one end only, so its duty has no source or no destination.",
+          "object": "Condenser",
+          "severity": "warning",
+          "source": "dwsim"
+        },
+        {
+          "code": "ENERGY_STREAM_HALF_CONNECTED",
+          "fix": "Connect both ends, or delete it if the unit computes its own duty.",
+          "message": "This energy stream is attached at one end only, so its duty has no source or no destination.",
+          "object": "Reboiler",
+          "severity": "warning",
+          "source": "dwsim"
+        }
+      ],
+      "ready": true
+    },
+    "dwsim_version": "10.2.9",
+    "solve": {
+      "errors": [
+        "COL: Could not converge to a valid solution. Please check the column specs"
+      ],
+      "failed_objects": [
+        {
+          "calculated": false,
+          "error": "Could not converge to a valid solution. Please check the column specs",
+          "tag": "COL"
+        },
+        {
+          "calculated": false,
+          "error": "",
+          "tag": "Distillate"
+        },
+        {
+          "calculated": false,
+          "error": "",
+          "tag": "Condenser"
+        },
+        {
+          "calculated": false,
+          "error": "",
+          "tag": "Bottoms"
+        }
+      ],
+      "ok": false
+    },
+    "status": "failed"
+  },
+  "raw_dwsim": {
+    "dwsim_flowsheet_check": {
+      "blockers": 0,
+      "compound_count": 2,
+      "explanations": [
+        {
+          "code": "ENERGY_STREAM_HALF_CONNECTED",
+          "how_to_fix": "Connect the other end, set the duty on the stream by hand if it is a boundary energy input, or delete the stream if the unit computes its own duty from a temperature specification.",
+          "learn_more": "https://dwsim.org/tutorials/en/beginner/03-heater-cooler.html",
+          "meaning": "An energy stream is attached to a unit at one end only.",
+          "title": "Energy stream with a loose end",
+          "why": "An energy stream carries a duty: heat into a heater, work into a pump, heat out of a cooler. A unit in Energy Stream mode reads its duty from the stream, so the stream needs a value from somewhere. One loose end means the duty comes from nowhere, or goes nowhere."
+        }
+      ],
+      "findings": [
+        {
+          "code": "ENERGY_STREAM_HALF_CONNECTED",
+          "fix": "Connect both ends, or delete it if the unit computes its own duty.",
+          "learn_more": "https://dwsim.org/tutorials/en/beginner/03-heater-cooler.html",
+          "message": "This energy stream is attached at one end only, so its duty has no source or no destination.",
+          "object": "Condenser",
+          "severity": "warning"
+        },
+        {
+          "code": "ENERGY_STREAM_HALF_CONNECTED",
+          "fix": "Connect both ends, or delete it if the unit computes its own duty.",
+          "learn_more": "https://dwsim.org/tutorials/en/beginner/03-heater-cooler.html",
+          "message": "This energy stream is attached at one end only, so its duty has no source or no destination.",
+          "object": "Reboiler",
+          "severity": "warning"
+        }
+      ],
+      "object_count": 6,
+      "ready": true,
+      "warnings": 2
+    },
+    "dwsim_solve_run": {
+      "blockers": 2,
+      "error_count": 1,
+      "errors": [
+        "COL: Could not converge to a valid solution. Please check the column specs"
+      ],
+      "findings": [
+        {
+          "code": "NOT_CONVERGED",
+          "fix": "Check its specification, and that everything upstream of it solved.",
+          "learn_more": "https://dwsim.org/tutorials/en/reference/troubleshooting.html",
+          "message": "Could not converge to a valid solution. Please check the column specs",
+          "object": "COL",
+          "severity": "blocker"
+        },
+        {
+          "code": "SOLVER_EXCEPTION",
+          "fix": "Check that object's specification, and its feed.",
+          "learn_more": "https://dwsim.org/tutorials/en/reference/troubleshooting.html",
+          "message": "Could not converge to a valid solution. Please check the column specs",
+          "object": "COL",
+          "severity": "blocker"
+        }
+      ],
+      "objects": [
+        {
+          "calculated": false,
+          "error": "Could not converge to a valid solution. Please check the column specs",
+          "name": "COL",
+          "type": "DistillationColumn"
+        },
+        {
+          "calculated": true,
+          "error": "",
+          "name": "Reboiler",
+          "type": "EnergyStream"
+        },
+        {
+          "calculated": true,
+          "error": "",
+          "name": "Feed",
+          "type": "MaterialStream"
+        },
+        {
+          "calculated": false,
+          "error": "",
+          "name": "Distillate",
+          "type": "MaterialStream"
+        },
+        {
+          "calculated": false,
+          "error": "",
+          "name": "Condenser",
+          "type": "EnergyStream"
+        },
+        {
+          "calculated": false,
+          "error": "",
+          "name": "Bottoms",
+          "type": "MaterialStream"
+        }
+      ],
+      "ok": false
+    }
+  },
+  "runtime_sha256": "d20f97426c264ac91114240b085b3c4e7877dfda83ecb487c0125f838cf66cfa"
+}

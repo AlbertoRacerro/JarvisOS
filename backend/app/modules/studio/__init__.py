@@ -1,0 +1,1 @@
+"""Engineering Studio model authoring."""
