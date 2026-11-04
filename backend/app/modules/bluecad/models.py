@@ -136,8 +136,8 @@ def _transform_bbox(bbox: tuple[tuple[float, float, float], tuple[float, float, 
 # Spec 010 AI loop ledger/API models.
 
 CandidateStatus = Literal["generating", "validating", "valid", "parked", "archived"]
-ParkedReason = Literal["attempts_exhausted", "budget_blocked", "policy_blocked", "malformed_repeated", "user_cancelled", "cad_link_failed", "template_build_failed", "agent_action_failed"]
-CandidateOrigin = Literal["ai", "parametric_variant", "process_linked", "template", "agent_action"]
+ParkedReason = Literal["attempts_exhausted", "budget_blocked", "policy_blocked", "malformed_repeated", "user_cancelled", "cad_link_failed", "template_build_failed", "agent_action_failed", "feature_history_build_failed"]
+CandidateOrigin = Literal["ai", "parametric_variant", "process_linked", "template", "agent_action", "feature_history"]
 ProposalOutcome = Literal["ok", "malformed", "provider_error", "blocked", "not_applicable"]
 ValidationVerdict = Literal["pass", "fail"]
 
