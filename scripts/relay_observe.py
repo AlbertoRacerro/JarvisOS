@@ -77,10 +77,11 @@ _URL_RE = re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]{1,15}://\S*|(?:mailto|tel|slack
                      r"|cloud|tech|example|eu|us|uk|de|it|fr|ru|cn)\b(?:[/?#]\S*)?)")
 _PATH_RE = re.compile(r"(?<![\w.~])(?:~|/(?:home|mnt|root|etc|tmp|run|var|proc))/\S*")
 _SLACK_ESCAPES = (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"))
-# A commit SHA has at least one digit, so Italian words such as "accadde" are not taken for one.
-_MACHINE_RE = re.compile(r"(?i)\b(?=[0-9a-f]*\d)[0-9a-f]{7,}\b|\b[mj]-20\d\d\w*|\bL20\d\d\w*|`|"
-                         r"(?<!\w)(?:[\w.-]+/)+[\w.-]+\.[\w.-]+|(?<!\w)/(?:[\w.-]+/)*[a-z_][\w.-]*|"
+# All-letter SHAs exist; exempt ordinary Italian words that happen to use only hex letters.
+_MACHINE_RE = re.compile(r"(?i)\b(?!(?:accadde|decadde)\b)[0-9a-f]{7,}\b|\b[mj]-20\d\d\w*|\bL20\d\d\w*|`|"
+                         r"(?<!\w)(?:[a-z_][\w.-]*[/\\])+[\w.-]+|(?<!\w)/(?:[\w.-]+/)*[a-z_][\w.-]*|"
                          r"\b[\w-]+\.(?:py|mjs|js|tsx?|json|md|toml|ya?ml|sh|ps1|cmd|log)\b")
+_ISSUE_REF_RE = re.compile(r"(?<!\w)#\d{1,6}\b")
 
 
 def machine_marker(text: str) -> bool:
@@ -238,7 +239,7 @@ def _maintainer_update(entries: list[dict[str, Any]], since: str | None) -> tupl
                 and (not since or str(e.get("ts") or "") >= since))
     latest = max(eligible, key=lambda e: str(e.get("ts") or ""), default=None)
     raw = latest.get("text") if latest else None
-    if not isinstance(raw, str) or machine_marker(raw):
+    if not isinstance(raw, str) or machine_marker(raw) or _ISSUE_REF_RE.search(raw):
         return None, None
     parts = re.split(r"\s+Prossimo:\s*", raw, maxsplit=1)
     update = clean(parts[0])
@@ -394,7 +395,7 @@ def incidents(snap: dict[str, Any], now: datetime) -> dict[str, str]:
     if snap["state"] == "paused":
         question = snap.get("question")
         found[f"paused|{reason}"] = (question if reason == "coordinator_blocked" and isinstance(question, str)
-                                        and not machine_marker(question) else
+                                        and not machine_marker(question) and not _ISSUE_REF_RE.search(question) else
                                         "c'è una domanda per te: rispondi a Claude in chat" if reason == "coordinator_blocked"
                                         else f"lo sviluppo è in pausa: {REASON_IT.get(reason, 'serve una tua verifica')}")
     if "owner_down" in snap["problems"]:
@@ -429,6 +430,8 @@ def digest_text(snap: dict[str, Any], *, since: str | None, merges: list[tuple[s
     mission = snap.get("mission") or {}
     state = snap["state"]
     label = mission.get("label")
+    if isinstance(label, str):
+        label = re.sub(r"\s+", " ", _ISSUE_REF_RE.sub("", label)).strip()
     if label and label != ROADMAP_LABEL:
         # The queue item is the maintainer's own wording; it is framed, never replaced by the turn's English notes.
         fallback = "sviluppo di JarvisOS" if machine_marker(label) else f"il compito che hai messo in coda: {label}"
@@ -436,24 +439,30 @@ def digest_text(snap: dict[str, Any], *, since: str | None, merges: list[tuple[s
         fallback = ROADMAP_LABEL if label or (snap.get("roadmap") or {}).get("enabled") else "nessun lavoro attivo"
     state_word = {"held": "in pausa", "paused": "in pausa", "waiting": "in attesa di lavori lunghi in corso" if snap.get("wait_kind") == "jobs" else "in attesa",
                   "stopped": "fermo", "unknown": "da verificare"}.get(state)
-    current = snap.get("update") or fallback
+    update = snap.get("update")
+    current = (update if isinstance(update, str) and not machine_marker(update) and not _ISSUE_REF_RE.search(update)
+               else fallback)
     lines.append(f"*Sto facendo:* {current}" + (f" ({state_word})" if state_word else ""))
     done = [d for d in snap.get("delivered") or [] if not since or (d.get("at") or "") > since]
     lines.append("*Fatto:*")
     # A settled roadmap cycle says nothing by itself: its merged PRs below carry the content.
     labels = [d.get("label") for d in done if d.get("label") != ROADMAP_LABEL]
-    labels = [label if label and not machine_marker(label) else "lavoro completato" for label in labels]
+    labels = [re.sub(r"\s+", " ", _ISSUE_REF_RE.sub("", label)).strip()
+              if isinstance(label, str) and not machine_marker(label) else "lavoro completato" for label in labels]
+    labels = [label or "lavoro completato" for label in labels]
     for label in list(dict.fromkeys(labels))[-4:]:
         lines.append(f"  • {label}")
     for pr, title in merges[-5:]:
         subject = re.sub(r"(?:\s*(?:\(Spec \d+\)|\(#\d+\)|#\d+))+\s*$", "", title, flags=re.IGNORECASE)
         subject = re.sub(r"^[a-z][\w-]*(?:\([^)]*\))?:\s*", "", subject, flags=re.IGNORECASE).strip()
+        subject = re.sub(r"\s+", " ", _ISSUE_REF_RE.sub("", subject)).strip()
         subject = subject[:1].upper() + subject[1:] if subject and not machine_marker(subject) else "Modifica completata"
         lines.append(f"  • <{REPO_URL}/pull/{pr}|{subject}>")
     if lines[-1] == "*Fatto:*":
         lines.append("  • nessuna novità")
-    if snap.get("update_next"):
-        lines.append(f"*Prossimo:* {snap['update_next']}")
+    next_step = snap.get("update_next")
+    if isinstance(next_step, str) and not machine_marker(next_step) and not _ISSUE_REF_RE.search(next_step):
+        lines.append(f"*Prossimo:* {next_step}")
     asks = list(incidents(snap, rc.parse_ts(snap["at"]) or rc.now_utc()).values())
     if delivery_failures:
         asks.append(f"{delivery_failures} invii Slack falliti dall'ultimo aggiornamento")
@@ -463,6 +472,8 @@ def digest_text(snap: dict[str, Any], *, since: str | None, merges: list[tuple[s
 
 
 def alert_text(description: str, snap: dict[str, Any]) -> str:
+    if machine_marker(description) or _ISSUE_REF_RE.search(description):
+        description = "c'è una domanda per te: rispondi a Claude in chat"
     end = "" if description.endswith((".", "?", "!")) else "."
     return f":red_circle: *JarvisOS — serve il tuo intervento* ({_local(snap['at'])})\n{description}{end}"
 

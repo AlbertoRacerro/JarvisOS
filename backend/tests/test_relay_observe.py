@@ -206,11 +206,20 @@ def test_update_boundary_and_machine_marker_fall_back_to_label(tmp_path: Path) -
     s = snap(root, repo, ledger=entries)
     assert (s["update"], s["update_next"]) == ("Sto migliorando il riepilogo Slack.", "verificare il risultato.")
     assert "*Prossimo:* verificare il risultato." in ro.digest_text(s, since=None, merges=[])
-    for value in ("abcdef0", M1, "j-20261104T120000Z-aabbcc", AUTH, "scripts/relay_observe.py", "`cmd`",
+    for value in ("abcdef0", "abcdefa", M1, "j-20261104T120000Z-aabbcc", AUTH,
+                  "scripts/relay_observe.py", "src/module", r"C:\Users\Sample\secret.txt", "`cmd`",
                   "Sto modificando relay_observe.py", "m-20271104T110422Z-27bb5e", "L20270101000000-abcd"):
         assert ro.machine_marker(value), value
-    for value in ("Non so cosa accadde ieri.", "Sto aggiungendo la colonna Copilot in Coding > Runtime."):
+    for value in ("Non so cosa accadde ieri.", "La cosa decadde ieri.",
+                  "Sto aggiungendo la colonna Copilot in Coding > Runtime."):
         assert not ro.machine_marker(value), value
+
+    for unsafe in ("Sto leggendo abcdefa.", "Sto leggendo src/module.", "Sto verificando #900.",
+                   r"Sto leggendo C:\Users\Sample\secret.txt."):
+        entries[-1]["text"] = unsafe + " Prossimo: verificare il riepilogo."
+        assert snap(root, repo, ledger=entries)["update"] is None
+        assert "Migliorare il riepilogo Slack" in ro.digest_text(snap(root, repo, ledger=entries),
+                                                                 since=None, merges=[])
 
 
 def test_update_without_active_mission_uses_last_delivered_session_start(tmp_path: Path) -> None:
@@ -242,7 +251,8 @@ def test_realistic_visible_digest_and_alerts_have_no_machine_markers(tmp_path: P
     s["delivered"] = [{"at": rc.iso(T0 + timedelta(minutes=10)), "label": "Riepilogo delle quote",
                        "outcome": "verified"}]
     s["jobs"] = [{"id": "j-20261104T120000Z-aabbcc", "status": "running", "exit_code": None}]
-    merged = [("871", "feat(quotes): add quote panel (Spec 241)"), ("872", "fix: improve alerts (Spec 241) (#872)"),
+    merged = [("871", "feat(quotes): add quote panel (Spec 241)"),
+              ("872", "fix: improve #872 alerts (Spec 241) (#872)"),
               ("873", "docs: tidy notes #873")]
     visible = _visible(ro.digest_text(s, since=None, merges=merged))
     assert "<Add quote panel>" in visible and "<Improve alerts>" in visible and "<Tidy notes>" in visible
@@ -258,6 +268,7 @@ def test_realistic_visible_digest_and_alerts_have_no_machine_markers(tmp_path: P
         {**s, "state": "held", "reason": "auth_failure"},
         {**s, "state": "paused", "reason": "coordinator_blocked", "question": "Vuoi continuare con le quote?"},
         {**s, "state": "paused", "reason": "coordinator_blocked", "question": "Controlla `cmd`?"},
+        {**s, "state": "paused", "reason": "coordinator_blocked", "question": "Approve spending on #900?"},
         {**s, "state": "stopped", "problems": ["owner_down"]},
         {**s, "state": "unknown", "problems": ["hostops_down", "roadmap_corrupt"]},
     ]
@@ -268,6 +279,15 @@ def test_realistic_visible_digest_and_alerts_have_no_machine_markers(tmp_path: P
             assert not ro.machine_marker(_visible(ro.alert_text(description, state)))
     assert ro.incidents(states[1], T0)["paused|coordinator_blocked"] == "Vuoi continuare con le quote?"
     assert "rispondi a Claude" in ro.incidents(states[2], T0)["paused|coordinator_blocked"]
+    assert "rispondi a Claude" in ro.incidents(states[3], T0)["paused|coordinator_blocked"]
+    assert "#900" not in ro.digest_text(states[3], since=None, merges=merged)
+    assert "Approve spending" not in ro.alert_text(ro.incidents(states[3], T0)["paused|coordinator_blocked"], states[3])
+    with_refs = {**s, "mission": {"label": "Migliorare #900 le quote"},
+                 "delivered": [{"at": rc.iso(T0), "label": "Completare #900 il pannello"}],
+                 "update": "Sto leggendo src/module.", "update_next": "controllare abcdefa"}
+    text = ro.digest_text(with_refs, since=None, merges=[])
+    assert "Migliorare le quote" in text and "Completare il pannello" in text
+    assert "src/module" not in text and "abcdefa" not in text and "#900" not in text
 
 
 def test_clean_rejects_secrets_and_bounds_text() -> None:
