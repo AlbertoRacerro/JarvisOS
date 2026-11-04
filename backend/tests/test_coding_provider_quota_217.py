@@ -87,7 +87,7 @@ def test_unauthenticated_missing_and_unreadable_states() -> None:
     assert provider(payload, "codex") == {"provider": "codex", "label": "Codex (ChatGPT)", "source": "codex account/rateLimits/read",
                                          "status": "unavailable", "reason": "codex_limits_unreadable", "windows": []}
     unreadable = pq.normalize({"relay": None, "agy": None}, NOW)
-    assert {p["reason"] for p in unreadable["providers"]} == {"relay_limits_unreadable", "agy_quota_unreadable", "codex_limits_unreadable"}
+    assert {p["reason"] for p in unreadable["providers"]} == {"relay_limits_unreadable", "agy_quota_unreadable", "codex_limits_unreadable", "copilot_quota_unreadable"}
 
 
 def test_antigravity_buckets_from_agy_quota() -> None:
@@ -174,10 +174,11 @@ def test_missing_tools_are_unreadable_not_an_error(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("JARVISOS_AGENT_RELAY_BIN", "/nonexistent/agent-relay")
     monkeypatch.setenv("JARVISOS_AGY_BIN", "/nonexistent/agy")
     monkeypatch.setenv("JARVISOS_CODEX_BIN", "/nonexistent/codex")
+    monkeypatch.setenv("JARVISOS_GH_BIN", "/nonexistent/gh")
     readings = pq.read_all()
-    assert readings == {"relay": None, "agy": None, "codex": None,
-                        "errors": {"relay": "not_found", "agy": "not_found", "codex": "not_found"}}
-    assert {p["reason"] for p in pq.normalize(readings, NOW)["providers"]} == {"relay_not_found", "agy_not_found", "codex_not_found"}
+    assert readings == {"relay": None, "agy": None, "codex": None, "copilot": None,
+                        "errors": {"relay": "not_found", "agy": "not_found", "codex": "not_found", "copilot": "not_found"}}
+    assert {p["reason"] for p in pq.normalize(readings, NOW)["providers"]} == {"relay_not_found", "agy_not_found", "codex_not_found", "copilot_not_found"}
 
 
 def test_tools_outside_the_service_path_are_found(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -206,9 +207,9 @@ def test_read_failures_name_their_cause(monkeypatch: pytest.MonkeyPatch, tmp_pat
     monkeypatch.setattr(pq.subprocess, "run", slow)
     assert pq.read_relay_limits() == (None, "timeout")
     reasons = pq.normalize({"relay": None, "agy": None, "errors": {"relay": "timeout", "agy": "no_json"}}, NOW)
-    assert {p["reason"] for p in reasons["providers"]} == {"relay_timeout", "agy_no_json", "codex_limits_unreadable"}
+    assert {p["reason"] for p in reasons["providers"]} == {"relay_timeout", "agy_no_json", "codex_limits_unreadable", "copilot_quota_unreadable"}
     junk = pq.normalize({"relay": None, "agy": None, "errors": {"relay": "/home/x/secret", "agy": 3}}, NOW)
-    assert {p["reason"] for p in junk["providers"]} == {"relay_limits_unreadable", "agy_quota_unreadable", "codex_limits_unreadable"}
+    assert {p["reason"] for p in junk["providers"]} == {"relay_limits_unreadable", "agy_quota_unreadable", "codex_limits_unreadable", "copilot_quota_unreadable"}
 
 
 def test_route_requires_the_runtime_repository(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -218,7 +219,7 @@ def test_route_requires_the_runtime_repository(monkeypatch: pytest.MonkeyPatch) 
     client = TestClient(app)
     prefix = runtime_routes.router.prefix
     ok = client.get(f"{prefix}/provider-quotas", params={"repository": CANONICAL_RUNTIME_REPOSITORY})
-    assert ok.status_code == 200 and [p["provider"] for p in ok.json()["providers"]] == ["claude", "codex", "antigravity"]
+    assert ok.status_code == 200 and [p["provider"] for p in ok.json()["providers"]] == ["claude", "codex", "antigravity", "copilot"]
     assert client.get(f"{prefix}/provider-quotas", params={"repository": "someone/else"}).status_code == 400
 
 
@@ -408,9 +409,9 @@ def test_codex_usage_timeout_reaps_ephemeral_child(monkeypatch: pytest.MonkeyPat
 
 
 def test_status_sources_start_independently_and_preserve_partial_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    started = threading.Barrier(3)
+    started = threading.Barrier(4)
 
-    def relay() -> tuple[dict[str, Any], None]:
+    def relay(*, refresh: bool = False) -> tuple[dict[str, Any], None]:
         started.wait(timeout=5)
         return {"agents": []}, None
 
@@ -422,9 +423,68 @@ def test_status_sources_start_independently_and_preserve_partial_failure(monkeyp
         started.wait(timeout=5)
         return {"status": "ok", "windows": []}, None
 
+    def copilot() -> tuple[None, str]:
+        started.wait(timeout=5)
+        return None, "timeout"
+
+    monkeypatch.setattr(pq, "read_copilot_quota", copilot)
     monkeypatch.setattr(pq, "read_relay_limits", relay)
     monkeypatch.setattr(pq, "read_agy_quota", agy)
     monkeypatch.setattr(pq, "read_codex_limits", codex)
     result = pq.read_all()
-    assert result == {"relay": {"agents": []}, "agy": None, "codex": {"status": "ok", "windows": []},
-                      "errors": {"relay": None, "agy": "timeout", "codex": None}}
+    assert result == {"relay": {"agents": []}, "agy": None, "codex": {"status": "ok", "windows": []}, "copilot": None,
+                      "errors": {"relay": None, "agy": "timeout", "codex": None, "copilot": "timeout"}}
+
+
+@pytest.mark.parametrize(("bucket", "expected"), [
+    ({"percent_remaining": 35}, 35), ({"unlimited": True}, 100),
+    ({"percent_remaining": 50, "remaining": 0}, 0), ({"has_quota": False}, 0),
+])
+def test_copilot_pool(bucket: dict[str, Any], expected: int) -> None:
+    data = {"quota_snapshots": {"premium_interactions": bucket}, "quota_reset_date": "2026-11-01"}
+    result = provider(pq.normalize({"copilot": data}, NOW), "copilot")
+    assert result["status"] == "ok"
+    assert result["windows"][0]["remaining_percent"] == expected
+    assert result["windows"][0]["resets_at"] == "2026-11-01T00:00:00Z"
+
+
+@pytest.mark.parametrize(("data", "reason"), [
+    ({"cli_enabled": False}, "cli_disabled"), ({}, "bucket_missing"),
+    ({"quota_snapshots": {"premium_interactions": {"has_quota": False, "entitlement": 0}}}, "no_entitlement"),
+    ({"quota_snapshots": {"premium_interactions": {"percent_remaining": float("nan")}}}, "invalid_reading"),
+])
+def test_copilot_invalid(data: dict[str, Any], reason: str) -> None:
+    assert provider(pq.normalize({"copilot": data}, NOW), "copilot")["reason"] == reason
+
+
+def test_relay_cached_and_refresh_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(UTC)
+    cached = {"agents": [{"agent_key": "claude", "status": "ok", "as_of": iso(now),
+                          "windows": [{"id": "weekly", "used_percent": 12}]}]}
+    calls: list[list[str]] = []
+    def run(_env: str, _cmd: str, args: list[str]) -> tuple[str, None]:
+        calls.append(args)
+        return json.dumps(cached if len(args) == 2 else {"agents": [{"agent_key": "claude", "status": "unavailable"}]}), None
+    monkeypatch.setattr(pq, "_run", run)
+    assert pq.read_relay_limits()[0] == cached and len(calls) == 1
+    assert pq.read_relay_limits(refresh=True)[0] == cached and len(calls) == 3
+
+
+def test_last_good_retains_age_and_unavailable_reason() -> None:
+    clock = [NOW]
+    values = iter([reading(claude={"status": "ok", "as_of": iso(NOW), "windows": [{"used_percent": 20}]}), {}, {}])
+    cache = pq.QuotaCache(lambda: next(values), clock=lambda: clock[0])
+    cache.get()
+    clock[0] += timedelta(hours=1)
+    result = provider(cache.get(refresh=True), "claude")
+    assert result["status"] == "ok" and result["last_error"] == "relay_limits_unreadable"
+    assert result["as_of"] == iso(NOW) and result["windows"][0]["stale"]
+    assert provider(cache.get(), "copilot")["status"] == "unavailable"
+
+
+@pytest.mark.parametrize("error", ["timeout", "no_json"])
+def test_copilot_cli_failure(monkeypatch: pytest.MonkeyPatch, error: str) -> None:
+    monkeypatch.setattr(pq, "_run", lambda *_args: (None, error))
+    data, failure = pq.read_copilot_quota()
+    result = provider(pq.normalize({"copilot": data, "errors": {"copilot": failure}}, NOW), "copilot")
+    assert result["status"] == "unavailable" and result["reason"] == f"copilot_{error}"

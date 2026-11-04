@@ -104,7 +104,8 @@ export function ProviderQuotaView({ data, error, now = new Date(), refreshing = 
     {data ? <div className="coding-quota-grid" style={{ gridTemplateColumns: `max-content repeat(${providers.length}, minmax(0, 1fr))` }}>
       <span />
       {providers.map((p) => <strong key={p.provider} className="coding-quota-provider">{p.label}
-        {p.as_of ? <small title={`Usage observed at ${p.as_of}`}>{age(p.as_of, now)}</small> : null}
+        {p.last_error ? <small>Last reading {age(p.as_of, now)?.replace(/^read /, "") ?? "at an unknown time"} — refresh failed</small>
+          : p.as_of ? <small title={`Usage observed at ${p.as_of}`}>{age(p.as_of, now)}</small> : null}
       </strong>)}
       {ROWS.map((row) => <div key={row.kind} className="coding-quota-row" role="group" aria-label={row.label}>
         <span className="coding-quota-rowlabel">{row.label}</span>
