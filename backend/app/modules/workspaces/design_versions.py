@@ -96,6 +96,18 @@ def _fork_content(connection, parent_id: str, drafts: dict[str, dict[str, str]],
                 "updated_at) VALUES (?, ?, ?, ?)",
                 (new, geometry["candidate_id"], revisions.get(source, source), now))
             counts["geometry"] += 1
+        history = connection.execute(
+            "SELECT sequence_json, sequence_digest, compiled_spec_id, candidate_id, revision, updated_by "
+            "FROM design_component_feature_history WHERE component_id = ?", (old,),
+        ).fetchone()
+        if history is not None:
+            connection.execute(
+                "INSERT INTO design_component_feature_history "
+                "(component_id, sequence_json, sequence_digest, compiled_spec_id, candidate_id, revision, updated_at, updated_by) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (new, history["sequence_json"], history["sequence_digest"], history["compiled_spec_id"],
+                 history["candidate_id"], history["revision"], now, history["updated_by"]),
+            )
         for pin in connection.execute(
                 "SELECT model_version_id, node, category, source_sha256, contract_sha256, attached_at "
                 "FROM design_component_models WHERE component_id = ? ORDER BY rowid", (old,)).fetchall():

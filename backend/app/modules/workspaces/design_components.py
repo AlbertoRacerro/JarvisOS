@@ -25,6 +25,13 @@ from app.modules.bluecad.cfd_pipe.reduced_model import (
 )
 from app.modules.bluecad.cfd_pipe.studio_publication import publish_to_studio, reduced_model_of_source
 from app.modules.bluecad.cfd_pipe.study_from_runs import publication_inputs
+from app.modules.bluecad.feature_history import (
+    FeatureHistoryError,
+    FeatureSequence,
+    compile_feature_sequence,
+    create_feature_history_candidate,
+    synthesize_feature_sequence_from_spec,
+)
 from app.modules.bluecad.ledger import get_candidate_from_connection
 from app.modules.bluecad.registry import ToolRegistryError, resolve_tool
 from app.modules.bluecad.spec import canonicalize_geometry_spec
@@ -160,6 +167,28 @@ class UnitEntry(BaseModel):
 
 class GeometryAttachment(BaseModel):
     candidate_id: str
+    expected_revision: int = Field(ge=1)
+    expected_active_version_id: str
+    expected_draft_revision: str | None = None
+
+
+class ComponentFeatureHistoryRead(BaseModel):
+    component_id: str
+    persisted: bool
+    revision: int | None = None
+    sequence: FeatureSequence | None = None
+    sequence_digest: str | None = None
+    compiled_spec_id: str | None = None
+    candidate_id: str | None = None
+    attached_candidate_id: str | None = None
+    stale_against_attached_candidate: bool = False
+    updated_at: str | None = None
+    updated_by: str | None = None
+
+
+class ComponentFeatureHistoryPut(BaseModel):
+    model_config = {"extra": "forbid"}
+    sequence: FeatureSequence
     expected_revision: int = Field(ge=1)
     expected_active_version_id: str
     expected_draft_revision: str | None = None
@@ -510,6 +539,121 @@ def attach_component_geometry(
         row = _component(connection, project_id, version_id, component_id)
         connection.commit()
         return _read_component(connection, row)
+
+
+def _feature_history_guard(connection, project_id: str, version_id: str, component_id: str,
+                           payload: ComponentFeatureHistoryPut) -> str:
+    _active_version(connection, project_id, version_id, payload.expected_active_version_id)
+    if _component(connection, project_id, version_id, component_id)["revision"] != payload.expected_revision:
+        raise HTTPException(409, detail="Component changed; reload before attaching geometry.")
+    workspace_id = _data_workspace_id(connection, project_id, version_id)
+    source = connection.execute(
+        "SELECT draft_id FROM design_component_units WHERE component_id = ?", (component_id,),
+    ).fetchone()
+    if source:
+        if payload.expected_draft_revision is None:
+            raise HTTPException(422, detail="Process draft revision is required for this component.")
+        try:
+            process = draft.projection(workspace_id, source["draft_id"])
+        except DraftError as error:
+            raise HTTPException(error.status, detail=str(error)) from error
+        if process["revision"] != payload.expected_draft_revision:
+            raise HTTPException(409, detail="Process draft changed; reload before attaching geometry.")
+    elif payload.expected_draft_revision is not None:
+        raise HTTPException(422, detail="This component has no Process draft source.")
+    return workspace_id
+
+
+@router.get("/{component_id}/geometry/feature-history", response_model=ComponentFeatureHistoryRead)
+def get_component_feature_history(project_id: str, version_id: str, component_id: str) -> ComponentFeatureHistoryRead:
+    with open_sqlite_connection() as connection:
+        _component(connection, project_id, version_id, component_id)
+        attached = connection.execute(
+            "SELECT candidate_id FROM design_component_geometry WHERE component_id = ?", (component_id,),
+        ).fetchone()
+        attached_id = attached["candidate_id"] if attached else None
+        row = connection.execute(
+            "SELECT * FROM design_component_feature_history WHERE component_id = ?", (component_id,),
+        ).fetchone()
+        if row:
+            return ComponentFeatureHistoryRead(
+                component_id=component_id, persisted=True, revision=row["revision"],
+                sequence=FeatureSequence.model_validate(json.loads(row["sequence_json"])),
+                sequence_digest=row["sequence_digest"], compiled_spec_id=row["compiled_spec_id"],
+                candidate_id=row["candidate_id"], attached_candidate_id=attached_id,
+                stale_against_attached_candidate=attached_id != row["candidate_id"],
+                updated_at=row["updated_at"], updated_by=row["updated_by"],
+            )
+        if attached_id:
+            artifact = connection.execute(
+                "SELECT a.stored_path FROM bluecad_candidates c JOIN artifacts a ON a.id = c.spec_artifact_id "
+                "AND a.workspace_id = c.workspace_id WHERE c.id = ? AND a.status = 'registered'",
+                (attached_id,),
+            ).fetchone()
+            if artifact and Path(artifact["stored_path"]).is_file():
+                try:
+                    spec = json.loads(Path(artifact["stored_path"]).read_text(encoding="utf-8"))
+                    sequence = synthesize_feature_sequence_from_spec(spec)
+                    if sequence:
+                        _, compiled, digest = compile_feature_sequence(sequence)
+                        return ComponentFeatureHistoryRead(
+                            component_id=component_id, persisted=False, sequence=sequence,
+                            sequence_digest=digest, compiled_spec_id=compiled["spec_id"],
+                            candidate_id=attached_id, attached_candidate_id=attached_id,
+                        )
+                except (ValueError, OSError, FeatureHistoryError):
+                    pass
+        return ComponentFeatureHistoryRead(component_id=component_id, persisted=False,
+                                           attached_candidate_id=attached_id)
+
+
+@router.put("/{component_id}/geometry/feature-history", response_model=ComponentFeatureHistoryRead)
+def put_component_feature_history(project_id: str, version_id: str, component_id: str,
+                                  payload: ComponentFeatureHistoryPut) -> ComponentFeatureHistoryRead:
+    with open_sqlite_connection() as connection:
+        workspace_id = _feature_history_guard(connection, project_id, version_id, component_id, payload)
+        previous = connection.execute(
+            "SELECT c.id, c.workspace_id FROM design_component_geometry g "
+            "JOIN bluecad_candidates c ON c.id = g.candidate_id WHERE g.component_id = ?", (component_id,),
+        ).fetchone()
+        parent_id = previous["id"] if previous and previous["workspace_id"] == workspace_id else None
+    try:
+        candidate, sequence, spec, digest = create_feature_history_candidate(
+            workspace_id, payload.sequence, parent_candidate_id=parent_id,
+        )
+    except FeatureHistoryError as error:
+        raise HTTPException(error.status_code, detail=error.message) from error
+    if candidate.status != "valid":
+        raise HTTPException(409, detail=f"BlueCad candidate {candidate.id} did not validate; feature history was not attached.")
+    now = utc_now()
+    with open_sqlite_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        _feature_history_guard(connection, project_id, version_id, component_id, payload)
+        connection.execute(
+            "INSERT INTO design_component_geometry (component_id, candidate_id, source_draft_revision, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(component_id) DO UPDATE SET candidate_id = excluded.candidate_id, "
+            "source_draft_revision = excluded.source_draft_revision, updated_at = excluded.updated_at",
+            (component_id, candidate.id, payload.expected_draft_revision, now),
+        )
+        connection.execute(
+            "INSERT INTO design_component_feature_history (component_id, sequence_json, sequence_digest, "
+            "compiled_spec_id, candidate_id, revision, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, 1, ?, ?) "
+            "ON CONFLICT(component_id) DO UPDATE SET sequence_json = excluded.sequence_json, "
+            "sequence_digest = excluded.sequence_digest, compiled_spec_id = excluded.compiled_spec_id, "
+            "candidate_id = excluded.candidate_id, revision = design_component_feature_history.revision + 1, "
+            "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+            (component_id, json.dumps(sequence, sort_keys=True, separators=(",", ":")), digest,
+             spec["spec_id"], candidate.id, now, "local-user"),
+        )
+        connection.execute("UPDATE design_components SET revision = revision + 1, updated_at = ? WHERE id = ?",
+                           (now, component_id))
+        log_event(connection, event_type="DesignComponentFeatureHistoryApplied", actor="local-user",
+                  target_type="DesignComponent", target_id=component_id, workspace_id=project_id,
+                  payload={"version_id": version_id, "candidate_id": candidate.id,
+                           "sequence_digest": digest, "compiled_spec_id": spec["spec_id"],
+                           "parent_candidate_id": parent_id})
+        connection.commit()
+    return get_component_feature_history(project_id, version_id, component_id)
 
 
 def _pin_model(connection, project_id: str, version_id: str, component_id: str, model_version_id: str) -> tuple[str, str]:

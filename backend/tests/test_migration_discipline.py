@@ -44,7 +44,8 @@ LEGACY_CREATE_ONLY_COLUMNS: dict[tuple[str, str], str] = {}
 # CREATE IF NOT EXISTS tables (migration 0027), not new columns on old ones.
 # Reviewed for BUBU-2: ai_thread_turn_extras is a new CREATE IF NOT EXISTS table
 # (migration 0028), not new columns on an old one.
-BASE_CREATE_ONLY_SHA256 = "aa675b9a5976b6a9734184f27978f69cf1598e0d9733e529cf6ff6fb0b966778"
+# Reviewed for spec 234: design_component_feature_history is a new CREATE IF NOT EXISTS table.
+BASE_CREATE_ONLY_SHA256 = "9f406440203b73978367ade2b086b6ea8cc7e6f2f5377135224af5193770d214"
 
 # KNOWN DRIFT (spec 028, recorded not fixed): columns added by a migration
 # statement but absent from their owner's CREATE TABLE. A fresh database only has

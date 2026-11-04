@@ -29,14 +29,15 @@ const data = { state: "ok", read_at: "2026-10-24T11:57:00Z", providers: [
   { provider: "codex", label: "Codex (ChatGPT)", source: "agent-relay limits", status: "ok",
     windows: [win("five_hour", 100, { exhausted: true }), win("weekly", 40, { stale: true })] },
   { provider: "antigravity", label: "Antigravity", source: "agy /quota", status: "unavailable", reason: "agy_quota_unreadable", windows: [] },
+  { provider: "copilot", label: "GitHub Copilot", source: "gh copilot_internal/user", status: "ok", as_of: "2026-10-24T11:57:00Z", last_error: "timeout", windows: [win("pool", 20, { id: "premium_interactions", label: "Monthly premium requests" })] },
 ] };
 const html = render({ data });
 
-// Three provider columns, 5-hour and weekly rows, and a third row only for the pool that exists.
-for (const fragment of ["Claude", "Codex (ChatGPT)", "Antigravity", 'aria-label="5-hour"', 'aria-label="Weekly"', 'aria-label="Frontier model"', "read 3 min ago"]) {
+// Four provider columns, 5-hour and weekly rows, and a third row only for the pool that exists.
+for (const fragment of ["Claude", "Codex (ChatGPT)", "Antigravity", "GitHub Copilot", "refresh failed", 'aria-label="5-hour"', 'aria-label="Weekly"', 'aria-label="Frontier model"', "read 3 min ago"]) {
   assert.ok(html.includes(fragment), `missing ${fragment}`);
 }
-assert.equal((html.match(/role="group"/g) ?? []).length, 5, "three rows plus the two AGY Claude source groups");
+assert.equal((html.match(/role="group"/g) ?? []).length, 6, "four rows plus the two AGY Claude source groups");
 assert.ok(html.includes('<span class="coding-quota-model">Opus</span>'), "the model name is Opus, not the id prefix");
 
 // The visible percentage is the same metric as the ring: remaining.
@@ -45,7 +46,7 @@ assert.ok(html.includes(">88%</text>") && html.includes(">36%</text>"));
 assert.ok(html.includes("↻ 2h 30m") && html.includes('title="Resets in 2h 30m"'));
 const later = render({ data: { ...data, providers: [{ ...data.providers[0], windows: [win("weekly", 10, { resets_at: "2026-10-25T21:59:00Z" })] }] } });
 assert.ok(later.includes("↻ 1d 9h"), "a reset beyond a day is shown in days");
-assert.equal((html.match(/class="coding-quota-value"/g) ?? []).length, 4, "an empty (0 %) ring draws no arc");
+assert.equal((html.match(/class="coding-quota-value"/g) ?? []).length, 5, "an empty (0 %) ring draws no arc");
 
 // Exhausted, stale and missing are distinct and never shown as 0 %.
 assert.ok(html.includes('data-state="exhausted"') && html.includes(">Exhausted<"));
@@ -55,7 +56,7 @@ const agy = render({ data: { ...data, providers: [{ provider: "antigravity", lab
   windows: [win("five_hour", 0), win("weekly", 51), win("frontier", 51, { id: "argon-weekly", label: "Argon · weekly" })] }] } });
 assert.ok(agy.includes('aria-label="Frontier model"') && agy.includes('<span class="coding-quota-model">Argon</span>'));
 assert.ok(agy.includes(">100%</text>") && agy.includes(">49%</text>") && !agy.includes("Claude &amp; GPT"));
-assert.equal((html.match(/>N\/A</g) ?? []).length, 4, "unavailable AGY shows N/A for its two common and two Claude windows");
+assert.equal((html.match(/>N\/A</g) ?? []).length, 6, "missing common windows and unavailable AGY show N/A");
 assert.equal((html.match(/>0%</g) ?? []).length, 1, "only the really exhausted window shows 0 %; missing values never do");
 
 const unauthenticated = render({ data: { ...data, providers: [{ provider: "claude", label: "Claude", source: "agent-relay limits",
