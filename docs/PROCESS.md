@@ -121,6 +121,7 @@ are away. Operations manual: `docs/implementation/relay-continuity-runbook.md`.
   one task at a time. In roadmap mode the supervisor keeps one coordinator cycle queued; the cycle reads `docs/specs/STATUS.md` and
   the fresh GitHub state, picks the highest-value authorized work, and drives it to a merged and reconciled result or to a
   durable checkpoint (a pushed branch or PR plus a ledger note).
+- Every coordinator turn records a maintainer update with `python3 scripts/devctx.py note note --lane maintainer "Sto … . Prossimo: …"`: one or two plain Italian sentences about what the maintainer sees, naming a feature by its visible name or a spec by its subject, without ids, SHAs, paths or codenames.
 - **Recovery packet.** Start every resumed or taken-over session with `python3 scripts/devctx.py recover`. It prints a
   freshness-checked picture of Git, GitHub, `docs/specs/STATUS.md`, worktrees and the local control ledger. Record what the code
   cannot show with `devctx.py note` (kinds include `question` and `blocker`) and `devctx.py directive`, not in chat

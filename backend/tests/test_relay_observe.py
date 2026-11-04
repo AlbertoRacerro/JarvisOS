@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -83,7 +84,7 @@ def test_classification_covers_every_owner_state(tmp_path: Path) -> None:
                "fingerprint": "f", "attempt": 1, "task": 0}
     store_state(root, M1, phase="running", pending=pending, agent="claude")
     s = snap(root, repo)
-    assert s["state"] == "running" and s["mission"]["task"] == "1/1" and "ciclo 4" in s["mission"]["label"]
+    assert s["state"] == "running" and s["mission"]["task"] == "1/1" and "sviluppo autonomo" in s["mission"]["label"]
     assert snap(root, repo, alive=False)["state"] == "stopped"
     assert "owner_down" in snap(root, repo, alive=False)["problems"]
     assert snap(root, repo, alive=None)["state"] == "unknown"
@@ -114,7 +115,7 @@ def test_classification_covers_every_owner_state(tmp_path: Path) -> None:
     assert snap(root, repo)["state"] == "idle"
     down = snap(root, repo, alive=False)  # nobody left to queue the next roadmap cycle
     assert down["state"] == "stopped" and "owner_down|-" in ro.incidents(down, T0)
-    assert "la roadmap autonoma è attiva" in ro.incidents(down, T0)["owner_down|-"]
+    assert "scrivi a Claude in chat" in ro.incidents(down, T0)["owner_down|-"]
     rc.write_json_atomic(root / "roadmap.json", {"enabled": False, "cycle": 4, "paused": "coordinator_blocked"})
     assert snap(root, repo)["state"] == "paused"
 
@@ -154,7 +155,7 @@ def test_owner_alive_reads_the_kernel_lock_table_without_locking(tmp_path: Path)
 # Digest and alerts
 
 
-def test_digest_answers_what_why_delivered_next_problem(tmp_path: Path) -> None:
+def test_digest_answers_what_delivered_next_problem(tmp_path: Path) -> None:
     root, repo = tmp_path / "c", tmp_path / "r"
     mission(root, M1, ["Implement issue https://github.com/AlbertoRacerro/JarvisOS/issues/866 Slack digest"])
     done = {"task": 0, "session": SESSION, "agent": "claude", "at": rc.iso(T0 + timedelta(minutes=30)), "outcome": "verified"}
@@ -163,17 +164,106 @@ def test_digest_answers_what_why_delivered_next_problem(tmp_path: Path) -> None:
     turn(repo, SESSION, 1, {"status": "propose_done", "reason": f"Merged #871 ({WEBHOOK})",
                             "next_step": "Start #859 Phase B", "verification": ["CI green on #871", "ghp_" + "a" * 36]})
     rc.write_json_atomic(root / "roadmap.json", {"enabled": True, "cycle": 5, "paused": None})
-    s = snap(root, repo)
-    text = ro.digest_text(s, since=rc.iso(T0), merges=[("871", "feat(205): semantic digest")])
-    assert "*In corso:*" in text and "*Fatto dall'ultimo aggiornamento:*" in text and "*Prossimo:*" in text
-    assert "*Serve intervento:* no." in text and "perché" in text
-    assert "verificato in modo indipendente" in text and "pull/871|#871>" in text and "issues/866|#866>" in text
-    assert "Start <https://github.com/AlbertoRacerro/JarvisOS/issues/859|#859> Phase B" in text
-    assert "hooks.slack.com" not in text and "ghp_" not in text and "CI green" in text
+    s = snap(root, repo, ledger=[{"kind": "note", "ts": rc.iso(T0 + timedelta(minutes=5)),
+                                  "refs": {"lane": "maintainer"},
+                                  "text": "Sto migliorando il riepilogo Slack. Prossimo: verificare la consegna."}])
+    text = ro.digest_text(s, since=rc.iso(T0), merges=[("871", "feat(205): semantic digest (Spec 205)")])
+    assert "*Sto facendo:* Sto migliorando il riepilogo Slack." in text
+    assert "*Fatto:*" in text and "*Prossimo:* verificare la consegna." in text
+    assert "*Serve il tuo intervento:* no." in text
+    assert "pull/871|Semantic digest>" in text and "Implement issue" in text
+    assert "hooks.slack.com" not in text and "ghp_" not in text and "CI green" not in text
     assert len(text.splitlines()) <= 14 and len(text) <= ro.MAX_MESSAGE
     # Nothing new since the last digest: said plainly.
     quiet = ro.digest_text(s, since=rc.iso(T0 + timedelta(hours=1)), merges=[])
-    assert "nessun risultato nuovo" in quiet
+    assert "nessuna novità" in quiet
+
+
+def _visible(text: str) -> str:
+    return re.sub(r"<[^|>]+\|", "<", text)
+
+
+def test_update_boundary_and_machine_marker_fall_back_to_label(tmp_path: Path) -> None:
+    root, repo = tmp_path / "c", tmp_path / "r"
+    mission(root, M1, ["Migliorare il riepilogo Slack"])
+    store_state(root, M1, chain=[SESSION], head_session=SESSION)
+    turn(repo, SESSION, 1, {"status": "continue", "reason": "raw English claim in scripts/relay_observe.py",
+                            "next_step": "run j-20261104T120000Z-aabbcc"})
+    entries = [{"kind": "note", "ts": rc.iso(T0 - timedelta(seconds=1)), "refs": {"lane": "maintainer"},
+                "text": "Sto cambiando un lavoro precedente."},
+               {"kind": "claim", "ts": rc.iso(T0 + timedelta(seconds=1)), "text": "SHA abcdef0123 in scripts/relay_observe.py"}]
+    s = snap(root, repo, ledger=entries)
+    assert s["update"] is None
+    fallback = ro.digest_text(s, since=None, merges=[])
+    assert "*Sto facendo:* Migliorare il riepilogo Slack" in fallback
+    assert "raw English" not in fallback and "abcdef0123" not in fallback and "j-" not in fallback
+    entries.append({"kind": "note", "ts": rc.iso(T0 + timedelta(minutes=1)), "refs": {"lane": "maintainer"},
+                    "text": "Sto cambiando `relay_observe.py`. Prossimo: provare."})
+    assert snap(root, repo, ledger=entries)["update"] is None
+    entries[-1]["text"] = "Sto migliorando il riepilogo Slack. Prossimo: verificare il risultato."
+    entries.insert(0, {"kind": "note", "ts": rc.iso(T0 + timedelta(minutes=2)),
+                       "refs": {"lane": "other"}, "text": "Nota di un altro canale."})
+    s = snap(root, repo, ledger=entries)
+    assert (s["update"], s["update_next"]) == ("Sto migliorando il riepilogo Slack.", "verificare il risultato.")
+    assert "*Prossimo:* verificare il risultato." in ro.digest_text(s, since=None, merges=[])
+    for value in ("abcdef0", M1, "j-20261104T120000Z-aabbcc", AUTH, "scripts/relay_observe.py", "`cmd`"):
+        assert ro.machine_marker(value)
+
+
+def test_update_without_active_mission_uses_last_delivered_session_start(tmp_path: Path) -> None:
+    root, repo = tmp_path / "c", tmp_path / "r"
+    mission(root, M1, ["Migliorare il riepilogo Slack"])
+    done = {"task": 0, "session": SESSION, "agent": "claude", "at": rc.iso(T0 + timedelta(minutes=30)),
+            "outcome": "verified"}
+    store_state(root, M1, chain=[SESSION], mission={"next": 1, "done": [done],
+                                                  "completed_at": rc.iso(T0 + timedelta(minutes=30))})
+    entries = [{"kind": "note", "ts": rc.iso(T0 - timedelta(seconds=1)), "refs": {"lane": "maintainer"},
+                "text": "Nota precedente."},
+               {"kind": "note", "ts": rc.iso(T0 + timedelta(minutes=5)), "refs": {"lane": "maintainer"},
+                "text": "Sto verificando il riepilogo."}]
+    assert snap(root, repo, ledger=entries)["update"] == "Sto verificando il riepilogo."
+    assert snap(root, repo, ledger=entries[:1])["update"] is None
+
+
+def test_realistic_visible_digest_and_alerts_have_no_machine_markers(tmp_path: Path) -> None:
+    root, repo = tmp_path / "c", tmp_path / "r"
+    mission(root, M1, ["Roadmap continuation cycle 289. Act as coordinator."])
+    store_state(root, M1, chain=[SESSION], head_session=SESSION)
+    turn(repo, SESSION, 1, {"status": "continue", "reason": "run j-20261104T120000Z-aabbcc",
+                            "next_step": "open scripts/relay_observe.py"})
+    ledger = [{"kind": "claim", "ts": rc.iso(T0), "text": "SHA abcdef0123 in scripts/relay_observe.py"},
+              {"kind": "note", "ts": rc.iso(T0 + timedelta(minutes=1)), "refs": {"lane": "maintainer"},
+               "text": "Sto migliorando gli aggiornamenti Slack. Prossimo: verificare gli avvisi."}]
+    rc.write_json_atomic(root / "roadmap.json", {"enabled": True, "cycle": 289, "paused": None})
+    s = snap(root, repo, ledger=ledger)
+    s["delivered"] = [{"at": rc.iso(T0 + timedelta(minutes=10)), "label": "Riepilogo delle quote",
+                       "outcome": "verified"}]
+    s["jobs"] = [{"id": "j-20261104T120000Z-aabbcc", "status": "running", "exit_code": None}]
+    merged = [("871", "feat(quotes): add quote panel (Spec 241)"), ("872", "fix: improve alerts (#872)")]
+    visible = _visible(ro.digest_text(s, since=None, merges=merged))
+    assert "<Add quote panel>" in visible and "<Improve alerts>" in visible
+    # Settled roadmap cycles are not listed as deliveries; repeated labels appear once.
+    cycles = [{"at": rc.iso(T0 + timedelta(minutes=n)), "label": ro.ROADMAP_LABEL, "outcome": "cycle_settled"}
+              for n in (11, 12)]
+    repeated = ro.digest_text({**s, "delivered": s["delivered"] * 2 + cycles}, since=None, merges=[])
+    assert ro.ROADMAP_LABEL not in repeated and repeated.count("Riepilogo delle quote") == 1
+    assert "nessuna novità" in ro.digest_text({**s, "delivered": cycles}, since=None, merges=[])
+    assert not ro.machine_marker(visible)
+    assert "ciclo 289" not in visible and "j-" not in visible and "m-" not in visible
+    states = [
+        {**s, "state": "held", "reason": "auth_failure"},
+        {**s, "state": "paused", "reason": "coordinator_blocked", "question": "Vuoi continuare con le quote?"},
+        {**s, "state": "paused", "reason": "coordinator_blocked", "question": "Controlla `cmd`?"},
+        {**s, "state": "stopped", "problems": ["owner_down"]},
+        {**s, "state": "unknown", "problems": ["hostops_down", "roadmap_corrupt"]},
+    ]
+    for state in states:
+        assert not ro.machine_marker(_visible(ro.digest_text(state, since=None, merges=merged)))
+        for description in ro.incidents(state, T0).values():
+            assert not ro.machine_marker(description)
+            assert not ro.machine_marker(_visible(ro.alert_text(description, state)))
+    assert ro.incidents(states[1], T0)["paused|coordinator_blocked"] == "Vuoi continuare con le quote?"
+    assert "rispondi a Claude" in ro.incidents(states[2], T0)["paused|coordinator_blocked"]
 
 
 def test_clean_rejects_secrets_and_bounds_text() -> None:
@@ -215,7 +305,7 @@ def test_alerts_are_prompt_edge_triggered_and_survive_restart(tmp_path: Path) ->
     now += timedelta(minutes=1)
     ro.observe_step(obs, snap(root, repo), now, send=send, digest_every=every, merges=lambda _s: [])
     alert = [t for k, t in send.sent if k.startswith("alert|")]
-    assert len(alert) == 1 and "autenticazione" in alert[0] and "release" in alert[0]
+    assert len(alert) == 1 and "tua verifica" in alert[0] and "scrivi a Claude" in alert[0]
 
     # Repeated identical observations, also after a watcher restart (obs persisted as JSON), stay silent.
     obs = json.loads(json.dumps(obs))
@@ -229,12 +319,12 @@ def test_alerts_are_prompt_edge_triggered_and_survive_restart(tmp_path: Path) ->
     ro.observe_step(obs, snap(root, repo), now, send=send, digest_every=every, merges=lambda _s: [])
     assert obs["active"] == {}
     ro.observe_step(obs, snap(root, repo, alive=False), now, send=send, digest_every=every, merges=lambda _s: [])
-    assert "non è in esecuzione" in send.sent[-1][1]
+    assert "non è attivo" in send.sent[-1][1]
 
     # The digest comes due again after the interval.
     now += every
     ro.observe_step(obs, snap(root, repo, alive=False), now, send=send, digest_every=every, merges=lambda _s: [])
-    assert send.sent[-1][0] == f"digest|{rc.iso(now)}" and "non è in esecuzione" in send.sent[-1][1]
+    assert send.sent[-1][0] == f"digest|{rc.iso(now)}" and "non è attivo" in send.sent[-1][1]
 
 
 def test_slack_down_never_blocks_and_is_reported_when_delivery_recovers(tmp_path: Path) -> None:
@@ -267,11 +357,11 @@ def test_paused_roadmap_alert_carries_the_recorded_question(tmp_path: Path) -> N
     done = {"task": 0, "session": SESSION, "agent": "claude", "at": rc.iso(T0), "outcome": "cycle_settled"}
     store_state(root, M1, chain=[SESSION], mission={"next": 1, "done": [done], "completed_at": rc.iso(T0)})
     rc.write_json_atomic(root / "roadmap.json", {"enabled": True, "cycle": 4, "paused": "coordinator_blocked"})
-    ledger = [{"kind": "question", "ts": rc.iso(T0 + timedelta(minutes=5)), "text": "Approve spending on #900?"}]
+    ledger = [{"kind": "question", "ts": rc.iso(T0 + timedelta(minutes=5)), "text": "Vuoi approvare la spesa?"}]
     s = snap(root, repo, ledger=ledger)
     (key, description), = ro.incidents(s, T0).items()
     text = ro.alert_text(description, s)
-    assert key == "paused|coordinator_blocked" and "Approve spending" in text and "issues/900|#900" in text
+    assert key == "paused|coordinator_blocked" and "Vuoi approvare la spesa?" in text
 
 
 def test_watch_notifier_send_text_dedupes_and_never_raises(tmp_path: Path) -> None:
@@ -419,7 +509,7 @@ def test_a_recurring_incident_is_alerted_again_through_the_real_notifier(tmp_pat
     held(root)  # the same hold comes back well inside the notifier's 6 h dedupe window
     step(now := now + timedelta(minutes=30))
     step(now + timedelta(minutes=1))  # and is still announced only once per occurrence
-    assert sum("serve intervento" in text for text in delivered) == 2
+    assert sum("serve il tuo intervento" in text for text in delivered) == 2
 
 
 def test_owner_down_is_reported_while_a_mission_waits_or_is_held(tmp_path: Path) -> None:
@@ -486,13 +576,9 @@ def test_job_wait_is_not_a_human_incident(tmp_path: Path, monkeypatch: pytest.Mo
     assert s["jobs"] == list(records.values())
     assert not s.get("question") and not ro.incidents(s, T0 + timedelta(days=2))
     text = ro.digest_text(s, since=None, merges=[])
-    assert "*Serve intervento:* no." in text
-    assert "in attesa dei job registrati" in text and all(j in text for j in ids)
+    assert "*Serve il tuo intervento:* no." in text
+    assert "in attesa di lavori lunghi in corso" in text and all(j not in text for j in ids)
     assert "il coordinatore ha dichiarato un blocco" not in text
-    if reason == "jobs_recoverable":
-        assert "errore recuperabile dal coordinatore" in text
-    if reason == "jobs_ready":
-        assert "il coordinatore riprende" in text
 
 
 def test_job_wait_with_unknown_record_preserves_uncertainty_and_reports_owner_down(
