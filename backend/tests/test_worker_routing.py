@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 import time
 from datetime import UTC, datetime, timedelta
@@ -406,7 +407,7 @@ def test_read_claude_uses_the_relay_limits_source(monkeypatch: pytest.MonkeyPatc
     document = {"command": "limits", "agents": [{"agent_key": "codex", "status": "ok", "windows": []},
                                                  entry(stamp)]}
     fake = tmp_path / "agent-relay"
-    fake.write_text("#!/bin/sh\n[ \"$1 $2 $3\" = '--json limits --refresh' ] || exit 9\ncat <<'EOF'\n"
+    fake.write_text("#!/bin/sh\n[ \"$1 $2\" = '--json limits' ] || exit 9\ncat <<'EOF'\n"
                     + json.dumps(document) + "\nEOF\n")
     fake.chmod(0o755)
     monkeypatch.setenv("JARVISOS_AGENT_RELAY_BIN", str(fake))
@@ -549,3 +550,21 @@ def test_read_copilot_requires_worker_auth_even_with_coordinator_gh(tmp_path: Pa
     monkeypatch.delenv("JARVISOS_COPILOT_GH_TOKEN", raising=False)
     monkeypatch.delenv("COPILOT_GITHUB_TOKEN", raising=False)
     assert wr.read_copilot().reason == "auth_missing"
+
+
+def test_read_claude_cached_and_stale_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JARVISOS_AGENT_RELAY_BIN", "relay")
+    now = datetime.now(UTC)
+    calls: list[list[str]] = []
+    documents = [{"agents": [entry(wr._iso(now))]}]
+    def run(args: list[str], **_kwargs: Any) -> Any:
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, json.dumps(documents[min(len(calls) - 1, len(documents) - 1)]), "")
+    monkeypatch.setattr(wr.subprocess, "run", run)
+    assert wr.read_claude().free is not None and len(calls) == 1
+    calls.clear()
+    documents[:] = [{"agents": [entry(wr._iso(now - timedelta(hours=1)))]}, {"agents": [entry(wr._iso(now))]}]
+    assert wr.read_claude().free is not None and calls[1][-1] == "--refresh"
+    calls.clear()
+    documents[1] = {"agents": []}
+    assert wr.read_claude().free is None and len(calls) == 2

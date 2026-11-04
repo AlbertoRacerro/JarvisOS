@@ -296,22 +296,30 @@ def read_copilot() -> Pool:
 
 
 def read_claude() -> Pool:
-    """Claude windows from the same source the supervisor uses (`agent-relay --json limits --refresh`)."""
+    """Use a fresh cached Relay reading before requesting a refresh."""
     binary = os.environ.get("JARVISOS_AGENT_RELAY_BIN") or _host_which("agent-relay")
     if not binary:
         return unreadable("claude", "relay_missing")
-    try:
-        done = subprocess.run([binary, "--json", "limits", "--refresh"], capture_output=True, text=True,
-                              timeout=READ_TIMEOUT, check=False, cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        return unreadable("claude", "timeout")
-    except OSError:
-        return unreadable("claude", "relay_missing")
-    data = _json_document(done.stdout)
-    agents = data.get("agents") if data else None
-    entry = next((a for a in agents if isinstance(a, dict) and a.get("agent_key") == "claude"), None) \
-        if isinstance(agents, list) else None
-    return parse_claude(entry)
+
+    def read(refresh: bool) -> Pool:
+        try:
+            done = subprocess.run([binary, "--json", "limits", *(["--refresh"] if refresh else [])],
+                                  capture_output=True, text=True, timeout=READ_TIMEOUT, check=False,
+                                  cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            return unreadable("claude", "timeout")
+        except OSError:
+            return unreadable("claude", "relay_missing")
+        data = _json_document(done.stdout)
+        agents = data.get("agents") if data else None
+        entry = next((a for a in agents if isinstance(a, dict) and a.get("agent_key") == "claude"), None) \
+            if isinstance(agents, list) else None
+        return parse_claude(entry)
+
+    cached = read(False)
+    if cached.free is not None:
+        return cached
+    return read(True)
 
 
 def read_gemini() -> Pool:

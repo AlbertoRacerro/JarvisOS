@@ -257,11 +257,12 @@ export type ProviderQuotaWindow = Readonly<{
 }>;
 
 export type ProviderQuota = Readonly<{
-  provider: "claude" | "codex" | "antigravity";
+  provider: "claude" | "codex" | "antigravity" | "copilot";
   label: string;
   source: string | null;
   status: "ok" | "unavailable" | "unauthenticated";
   reason?: string;
+  last_error?: string;
   as_of?: string | null;
   windows: readonly ProviderQuotaWindow[];
 }>;
