@@ -1,6 +1,6 @@
 # 234 — Geometry feature history
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal
