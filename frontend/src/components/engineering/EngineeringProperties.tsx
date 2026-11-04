@@ -14,6 +14,7 @@ import {
   type RunnerJobRunResponse
 } from "../../api/client";
 import type { SimulationRunDetail } from "../../api/runs";
+import { useGuidedTourActive } from "../bubu/guidedTourActivity";
 import InlineNotice from "../ui/InlineNotice";
 import { isStudioKind } from "../../api/studio";
 import {
@@ -168,6 +169,7 @@ export function useEngineeringProperties(
   const [undoStack, setUndoStack] = useState<BindingMap[]>([]);
   const [revision, setRevision] = useState(0);
   const [preview, setPreview] = useState<BindingPreviewResponse | null>(null);
+  const guidedTourActive = useGuidedTourActive();
   const [previewPhase, setPreviewPhase] = useState<PreviewPhase>("idle");
   const [previewMessage, setPreviewMessage] = useState<string | null>(null);
   const [runLabel, setRunLabel] = useState("");
@@ -253,7 +255,7 @@ export function useEngineeringProperties(
   }, [selected?.id]);
 
   useEffect(() => {
-    if (!workspaceId || !selected) {
+    if (!workspaceId || !selected || guidedTourActive) {
       setPreview(null);
       setPreviewPhase("idle");
       return;
@@ -298,7 +300,7 @@ export function useEngineeringProperties(
         });
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [workspaceId, selected?.id, selected?.input_contract_sha256, revision]);
+  }, [workspaceId, selected?.id, selected?.input_contract_sha256, revision, guidedTourActive]);
 
   const dirtyNames = useMemo(
     () => new Set(variables.filter((variable) => !sameBinding(working[variable.name], baseline[variable.name])).map((variable) => variable.name)),
