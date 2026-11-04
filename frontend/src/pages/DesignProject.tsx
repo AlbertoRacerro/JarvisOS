@@ -22,6 +22,7 @@ import ReducedModelsPanel from "./ReducedModelsPanel";
 import { CfdResultBlocks, CfdRunPicker, type CfdRunsRead } from "./CfdResultsCompare";
 import CfdMeshPanel from "./CfdMeshPanel";
 import StudyTemplatesPanel from "./StudyTemplatesPanel";
+import DesignFeatureInspector from "./DesignFeatureInspector";
 import BluecadGlbViewer from "../components/BluecadGlbViewer";
 import NumericInput from "../components/ui/NumericInput";
 import DesignComponentTree, { componentNodeStatus, type DesignNode } from "../components/design/DesignComponentTree";
@@ -522,6 +523,9 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
               <details className="design-project__about"><summary>Details</summary><p>Published Studio models of this node's kind attach here. Process unit models and procedures attach to Plant through Process.</p></details>
             </form>
           </section> : null}
+          {selectedNode === "Geometry" && active ? <DesignFeatureInspector projectId={projectId} versionId={active.id} component={selected}
+            draftRevision={selected.source_draft_id ? sourceRevision : null} disabled={busy || Boolean(selected.source_draft_id && !sourceRevision)}
+            onApplied={reload} /> : null}
           {selectedNode === "Geometry" && active ? <form onSubmit={(event) => {
             event.preventDefault();
             if (!geometrySelection || (selected.source_draft_id && !sourceRevision)) return;
