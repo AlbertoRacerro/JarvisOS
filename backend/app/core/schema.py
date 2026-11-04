@@ -26,8 +26,10 @@ SCHEMA_CONVERSATION_INTAKE_MIGRATION_ID = "0027_conversation_intake"
 SCHEMA_CONVERSATION_INTAKE_MIGRATION_NAME = "External conversation intake receipts"
 SCHEMA_BUBU_TURN_EXTRAS_MIGRATION_ID = "0028_bubu_turn_extras"
 SCHEMA_BUBU_TURN_EXTRAS_MIGRATION_NAME = "Bubu page description and screenshot references per AI thread turn"
-CURRENT_SCHEMA_MIGRATION_ID = SCHEMA_BUBU_TURN_EXTRAS_MIGRATION_ID
-CURRENT_SCHEMA_MIGRATION_NAME = SCHEMA_BUBU_TURN_EXTRAS_MIGRATION_NAME
+SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_ID = "0029_geometry_feature_history"
+SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_NAME = "Design component parametric geometry feature history"
+CURRENT_SCHEMA_MIGRATION_ID = SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_ID
+CURRENT_SCHEMA_MIGRATION_NAME = SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_NAME
 
 SCHEMA_MIGRATION_RECORDS = [
     {
@@ -88,6 +90,11 @@ SCHEMA_MIGRATION_RECORDS = [
     {
         "migration_id": SCHEMA_DESIGN_PROJECT_VERSIONS_MIGRATION_ID,
         "name": SCHEMA_DESIGN_PROJECT_VERSIONS_MIGRATION_NAME,
+        "checksum": None,
+    },
+    {
+        "migration_id": SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_ID,
+        "name": SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_NAME,
         "checksum": None,
     },
 ]
@@ -159,6 +166,20 @@ SCHEMA_STATEMENTS = [
         candidate_id TEXT NOT NULL,
         source_draft_revision TEXT,
         updated_at TEXT NOT NULL,
+        FOREIGN KEY (component_id) REFERENCES design_components(id),
+        FOREIGN KEY (candidate_id) REFERENCES bluecad_candidates(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS design_component_feature_history (
+        component_id TEXT PRIMARY KEY,
+        sequence_json TEXT NOT NULL,
+        sequence_digest TEXT NOT NULL,
+        compiled_spec_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+        updated_at TEXT NOT NULL,
+        updated_by TEXT NOT NULL,
         FOREIGN KEY (component_id) REFERENCES design_components(id),
         FOREIGN KEY (candidate_id) REFERENCES bluecad_candidates(id)
     )

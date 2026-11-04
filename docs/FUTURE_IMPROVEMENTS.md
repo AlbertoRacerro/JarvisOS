@@ -124,3 +124,11 @@ Each entry must contain:
 - **Disposition:** PARK; correcting the backend plane metadata (or the patch the case samples) is a 216 backend change outside the 229 frontend scope.
 - **Expected benefit:** other readers of the field payload get a plane label that matches the data.
 - **Likely surface:** `backend/app/modules/bluecad/cfd_pipe/casegen.py` (`FIELD_SURFACE`, symmetry patch faces) and `field_export.py`.
+
+### F20 — Cross-version candidate lineage after a Design fork — PARK
+
+- **Origin:** spec 234 independent review of PR #10, 2026-11-04.
+- **Observation:** a forked Design version inherits the parent version's attached BlueCAD candidate, which lives in the parent's data workspace. The fork's first feature-history regeneration therefore records `parent_candidate_id = NULL` instead of the inherited candidate, because the workspace lineage graph (`flowsheet/service.py`) only resolves edges inside one data workspace and would report a `dangling_reference`. The copied `design_component_feature_history` row still records the inherited candidate, and in-version lineage is complete.
+- **Disposition:** PARK; a cross-workspace lineage edge needs a graph/authority decision outside the 234 scope.
+- **Expected benefit:** candidate ancestry can be followed across Design versions.
+- **Likely surface:** `backend/app/modules/workspaces/design_components.py` (`put_component_feature_history` parent selection) and the workspace graph builder in `backend/app/modules/flowsheet/service.py`.
