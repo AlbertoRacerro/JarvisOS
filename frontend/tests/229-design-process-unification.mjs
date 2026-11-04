@@ -56,6 +56,7 @@ walk(resolve(root, "src"));
 const placements = new Map(ids.map((id) => [id, []]));
 for (const path of sources) {
   if (path.endsWith(join("app", "designTargets.ts"))) continue;
+  if (/components[\\/]bubu[\\/](guidedTour\.ts|useGuidedTour\.tsx)$/.test(path)) continue; // Spec 242: the tour refers to targets, it does not place them
   const text = readFileSync(path, "utf8");
   for (const id of ids) {
     const count = text.split(`"${id}"`).length - 1;

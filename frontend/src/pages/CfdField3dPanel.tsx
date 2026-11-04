@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { designTarget } from "../app/designTargets";
 import { getComponentCfdRunFields3d, type CfdField3d, type CfdRun } from "../api/designProject";
 import { colorFor, legendGradient } from "./cfdFieldSlice";
 import { radialStretch, reflectedSample, transforms, validField3d } from "./cfdField3d";
@@ -117,7 +118,7 @@ export default function CfdField3dPanel({ projectId, versionId, componentId, run
     return () => { cancelAnimationFrame(frame); observer.disconnect(); controls.dispose(); renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointerup", onClick); renderer.dispose(); material.dispose(); geometries.forEach((geometry) => geometry.dispose()); renderer.domElement.remove(); };
   }, [available, field, full, range, stretch]);
-  return <section aria-label="CFD 3D field" className="design-project__field-3d">
+  return <section aria-label="CFD 3D field" className="design-project__field-3d" {...designTarget("design.panel.cfd-field-3d")}>
     <div className="design-project__field-head"><h4>3D field</h4>{available ? <>
       <div role="group" aria-label="3D field" className="design-project__segmented">
         <button type="button" aria-pressed={field === "p"} onClick={() => { setField("p"); setProbe(null); }}>p</button>

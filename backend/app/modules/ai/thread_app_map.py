@@ -43,7 +43,9 @@ _DESIGN_STAGES = {
         "CFD results, laminar or turbulent: CFD stage (design.stage.cfd), then click the component in the Components "
         "tree (a design.tree.component.<name> row), then the node Results (design.tree.node.results; it opens by itself in the CFD stage). The Inspector "
         "lists every run under \"Compare runs\" (design.field.run) with checkboxes; each checked run is stacked in the "
-        "centre with its field slice. Study templates fold (Inspector): record and start runs. Mesh settings: node Mesh "
+        "centre with its field slice, and below it a finished run has the 3D field (design.panel.cfd-field-3d): p or |U| "
+        "on the computed surfaces, and \"Show full pipe\" mirrors them across the symmetry planes (labelled mirrored, "
+        "not computed). Study templates fold (Inspector): record and start runs. Mesh settings: node Mesh "
         "(design.tree.node.mesh). Physics models: node Physics."
     ),
     "plant": (
@@ -56,7 +58,12 @@ _DESIGN_STAGES = {
         "Dynamic (design.panel.dynamic): pick the Process draft (design.dynamic.draft), then work through the four "
         "steps in design.dynamic.steps: 1 Scenario, 2 Schedule & controllers (optional), 3 Run, 4 Results & compare."
     ),
-    "cad": "CAD: select the component, node Geometry: attach a BlueCad candidate or generate geometry from Process; the viewport shows it.",
+    "cad": (
+        "CAD: select the component, node Geometry (design.tree.node.geometry); the viewport shows the geometry. The "
+        "Inspector has the Feature inspector (design.panel.feature-inspector): Add tube, bend, manifold or serpentine; "
+        "edit dimensions; Enabled checkbox and Remove per feature; Rebuild geometry makes a new revision; Undo "
+        "restores the previous one. Attach a BlueCad candidate (design.node.attach-model) or generate geometry from Process."
+    ),
     "reduced-model": "Reduced model: select the component, node Reduced model: published reduced models and their status.",
     "optics": "Optics lists the optics inputs of every photobioreactor unit and the stored Dynamic Studio prediction (design.panel.optics).",
 }

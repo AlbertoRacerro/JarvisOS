@@ -202,4 +202,42 @@
 #bubu-bubble .bubu-turn__ask:hover { background: var(--color-accent-surface); }
 #bubu-bubble .bubu-status--error { color: var(--color-status-danger-text); }
 
+/* Guided tour (Spec 242): the same bubble, with the stop text in place of the conversation. */
+#bubu-bubble button.bubu-bubble__tour {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--bubu-green-edge);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+#bubu-bubble button.bubu-bubble__tour:hover { background: color-mix(in srgb, var(--color-accent-primary) 24%, transparent); }
+#bubu-bubble .bubu-tour { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+#bubu-bubble .bubu-tour p { margin: 0; }
+#bubu-bubble .bubu-tour__count { font-size: 0.75rem; color: var(--color-text-secondary); }
+#bubu-bubble .bubu-tour__title { margin: 0; font-size: 1rem; }
+#bubu-bubble .bubu-tour__route { font-size: 0.75rem; color: var(--color-text-secondary); overflow-wrap: anywhere; }
+#bubu-bubble .bubu-tour__note { min-height: 1.2em; font-size: 0.8rem; color: var(--color-text-secondary); }
+#bubu-bubble .bubu-tour__actions { display: flex; gap: 6px; justify-content: flex-end; }
+#bubu-bubble button.bubu-tour__btn {
+  min-height: 0;
+  padding: 4px 12px;
+  border: 1px solid var(--bubu-green-edge);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+#bubu-bubble button.bubu-tour__btn:hover:not(:disabled) { background: color-mix(in srgb, var(--color-accent-primary) 24%, transparent); }
+#bubu-bubble button.bubu-tour__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+#bubu-bubble button.bubu-tour__btn--primary { border-color: var(--color-accent-foreground); background: var(--color-accent-foreground); color: var(--color-bg-surface); }
+
 @media print { #bubu-bubble { display: none; } }
