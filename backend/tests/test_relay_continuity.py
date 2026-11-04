@@ -352,7 +352,7 @@ def test_claude_quota_switches_to_codex_and_goes_idle(tmp_path: Path) -> None:
     cooldown = sup.state["cooldowns"]["claude"]
     assert cooldown["reason"] == "quota" and cooldown["source"] in ("message", "estimate")
     events = env.events()
-    assert any("provider switched" in e for e in events) and any("turn completed" in e for e in events)
+    assert any("ha cambiato assistente" in e for e in events) and any("ha completato un passaggio" in e for e in events)
     assert sup.state["head_session"] != HEAD and sup.state["chain"][0] == HEAD
 
 
@@ -418,7 +418,7 @@ def test_unavailable_fallback_waits_for_earliest_validated_reset(tmp_path: Path)
     assert result == "idle"
     assert [launch["agent"] for launch in env.relay.launches] == ["codex"]
     assert env.clock.now() >= codex_reset
-    assert any("no coordinator provider available" in e for e in env.events())
+    assert any("Gli assistenti non sono disponibili" in e for e in env.events())
 
 
 def test_spend_limits_on_both_agents_hold(tmp_path: Path) -> None:
@@ -533,7 +533,7 @@ def test_auth_failure_disables_only_that_provider_and_unknown_failure_retries(
     if agents == ["codex"]:
         cooldown = sup.state["cooldowns"]["claude"]
         assert cooldown["reason"] == "auth" and rc.parse_ts(cooldown["until"]) == T0 + timedelta(minutes=30)
-        assert any("provider limit" in e for e in env.events())  # the maintainer learns about the login problem
+        assert any("Un assistente non è disponibile" in e for e in env.events())
 
 
 def test_codex_exhausted_returns_to_recovered_claude(tmp_path: Path) -> None:
@@ -622,13 +622,13 @@ def test_interrupted_external_operation_without_a_settling_probe_holds(tmp_path:
     result, sup = env.run()
     assert result == "held" and sup.state["hold"]["reason"] == "effects_uncertain"
     assert env.relay.launches == []
-    assert any("HOLD" in e for e in env.events())
+    assert any("richiede una verifica" in e for e in env.events())
     record = [r for r in journal(env) if r.get("event") == "reconcile"][-1]
     assert record["result"] == "effects_uncertain" and record["verdicts"][0]["verdict"] == "unresolved"
     # A restart decides the same turn again and still holds, quietly.
     sent = len(env.sent)
     result, _ = env.run()
-    assert result == "held" and env.relay.launches == [] and not any("HOLD" in e for e in env.sent[sent:])
+    assert result == "held" and env.relay.launches == [] and not any("richiede una verifica" in e for e in env.sent[sent:])
 
 
 @pytest.mark.parametrize("name", sorted(set(IN_FLIGHT) - set(EXTERNAL)))
@@ -1186,9 +1186,24 @@ def test_every_supervisor_message_is_template_only(tmp_path: Path) -> None:
     assert env.sent
     for text in env.sent:
         assert "git push" not in text and "pw@" not in text and "/home" not in text
-        for line in text.splitlines()[1:]:
-            key, _, value = line.partition(": ")
-            assert rc.FIELD_RULES[key.replace(" ", "_")](value)
+        assert text in {title for title, _ in rc.EVENTS.values()}
+
+
+def test_supervisor_templates_do_not_expose_machine_fields() -> None:
+    for event, (_, fields) in rc.EVENTS.items():
+        values = {key: {
+            "session": HEAD, "mission": "m-20261104T120000Z-aabbcc", "sha": "abcdef0123456789",
+            "task": "1/3", "pr": "123", "agent": "claude", "from_agent": "codex",
+            "outcome": "quota", "action": "switch", "reason": "effects_uncertain", "phase": "idle",
+            "reset_at": "none", "next_check_at": "none", "reset_source": "limits",
+            "attempt": "1", "owner": "control-plane",
+        }[key] for key in fields}
+        if event == "roadmap_paused":
+            values["reason"] = "no_progress"
+        rendered = rc.render(event, values)
+        assert rendered is not None, event
+        assert HEAD not in rendered and "abcdef0" not in rendered and "m-2026" not in rendered
+        assert "/" not in rendered and "`" not in rendered
 
 
 def test_watch_notifies_repl_failures_once_and_master_merges(tmp_path: Path) -> None:
@@ -1204,10 +1219,10 @@ def test_watch_notifies_repl_failures_once_and_master_merges(tmp_path: Path) -> 
     master = iter([("a" * 40, None), ("b" * 40, "830")])
     rc.watch_once(state, notifier, repo, now, supervised={"20261018-075000-cdcdcd"}, master=lambda: next(master))
     rc.watch_once(state, notifier, repo, now, supervised=set(), master=lambda: next(master))
-    failed = [t for t in sent if "REPL turn failed" in t]
-    assert len(failed) == 1 and HEAD in failed[0]
-    merged = [t for t in sent if "master advanced" in t]
-    assert len(merged) == 1 and "pr: 830" in merged[0]
+    failed = [t for t in sent if "Un tentativo interattivo non è riuscito" in t]
+    assert len(failed) == 1 and HEAD not in failed[0]
+    merged = [t for t in sent if "Una modifica è stata integrata" in t]
+    assert len(merged) == 1 and "830" not in merged[0]
 
 
 def test_watch_alerts_when_claude_repl_effective_mode_is_dont_ask(tmp_path: Path) -> None:
@@ -1225,8 +1240,8 @@ def test_watch_alerts_when_claude_repl_effective_mode_is_dont_ask(tmp_path: Path
     now = datetime.now(UTC)
     for _ in range(2):
         rc.watch_once(state, notifier, repo, now, supervised=set(), master=lambda: (None, None))
-    alerts = [text for text in sent if "launched in dontAsk" in text]
-    assert len(alerts) == 1 and HEAD in alerts[0]
+    alerts = [text for text in sent if "potrebbe non poter eseguire comandi" in text]
+    assert len(alerts) == 1 and HEAD not in alerts[0]
 
 
 # ---------------------------------------------------------------------------
@@ -2049,8 +2064,8 @@ def test_mission_advances_each_task_only_on_success_and_completes(tmp_path: Path
     assert rec["next"] == 3 and rec["completed_at"] and [d["task"] for d in rec["done"]] == [0, 1, 2]
     assert journal_events(env.store).count("task_completed") == 3 and "mission_completed" in journal_events(env.store)
     assert sup.state["phase"] == "idle"
-    assert sum("mission task completed" in e for e in env.events()) == 3
-    assert any("mission completed" in e for e in env.events())
+    assert sum("ha completato una parte del lavoro" in e for e in env.events()) == 3
+    assert any("ha completato il lavoro richiesto" in e for e in env.events())
     assert not any("awaiting maintainer" in e for e in env.events())
 
 
@@ -2068,7 +2083,7 @@ def test_mission_quota_fails_over_to_codex_with_task_context_and_continues(tmp_p
     done = sup.state["mission"]["done"]
     assert [(d["task"], d["agent"]) for d in done] == [(0, "claude"), (1, "codex"), (2, "codex")]
     assert sup.state["cooldowns"]["claude"]["reason"] == "quota"
-    assert any("provider switched" in e for e in env.events())
+    assert any("ha cambiato assistente" in e for e in env.events())
 
 
 def test_mission_fails_over_on_a_stale_codex_reading_without_probing(tmp_path: Path) -> None:
