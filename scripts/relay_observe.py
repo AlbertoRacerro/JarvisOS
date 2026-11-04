@@ -77,8 +77,10 @@ _URL_RE = re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]{1,15}://\S*|(?:mailto|tel|slack
                      r"|cloud|tech|example|eu|us|uk|de|it|fr|ru|cn)\b(?:[/?#]\S*)?)")
 _PATH_RE = re.compile(r"(?<![\w.~])(?:~|/(?:home|mnt|root|etc|tmp|run|var|proc))/\S*")
 _SLACK_ESCAPES = (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"))
-_MACHINE_RE = re.compile(r"(?i)\b[0-9a-f]{7,}\b|\b[mj]-2026\w*|\bL2026\w*|`|"
-                         r"(?<!\w)(?:[\w.-]+/)+[\w.-]+\.[\w.-]+|(?<!\w)/(?:[\w.-]+/)*[a-z_][\w.-]*")
+# A commit SHA has at least one digit, so Italian words such as "accadde" are not taken for one.
+_MACHINE_RE = re.compile(r"(?i)\b(?=[0-9a-f]*\d)[0-9a-f]{7,}\b|\b[mj]-20\d\d\w*|\bL20\d\d\w*|`|"
+                         r"(?<!\w)(?:[\w.-]+/)+[\w.-]+\.[\w.-]+|(?<!\w)/(?:[\w.-]+/)*[a-z_][\w.-]*|"
+                         r"\b[\w-]+\.(?:py|mjs|js|tsx?|json|md|toml|ya?ml|sh|ps1|cmd|log)\b")
 
 
 def machine_marker(text: str) -> bool:
@@ -426,10 +428,12 @@ def digest_text(snap: dict[str, Any], *, since: str | None, merges: list[tuple[s
     lines = [f"*JarvisOS — aggiornamento delle {_local(snap['at'])}*"]
     mission = snap.get("mission") or {}
     state = snap["state"]
-    fallback = mission.get("label") or (ROADMAP_LABEL
-                                         if (snap.get("roadmap") or {}).get("enabled") else "nessun lavoro attivo")
-    if machine_marker(fallback):
-        fallback = "sviluppo di JarvisOS"
+    label = mission.get("label")
+    if label and label != ROADMAP_LABEL:
+        # The queue item is the maintainer's own wording; it is framed, never replaced by the turn's English notes.
+        fallback = "sviluppo di JarvisOS" if machine_marker(label) else f"il compito che hai messo in coda: {label}"
+    else:
+        fallback = ROADMAP_LABEL if label or (snap.get("roadmap") or {}).get("enabled") else "nessun lavoro attivo"
     state_word = {"held": "in pausa", "paused": "in pausa", "waiting": "in attesa di lavori lunghi in corso" if snap.get("wait_kind") == "jobs" else "in attesa",
                   "stopped": "fermo", "unknown": "da verificare"}.get(state)
     current = snap.get("update") or fallback
@@ -442,7 +446,7 @@ def digest_text(snap: dict[str, Any], *, since: str | None, merges: list[tuple[s
     for label in list(dict.fromkeys(labels))[-4:]:
         lines.append(f"  • {label}")
     for pr, title in merges[-5:]:
-        subject = re.sub(r"\s*(?:\(Spec \d+\)|\(#\d+\))\s*$", "", title, flags=re.IGNORECASE)
+        subject = re.sub(r"(?:\s*(?:\(Spec \d+\)|\(#\d+\)|#\d+))+\s*$", "", title, flags=re.IGNORECASE)
         subject = re.sub(r"^[a-z][\w-]*(?:\([^)]*\))?:\s*", "", subject, flags=re.IGNORECASE).strip()
         subject = subject[:1].upper() + subject[1:] if subject and not machine_marker(subject) else "Modifica completata"
         lines.append(f"  • <{REPO_URL}/pull/{pr}|{subject}>")

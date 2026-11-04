@@ -195,7 +195,7 @@ def test_update_boundary_and_machine_marker_fall_back_to_label(tmp_path: Path) -
     s = snap(root, repo, ledger=entries)
     assert s["update"] is None
     fallback = ro.digest_text(s, since=None, merges=[])
-    assert "*Sto facendo:* Migliorare il riepilogo Slack" in fallback
+    assert "*Sto facendo:* il compito che hai messo in coda: Migliorare il riepilogo Slack" in fallback
     assert "raw English" not in fallback and "abcdef0123" not in fallback and "j-" not in fallback
     entries.append({"kind": "note", "ts": rc.iso(T0 + timedelta(minutes=1)), "refs": {"lane": "maintainer"},
                     "text": "Sto cambiando `relay_observe.py`. Prossimo: provare."})
@@ -206,8 +206,11 @@ def test_update_boundary_and_machine_marker_fall_back_to_label(tmp_path: Path) -
     s = snap(root, repo, ledger=entries)
     assert (s["update"], s["update_next"]) == ("Sto migliorando il riepilogo Slack.", "verificare il risultato.")
     assert "*Prossimo:* verificare il risultato." in ro.digest_text(s, since=None, merges=[])
-    for value in ("abcdef0", M1, "j-20261104T120000Z-aabbcc", AUTH, "scripts/relay_observe.py", "`cmd`"):
-        assert ro.machine_marker(value)
+    for value in ("abcdef0", M1, "j-20261104T120000Z-aabbcc", AUTH, "scripts/relay_observe.py", "`cmd`",
+                  "Sto modificando relay_observe.py", "m-20271104T110422Z-27bb5e", "L20270101000000-abcd"):
+        assert ro.machine_marker(value), value
+    for value in ("Non so cosa accadde ieri.", "Sto aggiungendo la colonna Copilot in Coding > Runtime."):
+        assert not ro.machine_marker(value), value
 
 
 def test_update_without_active_mission_uses_last_delivered_session_start(tmp_path: Path) -> None:
@@ -239,9 +242,10 @@ def test_realistic_visible_digest_and_alerts_have_no_machine_markers(tmp_path: P
     s["delivered"] = [{"at": rc.iso(T0 + timedelta(minutes=10)), "label": "Riepilogo delle quote",
                        "outcome": "verified"}]
     s["jobs"] = [{"id": "j-20261104T120000Z-aabbcc", "status": "running", "exit_code": None}]
-    merged = [("871", "feat(quotes): add quote panel (Spec 241)"), ("872", "fix: improve alerts (#872)")]
+    merged = [("871", "feat(quotes): add quote panel (Spec 241)"), ("872", "fix: improve alerts (Spec 241) (#872)"),
+              ("873", "docs: tidy notes #873")]
     visible = _visible(ro.digest_text(s, since=None, merges=merged))
-    assert "<Add quote panel>" in visible and "<Improve alerts>" in visible
+    assert "<Add quote panel>" in visible and "<Improve alerts>" in visible and "<Tidy notes>" in visible
     # Settled roadmap cycles are not listed as deliveries; repeated labels appear once.
     cycles = [{"at": rc.iso(T0 + timedelta(minutes=n)), "label": ro.ROADMAP_LABEL, "outcome": "cycle_settled"}
               for n in (11, 12)]
