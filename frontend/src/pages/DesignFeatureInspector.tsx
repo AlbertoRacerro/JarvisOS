@@ -187,7 +187,7 @@ export default function DesignFeatureInspector({ projectId, versionId, component
     {refused ? <p role="alert" className="design-project__error">Not applied: {refused} The previous geometry is still attached.</p> : null}
     {dirty && !refused ? <p role="status">Edits not applied yet.</p> : null}
     <div className="design-feature-inspector__actions">
-      <button type="button" disabled={locked || !features.length || (!dirty && !refused && read?.persisted)} onClick={rebuild}>Rebuild geometry</button>
+      <button type="button" disabled={locked || !features.length || (!dirty && !refused && read?.persisted && !read.stale_against_attached_candidate)} onClick={rebuild}>Rebuild geometry</button>
       <button type="button" disabled={locked || !undoStack.length} onClick={undo}>Undo</button>
     </div>
   </section>;
