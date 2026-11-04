@@ -173,6 +173,7 @@ try {
 
   // Exit closes the tour and the pointer, back to the conversation.
   await card.getByRole("button", { name: "Exit", exact: true }).click();
+  touring = false;
   await card.waitFor({ state: "detached" });
   await page.waitForFunction(() => document.querySelectorAll(".bubu-pointer__ring").length === 0);
   await page.getByRole("dialog", { name: "Jarvis" }).waitFor();
@@ -182,6 +183,7 @@ try {
 
   // Escape closes the tour from the middle.
   await page.getByRole("button", { name: "Guided tour", exact: true }).click();
+  touring = true;
   await card.waitFor();
   await settled(1);
   await card.getByRole("button", { name: "Next", exact: true }).click();
@@ -192,13 +194,9 @@ try {
   check("escape_closes_tour_and_pointer");
   touring = false;
 
-  // The shell publishes the current surface to the read-only brief endpoint on page changes (it computes a preview and
-  // stores nothing, the same allowance as the 229 walk); it is recorded separately and is not a tour request.
-  const PREVIEW_POST = /^POST \/workspaces\/[^/]+\/actions\/brief$/;
-  const writes = summary.tour_requests.filter((line) => !/^(GET|HEAD|OPTIONS) /.test(line) && !PREVIEW_POST.test(line));
+  const writes = summary.tour_requests.filter((line) => !/^(GET|HEAD|OPTIONS) /.test(line));
   assert(writes.length === 0, `mutating requests during the tour: ${writes.join(", ")}`);
-  check("no_post_put_delete_during_tour", { tour_requests: summary.tour_requests.length, mutating: 0,
-    page_preview_posts_not_from_the_tour: summary.tour_requests.filter((line) => PREVIEW_POST.test(line)).length });
+  check("no_post_put_delete_during_tour", { tour_requests: summary.tour_requests.length, mutating: 0 });
   assert(summary.page_errors.length === 0, `page errors: ${summary.page_errors.join("; ")}`);
 } catch (error) {
   failure = error;

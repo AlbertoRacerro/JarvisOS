@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { Navigate } from "../../app/AppLink";
+import { setGuidedTourActive } from "./guidedTourActivity";
 import { TOUR_CLICKABLE, TOUR_COUNT, TOUR_STOPS, notAvailableLine, tourPosition, type TourStop } from "./guidedTour";
 import { isRenderable, resolveTarget } from "./pageContext";
 import type { PointDirective } from "./pointerDirectives";
@@ -107,6 +108,7 @@ export function useGuidedTour(navigate: Navigate): GuidedTour {
   const index = state?.index ?? null;
 
   const exit = useCallback(() => {
+    setGuidedTourActive(false);
     setState(null);
     if (switched.current) {
       switched.current = false;
@@ -153,5 +155,5 @@ export function useGuidedTour(navigate: Navigate): GuidedTour {
     </div>
   } : undefined;
   const points: PointDirective[] = state && stop && state.phase === "pointing" ? [{ id: stop.target, label: stop.title }] : [];
-  return { start: () => go(0), bubble, points, exit };
+  return { start: () => { setGuidedTourActive(true); go(0); }, bubble, points, exit };
 }
