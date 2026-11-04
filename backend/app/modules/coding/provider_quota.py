@@ -1,6 +1,7 @@
 """Read-only provider quota rings for Coding → Runtime (spec 217).
 
-Claude usage windows come from ``agent-relay --json limits --refresh`` (the source spec 195 uses).
+Claude usage windows come from cached or refreshed ``agent-relay --json limits`` readings.
+Copilot premium usage comes from the host gh CLI entitlement endpoint.
 Codex windows come from the CLI's status-only ``account/rateLimits/read`` method, without a model turn.
 Antigravity buckets come from the agy CLI's own ``/quota`` command run headless (``agy -p /quota --output-format
 json``), which starts no model turn and spends no quota. Automatic reads share a TTL cache; explicit refresh
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import glob
 import json
+import math
 import os
 import queue
 import re
@@ -33,6 +35,7 @@ PROVIDERS = (
     ("claude", "Claude", "claude"),
     ("codex", "Codex (ChatGPT)", "codex"),
     ("antigravity", "Antigravity", "agy"),
+    ("copilot", "GitHub Copilot", "copilot"),
 )
 EXHAUSTED_PERCENT = 99.5
 STALE_AFTER = timedelta(minutes=30)
@@ -78,9 +81,33 @@ def _run(env_key: str, command: str, args: list[str]) -> tuple[str | None, str |
     return proc.stdout, None
 
 
-def read_relay_limits() -> tuple[dict[str, Any] | None, str | None]:
-    """One ``agent-relay`` limits reading, or None and why: the tool is missing, slow or prints no JSON."""
-    stdout, error = _run("JARVISOS_AGENT_RELAY_BIN", "agent-relay", ["--json", "limits", "--refresh"])
+def read_relay_limits(*, refresh: bool = False) -> tuple[dict[str, Any] | None, str | None]:
+    """Prefer a fresh cached Claude reading and retain it if a refresh fails."""
+    def read(force: bool) -> tuple[dict[str, Any] | None, str | None]:
+        args = ["--json", "limits"] + (["--refresh"] if force else [])
+        stdout, error = _run("JARVISOS_AGENT_RELAY_BIN", "agent-relay", args)
+        data = _json_document(stdout) if stdout is not None else None
+        return data, None if data is not None else error or "no_json"
+
+    def claude(data: dict[str, Any] | None) -> dict[str, Any] | None:
+        agents = data.get("agents") if data else None
+        return next((a for a in agents if isinstance(a, dict) and a.get("agent_key") == "claude"), None) if isinstance(agents, list) else None
+
+    cached, _ = read(False)
+    entry = claude(cached)
+    now = datetime.now(UTC)
+    usable = normalize_agent(entry, now)["status"] == "ok"
+    observed = _ts(entry.get("as_of")) if entry else None
+    if not refresh and usable and observed and abs((now - observed).total_seconds()) < ttl_seconds():
+        return cached, None
+    fresh, error = read(True)
+    if usable and normalize_agent(claude(fresh), now)["status"] != "ok":
+        return cached, None
+    return fresh, error
+
+
+def read_copilot_quota() -> tuple[dict[str, Any] | None, str | None]:
+    stdout, error = _run("JARVISOS_GH_BIN", "gh", ["api", "copilot_internal/user"])
     data = _json_document(stdout) if stdout is not None else None
     return data, None if data is not None else error or "no_json"
 
@@ -193,13 +220,14 @@ def read_codex_limits() -> tuple[dict[str, Any] | None, str | None]:
             proc.stdout.close()
 
 
-def read_all() -> dict[str, Any]:
-    # Independent status sources share one bounded wait, so a slow CLI cannot delay starting the other reads.
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        jobs = [executor.submit(reader) for reader in (read_relay_limits, read_agy_quota, read_codex_limits)]
-        (relay, relay_error), (agy, agy_error), (codex, codex_error) = [job.result() for job in jobs]
-    return {"relay": relay, "agy": agy, "codex": codex,
-            "errors": {"relay": relay_error, "agy": agy_error, "codex": codex_error}}
+def read_all(*, refresh: bool = False) -> dict[str, Any]:
+    # Independent status sources share one bounded wait.
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        jobs = [executor.submit(read_relay_limits, refresh=refresh), executor.submit(read_agy_quota),
+                executor.submit(read_codex_limits), executor.submit(read_copilot_quota)]
+        (relay, relay_error), (agy, agy_error), (codex, codex_error), (copilot, copilot_error) = [job.result() for job in jobs]
+    return {"relay": relay, "agy": agy, "codex": codex, "copilot": copilot,
+            "errors": {"relay": relay_error, "agy": agy_error, "codex": codex_error, "copilot": copilot_error}}
 
 
 def _buckets(node: Any, depth: int = 0) -> list[dict[str, Any]]:
@@ -324,8 +352,42 @@ def normalize_agent(entry: Any, now: datetime) -> dict[str, Any]:
     return {"status": "ok", "as_of": _iso(as_of), "windows": windows}
 
 
+def copilot_entry(reading: dict[str, Any], now: datetime) -> dict[str, Any]:
+    def unavailable(reason: str) -> dict[str, Any]:
+        return {"status": "unavailable", "reason": reason, "windows": []}
+
+    if reading.get("cli_enabled") is False:
+        return unavailable("cli_disabled")
+    snapshots = reading.get("quota_snapshots")
+    bucket = snapshots.get("premium_interactions") if isinstance(snapshots, dict) else None
+    if not isinstance(bucket, dict):
+        return unavailable("bucket_missing")
+    if bucket.get("unlimited") is True:
+        percent = 100.0
+    elif bucket.get("has_quota") is False:
+        if bucket.get("entitlement") in (0, 0.0):
+            return unavailable("no_entitlement")
+        percent = 0.0
+    else:
+        raw_percent = bucket.get("percent_remaining")
+        remaining = bucket.get("remaining")
+        if (isinstance(raw_percent, bool) or not isinstance(raw_percent, (int, float)) or not math.isfinite(raw_percent)
+                or not 0 <= raw_percent <= 100 or (remaining is not None and
+                (isinstance(remaining, bool) or not isinstance(remaining, (int, float)) or not math.isfinite(remaining)))):
+            return unavailable("invalid_reading")
+        percent = 0.0 if remaining is not None and remaining <= 0 else float(raw_percent)
+    reset = reading.get("quota_reset_date")
+    try:
+        reset_at = datetime.strptime(reset, "%Y-%m-%d").replace(tzinfo=UTC) if isinstance(reset, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", reset) else None
+    except ValueError:
+        reset_at = None
+    return {"status": "ok", "as_of": _iso(now), "windows": [{"id": "premium_interactions",
+            "label": "Monthly premium requests", "kind": "pool", "used_percent": 100 - percent,
+            "resets_at": _iso(reset_at)}]}
+
+
 READ_ERRORS = ("not_found", "timeout", "no_json")
-UNREADABLE = {"relay": "relay_limits_unreadable", "agy": "agy_quota_unreadable", "codex": "codex_limits_unreadable"}
+UNREADABLE = {"relay": "relay_limits_unreadable", "agy": "agy_quota_unreadable", "codex": "codex_limits_unreadable", "copilot": "copilot_quota_unreadable"}
 
 
 def _reason(source: str, error: Any) -> str:
@@ -348,6 +410,14 @@ def normalize(readings: dict[str, Any], now: datetime, *, read_at: datetime | No
             source, entry = "codex account/rateLimits/read", readings.get("codex")
             body = (normalize_agent(entry, now) if isinstance(entry, dict)
                     else {"status": "unavailable", "reason": _reason("codex", errors.get("codex")), "windows": []})
+        elif source_key == "copilot":
+            source, entry = "gh copilot_internal/user", readings.get("copilot")
+            if isinstance(entry, dict):
+                body = copilot_entry(entry, read_at or now)
+                if body["status"] == "ok":
+                    body = normalize_agent(body, now)
+            else:
+                body = {"status": "unavailable", "reason": _reason("copilot", errors.get("copilot")), "windows": []}
         else:
             source = "agent-relay limits"
             body = (normalize_agent(by_key.get(source_key), now) if isinstance(relay, dict)
@@ -366,6 +436,7 @@ class QuotaCache:
         self._reading: dict[str, Any] = {}
         self._read_at: datetime | None = None
         self._generation = 0
+        self._last_good: dict[str, dict[str, Any]] = {}
 
     def get(self, *, refresh: bool = False) -> dict[str, Any]:
         generation = self._generation
@@ -373,10 +444,18 @@ class QuotaCache:
             now = self.clock()
             ttl = timedelta(seconds=ttl_seconds())
             if self._read_at is None or now - self._read_at >= ttl or (refresh and generation == self._generation):
-                self._reading = self.reader() or {}
+                self._reading = (read_all(refresh=refresh) if self.reader is read_all else self.reader()) or {}
                 self._read_at = self.clock()
                 self._generation += 1
             payload = normalize(self._reading, self.clock(), read_at=self._read_at)
+            for index, body in enumerate(payload["providers"]):
+                key = body["provider"]
+                if body["status"] == "ok":
+                    self._last_good[key] = body
+                elif body["status"] == "unavailable" and key in self._last_good:
+                    previous = self._last_good[key]
+                    restored = normalize_agent(previous, self.clock())
+                    payload["providers"][index] = {**previous, **restored, "last_error": body["reason"]}
             payload["read_at"] = _iso(self._read_at)
             payload["next_read_at"] = _iso(self._read_at + ttl)
             return payload
