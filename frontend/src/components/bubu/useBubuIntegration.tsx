@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Camera, Eye, HandPointing, Microphone } from "@phosphor-icons/react";
 
+import type { Navigate } from "../../app/AppLink";
 import type { BubuIntegration } from "./BubuBubble";
 import JarvisMessageText from "../ai/JarvisMessageText";
 import { BubuPointer } from "./BubuPointer";
@@ -10,16 +11,19 @@ import { useBubuConversation, type BubuExtras } from "./conversationStore";
 import { collectPageContext, type UiTarget } from "./pageContext";
 import { parsePointDirectives, type PointDirective } from "./pointerDirectives";
 import { useDictation } from "./useDictation";
+import { useGuidedTour } from "./useGuidedTour";
 import { useUserPointer } from "./useUserPointer";
 
 const replyText = (text: string): ReactNode => <JarvisMessageText text={parsePointDirectives(text).text} />;
 
 /**
  * BUBU-2 wiring: the page is always described (DOM-first); screenshots only when asked; dictation fills the draft;
- * the user can point at an element; [[point:id]] in a reply shows where. Nothing here clicks or edits the page.
+ * the user can point at an element; [[point:id]] in a reply shows where. Nothing here clicks or edits the page
+ * (the guided tour, useGuidedTour, only navigates and selects tree rows).
  */
-export function useBubuIntegration(): { integration: BubuIntegration; overlay: ReactNode } {
+export function useBubuIntegration(navigate: Navigate): { integration: BubuIntegration; overlay: ReactNode } {
   const conversation = useBubuConversation();
+  const tour = useGuidedTour(navigate);
   const [insert, setInsert] = useState<{ text: string; nonce: number } | undefined>();
   const [picked, setPicked] = useState<UiTarget[]>([]);
   const [shot, setShot] = useState<string | null>(null);
@@ -61,7 +65,7 @@ export function useBubuIntegration(): { integration: BubuIntegration; overlay: R
     return extras;
   };
 
-  const onSleep = () => { stopVision(); dictation.stop(); pointer.cancel(); setShot(null); setPicked([]); setPoints([]); setMediaError(null); };
+  const onSleep = () => { stopVision(); tour.exit(); dictation.stop(); pointer.cancel(); setShot(null); setPicked([]); setPoints([]); setMediaError(null); };
 
   const status = mediaError ? <span className="bubu-status bubu-status--error">{mediaError}</span>
     : dictation.error ? <span className="bubu-status bubu-status--error">{dictation.error}</span>
@@ -79,6 +83,6 @@ export function useBubuIntegration(): { integration: BubuIntegration; overlay: R
     {tool("Vision", vision ? "Vision on: each message carries what you see · click to stop" : "Let Jarvis see this tab until Sleep", vision, () => void toggleVision(), <Eye size={16} aria-hidden="true" />)}
   </>;
 
-  const integration: BubuIntegration = { extraTools, getExtras, renderReply: replyText, draftInsert: insert, status, listening: dictation.listening, onSleep };
-  return { integration, overlay: <BubuPointer points={points} onDismiss={(id) => setPoints((current) => current.filter((p) => p.id !== id))} /> };
+  const integration: BubuIntegration = { extraTools, getExtras, renderReply: replyText, draftInsert: insert, status, listening: dictation.listening, onSleep, tour: tour.bubble, onStartTour: tour.start };
+  return { integration, overlay: <><BubuPointer points={points} onDismiss={(id) => setPoints((current) => current.filter((p) => p.id !== id))} /><BubuPointer points={tour.points} /></> };
 }

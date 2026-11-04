@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { designTarget } from "../app/designTargets";
 import NumericInput from "../components/ui/NumericInput";
 import { getComponentFeatureHistory, putComponentFeatureHistory,
   type ComponentFeatureHistory, type DesignComponent, type FeatureKind, type FeatureSequence, type FeatureStep } from "../api/designProject";
@@ -149,7 +150,7 @@ export default function DesignFeatureInspector({ projectId, versionId, component
   const undo = () => { const last = undoStack[undoStack.length - 1]; if (last) void send(last, true); };
 
   const locked = disabled || busy;
-  return <section aria-label="Feature inspector" className="design-feature-inspector">
+  return <section aria-label="Feature inspector" className="design-feature-inspector" {...designTarget("design.panel.feature-inspector")}>
     <h4>Features</h4>
     <p className="design-feature-inspector__lineage" role="status">
       {loadError ? loadError : !read ? "Loading feature history…"

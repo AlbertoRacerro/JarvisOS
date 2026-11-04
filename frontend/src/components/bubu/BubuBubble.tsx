@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUp, ArrowsOutSimple, DotsSix, Moon, PushPin, X } from "@phosphor-icons/react";
+import { ArrowUp, ArrowsOutSimple, Compass, DotsSix, Moon, PushPin, X } from "@phosphor-icons/react";
 
 import { clampBubblePosition, denormalizeBubblePosition, exceedsDragThreshold, loadStoredPosition, normalizeBubblePosition, nudgeBubblePosition, saveStoredPosition, type BubblePoint, type NormalizedPosition } from "./bubbleDrag";
 import { placeBubble } from "./bubblePlacement";
@@ -31,6 +31,10 @@ export type BubuBubbleProps = Readonly<{
   draftInsert?: Readonly<{ text: string; nonce: number }>;
   /** One short status line above the toolbar (interim dictation, attachments, media errors). */
   status?: ReactNode;
+  /** A running guided tour replaces the conversation inside the bubble; Escape or Exit ends it. */
+  tour?: Readonly<{ content: ReactNode; onExit(): void }>;
+  /** Starts the guided tour (the "Guided tour" entry in the bubble). */
+  onStartTour?(): void;
 }>;
 
 /** What the app can add around the bubble: the integrator wires dictation, page description and reply rendering here. */
@@ -40,6 +44,8 @@ export type BubuIntegration = Readonly<{
   renderReply?: (text: string) => ReactNode;
   draftInsert?: Readonly<{ text: string; nonce: number }>;
   status?: ReactNode;
+  tour?: Readonly<{ content: ReactNode; onExit(): void }>;
+  onStartTour?(): void;
   /** Dictation is active: Bubu shows the listening pose with a subtle pulse. */
   listening?: boolean;
   /** The conversation was ended with Sleep: vision, pointers and attachments reset. */
@@ -50,7 +56,7 @@ const plainReply =(text: string): ReactNode => <p>{text}</p>;
 const viewport = () => ({ width: window.innerWidth, height: window.innerHeight });
 
 /** Bubu's speech bubble: the last few turns, a composer and a small toolbar, anchored next to Bubu. */
-export default function BubuBubble({ open, onClose, onExpand, onSleep, returnFocusRef, extraTools, getExtras, renderReply = plainReply, draftInsert, status }: BubuBubbleProps) {
+export default function BubuBubble({ open, onClose, onExpand, onSleep, returnFocusRef, extraTools, getExtras, renderReply = plainReply, draftInsert, status, tour, onStartTour }: BubuBubbleProps) {
   const conversation = useBubuConversation();
   const relayEnabled = useBubuRelayEnabled();
   const anchor = useBubuRect();
@@ -166,7 +172,7 @@ export default function BubuBubble({ open, onClose, onExpand, onSleep, returnFoc
   const sleep = () => { conversation.sleep(); setDraft(""); onSleep(); focusBubu(); };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Escape" && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); close(); }
+    if (event.key === "Escape" && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); if (tour) tour.onExit(); else close(); }
   };
 
   return createPortal(<div
@@ -174,7 +180,7 @@ export default function BubuBubble({ open, onClose, onExpand, onSleep, returnFoc
     id="bubu-bubble"
     className="bubu-bubble"
     role="dialog"
-    aria-label="Jarvis"
+    aria-label={tour ? "Guided tour" : "Jarvis"}
     data-bubu-ui="bubble"
     data-placement={isDetached ? undefined : layout.placement}
     data-detached={isDetached ? "true" : undefined}
@@ -184,10 +190,12 @@ export default function BubuBubble({ open, onClose, onExpand, onSleep, returnFoc
   >
     <div className={`bubu-bubble__bar${dragPoint ? " is-dragging" : ""}`} onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerCancel={onBarUp} onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button")) attach(); }}>
       <div ref={gripRef} className="bubu-bubble__grip" role="button" tabIndex={0} aria-label="Move Jarvis" aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Home" title="Drag to move · arrow keys nudge · Home or double-click attaches to Bubu" onKeyDown={onGripKeyDown}>
-        <DotsSix size={16} weight="bold" aria-hidden="true" /><span className="bubu-bubble__title">Jarvis</span>
+        <DotsSix size={16} weight="bold" aria-hidden="true" /><span className="bubu-bubble__title">{tour ? "Guided tour" : "Jarvis"}</span>
       </div>
+      {onStartTour && !tour ? <button type="button" className="bubu-bubble__tour" onClick={onStartTour} title="Walk through the main areas of the app, one stop at a time"><Compass size={14} aria-hidden="true" />Guided tour</button> : null}
       {detached ? <button type="button" className="bubu-bubble__attach" onClick={attach} aria-label="Attach to Bubu" title="Attach to Bubu"><PushPin size={14} aria-hidden="true" /></button> : null}
     </div>
+    {tour ? tour.content : <>
     {turns.length ? <ol className="bubu-bubble__turns" ref={listRef} aria-label="Conversation" aria-live="polite">
       {turns.map((turn) => <li key={turn.id} className={`bubu-turn bubu-turn--${turn.role}${turn.failed ? " is-failed" : ""}`}>
         {turn.pending
@@ -217,5 +225,6 @@ export default function BubuBubble({ open, onClose, onExpand, onSleep, returnFoc
       <button type="button" className="bubu-bubble__btn" onClick={sleep} aria-label="Sleep" title="End this conversation"><Moon size={16} aria-hidden="true" /></button>
       <button type="button" className="bubu-bubble__btn" onClick={close} aria-label="Close" title="Hide (Esc)"><X size={16} aria-hidden="true" /></button>
     </div>
+    </>}
   </div>, document.body);
 }

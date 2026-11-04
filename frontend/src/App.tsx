@@ -161,7 +161,7 @@ function App() {
   // 155: pending process proposals stay visible above the composer, not inside the collapsed context.
   const processProposals = route.id === "design-process" && workspaceId ? <ProcessProposals workspaceId={workspaceId} /> : null;
   const jarvisSidecar = useJarvisSidecar(workspaceId, route.id, selection, jarvisLocalContext, knowledgeContext, processProposals, studioModelId);
-  const bubu = useBubuIntegration();
+  const bubu = useBubuIntegration(navigate);
 
   let content: ReactNode;
   const workspaceRequired = !WORKSPACE_OPTIONAL_ROUTES.has(route.id);

@@ -25,6 +25,7 @@ optional pack, not by this repository.
 | `grounding_walk.mjs` | Bubu grounding: pointer targets resolved against the real Design screens (uses `frontend/src/app/designTargets.ts`) | `node e2e/grounding_walk.mjs <evidence-dir> <source-data-root>` |
 | `owner_predicate_walk.mjs` | Measures the Process owner surface after operator actions (uses `frontend/src/app/ownerPredicates.ts`) | `node e2e/owner_predicate_walk.mjs <evidence-dir> <source-data-root>` |
 | `design_feature_inspector_walk.mjs` | Spec 235 feature inspector: add a tube, rebuild, 3D preview, change length, revision lineage, client refusal, undo (fresh temporary data root) | `node e2e/design_feature_inspector_walk.mjs <evidence-dir>` |
+| `bubu_guided_tour_walk.mjs` | Spec 242 Bubu guided tour: Next through every stop (route, pointed target or "Not available here"), Back, Exit, Escape, and no POST/PUT/DELETE during the tour (fresh temporary data root, or a copy with the C1 case study) | `node e2e/bubu_guided_tour_walk.mjs <evidence-dir> [<source-data-root>]` |
 | `coding_supervisor_walk.mjs` | Coding → Runtime supervisor controls (pause, resume, graceful restart) and open maintainer question answers | `node e2e/coding_supervisor_walk.mjs <evidence-dir>` |
 | `provider_quota_walk.mjs` | Coding → Runtime provider usage columns, quota rings, Claude windows, and failed-refresh retention | `node e2e/provider_quota_walk.mjs <evidence-dir>` |
 
