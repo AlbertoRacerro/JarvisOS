@@ -369,14 +369,13 @@ def copilot_entry(reading: dict[str, Any], now: datetime) -> dict[str, Any]:
             return unavailable("no_entitlement")
         percent = 0.0
     else:
-        percent = bucket.get("percent_remaining")
+        raw_percent = bucket.get("percent_remaining")
         remaining = bucket.get("remaining")
-        if (isinstance(percent, bool) or not isinstance(percent, (int, float)) or not math.isfinite(percent)
-                or not 0 <= percent <= 100 or (remaining is not None and
+        if (isinstance(raw_percent, bool) or not isinstance(raw_percent, (int, float)) or not math.isfinite(raw_percent)
+                or not 0 <= raw_percent <= 100 or (remaining is not None and
                 (isinstance(remaining, bool) or not isinstance(remaining, (int, float)) or not math.isfinite(remaining)))):
             return unavailable("invalid_reading")
-        if remaining is not None and remaining <= 0:
-            percent = 0.0
+        percent = 0.0 if remaining is not None and remaining <= 0 else float(raw_percent)
     reset = reading.get("quota_reset_date")
     try:
         reset_at = datetime.strptime(reset, "%Y-%m-%d").replace(tzinfo=UTC) if isinstance(reset, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", reset) else None
@@ -413,10 +412,11 @@ def normalize(readings: dict[str, Any], now: datetime, *, read_at: datetime | No
                     else {"status": "unavailable", "reason": _reason("codex", errors.get("codex")), "windows": []})
         elif source_key == "copilot":
             source, entry = "gh copilot_internal/user", readings.get("copilot")
-            body = copilot_entry(entry, read_at or now) if isinstance(entry, dict) else None
-            if body and body["status"] == "ok":
-                body = normalize_agent(body, now)
-            if body is None:
+            if isinstance(entry, dict):
+                body = copilot_entry(entry, read_at or now)
+                if body["status"] == "ok":
+                    body = normalize_agent(body, now)
+            else:
                 body = {"status": "unavailable", "reason": _reason("copilot", errors.get("copilot")), "windows": []}
         else:
             source = "agent-relay limits"
