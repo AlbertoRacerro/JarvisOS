@@ -145,7 +145,9 @@ def test_lifecycle_regeneration_failure_atomicity_and_fork(monkeypatch) -> None:
         assert client.get(f"{base}/{component}/fluid-domain").json()["geometry_digest"] != old_digest
         (status,) = client.get(f"{base}/{component}/reduced-models").json()
         assert status["status"] == "obsolete"
-        assert any("geometry changed" in reason for reason in status["obsolete_reasons"])
+        # Spec 216's existing digest check owns the reason text; there is no separate machine code.
+        assert any(reason.startswith("tube geometry changed since the reduced model was published")
+                   for reason in status["obsolete_reasons"])
         revision = client.get(base).json()[0]["revision"]
         bad = _sequence()
         bad["features"][0]["params"]["length_mm"] = {"$param": "unknown"}
@@ -170,6 +172,7 @@ def test_lifecycle_regeneration_failure_atomicity_and_fork(monkeypatch) -> None:
             assert parked["status"] == "parked"
         assert client.get(path).json() == second_data
         assert client.get(base).json()[0]["revision"] == revision
+        monkeypatch.undo()
         fork = client.post(f"/workspaces/{project}/design-versions", json={
             "label": "Fork", "expected_active_version_id": project, "mode": "fork",
         })
@@ -181,3 +184,24 @@ def test_lifecycle_regeneration_failure_atomicity_and_fork(monkeypatch) -> None:
         assert inherited["sequence"] == second_data["sequence"]
         assert inherited["sequence_digest"] == second_data["sequence_digest"]
         assert inherited["candidate_id"] == second_data["candidate_id"]
+        assert inherited["persisted"] and not inherited["stale_against_attached_candidate"]
+        activated = client.post(f"/workspaces/{project}/design-versions/activate", json={
+            "version_id": version["id"], "expected_active_version_id": project})
+        assert activated.status_code == 200, activated.text
+        fork_revision = client.get(fork_base).json()[0]["revision"]
+        regenerated = client.put(f"{fork_base}/{fork_component}/geometry/feature-history", json={
+            "sequence": _sequence(3200), "expected_revision": fork_revision,
+            "expected_active_version_id": version["id"],
+        })
+        assert regenerated.status_code == 200, regenerated.text
+        fork_candidate = regenerated.json()["candidate_id"]
+        assert fork_candidate != second_data["candidate_id"] and regenerated.json()["revision"] == inherited["revision"] + 1
+        with open_sqlite_connection() as connection:
+            # The inherited candidate lives in the parent version's data workspace; lineage edges stay inside one
+            # workspace, so a fork's first regeneration starts a new chain instead of a dangling cross-workspace parent.
+            row = connection.execute("SELECT parent_candidate_id FROM bluecad_candidates WHERE id = ?",
+                                     (fork_candidate,)).fetchone()
+            assert row["parent_candidate_id"] is None
+            parent_geometry = connection.execute(
+                "SELECT candidate_id FROM design_component_geometry WHERE component_id = ?", (component,)).fetchone()
+            assert parent_geometry["candidate_id"] == second_data["candidate_id"]
