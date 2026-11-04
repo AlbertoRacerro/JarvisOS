@@ -64,6 +64,12 @@ WALL_FUNCTION_YPLUS = 60.0
 _SYMMETRY_PATCHES = ("symmetry_y", "symmetry_z")
 FIELD_FUNCTION = "pipe_fields"  # controlDict function object; output in postProcessing/pipe_fields/<time>/
 FIELD_SURFACE = "symmetry_z"  # axial-section patch (z = 0 plane, contains the x axis) sampled for the viewport
+FIELD_3D_FUNCTION = "pipe_fields_3d"
+FIELD_3D_PATCHES = ("wall", "symmetry_y", "symmetry_z")
+FIELD_3D_SECTIONS = (("section_25", 0.25), ("section_50", 0.5), ("section_75", 0.75))
+SYMMETRY_BASIS = "Smooth straight pipe with axisymmetric inlet and mean flow; quarter domain y >= 0, z >= 0."
+SYMMETRY = {"domain": "quarter", "axis": "x", "mirror_planes": ["y=0", "z=0"],
+            "basis": SYMMETRY_BASIS}
 
 
 class MeshPlan(BaseModel):
@@ -290,6 +296,21 @@ def control_dict(contract: PipeStudyContract, *, stop_now: bool = False) -> str:
                 "writeControl": "timeStep", "writeInterval": contract.solver.max_iterations,
                 "fields": ("p", "U"),
                 "surfaces": [{FIELD_SURFACE: {"type": "patch", "patches": (FIELD_SURFACE,)}}],
+            },
+            FIELD_3D_FUNCTION: {
+                "type": "surfaces", "libs": ('"libsampling.so"',),
+                "surfaceFormat": "vtk",
+                "formatOptions": {"vtk": {"legacy": "true", "format": "ascii"}},
+                "interpolationScheme": "cellPoint", "interpolate": "true",
+                "writeControl": "timeStep", "writeInterval": contract.solver.max_iterations,
+                "fields": ("p", "U"),
+                "surfaces": [
+                    *[{name: {"type": "patch", "patches": (name,)}} for name in FIELD_3D_PATCHES],
+                    *[{name: {"type": "cuttingPlane", "planeType": "pointAndNormal",
+                              "pointAndNormalDict": {"point": (contract.domain.length_m * fraction, 0, 0),
+                                                     "normal": (1, 0, 0)}}}
+                      for name, fraction in FIELD_3D_SECTIONS],
+                ],
             },
         },
     }
