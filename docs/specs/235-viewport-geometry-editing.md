@@ -1,6 +1,6 @@
 # 235 — Viewport geometry editing, slice 1: feature inspector
 
-Status: ready
+Status: merged
 Depends on: 234
 
 ## Goal
