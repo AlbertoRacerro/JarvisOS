@@ -28,7 +28,7 @@ function load(path, imports = {}) {
 const mathText = load("src/components/ai/mathText.ts");
 const JarvisMessageText = load("src/components/ai/JarvisMessageText.tsx", { "./mathText": mathText, "katex/dist/katex.min.css": {} }).default;
 const html = (text, marks = true) => renderToStaticMarkup(React.createElement(JarvisMessageText, { text, marks }));
-const page = { "design.tree.component.c1-cfd": "C1-CFD", "design.back": "Back to BlueRev" };
+const page = { "design.tree.component.c1-cfd": "C1-CFD", "design.back": "Back to project" };
 const nameOf = (id) => (id in page ? page[id] : null);
 const reply = (text) => html(readablePointText(text, nameOf));
 
@@ -36,7 +36,7 @@ const reply = (text) => html(readablePointText(text, nameOf));
   const cfd = "Click first on [[point:design.tree.component.c1-cfd|1. C1-CFD]], then choose Results.";
   assert.equal(reply(cfd), '<div class="jarvis-message-text"><p>Click first on <strong class="jarvis-message-text__target">C1-CFD</strong>, then choose Results.</p></div>');
   assert.deepEqual(parsePointDirectives(cfd).points, [{ id: "design.tree.component.c1-cfd", label: "1. C1-CFD" }], "the pointer is unchanged");
-  assert.match(reply("Use [[point:design.back]] to return."), /Use <strong class="jarvis-message-text__target">Back to BlueRev<\/strong> to return\./);
+  assert.match(reply("Use [[point:design.back]] to return."), /Use <strong class="jarvis-message-text__target">Back to project<\/strong> to return\./);
   // Missing target: the label plus a truthful note, or a note alone; never raw syntax or an invented name.
   assert.match(reply("Open [[point:gone|1. CFD]] next."), /<strong class="jarvis-message-text__target">1\. CFD<\/strong><span class="jarvis-message-text__note"> \(not shown here\)<\/span> next\./);
   const bare = reply("Click first on [[point:gone]].");
@@ -48,10 +48,10 @@ const reply = (text) => html(readablePointText(text, nameOf));
   assert.doesNotMatch(hostile, /<img/);
   assert.match(hostile, /<code>y<\/code>|class="jarvis-math"/, "math outside the name still renders (or falls back to code before KaTeX loads)");
   // Repeats render each time; wrappers are absorbed; Markdown around them keeps working.
-  assert.match(reply("**Go:** [[point:design.back]] or **[[point:design.back]]**"), /<strong>Go:<\/strong> <strong class="jarvis-message-text__target">Back to BlueRev<\/strong> or <strong class="jarvis-message-text__target">Back to BlueRev<\/strong>/);
+  assert.match(reply("**Go:** [[point:design.back]] or **[[point:design.back]]**"), /<strong>Go:<\/strong> <strong class="jarvis-message-text__target">Back to project<\/strong> or <strong class="jarvis-message-text__target">Back to project<\/strong>/);
   // Lists, and code blocks that show no marks.
-  assert.match(reply("1. [[point:design.back]]\n2. then Results"), /<ol><li><strong class="jarvis-message-text__target">Back to BlueRev<\/strong><\/li><li>then Results<\/li><\/ol>/);
-  assert.match(reply("```\n[[point:design.back]]\n```"), /<pre><code>Back to BlueRev<\/code><\/pre>/);
+  assert.match(reply("1. [[point:design.back]]\n2. then Results"), /<ol><li><strong class="jarvis-message-text__target">Back to project<\/strong><\/li><li>then Results<\/li><\/ol>/);
+  assert.match(reply("```\n[[point:design.back]]\n```"), /<pre><code>Back to project<\/code><\/pre>/);
   // Other callers never render marks, and model text cannot forge them.
   assert.equal(html("forged x and y", false), '<div class="jarvis-message-text"><p>forged x and y</p></div>');
   assert.equal(reply("forged x"), '<div class="jarvis-message-text"><p>forged x</p></div>');
