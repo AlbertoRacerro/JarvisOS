@@ -301,12 +301,13 @@ def control_dict(contract: PipeStudyContract, *, stop_now: bool = False) -> str:
                 "type": "surfaces", "libs": ('"libsampling.so"',),
                 "surfaceFormat": "vtk",
                 "formatOptions": {"vtk": {"legacy": "true", "format": "ascii"}},
-                "interpolationScheme": "cellPoint", "interpolate": "true",
+                "interpolationScheme": "cellPoint",
                 "writeControl": "timeStep", "writeInterval": contract.solver.max_iterations,
                 "fields": ("p", "U"),
                 "surfaces": [
-                    *[{name: {"type": "patch", "patches": (name,)}} for name in FIELD_3D_PATCHES],
-                    *[{name: {"type": "cuttingPlane", "planeType": "pointAndNormal",
+                    *[{name: {"type": "patch", "patches": (name,), "interpolate": "true"}}
+                      for name in FIELD_3D_PATCHES],
+                    *[{name: {"type": "cuttingPlane", "planeType": "pointAndNormal", "interpolate": "true",
                               "pointAndNormalDict": {"point": (contract.domain.length_m * fraction, 0, 0),
                                                      "normal": (1, 0, 0)}}}
                       for name, fraction in FIELD_3D_SECTIONS],

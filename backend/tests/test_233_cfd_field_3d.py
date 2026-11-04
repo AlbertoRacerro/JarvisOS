@@ -33,6 +33,8 @@ def test_control_dict_has_six_surfaces_without_changing_old_object() -> None:
     old = text.split("    pipe_fields\n    {", 1)[1].split("    pipe_fields_3d\n    {", 1)[0]
     assert "symmetry_z" in old and "section_25" not in old
     new = text.split("    pipe_fields_3d\n    {", 1)[1]
+    assert new.count("interpolate true;") == 6
+    assert "interpolate true;" not in new.split("surfaces\n", 1)[0]
     for name in NAMES:
         assert f"{name}\n" in new
     for _, fraction in casegen.FIELD_3D_SECTIONS:
