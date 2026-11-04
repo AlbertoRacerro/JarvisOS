@@ -1,6 +1,6 @@
 # 241 — Semantic Slack updates
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal
