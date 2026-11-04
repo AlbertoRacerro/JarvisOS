@@ -1,6 +1,6 @@
 # 233 — CFD 3D symmetry view
 
-Status: ready
+Status: in_progress
 Depends on: none
 
 ## Goal
