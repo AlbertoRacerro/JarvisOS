@@ -998,7 +998,7 @@ def test_corrupt_state_holds_without_acting(tmp_path: Path, content: str) -> Non
     result, _ = env.run()
     assert result == "held" and env.relay.launches == []
     assert env.store.state_path.read_text() == content
-    assert any("state_corrupt" in text for text in env.sent)
+    assert any("JarvisOS richiede una verifica: scrivi a Claude in chat." in text for text in env.sent)
 
 
 def test_stop_request_and_resume(tmp_path: Path) -> None:
@@ -1413,7 +1413,7 @@ def test_structurally_incomplete_state_is_corrupt_not_repaired(tmp_path: Path, d
     env.store.state_path.write_text(json.dumps(state))
     result, _ = env.run()
     assert result == "held" and env.relay.launches == []
-    assert any("state_corrupt" in text for text in env.sent)
+    assert any("JarvisOS richiede una verifica: scrivi a Claude in chat." in text for text in env.sent)
 
 
 def test_journal_launch_missing_from_state_holds(tmp_path: Path) -> None:
