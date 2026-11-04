@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "/home/thera/jarvis-control/work/tools/pw/node_modules/playwright/index.mjs");
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
 const root = resolve(new URL("../../../", import.meta.url).pathname);
 const base = process.env.JARVISOS_231_BASE ?? "http://127.0.0.1:5173";
 const evidence = resolve(process.argv[2] ?? "/tmp/jarvisos-231-browser");
