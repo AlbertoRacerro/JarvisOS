@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { getComponentCfdRunFields3d, type CfdField3d, type CfdRun } from "../api/designProject";
 import { colorFor, legendGradient } from "./cfdFieldSlice";
-import { reflectedSample, transforms, validField3d } from "./cfdField3d";
+import { radialStretch, reflectedSample, transforms, validField3d } from "./cfdField3d";
 
 type Props = { projectId: string; versionId: string; componentId: string; run: CfdRun };
 type Field = "p" | "Umag";
@@ -28,6 +28,7 @@ export default function CfdField3dPanel({ projectId, versionId, componentId, run
     return () => { active = false; };
   }, [projectId, versionId, componentId, run.run_id]);
   const available = payload && validField3d(payload) ? payload : null;
+  const stretch = useMemo(() => available ? radialStretch(available.surfaces) : 1, [available]);
   const range = useMemo(() => {
     if (!available) return null;
     const values = available.surfaces.map((surface) => field === "p"
@@ -60,12 +61,13 @@ export default function CfdField3dPanel({ projectId, versionId, componentId, run
         const triangle = reverse ? [polygon[0]!, polygon[j + 1]!, polygon[j]!] : [polygon[0]!, polygon[j]!, polygon[j + 1]!];
         for (const index of triangle) {
           const sample = reflectedSample(surface, index, transform);
-          positions.push(...sample.position);
+          const drawn: [number, number, number] = [sample.position[0], sample.position[1] * stretch, sample.position[2] * stretch];
+          positions.push(...drawn);
           const value = field === "p" ? sample.p : Math.hypot(...sample.U);
           const color = new THREE.Color(colorFor(value, range.min, range.max));
           colors.push(color.r, color.g, color.b);
           sourceIndices.push(index);
-          bounds.expandByPoint(new THREE.Vector3(...sample.position));
+          bounds.expandByPoint(new THREE.Vector3(...drawn));
         }
       }
       const geometry = new THREE.BufferGeometry();
@@ -114,7 +116,7 @@ export default function CfdField3dPanel({ projectId, versionId, componentId, run
     draw(); setReady(true);
     return () => { cancelAnimationFrame(frame); observer.disconnect(); controls.dispose(); renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointerup", onClick); renderer.dispose(); material.dispose(); geometries.forEach((geometry) => geometry.dispose()); renderer.domElement.remove(); };
-  }, [available, field, full, range]);
+  }, [available, field, full, range, stretch]);
   return <section aria-label="CFD 3D field" className="design-project__field-3d">
     <div className="design-project__field-head"><h4>3D field</h4>{available ? <>
       <div role="group" aria-label="3D field" className="design-project__segmented">
@@ -128,6 +130,7 @@ export default function CfdField3dPanel({ projectId, versionId, componentId, run
     {available && range ? <figure className="design-project__field-3d-figure">
       {full ? <strong className="design-project__field-3d-badge">Mirrored from the computed quarter, not computed</strong> : null}
       <div ref={mount} className="design-project__field-3d-canvas" />
+      {stretch > 1 ? <p role="note" className="design-project__field-stretch">Display only: the radial axes (y, z) are stretched ×{stretch.toPrecision(3)} so the thin pipe is readable. Field values and probe coordinates are unchanged.</p> : null}
       <figcaption><div className="design-project__field-legend" aria-label="3D colour legend">
         <span>{field === "p" ? "p" : "|U|"}</span><span>{fmt(range.min)}</span>
         <span className="design-project__field-legend-bar" style={{ background: legendGradient() }} />

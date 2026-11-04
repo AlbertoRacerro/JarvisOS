@@ -5,6 +5,16 @@ const vec3 = (value: unknown): value is [number, number, number] => Array.isArra
 const sign3 = (value: unknown): value is [number, number, number] => vec3(value) && value.every((part) => part === 1 || part === -1);
 const obj = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
+export function radialStretch(surfaces: readonly CfdField3dSurface[], minRatio = 0.25): number {
+  let minX = Infinity, maxX = -Infinity, radial = 0;
+  for (const surface of surfaces) for (const [x, y, z] of surface.points) {
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    radial = Math.max(radial, Math.abs(y), Math.abs(z));
+  }
+  const axial = maxX - minX;
+  return radial <= 0 || axial <= 0 ? 1 : Math.max(1, minRatio * axial / radial);
+}
+
 /** The API type is compile-time only; reject malformed exports before allocating WebGL geometry. */
 export function validField3d(raw: unknown): raw is Extract<CfdField3d, { status: "available" }> {
   if (!obj(raw) || raw.status !== "available" || !Array.isArray(raw.surfaces) || !raw.surfaces.length || !obj(raw.symmetry) || !obj(raw.reflection_operators)) return false;

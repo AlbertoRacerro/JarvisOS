@@ -66,14 +66,16 @@ try {
   const canvas = panel.getByRole("img", { name: /3D CFD computed surfaces/ });
   await canvas.waitFor({ timeout: 60_000 });
   record.results.first_render_ms = Date.now() - start;
+  record.results.stretch_note = await panel.getByRole("note").innerText().catch(() => null);
   await shot("computed");
   const probe = panel.locator(".design-project__field-readout");
-  const sample = async (pattern) => { const box = await canvas.boundingBox(); check(box, "canvas has no bounds");
-    for (const y of [0.3, 0.5, 0.7]) for (const x of [0.3, 0.5, 0.7]) {
+  const sample = async (pattern) => { await canvas.scrollIntoViewIfNeeded(); const box = await canvas.boundingBox(); check(box, "canvas has no bounds");
+    for (const y of [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]) for (const x of [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]) {
       await page.mouse.click(box.x + box.width * x, box.y + box.height * y);
       if (pattern.test(await probe.innerText())) return await probe.innerText();
     }
     throw new Error(`could not probe ${pattern}`); };
+  await canvas.scrollIntoViewIfNeeded();
   record.results.computed_probe = await sample(/Computed vertex/);
   await panel.getByRole("button", { name: "|U|" }).click();
   check((await panel.getByLabel("3D colour legend").innerText()).includes("m/s"), "|U| legend did not update");
