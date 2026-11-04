@@ -2,7 +2,7 @@
 // Spec 235 slice 1: real-Chromium walk of the Design feature inspector. A clean profile opens "/", reaches Design with
 // visible controls only, adds a component, adds a tube in the Geometry node, rebuilds (3D preview appears), changes the
 // length and rebuilds (revision increments), refuses an invalid wall before any request, then undoes (new revision,
-// earlier geometry). Revision and candidate lineage are recorded from read-only GETs. Runs on a fresh temporary data
+// earlier geometry), then proves a server refusal after an out-of-band concurrent edit. Revision and candidate lineage are recorded from read-only GETs. Runs on a fresh temporary data
 // root; never the live app.
 //   (cd frontend && VITE_API_BASE_URL= npm run build)
 //   JARVISOS_PROOF_PYTHON=<backend venv python> node e2e/design_feature_inspector_walk.mjs <evidence-dir>
@@ -161,6 +161,47 @@ try {
   await viewport.locator("canvas").waitFor();
   await shot("undo-revision-3");
   step("undo_restores_earlier_spec_as_new_revision", { revision: third.revision, spec_id: third.compiled_spec_id });
+
+  // 5. Server refusal: acceptance 4 (server side). A concurrent edit made out of band (direct HTTP, not the UI) makes the
+  // page's expected_revision stale; the page's own rebuild must be refused and must not overwrite the other edit.
+  const componentsUrl = `/workspaces/${projectId}/design-versions/${versions.active_version_id}/components`;
+  const beforeOob = await history();
+  const liveComponent = (await getJson(componentsUrl)).find((item) => item.id === componentId);
+  const oobSequence = structuredClone(beforeOob.sequence);
+  const oobTube = oobSequence.features.find((f) => f.kind === "tube_run") ?? oobSequence.features[0];
+  const lengthKey = Object.keys(oobTube.params ?? {}).find((k) => /length/i.test(k));
+  assert(lengthKey, `cannot find a length parameter in the sequence: ${JSON.stringify(oobTube)}`);
+  oobTube.params[lengthKey] = 450;
+  const oobResponse = await fetch(`${base}${componentsUrl}/${encodeURIComponent(componentId)}/geometry/feature-history`, {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sequence: oobSequence, expected_revision: liveComponent.revision, expected_active_version_id: versions.active_version_id, expected_draft_revision: null })
+  });
+  const oobRequest = { origin: "out_of_band", request: `PUT ${componentsUrl}/${componentId}/geometry/feature-history`, status: oobResponse.status };
+  summary.out_of_band_requests = [oobRequest];
+  assert(oobResponse.ok, `out-of-band edit failed: ${oobResponse.status} ${await oobResponse.text()}`);
+  const afterOob = await record("after out-of-band edit");
+  assert(afterOob.revision === 4 && afterOob.candidate_id !== third.candidate_id, "out-of-band edit did not create a new revision");
+  // In the page, without reloading: change a dimension and rebuild.
+  await length.fill("260");
+  await inspector.getByRole("status").getByText("Edits not applied yet.").waitFor();
+  const putResponse = page.waitForResponse((r) => r.request().method() === "PUT" && r.url().includes("/geometry/feature-history"));
+  await inspector.getByRole("button", { name: "Rebuild geometry", exact: true }).click();
+  const refusedResponse = await putResponse;
+  const refusedStatus = refusedResponse.status();
+  const refusedBody = await refusedResponse.json().catch(() => null);
+  assert(refusedStatus >= 400, `the stale page edit was not refused (status ${refusedStatus})`);
+  const alert = inspector.getByRole("alert");
+  await alert.getByText(/^Not applied: .+ The previous geometry is still attached\.$/).waitFor();
+  const alertText = (await alert.innerText()).trim();
+  const detail = typeof refusedBody?.detail === "string" ? refusedBody.detail : JSON.stringify(refusedBody?.detail ?? refusedBody?.message ?? "");
+  assert(detail && alertText.includes(detail.replace(/\.$/, "")), `alert does not show the server message: alert=${alertText} server=${detail}`);
+  assert(await length.inputValue() === "260", "edited value was lost after the refusal");
+  const afterRefusal = await record("after server refusal");
+  assert(afterRefusal.revision === afterOob.revision && afterRefusal.candidate_id === afterOob.candidate_id
+    && afterRefusal.attached_candidate_id === afterOob.attached_candidate_id, "the refused edit changed the server geometry");
+  await shot("server-refusal-keeps-out-of-band-geometry");
+  step("server_refusal_keeps_attached_geometry", { out_of_band: oobRequest, page_put_status: refusedStatus, server_message: detail, alert_text: alertText,
+    attached_candidate_id: afterRefusal.attached_candidate_id, revision: afterRefusal.revision });
 
   assert(summary.page_errors.length === 0, `page errors: ${summary.page_errors.join("; ")}`);
 } catch (error) {
