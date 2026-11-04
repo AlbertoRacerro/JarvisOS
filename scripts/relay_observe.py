@@ -43,18 +43,6 @@ REPO_URL = "https://github.com/AlbertoRacerro/JarvisOS"
 WAIT_ALERT_AFTER = timedelta(hours=6)  # a provider/CI wait becomes an incident only when prolonged
 MAX_MESSAGE = 3500
 
-STATE_IT = {
-    "running": "in esecuzione",
-    "queued": "in coda, in attesa che il proprietario la avvii",
-    "checkpointed": "checkpoint salvato; il compito resta aperto e riprende al prossimo turno",
-    "verified_complete": "completata e verificata",
-    "held": "FERMA in attesa di revisione del maintainer",
-    "paused": "roadmap in pausa",
-    "waiting": "in attesa (limite provider o conflitto con lavoro attivo)",
-    "idle": "nessun lavoro in sospeso (inattività verificata)",
-    "stopped": "proprietario delle missioni fermo",
-    "unknown": "stato sconosciuto: la telemetria non è leggibile",
-}
 REASON_IT = {
     "effects_uncertain": "un'operazione interrotta potrebbe aver avuto effetti esterni incerti",
     "auth_failure": "errore di autenticazione o permessi del provider",
@@ -89,6 +77,16 @@ _URL_RE = re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]{1,15}://\S*|(?:mailto|tel|slack
                      r"|cloud|tech|example|eu|us|uk|de|it|fr|ru|cn)\b(?:[/?#]\S*)?)")
 _PATH_RE = re.compile(r"(?<![\w.~])(?:~|/(?:home|mnt|root|etc|tmp|run|var|proc))/\S*")
 _SLACK_ESCAPES = (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"))
+# All-letter SHAs exist; exempt ordinary Italian words that happen to use only hex letters.
+_MACHINE_RE = re.compile(r"(?i)\b(?!(?:accadde|decadde)\b)[0-9a-f]{7,}\b|\b[mj]-20\d\d\w*|\bL20\d\d\w*|`|"
+                         r"(?<!\w)(?:[a-z_][\w.-]*[/\\])+[\w.-]+|(?<!\w)/(?:[\w.-]+/)*[a-z_][\w.-]*|"
+                         r"\b[\w-]+\.(?:py|mjs|js|tsx?|json|md|toml|ya?ml|sh|ps1|cmd|log)\b")
+_ISSUE_REF_RE = re.compile(r"(?<!\w)#\d{1,6}\b")
+
+
+def machine_marker(text: str) -> bool:
+    """Whether text contains a machine reference unsuitable for a maintainer update."""
+    return bool(_MACHINE_RE.search(text))
 
 
 def clean(text: Any, limit: int = 240) -> str | None:
@@ -179,9 +177,12 @@ def live_session(repo: Path, state: dict[str, Any] | None) -> str | None:
     return state.get("head_session")
 
 
+ROADMAP_LABEL = "sviluppo autonomo di JarvisOS dalla coda delle specifiche"
+
+
 def _task_label(text: Any) -> str | None:
-    if isinstance(text, str) and (m := re.match(r"Roadmap continuation cycle (\d+)", text)):
-        return f"ciclo {m.group(1)} della roadmap autonoma (sviluppo JarvisOS dalla coda di STATUS.md)"
+    if isinstance(text, str) and re.match(r"Roadmap continuation cycle \d+", text):
+        return ROADMAP_LABEL
     first = text.split("\n", 1)[0] if isinstance(text, str) else None
     return clean(first, 200)
 
@@ -231,6 +232,29 @@ def _latest(entries: list[dict[str, Any]], kinds: tuple[str, ...], since: str | 
         if entry.get("kind") in kinds and (not since or str(entry.get("ts") or "") >= since):
             return clean(entry.get("text"), 220)
     return None
+
+
+def _maintainer_update(entries: list[dict[str, Any]], since: str | None) -> tuple[str | None, str | None]:
+    eligible = (e for e in entries if e.get("kind") == "note" and (e.get("refs") or {}).get("lane") == "maintainer"
+                and (not since or str(e.get("ts") or "") >= since))
+    latest = max(eligible, key=lambda e: str(e.get("ts") or ""), default=None)
+    raw = latest.get("text") if latest else None
+    if not isinstance(raw, str) or machine_marker(raw) or _ISSUE_REF_RE.search(raw):
+        return None, None
+    parts = re.split(r"\s+Prossimo:\s*", raw, maxsplit=1)
+    update = clean(parts[0])
+    next_step = clean(parts[1]) if len(parts) == 2 else None
+    return update, next_step
+
+
+def _session_start(item: dict[str, Any] | None) -> str | None:
+    session = item.get("session") if item else None
+    if isinstance(session, str) and (match := re.match(r"^(\d{8})-(\d{6})-", session)):
+        try:
+            return rc.iso(datetime.strptime("".join(match.groups()), "%Y%m%d%H%M%S").replace(tzinfo=rc.UTC))
+        except ValueError:
+            pass
+    return item.get("at") if item else None
 
 
 def snapshot(root: Path, repo: Path, now: datetime, *, alive: Callable[[Path], bool | None] = owner_alive,
@@ -285,6 +309,7 @@ def snapshot(root: Path, repo: Path, now: datetime, *, alive: Callable[[Path], b
     if active is None:
         paused = (snap.get("roadmap") or {}).get("paused")
         last = max(snap["delivered"], key=lambda d: d.get("at") or "", default=None)
+        snap["update"], snap["update_next"] = _maintainer_update(entries, _session_start(last))
         verified = last is not None and last["outcome"] == "verified"
         snap["state"] = ("paused" if paused else "stopped" if snap["stop"] else "unknown" if snap["owner"] is None
                          else "verified_complete" if verified else "idle")
@@ -321,6 +346,7 @@ def snapshot(root: Path, repo: Path, now: datetime, *, alive: Callable[[Path], b
                 snap["question"] = _latest(entries, ("question", "blocker"), last.get("at") if last else None)
         return snap
     mission, status, state = active
+    snap["update"], snap["update_next"] = _maintainer_update(entries, mission.get("submitted_at"))
     state = state or {}
     rec = state.get("mission") or {}
     index = rec.get("next", 0)
@@ -365,23 +391,25 @@ def incidents(snap: dict[str, Any], now: datetime) -> dict[str, str]:
     mission = (snap.get("mission") or {}).get("id") or "-"
     reason = snap.get("reason")
     if snap["state"] == "held":
-        found[f"held|{mission}|{reason}"] = f"missione {mission} ferma: {REASON_IT.get(reason, reason or 'motivo non registrato')}"
+        found[f"held|{mission}|{reason}"] = "il lavoro è fermo in attesa di una tua verifica: scrivi a Claude in chat"
     if snap["state"] == "paused":
-        found[f"paused|{reason}"] = f"roadmap in pausa: {REASON_IT.get(reason, reason or 'motivo non registrato')}"
+        question = snap.get("question")
+        found[f"paused|{reason}"] = (question if reason == "coordinator_blocked" and isinstance(question, str)
+                                        and not machine_marker(question) and not _ISSUE_REF_RE.search(question) else
+                                        "c'è una domanda per te: rispondi a Claude in chat" if reason == "coordinator_blocked"
+                                        else f"lo sviluppo è in pausa: {REASON_IT.get(reason, 'serve una tua verifica')}")
     if "owner_down" in snap["problems"]:
-        found[f"owner_down|{mission}"] = ("il proprietario delle missioni non è in esecuzione ma "
-                                          + (f"la missione {mission} ha lavoro in sospeso" if mission != "-"
-                                             else "la roadmap autonoma è attiva"))
+        found[f"owner_down|{mission}"] = "il supervisore che porta avanti lo sviluppo non è attivo: scrivi a Claude in chat per riavviarlo"
     if snap["state"] == "waiting" and snap.get("wait_kind") != "jobs" and (since := rc.parse_ts(snap.get("waiting_since"))) and now - since >= WAIT_ALERT_AFTER:
-        found[f"waiting|{mission}|{rc.iso(since)}"] = f"missione {mission} in attesa da più di {int(WAIT_ALERT_AFTER.total_seconds() // 3600)} ore"
+        found[f"waiting|{mission}|{rc.iso(since)}"] = "il lavoro è in attesa da oltre sei ore: scrivi a Claude in chat"
     for problem in snap["problems"]:
         if problem != "owner_down":
-            found[f"problem|{problem}"] = {"mission_corrupt": f"definizione o stato della missione {mission} illeggibile",
-                                           "roadmap_corrupt": "roadmap.json illeggibile",
-                                           "hostops_down": "esecutore host non disponibile: richieste in attesa da oltre due minuti",
-                                           "missions_unreadable": "cartella delle missioni illeggibile"}.get(problem, problem)
+            found[f"problem|{problem}"] = {"mission_corrupt": "lo stato del lavoro non è leggibile: scrivi a Claude in chat",
+                                           "roadmap_corrupt": "il piano di sviluppo non è leggibile: scrivi a Claude in chat",
+                                           "hostops_down": "le operazioni richieste sono ferme da oltre due minuti: scrivi a Claude in chat",
+                                           "missions_unreadable": "i lavori programmati non sono leggibili: scrivi a Claude in chat"}.get(problem, "lo stato dello sviluppo richiede una verifica: scrivi a Claude in chat")
     if snap["state"] == "unknown" and not snap["problems"]:
-        found["unknown|owner"] = "impossibile stabilire se il proprietario delle missioni è vivo (telemetria sconosciuta)"
+        found["unknown|owner"] = "non riesco a verificare se lo sviluppo è attivo: scrivi a Claude in chat"
     return found
 
 
@@ -395,75 +423,59 @@ def _local(ts: str | None) -> str:
         return when.strftime("%d/%m %H:%M UTC")
 
 
-OUTCOME_IT = {"verified": "verificato in modo indipendente", "cycle_settled": "ciclo chiuso (non è prova di consegna)",
-              "maintainer_attested": "attestato dal maintainer", "legacy_unverified": "non verificato"}
-
-
 def digest_text(snap: dict[str, Any], *, since: str | None, merges: list[tuple[str, str]],
                 delivery_failures: int = 0) -> str:
-    """Italian semantic digest: what, why, delivered, next, problem. Plain language, few lines, repo links only."""
+    """Plain Italian progress, delivery, next action and intervention need."""
     lines = [f"*JarvisOS — aggiornamento delle {_local(snap['at'])}*"]
     mission = snap.get("mission") or {}
     state = snap["state"]
-    head = "in attesa dei job registrati" if state == "waiting" and snap.get("wait_kind") == "jobs" else STATE_IT[state]
-    if mission.get("label"):
-        who = f" ({mission['agent']})" if mission.get("agent") else ""
-        lines.append(f"*In corso:* {head}{who}: {links(mission['label'])} — compito {mission.get('task', '?')}, "
-                     f"missione `{mission['id']}`.")
+    label = mission.get("label")
+    if isinstance(label, str):
+        label = re.sub(r"\s+", " ", _ISSUE_REF_RE.sub("", label)).strip()
+    if label and label != ROADMAP_LABEL:
+        # The queue item is the maintainer's own wording; it is framed, never replaced by the turn's English notes.
+        fallback = "sviluppo di JarvisOS" if machine_marker(label) else f"il compito che hai messo in coda: {label}"
     else:
-        lines.append(f"*In corso:* {head}.")
-    if snap.get("focus"):
-        lines.append(f"  lavoro attuale: {links(snap['focus'])}")
-    if snap.get("reason") and state in ("held", "paused", "waiting", "stopped"):
-        lines.append(f"  motivo: {REASON_IT.get(snap['reason'], snap['reason'])}")
-    if road := snap.get("roadmap"):
-        lines.append(f"  perché: roadmap autonoma {'attiva' if road['enabled'] else 'disattivata'}"
-                     f" (ciclo {road.get('cycle')}) per far avanzare lo sviluppo di JarvisOS senza supervisione continua.")
-    if snap.get("jobs"):
-        for job in snap["jobs"]:
-            code = "" if job["exit_code"] is None else f" (exit {job['exit_code']})"
-            lines.append(f"  job `{job['id']}`: {job['status']}{code}.")
+        fallback = ROADMAP_LABEL if label or (snap.get("roadmap") or {}).get("enabled") else "nessun lavoro attivo"
+    state_word = {"held": "in pausa", "paused": "in pausa", "waiting": "in attesa di lavori lunghi in corso" if snap.get("wait_kind") == "jobs" else "in attesa",
+                  "stopped": "fermo", "unknown": "da verificare"}.get(state)
+    update = snap.get("update")
+    current = (update if isinstance(update, str) and not machine_marker(update) and not _ISSUE_REF_RE.search(update)
+               else fallback)
+    lines.append(f"*Sto facendo:* {current}" + (f" ({state_word})" if state_word else ""))
     done = [d for d in snap.get("delivered") or [] if not since or (d.get("at") or "") > since]
-    turn = snap.get("turn") or {}
-    lines.append("*Fatto dall'ultimo aggiornamento:*")
-    if not done and not merges:
-        lines.append("  • nessun risultato nuovo registrato.")
-    for d in done[-4:]:
-        lines.append(f"  • {links(d.get('label') or 'compito')} — {OUTCOME_IT.get(d['outcome'], d['outcome'])} ({_local(d.get('at'))})")
+    lines.append("*Fatto:*")
+    # A settled roadmap cycle says nothing by itself: its merged PRs below carry the content.
+    labels = [d.get("label") for d in done if d.get("label") != ROADMAP_LABEL]
+    labels = [re.sub(r"\s+", " ", _ISSUE_REF_RE.sub("", label)).strip()
+              if isinstance(label, str) and not machine_marker(label) else "lavoro completato" for label in labels]
+    labels = [label or "lavoro completato" for label in labels]
+    for label in list(dict.fromkeys(labels))[-4:]:
+        lines.append(f"  • {label}")
     for pr, title in merges[-5:]:
-        lines.append(f"  • unito su master: <{REPO_URL}/pull/{pr}|#{pr}> {title}")
-    if turn.get("reason") and turn.get("status") in ("continue", "propose_done", "blocked"):
-        lines.append(f"  ultimo turno ({turn['status']}): {links(turn['reason'])}")
-        for v in turn.get("verification") or []:
-            lines.append(f"    – {links(v)}")
-    nxt = turn.get("next_step") if turn.get("next_step") != turn.get("reason") else None
-    if snap.get("wait_kind") == "jobs":
-        nxt = ("il coordinatore legge risultati e diagnosi al prossimo controllo del supervisor"
-               if snap["reason"] in ("jobs_ready", "jobs_recoverable")
-               else "attendere evidenze verificabili dei job senza rilanciare le simulazioni")
-    if state == "running":
-        nxt = nxt or "il turno in corso decide il prossimo passo"
-    lines.append(f"*Prossimo:* {links(nxt) if nxt else 'nessun passo dichiarato'}")
+        subject = re.sub(r"(?:\s*(?:\(Spec \d+\)|\(#\d+\)|#\d+))+\s*$", "", title, flags=re.IGNORECASE)
+        subject = re.sub(r"^[a-z][\w-]*(?:\([^)]*\))?:\s*", "", subject, flags=re.IGNORECASE).strip()
+        subject = re.sub(r"\s+", " ", _ISSUE_REF_RE.sub("", subject)).strip()
+        subject = subject[:1].upper() + subject[1:] if subject and not machine_marker(subject) else "Modifica completata"
+        lines.append(f"  • <{REPO_URL}/pull/{pr}|{subject}>")
+    if lines[-1] == "*Fatto:*":
+        lines.append("  • nessuna novità")
+    next_step = snap.get("update_next")
+    if isinstance(next_step, str) and not machine_marker(next_step) and not _ISSUE_REF_RE.search(next_step):
+        lines.append(f"*Prossimo:* {next_step}")
     asks = list(incidents(snap, rc.parse_ts(snap["at"]) or rc.now_utc()).values())
     if delivery_failures:
         asks.append(f"{delivery_failures} invii Slack falliti dall'ultimo aggiornamento")
-    lines.append("*Serve intervento:* " + ("; ".join(asks) if asks else "no."))
+    lines.append("*Serve il tuo intervento:* " + ("; ".join(asks) if asks else "no."))
     text = "\n".join(lines)
     return text if len(text) <= MAX_MESSAGE else text[: MAX_MESSAGE - 1] + "…"
 
 
 def alert_text(description: str, snap: dict[str, Any]) -> str:
-    text = f":red_circle: *JarvisOS — serve intervento* ({_local(snap['at'])})\n{description}."
-    road = snap.get("roadmap") or {}
-    if snap.get("question"):
-        text += f"\nRichiesta registrata: {links(snap['question'])}"
-    if snap["state"] == "held":
-        text += "\nRivedere le prove del turno e poi `relay_continuity.py release`."
-    elif snap["state"] == "paused" and road.get("paused") == "coordinator_blocked" and not snap.get("question"):
-        text += "\nLa domanda è registrata nel ledger (`devctx.py recover`)."
-    elif "owner_down" in snap["problems"]:
-        text += "\nRiavviare il servizio del proprietario (systemd --user) dopo aver controllato il suo log."
-    return text
+    if machine_marker(description) or _ISSUE_REF_RE.search(description):
+        description = "c'è una domanda per te: rispondi a Claude in chat"
+    end = "" if description.endswith((".", "?", "!")) else "."
+    return f":red_circle: *JarvisOS — serve il tuo intervento* ({_local(snap['at'])})\n{description}{end}"
 
 
 def merges_since(repo: Path, since: str | None, run: Callable[..., tuple[int, str]] = devctx.run) -> list[tuple[str, str]]:

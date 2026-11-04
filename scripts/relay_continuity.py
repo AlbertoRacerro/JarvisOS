@@ -1475,26 +1475,26 @@ FIELD_RULES: dict[str, Callable[[str], bool]] = {
 }
 OPTIONAL_FIELDS = ("reset_at", "next_check_at", "claude_until", "codex_until", "argon_until", "pr")
 EVENTS: dict[str, tuple[str, tuple[str, ...]]] = {
-    "supervisor_started": (":large_green_circle: JarvisOS continuity supervisor started", ("session", "agent")),
-    "supervisor_stopped": (":white_circle: JarvisOS continuity supervisor stopped", ("session", "reason", "phase")),
-    "provider_switched": (":repeat: JarvisOS coordinator provider switched", ("session", "from_agent", "agent", "outcome")),
-    "provider_exhausted": (":large_orange_circle: JarvisOS provider limit", ("agent", "outcome", "reset_at", "reset_source")),
-    "all_exhausted": (":large_orange_circle: JarvisOS: no coordinator provider available; waiting", ("next_check_at",)),
-    "turn_failed": (":large_orange_circle: JarvisOS coordinator turn failed", ("session", "agent", "outcome", "action")),
-    "hold": (":red_circle: JarvisOS continuity HOLD: maintainer review needed", ("session", "reason", "attempt")),
-    "circuit_open": (":red_circle: JarvisOS continuity circuit open", ("session", "reason")),
-    "turn_completed": (":large_green_circle: JarvisOS coordinator turn completed; awaiting maintainer", ("session", "agent")),
-    "master_advanced": (":large_green_circle: JarvisOS master advanced", ("sha", "pr")),
-    "repl_turn_failed": (":large_orange_circle: JarvisOS REPL turn failed (notify-only)", ("session", "agent", "outcome", "reset_at")),
-    "repl_claude_dont_ask": (":red_circle: JarvisOS Claude REPL launched in dontAsk; Bash may be denied", ("session",)),
-    "test": (":white_check_mark: JarvisOS continuity notification test", ()),
-    "task_completed": (":large_green_circle: JarvisOS mission task completed", ("mission", "task", "agent", "session")),
-    "mission_completed": (":white_check_mark: JarvisOS mission completed", ("mission", "task", "session")),
-    "mission_waiting": (":large_orange_circle: JarvisOS mission waiting",
+    "supervisor_started": ("JarvisOS ha ripreso il lavoro.", ("session", "agent")),
+    "supervisor_stopped": ("JarvisOS ha interrotto il lavoro.", ("session", "reason", "phase")),
+    "provider_switched": ("JarvisOS ha cambiato assistente e continua il lavoro.", ("session", "from_agent", "agent", "outcome")),
+    "provider_exhausted": ("Un assistente non è disponibile; JarvisOS prova a proseguire.", ("agent", "outcome", "reset_at", "reset_source")),
+    "all_exhausted": ("Gli assistenti non sono disponibili; JarvisOS riprenderà quando possibile.", ("next_check_at",)),
+    "turn_failed": ("Un tentativo di lavoro non è riuscito; JarvisOS verifica come proseguire.", ("session", "agent", "outcome", "action")),
+    "hold": ("JarvisOS richiede una verifica: scrivi a Claude in chat.", ("session", "reason", "attempt")),
+    "circuit_open": ("JarvisOS ha sospeso i tentativi: scrivi a Claude in chat.", ("session", "reason")),
+    "turn_completed": ("JarvisOS ha completato un passaggio di lavoro.", ("session", "agent")),
+    "master_advanced": ("Una modifica è stata integrata in JarvisOS.", ("sha", "pr")),
+    "repl_turn_failed": ("Un tentativo interattivo non è riuscito; controlla la chat.", ("session", "agent", "outcome", "reset_at")),
+    "repl_claude_dont_ask": ("La sessione interattiva potrebbe non poter eseguire comandi: controlla la chat.", ("session",)),
+    "test": ("Prova delle notifiche di JarvisOS.", ()),
+    "task_completed": ("JarvisOS ha completato una parte del lavoro richiesto.", ("mission", "task", "agent", "session")),
+    "mission_completed": ("JarvisOS ha completato il lavoro richiesto.", ("mission", "task", "session")),
+    "mission_waiting": ("JarvisOS è in attesa di poter proseguire.",
                         ("owner", "mission", "task", "agent", "reason", "next_check_at")),
-    "mission_held": (":red_circle: JarvisOS mission held",
+    "mission_held": ("JarvisOS richiede una verifica: scrivi a Claude in chat.",
                      ("owner", "mission", "task", "agent", "session", "reason")),
-    "roadmap_paused": (":double_vertical_bar: JarvisOS roadmap continuation paused", ("owner", "reason")),
+    "roadmap_paused": ("Il lavoro programmato è in pausa: scrivi a Claude in chat.", ("owner", "reason")),
 }
 
 
@@ -1505,7 +1505,6 @@ def render(event: str, fields: dict[str, Any]) -> str | None:
     title, allowed = EVENTS[event]
     if set(fields) - set(allowed):
         return None
-    lines = [f"*{title}*"]
     for key in allowed:
         value = fields.get(key)
         if value is None and key in OPTIONAL_FIELDS:
@@ -1515,8 +1514,7 @@ def render(event: str, fields: dict[str, Any]) -> str | None:
         value = str(value)
         if not FIELD_RULES[key](value):
             return None
-        lines.append(f"{key.replace('_', ' ')}: {value}")
-    text = "\n".join(lines)
+    text = title
     return None if devctx.find_secret(text) else text
 
 
