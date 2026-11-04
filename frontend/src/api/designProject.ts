@@ -51,6 +51,31 @@ export const attachDesignGeometry = (projectId: string, versionId: string, compo
     candidate_id: candidateId, expected_revision: component.revision, expected_active_version_id: versionId,
     expected_draft_revision: draftRevision
   });
+/** A `feature_sequence_v1` feature; numeric params are literals or `{ $param }` references into `parameters`. */
+export type FeatureKind = "tube_run" | "bend" | "manifold" | "serpentine";
+export type FeatureParamValue = number | { $param: string };
+export type FeatureStep = {
+  feature_id: string; enabled: boolean; kind: FeatureKind; params: Record<string, FeatureParamValue>;
+  frame?: { origin: [number, number, number]; direction: [number, number, number] } | null;
+  connect_to?: { from_port: string; to_feature_id: string; to_port: string } | null;
+};
+export type FeatureSequence = {
+  schema_version: "feature_sequence_v1"; parameters: { name: string; value: number; unit: "mm" | "deg" }[]; features: FeatureStep[];
+};
+export type ComponentFeatureHistory = {
+  component_id: string; persisted: boolean; revision: number | null; sequence: FeatureSequence | null;
+  sequence_digest: string | null; compiled_spec_id: string | null; candidate_id: string | null;
+  attached_candidate_id: string | null; stale_against_attached_candidate: boolean;
+  updated_at: string | null; updated_by: string | null;
+};
+export const getComponentFeatureHistory = (projectId: string, versionId: string, componentId: string) =>
+  request<ComponentFeatureHistory>(`${components(projectId, versionId)}/${encodeURIComponent(componentId)}/geometry/feature-history`);
+export const putComponentFeatureHistory = (projectId: string, versionId: string, component: DesignComponent,
+  sequence: FeatureSequence, draftRevision: string | null) =>
+  request<ComponentFeatureHistory>(`${components(projectId, versionId)}/${encodeURIComponent(component.id)}/geometry/feature-history`, "PUT", {
+    sequence, expected_revision: component.revision, expected_active_version_id: versionId,
+    expected_draft_revision: draftRevision
+  });
 export type ProcessGeometryMapping = {
   supported: boolean; unit_type: string; template: string | null; inner_d_mm: number | null; length_mm: number | null;
   segment_count: number | null; segment_length_mm: number | null; bend_radius_mm: number | null;

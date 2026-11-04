@@ -149,3 +149,8 @@
 .design-project__dynamic-draft select { max-width: 100%; }
 .design-project__dynamic-draft p { flex-basis: 100%; margin: 0; color: var(--color-text-secondary); }
 .design-project__dynamic .dyn-panel { padding: 0; }
+
+.design-feature-inspector__list { list-style: none; padding: 0; margin: .5rem 0; display: grid; gap: .75rem; }
+.design-feature-inspector__list > li { border: 1px solid var(--color-border-default); border-radius: .4rem; padding: .5rem; }
+.design-feature-inspector__actions { display: flex; flex-wrap: wrap; gap: .4rem; margin: .5rem 0; }
+.design-feature-inspector__note, .design-feature-inspector__lineage { color: var(--color-text-secondary); margin: .25rem 0; }
