@@ -1,6 +1,6 @@
 # 242 — Bubu guided tour
 
-State: **ready**, subject to the live registry in [STATUS.md](STATUS.md). Accepted by the coordinator under maintainer
+State: **merged**, subject to the live registry in [STATUS.md](STATUS.md). Accepted by the coordinator under maintainer
 directive `L20261103141101-7c11` item 5 ("visita guidata bubu aggiornate su linea comsol") and the acceptance rule of
 `L20261103142125-d682`. It does not authorize later roadmap items.
 
