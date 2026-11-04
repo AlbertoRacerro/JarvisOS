@@ -35,6 +35,7 @@ import {
   type ThreadSummary
 } from "../../api/threads";
 import { publishBubuConversation, publishBubuFailedPrompt, publishBubuRelayEnabled, registerBubuHandlers, type BubuExtras, type BubuTurn } from "../bubu/conversationStore";
+import { useGuidedTourActive } from "../bubu/guidedTourActivity";
 import { SidecarChrome } from "../shell/ContextualSidecar";
 import { ContextMenu, MenuButton, useContextMenu, type ContextMenuItem } from "../ui/ContextMenu";
 import JarvisMessageText from "./JarvisMessageText";
@@ -229,6 +230,7 @@ export function useJarvisSidecar(
   const [routes, setRoutes] = useState<ConversationRoute[]>([]);
   const [processSurface, setProcessSurface] = useState<ProcessSurface>(() => currentProcessSurface());
   const [surfaceBrief, setSurfaceBrief] = useState<Awaited<ReturnType<typeof getSurfaceBrief>> | null>(null);
+  const guidedTourActive = useGuidedTourActive();
   const [surfaceBriefRefresh, setSurfaceBriefRefresh] = useState(0);
   const [routesLoaded, setRoutesLoaded] = useState(false);
   const [routeClass, setRouteClass] = useState("");
@@ -351,12 +353,12 @@ export function useJarvisSidecar(
   useEffect(() => {
     let active = true;
     setSurfaceBrief(null);
-    if (!workspaceId) return;
+    if (!workspaceId || guidedTourActive) return;
     const timer = window.setTimeout(() => {
       void getSurfaceBrief(workspaceId, surfaceContext).then((brief) => { if (active) setSurfaceBrief(brief); }).catch(() => { if (active) setSurfaceBrief(null); });
     }, 250);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [surfaceContextKey, workspaceId, surfaceBriefRefresh]);
+  }, [surfaceContextKey, workspaceId, surfaceBriefRefresh, guidedTourActive]);
 
   useEffect(() => {
     const refreshBrief = (event: Event) => {

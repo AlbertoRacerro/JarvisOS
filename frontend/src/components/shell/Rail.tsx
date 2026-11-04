@@ -2,9 +2,13 @@ import type { ReactNode } from "react";
 import { ArrowLeft, ArrowRight } from "@phosphor-icons/react";
 
 import AppLink, { type Navigate } from "../../app/AppLink";
-import { designTarget } from "../../app/designTargets";
+import { designTarget, type DesignTargetId } from "../../app/designTargets";
 import { useHistoryPosition } from "../../app/navHistory";
 import { DESIGN_TOOL_ITEMS, PRIMARY_NAV_ITEMS, type PrimaryNavId } from "../../app/routes";
+
+const RAIL_TARGET: Readonly<Record<PrimaryNavId, DesignTargetId>> = {
+  design: "rail.design", memory: "rail.memory", development: "rail.development", coding: "rail.coding", settings: "rail.settings"
+};
 
 type RailProps = Readonly<{
   current: PrimaryNavId | undefined;
@@ -49,7 +53,7 @@ function Rail({ current, currentPath, navigate, project }: RailProps) {
               navigate={navigate}
               className="shell-nav-link"
               aria-current={current === item.id ? (item.id === "design" && currentPath !== item.href ? "true" : "page") : undefined}
-              {...(item.id === "design" ? designTarget("rail.design") : {})}
+              {...designTarget(RAIL_TARGET[item.id])}
             >
               {item.label}
             </AppLink>

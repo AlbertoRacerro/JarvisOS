@@ -78,6 +78,17 @@ def test_design_stage_addendum_follows_the_stage_query() -> None:
     assert app_map_for_route("/design/project?stage=nope") == app_map_for_route("/design/project?stage=mechanics")
 
 
+def test_comsol_line_surfaces_are_described_with_their_real_target_ids() -> None:
+    cad = app_map_for_route("/design/project?stage=cad")
+    for word in ("Feature inspector", "design.panel.feature-inspector", "Add tube", "Enabled", "Rebuild geometry", "Undo", "design.tree.node.geometry"):
+        assert word in cad, word
+    cfd = app_map_for_route("/design/project?stage=cfd")
+    for word in ("design.panel.cfd-field-3d", "Show full pipe", "symmetry", "not computed", "design.field.run"):
+        assert word in cfd, word
+    assert "design.panel.feature-inspector" not in cfd and "design.panel.cfd-field-3d" not in cad
+    assert {"design.panel.feature-inspector", "design.panel.cfd-field-3d"} <= _registry_ids()
+
+
 def test_guide_stays_short() -> None:
     texts = [thread_app_map._RAIL, thread_app_map._DESIGN, *thread_app_map._DESIGN_STAGES.values(), *(t for _, t in thread_app_map._AREAS)]
     for text in texts:
