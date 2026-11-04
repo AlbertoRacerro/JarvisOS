@@ -13,7 +13,13 @@ import math
 from pathlib import Path
 from typing import Any
 
-from app.modules.bluecad.cfd_pipe.casegen import FIELD_FUNCTION, FIELD_SURFACE
+from app.modules.bluecad.cfd_pipe.casegen import (
+    FIELD_3D_FUNCTION,
+    FIELD_3D_PATCHES,
+    FIELD_3D_SECTIONS,
+    FIELD_FUNCTION,
+    FIELD_SURFACE,
+)
 
 FIELD_DIR = Path("postProcessing") / FIELD_FUNCTION
 MAX_FILE_BYTES = 32 * 1024 * 1024
@@ -220,3 +226,94 @@ def read_field_slice(case: Path) -> dict[str, Any]:
         }
     except (FieldExportError, OSError, UnicodeDecodeError) as exc:
         return _unavailable(f"the field export could not be read: {exc}")
+
+
+_SURFACE_KINDS = {"wall": "wall", "symmetry_y": "symmetry_plane", "symmetry_z": "symmetry_plane",
+                  **{name: "section" for name, _ in FIELD_3D_SECTIONS}}
+REFLECTION_OPERATORS = {
+    "y=0": {"position": [1, -1, 1], "vector_field": [1, -1, 1], "scalar": "unchanged"},
+    "z=0": {"position": [1, 1, -1], "vector_field": [1, 1, -1], "scalar": "unchanged"},
+}
+
+
+def _surface_name(stem: str) -> str | None:
+    """Accept combined and per-field OpenFOAM VTK filenames, only for declared surfaces."""
+    for name in _SURFACE_KINDS:
+        if stem in {name, f"p_{name}", f"U_{name}", f"{name}_p", f"{name}_U"}:
+            return name
+    return None
+
+
+def read_field_surfaces_3d(case: Path) -> dict[str, Any]:
+    """Read the six computed surfaces at the latest export time, without partial results."""
+    try:
+        latest = _latest_time_dir(case / "postProcessing" / FIELD_3D_FUNCTION)
+        if latest is None:
+            return _unavailable("the case wrote no 3D field export")
+        time, directory = latest
+        files = sorted(p for p in directory.iterdir() if p.is_file() and not p.is_symlink() and
+                       p.suffix.lower() == ".vtk")
+        if not files:
+            return _unavailable("the latest 3D field export has no legacy VTK files")
+        grouped: dict[str, list[Path]] = {name: [] for name in _SURFACE_KINDS}
+        for file in files:
+            name = _surface_name(file.stem)
+            if name is None:
+                raise FieldExportError(f"unexpected 3D surface file {file.name}")
+            if file.stat().st_size > MAX_FILE_BYTES:
+                return {"status": "too_large", "time": time,
+                        "reason": f"{file.name} exceeds {MAX_FILE_BYTES} bytes"}
+            grouped[name].append(file)
+        missing = [name for name, paths in grouped.items() if not paths]
+        if missing:
+            return _unavailable(f"the 3D export lacks surfaces: {', '.join(missing)}")
+        surfaces: list[dict[str, Any]] = []
+        total_points = total_cells = 0
+        for name in (*FIELD_3D_PATCHES, *(section for section, _ in FIELD_3D_SECTIONS)):
+            merged: dict[str, Any] | None = None
+            for file in grouped[name]:
+                part = parse_legacy_vtk(file.read_text(encoding="utf-8"))
+                if merged is None:
+                    merged = part
+                else:
+                    if part["points"] != merged["points"] or part["polygons"] != merged["polygons"]:
+                        raise FieldExportError(f"VTK files for {name} disagree on geometry")
+                    for assoc in ("point", "cell"):
+                        if set(part[assoc]) & set(merged[assoc]):
+                            raise FieldExportError(f"VTK files for {name} repeat an array")
+                        merged[assoc].update(part[assoc])
+            assert merged is not None
+            points, polygons = merged["points"], merged["polygons"]
+            total_points += len(points)
+            total_cells += len(polygons)
+            if total_points > MAX_POINTS or total_cells > MAX_CELLS:
+                return {"status": "too_large", "time": time, "points": total_points, "cells": total_cells,
+                        "reason": f"the computed surfaces exceed {MAX_CELLS} cells or {MAX_POINTS} points"}
+            if not points or not polygons:
+                raise FieldExportError(f"surface {name} has no geometry")
+            # A vertex probe and colour map require interpolated values at each vertex.
+            arrays = merged["point"]
+            if set(_ARRAYS) - set(arrays):
+                return _unavailable(f"surface {name} lacks point pressure p or velocity U")
+            if any(len(row) != 1 for row in arrays["p"]) or any(len(row) != 3 for row in arrays["U"]):
+                raise FieldExportError(f"surface {name} has an invalid p or U array width")
+            pressure = [row[0] for row in arrays["p"]]
+            velocity = arrays["U"]
+            speed = _mag(velocity)
+            if not all(math.isfinite(value) for value in speed):
+                raise FieldExportError(f"surface {name} has a non-finite speed")
+            surfaces.append({
+                "name": name, "kind": _SURFACE_KINDS[name], "provenance": "computed",
+                "points": points, "polygons": polygons, "point_count": len(points), "cell_count": len(polygons),
+                "source_files": [file.name for file in grouped[name]],
+                "fields": {
+                    "p": {"values": pressure, "min": min(pressure), "max": max(pressure), "units": _UNITS["p"]},
+                    "U": {"values": velocity, "magnitude_min": min(speed), "magnitude_max": max(speed),
+                          "units": _UNITS["U"]},
+                    "|U|": {"values": speed, "min": min(speed), "max": max(speed), "units": _UNITS["U"]},
+                },
+            })
+        return {"status": "available", "time": time, "surfaces": surfaces, "point_count": total_points,
+                "cell_count": total_cells, "reflection_operators": REFLECTION_OPERATORS}
+    except (FieldExportError, OSError, UnicodeDecodeError) as exc:
+        return _unavailable(f"the 3D field export could not be read: {exc}")

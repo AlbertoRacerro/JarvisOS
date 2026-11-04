@@ -28,9 +28,9 @@ from uuid import uuid4
 
 from app.core.paths import build_paths
 from app.modules.bluecad.cfd_pipe.case_execution import execute_pipe_case
-from app.modules.bluecad.cfd_pipe.casegen import MAX_PROCESSORS, manifest_digest
+from app.modules.bluecad.cfd_pipe.casegen import MAX_PROCESSORS, SYMMETRY, manifest_digest
 from app.modules.bluecad.cfd_pipe.contract import PipeStudyContract, contract_digest
-from app.modules.bluecad.cfd_pipe.field_export import read_field_slice
+from app.modules.bluecad.cfd_pipe.field_export import read_field_slice, read_field_surfaces_3d
 from app.modules.bluecad.cfd_pipe.probe_results import ProbeResultError, laminar_comparison, turbulent_comparison
 from app.modules.bluecad.cfd_pipe.residuals import IterationResiduals
 
@@ -265,6 +265,7 @@ def start_run(workspace_id: str, component_id: str, regime: str, contract: PipeS
         record = {"run_id": run_id, "component_id": component_id, "regime": regime, "state": "queued",
                   "template_digest": template_digest, "geometry_digest": contract.domain.geometry_digest,
                   "contract_digest": contract_digest(contract), "processors": processors, "queued_at": _now(), "retry_of": retry_of, "qualifies_publication": False,
+                  "symmetry": SYMMETRY,
                   "authority": "evidence only; grants no study qualification or reduced-model publication"}
         _write(path / "contract.json", contract.model_dump(mode="json"))
         _write(path / "run.json", record)
@@ -317,6 +318,23 @@ def read_run_fields(workspace_id: str, component_id: str, run_id: str) -> dict[s
     if not case.is_relative_to(path.resolve()):
         return {"status": "unavailable", "run_id": run_id, "reason": "the run case directory is not inside the run"}
     return {"run_id": run_id, **read_field_slice(case)}
+
+
+def read_run_fields_3d(workspace_id: str, component_id: str, run_id: str) -> dict[str, Any]:
+    """Computed 3D surfaces of a finished, symmetry-qualified run."""
+    path = _run_dir(workspace_id, component_id, run_id)
+    record = _settled(path, _read(path))
+    if record["state"] != "finished":
+        return {"status": "unavailable", "run_id": run_id,
+                "reason": f"the run is {record['state']}; fields exist only for a finished run"}
+    symmetry = record.get("symmetry")
+    if symmetry != SYMMETRY:
+        return {"status": "unavailable", "run_id": run_id,
+                "reason": "the run has no supported quarter-domain symmetry record"}
+    case = (path / "case").resolve()
+    if not case.is_relative_to(path.resolve()):
+        return {"status": "unavailable", "run_id": run_id, "reason": "the run case directory is not inside the run"}
+    return {"run_id": run_id, "symmetry": symmetry, **read_field_surfaces_3d(case)}
 
 
 def read_run_contract(workspace_id: str, component_id: str, run_id: str) -> PipeStudyContract:

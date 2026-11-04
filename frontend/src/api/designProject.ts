@@ -149,6 +149,20 @@ export type CfdFieldSlice =
   | { status: "too_large"; run_id?: string; reason: string; time?: string; cells?: number; points?: number };
 export const getComponentCfdRunFields = (projectId: string, versionId: string, componentId: string, runId: string) =>
   request<CfdFieldSlice>(`${componentPath(projectId, versionId, componentId)}/cfd-runs/${encodeURIComponent(runId)}/fields`);
+export type CfdField3dOperator = { position: [number, number, number]; vector_field: [number, number, number]; scalar: "unchanged" };
+export type CfdField3dSurface = {
+  name: string; kind: "wall" | "symmetry_plane" | "section"; provenance: "computed";
+  points: [number, number, number][]; polygons: number[][];
+  fields: { p: { values: number[]; min: number; max: number; units: string };
+    U: { values: [number, number, number][]; magnitude_min: number; magnitude_max: number; units: string } };
+};
+export type CfdField3d =
+  | { status: "available"; run_id: string; time: string; surfaces: CfdField3dSurface[];
+    symmetry: { domain: "quarter"; axis: "x"; mirror_planes: string[]; basis: string };
+    reflection_operators: Record<string, CfdField3dOperator> }
+  | { status: "unavailable" | "too_large"; run_id?: string; reason: string };
+export const getComponentCfdRunFields3d = (projectId: string, versionId: string, componentId: string, runId: string) =>
+  request<CfdField3d>(`${componentPath(projectId, versionId, componentId)}/cfd-runs/${encodeURIComponent(runId)}/fields-3d`);
 export const startComponentCfdRun = (projectId: string, versionId: string, componentId: string, regime: string, retryOf?: string, processors = 1) =>
   request<CfdRun>(`${componentPath(projectId, versionId, componentId)}/cfd-runs`, "POST",
     { regime, ...(retryOf ? { retry_of: retryOf } : {}), ...(processors > 1 ? { processors } : {}) });

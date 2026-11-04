@@ -6,6 +6,7 @@ import { DesignStatus } from "../components/design/DesignStatus";
 import type { NodeBadge } from "../components/design/designNodeStatus";
 import { regimeLabel, runLabel, shortWhen } from "../components/design/designText";
 import CfdFieldSlicePanel from "./CfdFieldSlicePanel";
+import CfdField3dPanel from "./CfdField3dPanel";
 import { comparedRuns, newestFirst, runBadge, toggleCompared } from "./cfdResultsCompare";
 
 /** `null` while the runs are read; `unavailable` when the read failed. */
@@ -59,6 +60,7 @@ export function CfdResultBlocks({ projectId, versionId, componentId, runs, chose
         <h3 title={run.run_id}>{study(run)}</h3><span>{inputs(run)}</span><DesignStatus state={status.state} title={status.detail} />
       </div>
       <CfdFieldSlicePanel projectId={projectId} versionId={versionId} componentId={componentId} run={run} primary={index === 0} onFieldState={index === 0 ? onFieldState : undefined} />
+      {run.state === "finished" ? <CfdField3dPanel projectId={projectId} versionId={versionId} componentId={componentId} run={run} /> : null}
     </article>; })}
   </div>;
 }

@@ -59,6 +59,11 @@
 .design-project__reduced form { display: grid; gap: .35rem; max-width: 24rem; margin-top: .75rem; }
 
 .design-project__field-slice { display: grid; gap: .6rem; }
+.design-project__field-3d { display: grid; gap: .6rem; min-width: 0; }
+.design-project__field-3d-figure { display: grid; gap: .5rem; margin: 0; }
+.design-project__field-3d-canvas { width: 100%; height: clamp(18rem, 45vw, 32rem); overflow: hidden; border: 1px solid var(--color-border-default); border-radius: .6rem; }
+.design-project__field-3d-canvas canvas { display: block; width: 100%; height: 100%; }
+.design-project__field-3d-badge { width: fit-content; padding: .2rem .55rem; border-radius: .4rem; color: var(--color-status-warning-text); background: var(--color-status-warning-bg); }
 .design-project__field-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
 .design-project__field-head h4 { margin: 0; font-size: var(--font-size-section-title); }
 .design-project__field-head label { display: inline-flex; align-items: center; gap: .4rem; }

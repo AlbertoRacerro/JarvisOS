@@ -865,6 +865,15 @@ def get_component_cfd_run_fields(project_id: str, version_id: str, component_id:
         raise _run_failure(error) from error
 
 
+@router.get("/{component_id}/cfd-runs/{run_id}/fields-3d")
+def get_component_cfd_run_fields_3d(project_id: str, version_id: str, component_id: str, run_id: str) -> dict:
+    """Computed 3D surfaces from a finished quarter-pipe run."""
+    try:
+        return case_runs.read_run_fields_3d(_run_scope(project_id, version_id, component_id), component_id, run_id)
+    except case_runs.CaseRunError as error:
+        raise _run_failure(error) from error
+
+
 @router.post("/{component_id}/cfd-runs/{run_id}/stop")
 def stop_component_cfd_run(project_id: str, version_id: str, component_id: str, run_id: str) -> dict:
     try:
