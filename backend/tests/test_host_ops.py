@@ -262,8 +262,18 @@ def fake_prompt_phase(host, monkeypatch, prompts):
             return self.returncode
 
     real_popen = subprocess.Popen
+    real_run = subprocess.run
     monkeypatch.setattr(h.subprocess, "Popen", lambda argv, **kw: Child(argv, **kw)
                         if argv[0] == "systemd-run" else real_popen(argv, **kw))
+    def run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "stop"]:
+            seen["stopped"] = True
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
+        if argv[:3] == ["systemctl", "--user", "show"]:
+            assert seen.get("stopped")
+            return subprocess.CompletedProcess(argv, 0, "ActiveState=inactive\nLoadState=not-found\n", "")
+        return real_run(argv, **kw)
+    monkeypatch.setattr(h.subprocess, "run", run)
     return seen
 
 
@@ -298,6 +308,7 @@ def test_local_eval_token_stays_on_host_and_receipt_is_scores_only(host, monkeyp
     assert "test-local-model-credential" not in json.dumps(receipt)
     assert "test-local-model-credential" not in str(seen)
     assert not Path(seen["cwd"]).exists()
+    assert seen["stopped"]
     assert requests[0][0].get_header("Authorization") == "Bearer test-local-model-credential"
     assert 0 < requests[0][1] <= 30
     body = json.loads(requests[0][0].data)
@@ -329,6 +340,46 @@ def test_local_eval_refuses_bad_credential(host, monkeypatch, mode):
     _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
     assert receipt["outcome"] == "refused"
     assert "credential" in receipt["error"]
+
+
+def test_local_eval_never_reads_credential_while_prompt_scope_survives(host, monkeypatch):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    fake_prompt_phase(host, monkeypatch, [{"name": "case", "prompt": "p", "correct": ["a"], "plausible": []}])
+    real_run = h.subprocess.run
+    def still_active(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "show"]:
+            return subprocess.CompletedProcess(argv, 0, "ActiveState=active\nLoadState=loaded\n", "")
+        return real_run(argv, **kw)
+    monkeypatch.setattr(h.subprocess, "run", still_active)
+    monkeypatch.setattr(h, "_eval_credential", lambda *_: pytest.fail("credential read before scope stopped"))
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
+    assert receipt["outcome"] == "refused"
+    assert "prompt phase" in receipt["error"]
+
+
+def test_local_eval_cancel_stops_scope_before_credential(host, monkeypatch):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    seen = fake_prompt_phase(host, monkeypatch, [{"name": "case", "prompt": "p", "correct": ["a"], "plausible": []}])
+    real_popen = h.subprocess.Popen
+    class RunningChild:
+        returncode = None
+        def poll(self):
+            return self.returncode
+        def wait(self, **_):
+            self.returncode = -15
+    monkeypatch.setattr(h.subprocess, "Popen", lambda argv, **kw: RunningChild()
+                        if argv[0] == "systemd-run" else real_popen(argv, **kw))
+    ctx = h.Context(paths, h.load_policy(paths)[0], {"id": "a" * 32}, lambda *_a, **_k: None,
+                    lambda *_a: 200, h.now_utc, lambda: True, [])
+    root = paths.home / "checkout"
+    (root / "backend").mkdir(parents=True)
+    monkeypatch.setattr(h, "_eval_credential", lambda *_: pytest.fail("credential read after cancel"))
+    with pytest.raises(h.Cancelled):
+        h._run_benchmark(ctx, "local-eval", ctx.conf("bench.run")["benchmarks"]["local-eval"],
+                         root, "backend", None, SHA, None, close_scope=True)
+    assert seen["stopped"]
 
 
 @pytest.mark.parametrize("prompts", [[], [{"name": "x", "prompt": "p" * 16001, "correct": ["a"],
@@ -505,10 +556,7 @@ def test_bench_result_receipt_keeps_hash_and_limits(host, monkeypatch):
 
 def test_eval_checkout_extracts_only_safe_sha_archive(tmp_path, monkeypatch):
     content = archive([("repo", tarfile.DIRTYPE), ("repo/backend/pointing_eval.py", tarfile.REGTYPE)])
-    def run(argv, **kw):
-        assert argv == ["gh", "api", f"repos/{h.REPO}/tarball/{SHA}"]
-        return subprocess.CompletedProcess(argv, 0, content, b"")
-    monkeypatch.setattr(h.subprocess, "run", run)
+    fake_archive_download(tmp_path, monkeypatch, content)
     h._eval_checkout(SHA, tmp_path, lambda: 30)
     assert (tmp_path / "backend/pointing_eval.py").read_bytes() == b"# release\n"
 
@@ -524,7 +572,7 @@ def test_eval_checkout_extracts_only_safe_sha_archive(tmp_path, monkeypatch):
 ])
 def test_eval_checkout_refuses_unsafe_archive_member(tmp_path, monkeypatch, members):
     bad = archive(members)
-    monkeypatch.setattr(h.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, bad, b""))
+    fake_archive_download(tmp_path, monkeypatch, bad)
     with pytest.raises(h.Refused, match="unsafe"):
         h._eval_checkout(SHA, tmp_path, lambda: 30)
 
@@ -539,6 +587,62 @@ def archive(members):
             info.size = len(data) if kind == tarfile.REGTYPE else 0
             tar.addfile(info, io.BytesIO(data) if info.size else None)
     return out.getvalue()
+
+
+def fake_archive_download(tmp_path, monkeypatch, content):
+    source = tmp_path / "archive.gz"
+    source.write_bytes(content)
+    class Download:
+        def __init__(self):
+            self.stdout = source.open("rb")
+        def poll(self):
+            return 0
+        def wait(self, **_):
+            return 0
+    def popen(argv, **_):
+        assert argv == ["gh", "api", f"repos/{h.REPO}/tarball/{SHA}"]
+        return Download()
+    monkeypatch.setattr(h.subprocess, "Popen", popen)
+
+
+@pytest.mark.parametrize("limit,setting", [(12, "download"), (5, "extracted")])
+def test_eval_checkout_refuses_archive_size_limits(tmp_path, monkeypatch, limit, setting):
+    content = archive([("repo", tarfile.DIRTYPE), ("repo/backend/file", tarfile.REGTYPE)])
+    fake_archive_download(tmp_path, monkeypatch, content)
+    if setting == "download":
+        monkeypatch.setattr(h, "MAX_EVAL_ARCHIVE_BYTES", limit)
+    else:
+        monkeypatch.setattr(h, "MAX_EVAL_EXTRACTED_BYTES", limit)
+    with pytest.raises(h.Refused, match="size limit"):
+        h._eval_checkout(SHA, tmp_path / "checkout", lambda: 30)
+
+
+def test_eval_checkout_refuses_member_count_and_deadline(tmp_path, monkeypatch):
+    content = archive([("repo", tarfile.DIRTYPE), ("repo/a", tarfile.REGTYPE), ("repo/b", tarfile.REGTYPE)])
+    fake_archive_download(tmp_path, monkeypatch, content)
+    monkeypatch.setattr(h, "MAX_EVAL_ARCHIVE_MEMBERS", 2)
+    with pytest.raises(h.Refused, match="too many members"):
+        h._eval_checkout(SHA, tmp_path / "checkout", lambda: 30)
+    monkeypatch.setattr(h, "MAX_EVAL_ARCHIVE_MEMBERS", 20)
+    calls = 0
+    def expired():
+        nonlocal calls
+        calls += 1
+        if calls >= 4:
+            raise h.Failed("local evaluation exceeded its time limit", {})
+        return 30
+    with pytest.raises(h.Failed, match="time limit"):
+        h._eval_checkout(SHA, tmp_path / "checkout", expired)
+    assert calls >= 4
+
+
+def test_eval_tempdir_restores_permission_for_cleanup():
+    with h._eval_tempdir() as root:
+        child = root / "child"
+        child.mkdir()
+        (child / "file").write_text("x")
+        child.chmod(0)
+    assert not root.exists()
 
 
 def release_archive(extra=()):

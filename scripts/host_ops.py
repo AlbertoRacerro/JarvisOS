@@ -26,6 +26,8 @@ import json
 import os
 import re
 import secrets
+import select
+import shutil
 import signal
 import socket
 import subprocess
@@ -37,6 +39,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -57,6 +60,9 @@ REQUEST_NAME_RE = re.compile(r"^([0-9a-f]{32})\.json$")
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_REQUEST_AGE = timedelta(hours=1)
 MAX_CLOCK_SKEW = timedelta(minutes=5)
+MAX_EVAL_ARCHIVE_BYTES = 32 << 20
+MAX_EVAL_EXTRACTED_BYTES = 256 << 20
+MAX_EVAL_ARCHIVE_MEMBERS = 20000
 OUTCOMES = ("ok", "failed", "refused", "cancelled", "interrupted", "timeout")
 
 
@@ -763,7 +769,8 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
 
 def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: Path, sub: str,
                    result_path: Path | None, reported: str, worktree: str | None,
-                   remaining: float | None = None, scrub_result: bool = True) -> dict[str, Any]:
+                   remaining: float | None = None, scrub_result: bool = True,
+                   close_scope: bool = False) -> dict[str, Any]:
     launcher = str(ctx.conf("bench.run").get("launcher") or ctx.paths.home / ".local" / "bin" / "jarvis-sandbox")
     if result_path is not None and result_path.exists():
         raise Refused("benchmark result_file already exists before the run")
@@ -777,20 +784,24 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
             "timeout", "-k", "15", str(limits["timeout_s"]), launcher,
             *[str(a) for a in bench["argv"]]]
     started = time.monotonic()
-    with tempfile.TemporaryFile() as out:
-        proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
-                                env=_host_env(), cwd=root / sub)
-        cancelled = False
-        while proc.poll() is None:
-            if ctx.cancelled():
-                cancelled = True
-                subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], check=False, capture_output=True, timeout=60,
-                               env=_host_env())
-                proc.wait(timeout=60)
-                break
-            time.sleep(1)
-        out.seek(0)
-        output = out.read()
+    try:
+        with tempfile.TemporaryFile() as out:
+            proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
+                                    env=_host_env(), cwd=root / sub)
+            cancelled = False
+            while proc.poll() is None:
+                if ctx.cancelled():
+                    cancelled = True
+                    subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], check=False,
+                                   capture_output=True, timeout=60, env=_host_env())
+                    proc.wait(timeout=60)
+                    break
+                time.sleep(1)
+            out.seek(0)
+            output = out.read()
+    finally:
+        if close_scope:
+            _close_eval_scope(scope)
     detail = {"bench": bench_name, "worktree": worktree, "sandbox_head": reported, "limits": limits,
               "returncode": proc.returncode, "wall_s": round(time.monotonic() - started, 2),
               "output_sha256": hashlib.sha256(output).hexdigest(),
@@ -815,6 +826,22 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
             raise Failed(f"benchmark result_file is missing or invalid ({type(exc).__name__})", detail) from None
         detail["result"] = scrub_json(result) if scrub_result else result
     return detail
+
+
+def _close_eval_scope(scope: str) -> None:
+    """Credential access requires evidence that the prompt scope has no live members."""
+    unit = f"{scope}.scope"
+    try:
+        subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True,
+                       timeout=30, env=_host_env(), check=False)
+        state = subprocess.run(["systemctl", "--user", "show", unit, "-p", "ActiveState", "-p", "LoadState"],
+                               capture_output=True, text=True, timeout=30, env=_host_env(), check=False)
+        props = dict(line.split("=", 1) for line in state.stdout.splitlines() if "=" in line)
+        if state.returncode == 0 and props.get("ActiveState") == "inactive" and props.get("LoadState") in ("loaded", "not-found"):
+            return
+    except (OSError, subprocess.SubprocessError):
+        pass
+    raise Failed("local evaluator prompt scope could not be stopped", {})
 
 
 _POINT_RE = re.compile(r"\[\[\s*point\s*:\s*([\w.:-]+)\s*(?:\|([^\]]*))?\]\]", re.IGNORECASE)
@@ -912,11 +939,35 @@ def _eval_reachable(sha: str, remaining: Callable[[], float]) -> None:
 
 def _eval_checkout(sha: str, root: Path, remaining: Callable[[], float]) -> None:
     try:
-        proc = subprocess.run(["gh", "api", f"repos/{REPO}/tarball/{sha}"], capture_output=True,
-                              timeout=min(120, remaining()), check=True)
-        with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:gz") as archive:
+        proc = subprocess.Popen(["gh", "api", f"repos/{REPO}/tarball/{sha}"], stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, env=_host_env())
+        try:
+            data = bytearray()
+            assert proc.stdout is not None
+            while True:
+                readable, _, _ = select.select([proc.stdout], [], [], min(1, remaining()))
+                if not readable:
+                    continue
+                chunk = os.read(proc.stdout.fileno(), min(65536, MAX_EVAL_ARCHIVE_BYTES + 1 - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+                if len(data) > MAX_EVAL_ARCHIVE_BYTES:
+                    raise Refused("local evaluation archive download exceeds size limit")
+            if proc.wait(timeout=remaining()) != 0:
+                raise Refused("local evaluator checkout could not be fetched from GitHub")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            proc.stdout.close()
+        extracted = 0
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
             prefix = None
-            for member in archive.getmembers():
+            for count, member in enumerate(archive, 1):
+                remaining()
+                if count > MAX_EVAL_ARCHIVE_MEMBERS:
+                    raise Refused("local evaluation archive has too many members")
                 parts = Path(member.name).parts
                 if (member.name.startswith("/") or not parts or ".." in parts
                         or not (member.isdir() or member.isfile())
@@ -926,17 +977,41 @@ def _eval_checkout(sha: str, root: Path, remaining: Callable[[], float]) -> None
                 prefix = parts[0]
                 if len(parts) == 1:
                     continue
+                if member.isfile():
+                    if member.size > MAX_EVAL_EXTRACTED_BYTES - extracted:
+                        raise Refused("local evaluation archive exceeds extracted size limit")
+                    extracted += member.size
                 target = root.joinpath(*parts[1:])
                 if member.isdir():
                     target.mkdir(parents=True, exist_ok=True)
                 else:
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    with archive.extractfile(member) as source:
-                        target.write_bytes(source.read())
+                    with archive.extractfile(member) as source, target.open("wb") as output:
+                        while chunk := source.read(65536):
+                            remaining()
+                            output.write(chunk)
                     target.chmod(0o755 if member.mode & 0o111 else 0o644)
         remaining()
     except (OSError, tarfile.TarError, subprocess.SubprocessError):
         raise Refused("local evaluator checkout could not be fetched from GitHub") from None
+
+
+@contextmanager
+def _eval_tempdir():
+    """Remove an evaluator checkout even if its sandboxed child changes directory modes."""
+    root = Path(tempfile.mkdtemp(prefix="hostops-eval-"))
+    try:
+        yield root
+    finally:
+        if root.is_symlink():
+            raise Failed("local evaluator temporary checkout is unsafe", {})
+        root.chmod(0o700)
+        for current, dirs, _ in os.walk(root, followlinks=False):
+            for name in dirs:
+                child = Path(current) / name
+                if not child.is_symlink():
+                    child.chmod(0o700)
+        shutil.rmtree(root)
 
 
 def op_local_eval_run(ctx: Context) -> dict[str, Any]:
@@ -984,8 +1059,7 @@ def op_local_eval_run(ctx: Context) -> dict[str, Any]:
 
     _eval_reachable(sha, remaining)
     try:
-        with tempfile.TemporaryDirectory(prefix="hostops-eval-") as tmp:
-            root = Path(tmp)
+        with _eval_tempdir() as root:
             _eval_checkout(sha, root, remaining)
             sub = str(bench.get("cwd") or ".")
             if Path(sub).is_absolute() or ".." in Path(sub).parts or not (root / sub).is_dir():
@@ -994,7 +1068,7 @@ def op_local_eval_run(ctx: Context) -> dict[str, Any]:
                     or ".." in Path(result_file).parts or "secret_env" in bench):
                 raise Refused("local evaluator benchmark policy is invalid")
             phase_one = _run_benchmark(ctx, bench_name, bench, root, sub, root / sub / result_file,
-                                       sha, None, remaining(), scrub_result=False)
+                                       sha, None, remaining(), scrub_result=False, close_scope=True)
             remaining()
         prompts = _eval_prompts(phase_one.get("result"))
     except Failed as exc:
