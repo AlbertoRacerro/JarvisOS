@@ -224,6 +224,212 @@ def test_bench_clean_head_and_plain_launcher(host, dirty, head):
     assert all("--cwd" not in a and "--" not in a and k["cwd"] == str(paths.home / "src/worktrees/x") for a, k in calls)
 
 
+def local_eval_policy(paths, *, base_url="http://127.0.0.1:18081/v1", credential=True):
+    key_file = paths.config / "local-model-key"
+    if credential:
+        key_file.write_text("test-local-model-credential\n")
+        key_file.chmod(0o600)
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["bench.run"]["benchmarks"]["local-eval"] = {
+        "cwd": "backend", "argv": ["python", "pointing_eval.py", "--ids", "new",
+                                   "--emit-prompts", "prompts.json"], "result_file": "prompts.json",
+    }
+    policy["ops"]["local_eval.run"] = {"evaluations": {"local-eval": {
+        "credential_file": str(key_file), "base_url": base_url, "model": "test-model",
+        "ids": "new", "label": "after", "max_tokens": 220, "timeout_s": 30,
+    }}}
+    paths.policy.write_text(json.dumps(policy))
+    return key_file
+
+
+def fake_prompt_phase(host, monkeypatch, prompts):
+    paths, ex, _ = host
+    checkout = paths.home / "src/worktrees/x/backend"
+    checkout.mkdir(parents=True, exist_ok=True)
+    ex.run = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, SHA if "rev-parse" in argv else "", "")
+    seen = {}
+
+    class Child:
+        returncode = 0
+
+        def __init__(self, argv, **kw):
+            seen["argv"] = argv
+            seen["env"] = kw["env"]
+            (checkout / "prompts.json").write_text(json.dumps(prompts))
+
+        def poll(self):
+            return self.returncode
+
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(h.subprocess, "Popen", lambda argv, **kw: Child(argv, **kw)
+                        if argv[0] == "systemd-run" else real_popen(argv, **kw))
+    return seen
+
+
+def test_local_eval_token_stays_on_host_and_receipt_is_scores_only(host, monkeypatch):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    prompts = [{"name": "case_one", "prompt": "test prompt", "correct": ["good"], "plausible": ["maybe"]}]
+    seen = fake_prompt_phase(host, monkeypatch, prompts)
+    requests = []
+
+    class Response:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            return False
+        def read(self, _):
+            return json.dumps({"choices": [{"message": {"content": "[[point:good]] secret echo"}}]}).encode()
+
+    class Opener:
+        def open(self, req, timeout):
+            requests.append((req, timeout))
+            return Response()
+
+    monkeypatch.setattr(h.urllib.request, "build_opener", lambda *args: Opener())
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    assert receipt["outcome"] == "ok"
+    assert receipt["detail"] == {"model": "test-model", "base_url": "http://127.0.0.1:18081/v1",
+                                 "head": SHA, "ids": "after", "tally": {"correct": 1, "plausible": 0,
+                                 "wrong": 0, "none": 0}, "rows": [{"name": "case_one", "first": "good",
+                                                                 "verdict": "correct", "seconds": 0.0}]}
+    assert "test-local-model-credential" not in json.dumps(receipt)
+    assert "test-local-model-credential" not in str(seen)
+    assert requests[0][0].get_header("Authorization") == "Bearer test-local-model-credential"
+    assert requests[0][1] == 30
+    body = json.loads(requests[0][0].data)
+    assert body["temperature"] == 0 and body["max_tokens"] == 220
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+@pytest.mark.parametrize("url", ["http://example.com/v1", "https://127.0.0.1:18081/v1",
+                                  "http://127.0.0.2:18081/v1", "http://localhost.evil:18081/v1"])
+def test_local_eval_refuses_non_loopback(host, url):
+    paths, _, _ = host
+    local_eval_policy(paths, base_url=url)
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    assert receipt["outcome"] == "refused"
+    assert "loopback" in receipt["error"]
+
+
+@pytest.mark.parametrize("mode", ["missing", "insecure", "empty"])
+def test_local_eval_refuses_bad_credential(host, monkeypatch, mode):
+    paths, _, _ = host
+    credential = local_eval_policy(paths, credential=mode != "missing")
+    if mode == "insecure":
+        credential.chmod(0o644)
+    elif mode == "empty":
+        credential.write_text("")
+    fake_prompt_phase(host, monkeypatch, [{"name": "case_one", "prompt": "prompt", "correct": ["a"],
+                                      "plausible": ["b"]}])
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    assert receipt["outcome"] == "refused"
+    assert "credential" in receipt["error"]
+
+
+@pytest.mark.parametrize("prompts", [[], [{"name": "x", "prompt": "p" * 16001, "correct": ["a"],
+                                              "plausible": ["b"]}], [{"name": "x", "prompt": "p",
+                                              "correct": ["a"], "plausible": ["a"]}],
+                                     [{"name": "x", "prompt": "p", "correct": ["a"],
+                                       "plausible": ["b"]}] * 51])
+def test_local_eval_refuses_malformed_or_oversized_prompts(host, monkeypatch, prompts):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    fake_prompt_phase(host, monkeypatch, prompts)
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    assert receipt["outcome"] == "refused"
+    assert receipt["detail"] == {}
+
+
+def test_local_eval_http_error_does_not_expose_token(host, monkeypatch):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    fake_prompt_phase(host, monkeypatch, [{"name": "case_one", "prompt": "prompt", "correct": ["a"],
+                                      "plausible": ["b"]}])
+
+    class Opener:
+        def open(self, req, timeout):
+            raise h.urllib.error.URLError("test-local-model-credential")
+
+    monkeypatch.setattr(h.urllib.request, "build_opener", lambda *args: Opener())
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert "test-local-model-credential" not in json.dumps(receipt)
+
+
+def test_local_eval_http_status_reports_code_only(host, monkeypatch):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    fake_prompt_phase(host, monkeypatch, [{"name": "case_one", "prompt": "prompt", "correct": ["a"],
+                                      "plausible": []}])
+
+    class Opener:
+        def open(self, req, timeout):
+            raise h.urllib.error.HTTPError(req.full_url, 401, "test-local-model-credential", {}, None)
+
+    monkeypatch.setattr(h.urllib.request, "build_opener", lambda *args: Opener())
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert receipt["error"] == "local model returned HTTP 401"
+    assert "test-local-model-credential" not in json.dumps(receipt)
+
+
+def test_local_eval_unregistered_evaluator_refused(host):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    _, receipt = request(host, "local_eval.run", {"bench": "other", "worktree": "x"}, sha=SHA)
+    assert receipt["outcome"] == "refused"
+    assert "not registered" in receipt["error"]
+
+
+def test_local_eval_rejects_credential_outside_host_config(host):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    with pytest.raises(h.Refused, match="credential path"):
+        h._eval_credential(str(paths.spool / "key"), paths)
+
+
+def test_local_eval_score_matches_evaluator():
+    eval_path = SCRIPT.parents[1] / "docs/implementation/evidence/bubu3-pointing/pointing_eval.py"
+    source = eval_path.read_text()
+    import ast
+    scope = {"re": h.re}
+    module = ast.parse(source)
+    for node in module.body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "DIRECTIVE" for t in node.targets):
+            exec(compile(ast.Module(body=[node], type_ignores=[]), str(eval_path), "exec"), scope)
+        if isinstance(node, ast.FunctionDef) and node.name == "score":
+            exec(compile(ast.Module(body=[node], type_ignores=[]), str(eval_path), "exec"), scope)
+    for reply in ["hello", "[[point:a]]", "[[point:b|reason]]", "[[point:z]] [[point:a]]"]:
+        assert h._eval_score(reply, ["a"], ["b"]) == scope["score"](reply, ["a"], ["b"])
+
+
+def test_bench_request_cannot_supply_secret_env_and_unregistered_refused(host):
+    _, receipt = request(host, "bench.run", {"bench": "relay-observe-tests", "worktree": "x",
+                                             "secret_env": {"JARVISOS_LLAMACPP_API_KEY": "injected"}}, sha=SHA)
+    assert receipt["outcome"] == "refused"
+    assert "unknown arguments" in receipt["error"]
+    _, receipt = request(host, "bench.run", {"bench": "not-registered", "worktree": "x"}, sha=SHA)
+    assert receipt["outcome"] == "refused"
+    assert "not registered" in receipt["error"]
+
+
+def test_bench_unreachable_commit_refused(host):
+    paths, ex, _ = host
+    local_eval_policy(paths)
+    def run(argv, **kw):
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(argv, 0, SHA, "")
+        if "merge-base" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "")
+        return subprocess.CompletedProcess(argv, 0, "[]" if "gh" in argv else "", "")
+    ex.run = run
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    assert receipt["outcome"] == "refused"
+    assert "not reachable" in receipt["error"]
+
+
 def archive(members):
     out = io.BytesIO()
     with tarfile.open(fileobj=out, mode="w:gz") as tar:

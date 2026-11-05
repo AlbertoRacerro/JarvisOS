@@ -23,11 +23,14 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import scenarios  # noqa: E402
-
-from app.modules.ai.context_builder import assemble_prompt  # noqa: E402
-from app.modules.ai.thread_service import _jarvis_system_envelope  # noqa: E402
-from app.modules.ai.thread_ui_context import VISIBLE_PAGE_SOURCE, UiContext, render_visible_page_block  # noqa: E402
+import scenarios
+from app.modules.ai.context_builder import assemble_prompt
+from app.modules.ai.thread_service import _jarvis_system_envelope
+from app.modules.ai.thread_ui_context import (
+    VISIBLE_PAGE_SOURCE,
+    UiContext,
+    render_visible_page_block,
+)
 
 DIRECTIVE = re.compile(r"\[\[\s*point\s*:\s*([\w.:-]+)\s*(?:\|([^\]]*))?\]\]", re.IGNORECASE)
 
@@ -66,17 +69,25 @@ def score(text: str, correct: list[str], plausible: list[str]) -> tuple[str, str
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--label", required=True)
+    parser.add_argument("--label")
     parser.add_argument("--ids", choices=["old", "new"], required=True)
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--out")
+    parser.add_argument("--emit-prompts", help="write prompt JSON without contacting the model")
     parser.add_argument("--base-url", default="http://127.0.0.1:18081/v1")
     parser.add_argument("--model", default="gemma-4-12b-it-qat-q4_0")
     parser.add_argument("--max-tokens", type=int, default=220)
     parser.add_argument("--dry-run", action="store_true", help="print prompts, do not call the model")
     args = parser.parse_args()
+    if not args.emit_prompts and (not args.label or not args.out):
+        parser.error("--label and --out are required for a model run")
     rows = []
+    prompts = []
     for scenario in scenarios.build(args.ids):
         prompt = build_prompt(scenario["ui_context"], scenario["question"])
+        if args.emit_prompts:
+            prompts.append({"name": scenario["name"], "prompt": prompt,
+                            "correct": scenario["correct"], "plausible": scenario["plausible"]})
+            continue
         if args.dry_run:
             print(f"##### {scenario['name']} ({len(prompt)} chars)\n{prompt}\n")
             continue
@@ -85,7 +96,9 @@ def main() -> int:
         rows.append({"name": scenario["name"], "question": scenario["question"], "verdict": verdict, "first_id": first,
                      "correct": scenario["correct"], "plausible": scenario["plausible"], "prompt_chars": len(prompt), **reply})
         print(f"{scenario['name']:34} {verdict:9} first={first}  ({reply['seconds']}s)", flush=True)
-    if not args.dry_run:
+    if args.emit_prompts:
+        Path(args.emit_prompts).write_text(json.dumps(prompts, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif not args.dry_run:
         tally = {k: sum(1 for r in rows if r["verdict"] == k) for k in ("correct", "plausible", "wrong", "none")}
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
         Path(args.out).write_text(json.dumps({"label": args.label, "head": head, "ids": args.ids,
