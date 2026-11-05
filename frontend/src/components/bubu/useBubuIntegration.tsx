@@ -6,9 +6,9 @@ import type { BubuIntegration } from "./BubuBubble";
 import JarvisMessageText from "../ai/JarvisMessageText";
 import { BubuPointer } from "./BubuPointer";
 import { captureErrorText, captureTab, openTabStream, type TabStream } from "./captureTab";
-import { latestReply, pickImages, pickedMention, withPicked } from "./bubuExtras";
+import { latestReply, pickImages, pickedMention, refreshPicked, withPicked } from "./bubuExtras";
 import { useBubuConversation, type BubuExtras } from "./conversationStore";
-import { collectPageContext, targetName, type UiTarget } from "./pageContext";
+import { collectPageContext, describeElement, isRenderable, resolveTarget, targetName, type UiTarget } from "./pageContext";
 import { parsePointDirectives, readablePointText, type PointDirective } from "./pointerDirectives";
 import { useDictation } from "./useDictation";
 import { useGuidedTour } from "./useGuidedTour";
@@ -61,7 +61,8 @@ export function useBubuIntegration(navigate: Navigate): { integration: BubuInteg
       if (stream.current.live) { try { frame = await stream.current.grab(); } catch { frame = null; } }
       else { stopVision(); setMediaError("Vision stopped: the tab is no longer shared"); }
     }
-    const extras = { ui_context: withPicked(collectPageContext(), picked), images: pickImages(shot, frame) };
+    const currentPicked = refreshPicked(picked, (id) => { const el = resolveTarget(id); return el && isRenderable(el) ? describeElement(el) : null; });
+    const extras = { ui_context: withPicked(collectPageContext(), currentPicked), images: pickImages(shot, frame) };
     setShot(null); setPicked([]);
     return extras;
   };

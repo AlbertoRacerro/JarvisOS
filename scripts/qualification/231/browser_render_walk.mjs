@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Controlled-reply rendering proof against the branch frontend and the running local app data.
-// Start the branch Vite server on 5173 (proxying /api to the local backend on 8000).
+// Controlled-reply rendering proof against the branch frontend. Run it against an isolated proof server (a temporary
+// copy of a data root on JARVISOS_PROOF_PORT, see e2e/README.md), never the live app; pass its URL in JARVISOS_231_BASE.
 // Replies are injected into the existing conversation store after navigation; no model call is claimed.
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -9,7 +9,8 @@ import { spawnSync } from "node:child_process";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
 const root = resolve(new URL("../../../", import.meta.url).pathname);
-const base = process.env.JARVISOS_231_BASE ?? "http://127.0.0.1:5173";
+const base = process.env.JARVISOS_231_BASE;
+if (!base) throw new Error("set JARVISOS_231_BASE to the isolated proof server URL");
 const evidence = resolve(process.argv[2] ?? "/tmp/jarvisos-231-browser");
 await mkdir(evidence, { recursive: true });
 const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout.trim();
