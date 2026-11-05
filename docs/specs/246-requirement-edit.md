@@ -23,7 +23,9 @@ In scope:
 - Staging the edit as a Project Knowledge draft with one `requirement` `update` operation that carries only the changed
   fields, the requirement id and its `updated_at` as `expected_updated_at`. Then the existing impact preview and the
   existing approve/discard actions.
-- After approval, the list reloads and shows the corrected requirement.
+- After approval the edit is an approved working revision (its change list shows the correction); it becomes the
+  canonical requirement only through the existing revalidation and "Final reconcile" controls, unchanged. After
+  reconcile, the list reloads and shows the corrected requirement.
 
 Out of scope (binding non-goals):
 - The raw `PATCH /requirements/{id}` route, any new backend route, and schema changes.
@@ -52,7 +54,8 @@ Verify against actual code before starting; report conflicts instead of guessing
 ## Acceptance criteria
 
 1. From a clean profile at `/`, an operator can open Project Basis, expand a requirement, edit its statement through
-   visible controls, preview the impact, approve it, and see the corrected statement in the list.
+   visible controls, preview the impact, approve it, reconcile it with the existing "Final reconcile" control, and see
+   the corrected statement in the list.
 2. The staged draft contains exactly one `requirement` `update` operation with the changed fields, the record id and
    `expected_updated_at` equal to the record's `updated_at`.
 3. Empty or unchanged input cannot be staged. A stale record gives a visible conflict and nothing is applied. Read-only
@@ -64,7 +67,12 @@ Verify against actual code before starting; report conflicts instead of guessing
 - Offline frontend tests cover the operation payload, changed-fields-only, empty/unchanged refusal, the stale conflict
   message, read-only mode and workspace change.
 - A clean-profile browser walk from `/`, on a fresh temporary data root seeded through the API, edits a requirement end to
-  end and checks the persisted statement. Keep its evidence directory.
+  end (approve, then the existing Final reconcile) and checks the persisted statement through the canonical
+  requirement GET. Keep its evidence directory.
+
+Clarified 2026-11-05 (coordinator, cycle 356): approval never writes canonical requirements
+(`test_draft_cas_and_approval_are_noncanonical_until_reconciliation`); the walk reaches the list through the existing
+reconcile step instead of changing reconciliation semantics.
 
 ## Definition of done
 
