@@ -15,7 +15,8 @@ import {
   type ProjectKnowledgeRevision
 } from "../../api/projectKnowledge";
 
-type Props = Readonly<{ workspaceId: string | null; readOnly?: boolean; onChanged?: () => void }>;
+type Requirement = import("../../api/client").Requirement;
+type Props = Readonly<{ workspaceId: string | null; readOnly?: boolean; onChanged?: () => void; editing?: Requirement | null; onCancelEdit?: () => void }>;
 
 function shortId(value: string | null | undefined): string {
   return value ? `${value.slice(0, 8)}…` : "None";
@@ -43,10 +44,18 @@ function ChangeList({ operations }: { operations: ProjectKnowledgeOperation[] })
   </li>)}</ul>;
 }
 
-export default function ProjectKnowledgePanel({ workspaceId, readOnly = false, onChanged }: Props) {
+export default function ProjectKnowledgePanel({ workspaceId, readOnly = false, onChanged, editing, onCancelEdit }: Props) {
   const [revisions, setRevisions] = useState<ProjectKnowledgeRevision[]>([]);
   const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
   const [statement, setStatement] = useState("");
+  const [editStatement, setEditStatement] = useState("");
+  const [editRationale, setEditRationale] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  useEffect(() => { setEditStatement(editing?.statement ?? ""); setEditRationale(editing?.rationale ?? ""); setEditNotes(editing?.notes ?? ""); }, [editing, workspaceId]);
+  const editFields: Record<string, string> = {};
+  if (editing && editStatement !== editing.statement) editFields.statement = editStatement;
+  if (editing && editRationale !== (editing.rationale ?? "")) editFields.rationale = editRationale;
+  if (editing && editNotes !== (editing.notes ?? "")) editFields.notes = editNotes;
   const [draft, setDraft] = useState<ProjectKnowledgeDraft | null>(null);
   const [impact, setImpact] = useState<ProjectKnowledgeImpact | null>(null);
   const [revalidation, setRevalidation] = useState<ProjectKnowledgeRevalidation | null>(null);
@@ -132,6 +141,18 @@ export default function ProjectKnowledgePanel({ workspaceId, readOnly = false, o
     setImpact(nextImpact);
   });
 
+  const stageEdit = () => act(async () => {
+    if (!workspaceId || readOnly || !editing || !editStatement.trim() || !Object.keys(editFields).length || (revisions.length > 0 && !selectedParent)) return;
+    const nextDraft = await createProjectKnowledgeDraft({
+      workspace_id: workspaceId,
+      parent_kind: selectedParent?.state === "working" ? "working" : "reconciled",
+      parent_revision_id: selectedParent?.id ?? currentReconciled?.id ?? null,
+      operations: [{ owner_kind: "requirement", operation_kind: "update", owner_id: editing.id, expected_updated_at: editing.updated_at, fields: editFields }]
+    });
+    const nextImpact = await previewProjectKnowledgeImpact(workspaceId, nextDraft.id);
+    setDraft(nextDraft); setImpact(nextImpact);
+  });
+
   const approve = () => act(async () => {
     if (!workspaceId || readOnly || !draft || !impact || !impact.complete) return;
     const result = await approveProjectKnowledgeDraft({
@@ -144,6 +165,7 @@ export default function ProjectKnowledgePanel({ workspaceId, readOnly = false, o
     });
     if (result.state !== "success" || !result.working_revision_id) throw new Error(result.failure_code ?? "Approval did not produce a working revision");
     setStatement("");
+    onCancelEdit?.();
     setDraft(null);
     setImpact(null);
     await reload();
@@ -184,7 +206,8 @@ export default function ProjectKnowledgePanel({ workspaceId, readOnly = false, o
   return <section className="final-fusion__panel final-fusion__basis" aria-label="Project Knowledge">
     <header className="final-fusion__panel-head"><h2>Project Knowledge</h2><span>{readOnly ? "Revision history" : "Changes & revisions"}</span></header>
     <div className="final-fusion__dossier-top"><strong>{currentReconciled ? "Reconciled project basis" : "No reconciled revision yet"}</strong><span>Working revisions · {working.length}</span></div>
-    {error && <div className="final-fusion__source-empty"><strong>Transition rejected</strong><span>{error}</span></div>}
+    {error && <div className="final-fusion__source-empty" role="alert"><strong>Transition rejected</strong><span>{error}</span>{/stale|conflict/i.test(error) && <button type="button" onClick={() => { onCancelEdit?.(); setError(null); onChanged?.(); void reload(); }}>Reload records</button>}</div>}
+    {!readOnly && editing && <div className="final-fusion__source-list" aria-label="Edit requirement"><label>Statement<input aria-label="Edit statement" value={editStatement} onChange={event => setEditStatement(event.target.value)} /></label><label>Rationale<textarea aria-label="Edit rationale" value={editRationale} onChange={event => setEditRationale(event.target.value)} /></label><label>Notes<textarea aria-label="Edit notes" value={editNotes} onChange={event => setEditNotes(event.target.value)} /></label><button type="button" onClick={onCancelEdit}>Cancel edit</button><button type="button" disabled={busy || !editStatement.trim() || !Object.keys(editFields).length || (revisions.length > 0 && !selectedParent)} onClick={stageEdit}>Preview impact</button></div>}
     <div className="final-fusion__toolbar-line">
       <span>Revision history</span>
       <select aria-label="Project Knowledge revision" value={selectedRevision?.id ?? ""} onChange={(event) => setSelectedRevisionId(event.target.value || null)} disabled={busy || !revisions.length}>
