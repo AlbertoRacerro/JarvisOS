@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import type { PlacementMarker } from "../pages/DesignFeatureInspector";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
@@ -33,6 +35,7 @@ export type GeometryInspectionCommand = Readonly<{
 
 type BluecadGlbViewerProps = {
   artifactUrl: string;
+  placementMarker?: PlacementMarker | null;
   references?: readonly {
     id: string; url: string;
     translation_mm: readonly [number, number, number];
@@ -120,8 +123,14 @@ function meshFact(mesh: THREE.Mesh, ordinal: number, sessionKey: string): Geomet
 }
 
 const MM_TO_GLTF_METRES = 0.001;
+export const cadToGltf = ([x, y, z]: readonly number[]): [number, number, number] => [x * 0.001, z * 0.001, -y * 0.001];
+export const gltfToCad = ([x, y, z]: readonly number[]): [number, number, number] => [x * 1000, -z * 1000, y * 1000];
 
-function BluecadGlbViewer({ artifactUrl, references = [], inspectionCommand = null, onInspectionChange }: BluecadGlbViewerProps) {
+function BluecadGlbViewer({ artifactUrl, references = [], inspectionCommand = null, onInspectionChange, placementMarker = null }: BluecadGlbViewerProps) {
+  const markerRef = useRef(placementMarker);
+  markerRef.current = placementMarker;
+  const updateMarkerRef = useRef<(() => void) | null>(null);
+  useEffect(() => { updateMarkerRef.current?.(); }, [placementMarker]);
   const referenceSignature = JSON.stringify(references);
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [message, setMessage] = useState("Loading GLB artifact…");
@@ -181,6 +190,34 @@ function BluecadGlbViewer({ artifactUrl, references = [], inspectionCommand = nu
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
+    const marker = new THREE.AxesHelper(0.03);
+    const transform = new TransformControls(camera, renderer.domElement);
+    const helper = transform.getHelper();
+    scene.add(marker, helper);
+    transform.attach(marker);
+    let dragging = false;
+    const updateMarker = () => {
+      const value = markerRef.current;
+      marker.visible = helper.visible = Boolean(value);
+      transform.enabled = Boolean(value);
+      if (!value || dragging) return;
+      marker.position.set(...cadToGltf(value.origin));
+      // CAD heading about +Z is the same angle about glTF +Y (CAD (x, y, z) -> glTF (x, z, -y)).
+      marker.rotation.set(0, THREE.MathUtils.degToRad(value.heading), 0);
+      transform.setMode(value.mode);
+      transform.showX = value.mode === "translate";
+      transform.showY = true;
+      transform.showZ = value.mode === "translate";
+    };
+    transform.addEventListener("dragging-changed", (event) => { dragging = Boolean(event.value); controls.enabled = !dragging; });
+    transform.addEventListener("objectChange", () => {
+      if (!dragging || !markerRef.current) return;
+      // Read the heading from the rotated +X axis: Euler XYZ would clamp rotation.y to ±90°.
+      const axis = new THREE.Vector3(1, 0, 0).applyQuaternion(marker.quaternion);
+      markerRef.current.onChange(gltfToCad(marker.position.toArray()), THREE.MathUtils.radToDeg(Math.atan2(-axis.z, axis.x)));
+    });
+    updateMarkerRef.current = updateMarker;
+    updateMarker();
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0x64748b, 2.2));
     const directional = new THREE.DirectionalLight(0xffffff, 2.4);
@@ -455,6 +492,12 @@ function BluecadGlbViewer({ artifactUrl, references = [], inspectionCommand = nu
       grid.geometry.dispose();
       const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
       for (const material of gridMaterials) material.dispose();
+      updateMarkerRef.current = null;
+      transform.dispose();
+      scene.remove(marker, helper);
+      marker.geometry.dispose();
+      const markerMaterials = Array.isArray(marker.material) ? marker.material : [marker.material];
+      markerMaterials.forEach((material) => material.dispose());
       controls.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);

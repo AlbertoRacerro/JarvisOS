@@ -65,5 +65,5 @@ assert.match(read("src/components/Layout.tsx"), /tour=\{bubu\?\.tour\} onStartTo
 
 // ---- build chain ----
 assert.match(pkg, /"test:242": "node tests\/242_bubu_guided_tour\.test\.mjs"/);
-assert.match(pkg, /npm run test:235 && npm run test:242 &&/);
+assert.match(pkg, /npm run test:235 && npm run test:235b && npm run test:242 &&/);
 console.log("242 bubu guided tour: ok");

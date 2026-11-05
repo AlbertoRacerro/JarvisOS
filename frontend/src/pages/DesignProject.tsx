@@ -22,7 +22,7 @@ import ReducedModelsPanel from "./ReducedModelsPanel";
 import { CfdResultBlocks, CfdRunPicker, type CfdRunsRead } from "./CfdResultsCompare";
 import CfdMeshPanel from "./CfdMeshPanel";
 import StudyTemplatesPanel from "./StudyTemplatesPanel";
-import DesignFeatureInspector from "./DesignFeatureInspector";
+import DesignFeatureInspector, { type PlacementMarker } from "./DesignFeatureInspector";
 import BluecadGlbViewer from "../components/BluecadGlbViewer";
 import NumericInput from "../components/ui/NumericInput";
 import DesignComponentTree, { componentNodeStatus, type DesignNode } from "../components/design/DesignComponentTree";
@@ -68,6 +68,7 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
     if (!replace) navigate(href);
     else if (href !== `${window.location.pathname}${window.location.search}`) navigate(href, { replace: true });
   };
+  const [placementMarker, setPlacementMarker] = useState<PlacementMarker | null>(null);
   const [projectName, setProjectName] = useState("");
   const [projectWorkspace, setProjectWorkspace] = useState<Workspace | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -460,7 +461,7 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
         {active && selected && selectedNode === "Results" ? <CfdResultBlocks projectId={projectId} versionId={active.id} componentId={selected.id}
           runs={cfdRuns} chosen={compareIds} onFieldState={reportFieldSlice} /> : null}
         {selected && selectedNode === "Results" ? null
-          : glbUrl ? <BluecadGlbViewer key={glbUrl} artifactUrl={glbUrl} />
+          : glbUrl ? <BluecadGlbViewer key={glbUrl} artifactUrl={glbUrl} placementMarker={selectedNode === "Geometry" ? placementMarker : null} />
           : <div className="design-project__viewport-empty" role="status" aria-label={selected?.geometry_candidate_id ? "Geometry preview" : selected ? `No geometry attached to ${selected.name}` : "No component selected"}>
             {selected?.geometry_candidate_id ? geometryAggregate?.candidate.id === selected.geometry_candidate_id
               ? <DesignStatus state="empty" title="This geometry has no 3D preview" /> : <DesignStatus state="checking" />
@@ -525,7 +526,7 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
           </section> : null}
           {selectedNode === "Geometry" && active ? <DesignFeatureInspector projectId={projectId} versionId={active.id} component={selected}
             draftRevision={selected.source_draft_id ? sourceRevision : null} disabled={busy || Boolean(selected.source_draft_id && !sourceRevision)}
-            onApplied={reload} /> : null}
+            onApplied={reload} onMarkerChange={setPlacementMarker} /> : null}
           {selectedNode === "Geometry" && active ? <form onSubmit={(event) => {
             event.preventDefault();
             if (!geometrySelection || (selected.source_draft_id && !sourceRevision)) return;
