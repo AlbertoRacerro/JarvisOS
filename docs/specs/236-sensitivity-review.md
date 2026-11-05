@@ -1,6 +1,6 @@
 # 236 — Selected source sensitivity review
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal
