@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   listMemoryProposals,
   readSensitivityLabel,
+  readFreshnessInvalidation,
+  type FreshnessInvalidationDetail,
   type SensitivityLabel,
   promoteMemoryRecord,
   promoteParameterReplacement,
@@ -48,6 +50,11 @@ function ReviewStage({ workspaceId, onShellRegionsChange }: PrimaryStageProps) {
   const [transitionNotice, setTransitionNotice] = useState<string | null>(null);
   const [busyRecordId, setBusyRecordId] = useState<string | null>(null);
   const [sensitivity, setSensitivity] = useState<{ key: string; state: "loading" | "ready" | "error"; label?: SensitivityLabel | null; error?: string } | null>(null);
+  const [freshness, setFreshness] = useState<{ key: string; state: "loading" | "ready" | "error"; detail?: FreshnessInvalidationDetail; error?: string } | null>(null);
+  const [showAllFreshness, setShowAllFreshness] = useState(false);
+  const freshnessGeneration = useRef(0);
+  const currentFreshness = useRef<SensitivityRequest | null>(null);
+  const freshnessTarget = useRef<{ workspaceId: string; id: string } | null>(null);
   const sensitivityGeneration = useRef(0);
   const currentSensitivity = useRef<SensitivityRequest | null>(null);
   const requestGeneration = useRef(0);
@@ -80,6 +87,20 @@ function ReviewStage({ workspaceId, onShellRegionsChange }: PrimaryStageProps) {
       if (acceptsSensitivityRequest(currentSensitivity.current, request)) setSensitivity({ key, state: "error", error: error instanceof Error ? error.message : "Sensitivity lookup failed." });
     }
   }, [workspaceId, selected, sensitivityKey]);
+
+  useLayoutEffect(() => { freshnessGeneration.current += 1; currentFreshness.current = null; freshnessTarget.current = null; setFreshness(null); setShowAllFreshness(false); }, [workspaceId]);
+  const loadFreshness = useCallback(async (targetWorkspaceId: string, id: string) => {
+    const key = JSON.stringify([targetWorkspaceId, id]);
+    const request = { generation: ++freshnessGeneration.current, key };
+    currentFreshness.current = request; freshnessTarget.current = { workspaceId: targetWorkspaceId, id };
+    setFreshness({ key, state: "loading" });
+    try {
+      const detail = await readFreshnessInvalidation(targetWorkspaceId, id);
+      if (workspaceRef.current === targetWorkspaceId && acceptsSensitivityRequest(currentFreshness.current, request)) setFreshness({ key, state: "ready", detail });
+    } catch (error) {
+      if (workspaceRef.current === targetWorkspaceId && acceptsSensitivityRequest(currentFreshness.current, request)) setFreshness({ key, state: "error", error: error instanceof Error ? error.message : "Freshness detail unavailable." });
+    }
+  }, []);
 
   const loadRecords = useCallback(async (targetWorkspaceId: string, targetFilter: MemoryStatusFilter, preferredSelection: string | null = selectedRef.current, removedId: string | null = null, focusAfterLoad = false) => {
     const previousRecords = recordsRef.current;
@@ -120,18 +141,20 @@ function ReviewStage({ workspaceId, onShellRegionsChange }: PrimaryStageProps) {
     currentMutation.current = request; setBusyRecordId(record.id); setMessage(null); setTransitionNotice(null);
     try {
       let notice: string;
+      let replacement: ReplacementResult | null = null;
       if (kind === "reject") { const result = await rejectMemoryRecord(record.record_kind, record.id); notice = `Rejected ${result.record_kind} ${result.id}.`; }
-      else if (promotionRoute(record) === "replacement") notice = replacementNotice(await promoteParameterReplacement(record.id));
+      else if (promotionRoute(record) === "replacement") { replacement = await promoteParameterReplacement(record.id); notice = replacementNotice(replacement); }
       else { const result = await promoteMemoryRecord(record.record_kind, record.id); notice = `Accepted ${result.record_kind} ${result.id}.`; }
       if (!acceptsReviewMutation(currentMutation.current, request)) return;
       if (workspaceRef.current !== request.workspaceId || selectedRef.current !== request.recordId) return;
+      if (replacement) { setShowAllFreshness(false); void loadFreshness(request.workspaceId, replacement.invalidation.id); }
       setTransitionNotice(notice); await loadRecords(request.workspaceId, filterRef.current, request.recordId, request.recordId, true);
     } catch (error) {
       if (!acceptsReviewMutation(currentMutation.current, request)) return;
       if (workspaceRef.current !== request.workspaceId || selectedRef.current !== request.recordId) return;
       setMessage(error instanceof Error ? error.message : "Proposal transition failed.");
     } finally { setBusyRecordId((current) => current === record.id ? null : current); }
-  }, [busyRecordId, loadRecords]);
+  }, [busyRecordId, loadRecords, loadFreshness]);
 
   const navigator = useMemo(() => <div className="review-nav" aria-label="Proposal review navigator">
     <label className="review-filter"><span>Status</span><select ref={filterControlRef} value={statusFilter} onChange={(event) => changeFilter(event.target.value as MemoryStatusFilter)}>{FILTERS.map((filter) => <option key={filter} value={filter}>{filter}</option>)}</select></label>
@@ -146,6 +169,14 @@ function ReviewStage({ workspaceId, onShellRegionsChange }: PrimaryStageProps) {
   return <section className="review-workbench" aria-labelledby="review-stage-title" aria-busy={busyRecordId !== null}>
     <div className="page-header review-workbench__header"><div><p className="eyebrow">Proposal authority</p><h1 id="review-stage-title">Review</h1></div><Button variant="secondary" disabled={loadState === "loading" || busyRecordId !== null} onClick={() => void loadRecords(workspaceId, statusFilter)}>Refresh</Button></div>
     {message && <InlineNotice tone="danger">{message}</InlineNotice>}{transitionNotice && <InlineNotice tone="success">{transitionNotice}</InlineNotice>}
+    {freshness && <Surface as="section" className="review-card" aria-label="Freshness invalidation detail">
+      <h2>Freshness invalidation detail</h2>
+      {freshness.state === "loading" && <p role="status">Loading freshness detail…</p>}
+      {freshness.state === "error" && <><InlineNotice tone="danger">{freshness.error}</InlineNotice><Button variant="secondary" onClick={() => { const target = freshnessTarget.current; if (target) void loadFreshness(target.workspaceId, target.id); }}>Retry</Button></>}
+      {freshness.state === "ready" && freshness.detail && <><dl className="review-facts"><Fact label="Superseded parameter">{freshness.detail.source_ref}</Fact><Fact label="Replacement parameter">{freshness.detail.replacement_ref}</Fact><Fact label="Affected count">{freshness.detail.affected_count}</Fact></dl>
+        {freshness.detail.affected_count === 0 ? <p>No record became stale.</p> : <><ul>{(showAllFreshness ? freshness.detail.marks : freshness.detail.marks.slice(0, 20)).map((mark) => <li key={mark.record_ref}><strong>{mark.record_kind}</strong> {mark.record_id}<p>Reason: {mark.reason_code === "upstream_parameter_superseded" ? "Upstream parameter was replaced" : mark.reason_code}</p><p>Path: {mark.path.join(" → ")}</p></li>)}</ul>{!showAllFreshness && freshness.detail.marks.length > 20 && <Button variant="secondary" onClick={() => setShowAllFreshness(true)}>Show all</Button>}</>}
+      </>}
+    </Surface>}
     {loadState === "loading" && records.length === 0 && <InlineNotice tone="neutral">Loading canonical MemoryStore proposals…</InlineNotice>}
     {loadState === "ready" && records.length === 0 && <InlineNotice tone="neutral">No {statusFilter === "all" ? "proposal records" : statusFilter + " proposals"} in this workspace.</InlineNotice>}
     {selected && <Surface as="article" className="review-card">

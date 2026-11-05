@@ -41,7 +41,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `backend/app/schemas` | backlog-candidate | One shared dataclass (ServiceStatus) with no consumer in the app; delete it or give it a purpose. | `common.py` | <100 |
 | `backend/tests` | live | Backend test suite (pytest): offline, fake providers, isolated data root, a fake project pack. | `conftest.py`, `scripts/test_backend_sharded.sh` | 95200 |
 | `configs` | live | Declarative configuration: AI provider catalog, cloud escalation and egress policy, architecture-enforcement rules, BLUECAD tool registry, relay gateway. | `ai_providers.yaml`, `ai_egress_policy.json`, `architecture_enforcement.json` | <100 |
-| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 3400 |
+| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 3500 |
 | `eval` | in-development | Local-model re-evaluation: classification and intake quality, latency, llama.cpp qualification and the second-brain retrieval benchmark. Everything here is marked to improve. | `local/README.md`, `local/llamacpp_qualification.py` | 700 |
 | `frontend/src/api` | live | Typed API client wrappers per backend area, plus the generated contract types (generated/). | `client.ts`, `generated/` | 4300 |
 | `frontend/src/app` | live | Routing table and router hook, navigation history, selection, and the owner and target registries Bubu uses to find controls. | `routes.ts`, `useAppRouter.ts`, `designTargets.ts` | 700 |
@@ -65,7 +65,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `frontend/src/components/threads` | live | State logic for AI threads. | `threadState.ts` | 100 |
 | `frontend/src/components/ui` | live | Shared UI primitives: button, field, surface, status badge, numeric input, context menu. | `Button.tsx`, `Field.tsx`, `Surface.tsx` | 500 |
 | `frontend/src/pages` | live | Page-level screens: Design project, Studio, Runs, Coding, Settings, Literature, Model dossier, Engineering Data, Development roadmap, AI threads, and the CFD panels. | `DesignProject.tsx`, `Studio.tsx`, `CodingWorkbench.tsx` | 6400 |
-| `frontend/src/stages` | live | Stage containers for the Design workspace (process, studies, model, review), the environment panel and the process draft editor. | `registry.ts`, `ProcessStage.tsx`, `ModelStage.tsx` | 6400 |
+| `frontend/src/stages` | live | Stage containers for the Design workspace (process, studies, model, review), the environment panel and the process draft editor. | `registry.ts`, `ProcessStage.tsx`, `ModelStage.tsx` | 6500 |
 | `frontend/src/styles` | live | Design tokens and style sheets for the shell and each surface. | `tokens.css`, `global.css`, `lumen.css` | 5300 |
 | `frontend/tests` | live | Static frontend tests (node .mjs) run by `npm run build`; they assert literal strings and source patterns. | `package.json (scripts.build)` | 6100 |
 | `schemas` | live | JSON schemas for BLUECAD specs, results and tool registry, and Jarvis records. | `bluecad_geometry_spec_v0_1.schema.json` | <100 |
