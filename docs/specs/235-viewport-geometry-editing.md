@@ -1,102 +1,87 @@
-# 235 — Viewport geometry editing, slice 2: feature placement
+# 235 — Viewport geometry editing, slice 3: freely placed serpentines
 
-Status: merged
+Status: ready
 Depends on: 234
 
-Slice 1 (feature inspector, merged in PR #17) is in Git history. This file is the accepted contract for slice 2.
+Slices 1 (feature inspector, PR #17) and 2 (feature placement, PR #22) are in Git history. This file is the accepted
+contract for slice 3.
 
 ## Goal
 
-In the Design Geometry node, the user can place a feature where it belongs instead of only chaining it to the
-previous outlet: type its position and direction, or drag a move/rotate handle in the 3D viewport, then rebuild. The
-geometry the viewport shows after a rebuild is always the server-built GLB; the handle only edits the feature's
-`frame` and marks it "not applied" until the rebuild succeeds.
+A serpentine can be "Placed freely" like any other feature: the user sets its Position and Heading (typed or with
+the slice 2 viewport handle), rebuilds, and the whole serpentine (every run and bend) appears at that place, beside
+the main run instead of chained to it.
 
 ## Why
 
-W3 of `docs/strategy/ROADMAP_COMSOL_DIRECTION_2026-10-30.md` ("TransformControls gizmo writing back `transform`
-features"), queue item 4 of maintainer directive `L20261103141101-7c11`. Slice 1 can only build one connected chain
-from the origin: a second, separate pipe run or a manifold placed beside the main run cannot be made without Studio.
-The 234 backend already accepts an optional `frame` (`origin` and `direction`, millimetres, CAD Z-up) on every
-feature, and the inspector today only shows it read-only. `assembly.py` `_frame_placement` uses the origin and only
-the plan heading of `direction` (`atan2(y, x)`, a rotation about CAD Z; the z component is ignored) and only for parts
-not placed by a connection; the default is origin (0, 0, 0), heading +X. Placement is therefore frontend-only and is
-the smallest step that makes mouse modelling real.
+W3 of `docs/strategy/ROADMAP_COMSOL_DIRECTION_2026-10-30.md`, queue item 4 of maintainer directive
+`L20261103141101-7c11`. Slice 2 deferred it by name: `assembly.py` `assemble_parts` walks connections only from the
+first part of the whole spec. Every other part is placed by its own `frame` (default origin, heading +X), so the inner
+runs and bends of a serpentine that is not the first feature ignore the serpentine's frame. The 234 compiler already
+writes the feature `frame` on the serpentine's first part (`{feature_id}_run_1`). This means a heat-exchanger coil
+next to a feed line cannot be modelled today without Studio.
 
 ## Scope
 
 In scope:
-- Inspector, per feature:
-  - a placement choice for every feature except the first: "Connected to previous outlet" (today's behaviour, writes
-    `connect_to`) or "Placed freely" (writes `frame`, removes `connect_to`); manifolds stay never auto-connected.
-    "Placed freely" is offered only for single-part kinds (`tube_run`, `bend`, `manifold`): `assemble_parts` walks
-    connections only from the first part of the whole spec, so the inner runs of a detached `serpentine` would not
-    follow its frame; a serpentine is placed freely only as the first feature;
-  - for a freely placed feature (and the first feature), editable fields Position X/Y/Z (mm) and Heading (deg, in
-    plan, 0 = +X), written as `direction` (cos, sin, 0); an existing `frame` whose direction has a non-zero z is
-    shown with a note that only its plan heading is used and is preserved unless the user edits it; a feature without
-    a `frame` shows the default and only writes a `frame` once the user edits it;
-  - client-side refusal of non-finite values, mirroring `spec.py` `_validate_frame`.
-- Viewport handle: a "Place in viewport" toggle on a freely placed feature shows three.js `TransformControls`
-  (from `three/examples/jsm`, already shipped with the `three` dependency) on a small placement marker (axes at the
-  frame origin pointing along the heading), in move mode (three axes) and rotate mode limited to the CAD Z axis.
-  Dragging updates that feature's Position and Heading fields (rounded to 0.1 mm and 0.1 deg) and marks the sequence
-  not applied. The marker converts between the CAD Z-up frame and glTF Y-up exactly as the
-  viewer's existing export convention; OrbitControls are paused while dragging.
-- "Rebuild geometry" and session Undo work unchanged through the 234 `PUT`; a placement change is one more revision.
-- Frontend `.mjs` source test extended or added, in the `build` chain.
-- E2E walk from `/` in a clean profile on a temporary data-root copy: create a tube, add a second tube "Placed
-  freely", type a position, rebuild, see both in the viewport; drag the handle, see the fields change and the
-  not-applied mark, rebuild; undo restores the previous placement.
+- Backend, `backend/app/modules/bluecad/assembly.py` only: once the walk from the first part is done, take the first
+  unplaced part in spec order, place it by its own `frame`, and walk its connections the same way. Repeat until every
+  part is placed. Each connected group is then placed from the frame of its first part in spec order. Placement of
+  the group that holds the first part, and of single unconnected parts, is unchanged. The existing consistency and
+  port checks stay as they are.
+- Frontend, `DesignFeatureInspector.tsx`: offer "Placed freely" for a `serpentine` that is not the first feature,
+  with the same Position and Heading fields and "Place in viewport" handle as other kinds. Enable "Add serpentine"
+  when the last enabled feature is not connectable (for example a manifold); the new serpentine starts "Placed
+  freely" at the default frame.
+- Backend unit tests and the extended frontend static test (already in the `build` chain).
+- The slice 2 e2e walk extended, or a new walk, from `/` in a clean profile on a temporary data-root copy: tube, then a
+  serpentine set to "Placed freely" at a typed position, rebuild, and the whole serpentine visibly away from the tube.
 
 Out of scope (binding non-goals):
-- Moving or rotating the server mesh on the client, or any client-side geometry preview; the marker is the only
-  client-drawn object.
-- Scale, tilt or roll (any rotation not about CAD Z), snapping, plane picking, sketches, constraints, booleans, new primitive kinds, a `transform` feature
-  kind, a command line or Bubu proposals: later slices.
-- Any backend, schema or migration change. If a backend gap blocks an acceptance criterion, stop and report it.
-- Detached `serpentine` placement (needs the assembler to place every connected group from its own frame).
-- Selecting a feature by clicking its mesh (part-to-feature mapping is not guaranteed for macro features); selection
-  stays in the inspector.
+- Any change to `GeometrySpec`, `feature_sequence_v1`, the 234 compiler or route, the schema, or a migration.
+- A frame on a part that is placed by a connection still has no effect (as today); no warning UI for it.
+- Changing the placement of any spec that assembles today. This is not a re-placement of stored candidates: nothing
+  is rebuilt automatically, and existing candidates and digests are untouched.
+- Mesh-click selection, scale, tilt or roll, snapping, sketches, constraints, booleans, new primitives, a command
+  line or Bubu proposals: later slices.
 
 ## Files likely touched
 
+- `backend/app/modules/bluecad/assembly.py`
+- `backend/tests/bluecad/test_assembly_groups.py` (new) or an existing bluecad assembly test
 - `frontend/src/pages/DesignFeatureInspector.tsx`
-- `frontend/src/components/BluecadGlbViewer.tsx` (an optional placement-marker prop and change callback)
-- `frontend/src/pages/DesignProject.tsx` (wiring), `frontend/src/pages/designProject.css`
-- `frontend/tests/235_feature_inspector.test.mjs` or a new `frontend/tests/235b_feature_placement.test.mjs`,
-  `frontend/package.json` (build chain)
+- `frontend/tests/235b_feature_placement.test.mjs`
 - `e2e/design_feature_placement_walk.mjs`
 
 ## Design constraints
 
 - `design_component_geometry.candidate_id` stays the only geometry authority; nothing attaches geometry except the
   234 `PUT`.
-- Failure leaves the screen truthful: after a 409/422 the previous geometry stays displayed and the edited placement
-  stays in the form, marked not applied.
-- Features with `$param` references stay preserved unchanged; placement edits only `frame`/`connect_to`.
-- The marker lives in the same scene transform as the loaded GLB (any centring or unit scaling the viewer applies to
-  the model applies to the marker), so a typed position and the rebuilt geometry coincide on screen.
-- No new dependency, no new state library; the viewer change is opt-in so other viewer users are unaffected.
+- Deterministic: the result depends only on spec order and content, not on dictionary or set iteration order.
+- A spec that assembled before assembles to the same placements (within the existing `ABS_TOL`/`REL_TOL`). A spec
+  that failed before with `PORT_MISMATCH` only because a detached group ignored its frame now succeeds. Every other
+  refusal stays a refusal.
+- No new dependency; no client-side geometry beyond the slice 2 marker.
 
 ## Acceptance criteria
 
-1. A second `tube_run` set to "Placed freely" with Position (0, 100, 0) mm rebuilds into a candidate whose
-   `GeometrySpec` part carries that frame, and the viewport shows two separate tubes.
-2. Dragging the handle changes the Position/Heading fields and shows "not applied"; Rebuild makes a new revision
-   whose part frame equals the fields; Undo restores the previous frame as a new revision.
-3. A non-finite value is refused before sending; a server refusal leaves the previous geometry
-   displayed with the server's message visible.
-4. Switching a feature back to "Connected to previous outlet" removes its `frame` and restores the chained geometry.
-5. Frontend build (static tests, `tsc`, `vite build`) passes; the e2e walk passes from a clean profile at `/` using
-   visible controls only (the drag uses real pointer events on the handle), with its evidence directory attached to
-   the PR.
+1. Backend: a spec with a tube run, then a serpentine whose `_run_1` frame is origin (0, 300, 0) with heading +Y and
+   no connection to the tube, assembles. Every serpentine part is placed relative to that frame (the `_run_1` `port_a`
+   sits at (0, 300, 0) facing −Y, so the first run extends along +Y), and every internal connection passes the coincident and
+   opposed check.
+2. Backend: the existing bluecad, feature-history and template tests pass unchanged. A regression test shows that a
+   spec with a single connected chain and frames on non-root parts gives the same placements as before.
+3. Frontend: a non-first serpentine offers "Placed freely" and switching to it writes `frame` and removes
+   `connect_to`. Switching back restores the connection. "Add serpentine" is enabled after a manifold.
+4. Frontend build (static tests, `tsc`, `vite build`) passes; the e2e walk passes from a clean profile at `/` using
+   visible controls only, with its evidence directory attached to the PR.
 
 ## Required tests
 
-- Static test: placement choice writes `frame` xor `connect_to`, non-finite refusals, heading ↔ `direction`
-  conversion, axis conversion helper (CAD Z-up ↔ glTF Y-up) round-trips, no direct provider/filesystem calls.
-- `e2e/design_feature_placement_walk.mjs` covering criteria 1–4 against the real backend on a temporary data root.
+- Backend unit tests for criteria 1–2, including determinism (two detached groups in either spec order are each
+  placed from their own first part).
+- Static test: serpentine "Placed freely" option present and wired to `frame`; add-serpentine enable rule.
+- E2E walk covering criterion 3 against the real backend on a temporary data root.
 
 ## Definition of done
 
