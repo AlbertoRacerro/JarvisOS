@@ -212,7 +212,7 @@ def test_slack_allowed_and_rate_limit(host):
     assert request(host, "slack.deliver", {"text": "Pronto"})[1]["outcome"] == "refused"
 
 
-@pytest.mark.parametrize("dirty,head", [(" M x", SHA), ("?? x", SHA), ("", "b" * 40)])
+@pytest.mark.parametrize("dirty,head", [(" M x\0", SHA), ("?? x\0", SHA), ("", "b" * 40)])
 def test_bench_clean_head_and_plain_launcher(host, dirty, head):
     paths, ex, _ = host
     calls = []
@@ -229,7 +229,7 @@ def test_bench_clean_head_and_plain_launcher(host, dirty, head):
     git = [launcher, "git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", str(root)]
     assert [a for a, _ in calls] == [
         [*git, "rev-parse", "HEAD"],
-        [*git, "status", "--porcelain", "--ignored", "--untracked-files=all"],
+        [*git, "status", "--porcelain", "-z", "--ignored", "--untracked-files=all"],
         [*git, "ls-files", "-v"],
     ]
     assert all(k["cwd"] == str(root) for _, k in calls)
@@ -270,7 +270,9 @@ def test_bench_clean_check_real_linked_worktree(host, monkeypatch):
 
     common_dir = Path(subprocess.check_output(["git", "-C", str(root), "rev-parse", "--git-common-dir"],
                                               text=True).strip())
-    (common_dir / "info/exclude").write_text("conftest.py\n__pycache__/\n.pytest_cache/\n")
+    (common_dir / "info/exclude").write_text(
+        "conftest.py\n__pycache__/\n.pytest_cache/\n.venv/\n.ruff_cache/\nnode_modules\n.env\n"
+    )
     tests = root / "backend/tests"
     tests.mkdir(parents=True)
     conftest = tests / "conftest.py"
@@ -286,7 +288,7 @@ def test_bench_clean_check_real_linked_worktree(host, monkeypatch):
 
     pycache = tests / "__pycache__"
     pycache.mkdir()
-    (pycache / "x.cpython-312.pyc").write_bytes(b"cache")
+    (pycache / "a b.pyc").write_bytes(b"cache")
     assert outcome() == "ok"
     (pycache / "unexpected.py").write_text("unexpected\n")
     assert outcome() == "refused"
@@ -295,6 +297,21 @@ def test_bench_clean_check_real_linked_worktree(host, monkeypatch):
     pytest_cache.mkdir()
     (pytest_cache / "README.md").write_text("cache\n")
     assert outcome() == "ok"
+    venv_python = root / "backend/.venv/bin/python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text("python\n")
+    ruff_cache = root / "backend/.ruff_cache/x"
+    ruff_cache.parent.mkdir(parents=True)
+    ruff_cache.write_text("cache\n")
+    assert outcome() == "ok"
+    shared_modules = paths.home / "shared_modules"
+    shared_modules.mkdir()
+    (root / "frontend").mkdir()
+    (root / "frontend/node_modules").symlink_to(shared_modules, target_is_directory=True)
+    assert outcome() == "ok"
+    env_file = root / "backend/.env"
+    env_file.write_text("ignored\n")
+    assert outcome() == "refused"
 
 
 def local_eval_policy(paths, *, base_url="http://127.0.0.1:18081/v1", credential=True):

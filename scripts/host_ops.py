@@ -67,6 +67,7 @@ MAX_EVAL_ARCHIVE_BYTES = 32 << 20
 MAX_EVAL_EXTRACTED_BYTES = 256 << 20
 MAX_EVAL_ARCHIVE_MEMBERS = 20000
 OUTCOMES = ("ok", "failed", "refused", "cancelled", "interrupted", "timeout")
+BENCH_IGNORED_COMPONENTS = frozenset({".venv", "node_modules", "dist", ".vite", ".pytest_cache", ".ruff_cache", ".mypy_cache"})
 
 
 def now_utc() -> datetime:
@@ -764,18 +765,18 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
     # The checkout is agent-controlled: its revision is read inside the sandbox, never by host git.
     git = [launcher, "git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", str(root)]
     head = ctx.run([*git, "rev-parse", "HEAD"], timeout=60, cwd=str(root))
-    dirty = ctx.run([*git, "status", "--porcelain", "--ignored", "--untracked-files=all"],
+    dirty = ctx.run([*git, "status", "--porcelain", "-z", "--ignored", "--untracked-files=all"],
                     timeout=60, cwd=str(root))
     flags = ctx.run([*git, "ls-files", "-v"], timeout=60, cwd=str(root))
     reported = str(head.stdout).strip()
     hidden = any(line and (line[0].islower() or line[0] == "S") for line in str(flags.stdout).splitlines())
-    unexpected = False
-    for line in str(dirty.stdout).splitlines():
-        path = Path(line[3:])
-        if not (line.startswith("!! ") and (".pytest_cache" in path.parts
-                or ("__pycache__" in path.parts and path.suffix == ".pyc"))):
-            unexpected = True
-            break
+    entries = str(dirty.stdout).split("\0")
+    if entries[-1] == "":
+        entries.pop()
+    unexpected = any(not (entry.startswith("!! ") and
+                          (BENCH_IGNORED_COMPONENTS.intersection(Path(entry[3:]).parts) or
+                           ("__pycache__" in Path(entry[3:]).parts and Path(entry[3:]).suffix == ".pyc")))
+                     for entry in entries)
     if (head.returncode != 0 or dirty.returncode != 0 or flags.returncode != 0
             or reported != sha or unexpected or hidden):
         raise Refused(f"worktree {worktree} is not a clean checkout of {sha[:12]} (sandbox reports {reported[:12] or '?'})")
