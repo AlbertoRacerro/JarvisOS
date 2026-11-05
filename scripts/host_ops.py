@@ -21,22 +21,27 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import io
 import json
 import os
 import re
 import secrets
+import select
+import shutil
 import signal
 import socket
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -57,6 +62,9 @@ REQUEST_NAME_RE = re.compile(r"^([0-9a-f]{32})\.json$")
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_REQUEST_AGE = timedelta(hours=1)
 MAX_CLOCK_SKEW = timedelta(minutes=5)
+MAX_EVAL_ARCHIVE_BYTES = 32 << 20
+MAX_EVAL_EXTRACTED_BYTES = 256 << 20
+MAX_EVAL_ARCHIVE_MEMBERS = 20000
 OUTCOMES = ("ok", "failed", "refused", "cancelled", "interrupted", "timeout")
 
 
@@ -251,6 +259,16 @@ def scrub(text: str, limit: int = 2000) -> str:
     return text[-limit:]
 
 
+def scrub_json(value: Any) -> Any:
+    if isinstance(value, str):
+        return scrub(value)
+    if isinstance(value, list):
+        return [scrub_json(item) for item in value]
+    if isinstance(value, dict):
+        return {scrub(str(key)): scrub_json(item) for key, item in value.items()}
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Signing and verification
 
@@ -320,9 +338,9 @@ def find_ok_receipt(paths: Paths, op: str, sha: str | None = None) -> dict[str, 
     best = None
     for name in names:
         receipt, _ = load_receipt(paths, name[:-5])
-        if receipt and receipt_problem(receipt, op=op, sha=sha) is None:
-            if best is None or str(receipt.get("finished_at")) > str(best.get("finished_at")):
-                best = receipt
+        if (receipt and receipt_problem(receipt, op=op, sha=sha) is None
+                and (best is None or str(receipt.get("finished_at")) > str(best.get("finished_at")))):
+            best = receipt
     return best
 
 
@@ -735,13 +753,34 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
     sub = str(bench.get("cwd") or ".")
     if ".." in Path(sub).parts or Path(sub).is_absolute():
         raise Refused("benchmark cwd must be relative")
+    result_name = bench.get("result_file")
+    if result_name is not None and (not isinstance(result_name, str) or not result_name
+                                    or Path(result_name).is_absolute() or ".." in Path(result_name).parts):
+        raise Refused("benchmark result_file must be relative")
+    result_path = root / sub / result_name if result_name else None
+    if "secret_env" in bench:
+        raise Refused("benchmark secret_env is forbidden")
     # The checkout is agent-controlled: its revision is read inside the sandbox, never by host git.
     head = ctx.run([launcher, "git", "rev-parse", "HEAD"], timeout=60, cwd=str(root))
     dirty = ctx.run([launcher, "git", "status", "--porcelain"], timeout=60, cwd=str(root))
     reported = str(head.stdout).strip()
     if head.returncode != 0 or dirty.returncode != 0 or reported != sha or str(dirty.stdout).strip():
         raise Refused(f"worktree {worktree} is not a clean checkout of {sha[:12]} (sandbox reports {reported[:12] or '?'})")
-    limits = {"timeout_s": min(int(bench.get("timeout_s", 1800)), 4 * 3600),
+    return _run_benchmark(ctx, args["bench"], bench, root, sub, result_path, reported, worktree)
+
+
+def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: Path, sub: str,
+                   result_path: Path | None, reported: str, worktree: str | None,
+                   remaining: float | None = None, scrub_result: bool = True,
+                   close_scope: bool = False, deadline: float | None = None) -> dict[str, Any]:
+    launcher = str(ctx.conf("bench.run").get("launcher") or ctx.paths.home / ".local" / "bin" / "jarvis-sandbox")
+    if result_path is not None and result_path.exists():
+        raise Refused("benchmark result_file already exists before the run")
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Failed("local evaluation exceeded its time limit", {})
+    limits = {"timeout_s": min(int(bench.get("timeout_s", 1800)), 4 * 3600, remaining) if remaining is not None else min(int(bench.get("timeout_s", 1800)), 4 * 3600),
               "memory_max": str(bench.get("memory_max", "8G")), "cpu_quota": str(bench.get("cpu_quota", "400%")),
               "tasks_max": int(bench.get("tasks_max", 512))}
     scope = f"hostops-bench-{ctx.request['id'][:12]}"
@@ -751,21 +790,40 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
             "timeout", "-k", "15", str(limits["timeout_s"]), launcher,
             *[str(a) for a in bench["argv"]]]
     started = time.monotonic()
-    with tempfile.TemporaryFile() as out:
-        proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
-                                env=_host_env(), cwd=root / sub)
-        cancelled = False
-        while proc.poll() is None:
-            if ctx.cancelled():
-                cancelled = True
-                subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], capture_output=True, timeout=60,
-                               env=_host_env())
+    proc = None
+    cancelled = False
+    expired = False
+    try:
+        with tempfile.TemporaryFile() as out:
+            proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
+                                    env=_host_env(), cwd=root / sub)
+            while proc.poll() is None:
+                if deadline is not None and time.monotonic() >= deadline:
+                    expired = True
+                    break
+                if ctx.cancelled():
+                    cancelled = True
+                    break
+                time.sleep(min(1, max(0, deadline - time.monotonic())) if deadline is not None else 1)
+            out.seek(0)
+            output = out.read()
+    finally:
+        try:
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
                 proc.wait(timeout=60)
-                break
-            time.sleep(1)
-        out.seek(0)
-        output = out.read()
-    detail = {"bench": args["bench"], "worktree": worktree, "sandbox_head": reported, "limits": limits,
+        finally:
+            if close_scope:
+                _close_eval_scope(scope)
+            elif cancelled:
+                subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], check=False,
+                               capture_output=True, timeout=60, env=_host_env())
+    if expired or (deadline is not None and time.monotonic() >= deadline):
+        raise Failed("local evaluation exceeded its time limit", {})
+    detail = {"bench": bench_name, "worktree": worktree, "sandbox_head": reported, "limits": limits,
               "returncode": proc.returncode, "wall_s": round(time.monotonic() - started, 2),
               "output_sha256": hashlib.sha256(output).hexdigest(),
               "output_tail": scrub(output.decode("utf-8", "replace"), 1500)}
@@ -775,6 +833,350 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
         raise Failed("benchmark exceeded its time limit", detail)
     if proc.returncode != 0:
         raise Failed(f"benchmark exited {proc.returncode}", detail)
+    if result_path is not None:
+        try:
+            fd = open_dir(result_path.parent)
+            try:
+                raw_result = read_regular(fd, result_path.name, 1 << 20)
+            finally:
+                os.close(fd)
+            result = json.loads(raw_result)
+            if not isinstance(result, (dict, list)):
+                raise TypeError("result is not a JSON object or array")
+        except (OSError, ValueError, TypeError, UnicodeError) as exc:
+            raise Failed(f"benchmark result_file is missing or invalid ({type(exc).__name__})", detail) from None
+        detail["result"] = scrub_json(result) if scrub_result else result
+    return detail
+
+
+def _close_eval_scope(scope: str) -> None:
+    """Credential access requires evidence that the prompt scope has no live members."""
+    unit = f"{scope}.scope"
+    try:
+        subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True,
+                       timeout=30, env=_host_env(), check=False)
+        state = subprocess.run(["systemctl", "--user", "show", unit, "-p", "ActiveState", "-p", "LoadState"],
+                               capture_output=True, text=True, timeout=30, env=_host_env(), check=False)
+        props = dict(line.split("=", 1) for line in state.stdout.splitlines() if "=" in line)
+        if state.returncode == 0 and props.get("ActiveState") == "inactive" and props.get("LoadState") in ("loaded", "not-found"):
+            return
+    except (OSError, subprocess.SubprocessError):
+        pass
+    raise Failed("local evaluator prompt scope could not be stopped", {})
+
+
+def _eval_response_body(response: Any, remaining: Callable[[], float]) -> bytes:
+    """Read at most 1 MiB while enforcing the evaluation's absolute deadline."""
+    body = bytearray()
+    sock = response.fp.raw._sock
+    expired = threading.Event()
+
+    def stop_read() -> None:
+        expired.set()
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    timer = threading.Timer(remaining(), stop_read)
+    timer.start()
+    try:
+        while len(body) < 1 << 20:
+            sock.settimeout(remaining())
+            try:
+                chunk = response.read1(min(64 << 10, (1 << 20) - len(body)))
+            except (OSError, ValueError, http.client.HTTPException):
+                if expired.is_set():
+                    remaining()
+                raise ValueError("invalid local model response") from None
+            remaining()
+            if not chunk:
+                break
+            body.extend(chunk)
+    finally:
+        timer.cancel()
+    return bytes(body)
+
+
+_POINT_RE = re.compile(r"\[\[\s*point\s*:\s*([\w.:-]+)\s*(?:\|([^\]]*))?\]\]", re.IGNORECASE)
+_EVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,79}\Z")
+
+
+def _eval_prompts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 50:
+        raise Refused("evaluator prompts must be an array of 1 to 50 entries")
+    names: set[str] = set()
+    for row in value:
+        if not isinstance(row, dict) or set(row) != {"name", "prompt", "correct", "plausible"}:
+            raise Refused("evaluator prompt entry has invalid fields")
+        name, prompt = row["name"], row["prompt"]
+        if not isinstance(name, str) or not _EVAL_ID_RE.fullmatch(name) or name in names:
+            raise Refused("evaluator prompt name is invalid or repeated")
+        names.add(name)
+        if not isinstance(prompt, str) or not 1 <= len(prompt) <= 16000 or "\x00" in prompt:
+            raise Refused("evaluator prompt is empty or too long")
+        for field in ("correct", "plausible"):
+            ids = row[field]
+            minimum = 1 if field == "correct" else 0
+            if (not isinstance(ids, list) or not minimum <= len(ids) <= 20
+                    or any(not isinstance(item, str) or not _EVAL_ID_RE.fullmatch(item) for item in ids)
+                    or len(set(ids)) != len(ids)):
+                raise Refused(f"evaluator {field} ids are invalid")
+        if set(row["correct"]) & set(row["plausible"]):
+            raise Refused("evaluator correct and plausible ids overlap")
+    return value
+
+
+def _loopback_base(value: Any) -> str:
+    if not isinstance(value, str):
+        raise Refused("local evaluation base_url is invalid")
+    try:
+        parts = urllib.parse.urlsplit(value)
+        port = parts.port
+    except ValueError:
+        raise Refused("local evaluation base_url is invalid") from None
+    if (parts.scheme != "http" or not re.fullmatch(r"(?:127\.0\.0\.1|\[::1\]):[0-9]+", parts.netloc)
+            or not port or parts.username or parts.password or parts.query or parts.fragment
+            or parts.path != "/v1" or value != f"http://{parts.netloc}/v1"):
+        raise Refused("local evaluation requires a loopback /v1 base_url")
+    return value
+
+
+def _eval_credential(value: Any, paths: Paths) -> str:
+    if not isinstance(value, str) or not Path(value).is_absolute() or Path(value).parent != paths.config:
+        raise Refused("local evaluation credential path is invalid")
+    path = Path(value)
+    try:
+        fd = open_dir(path.parent)
+        try:
+            st = os.stat(path.name, dir_fd=fd, follow_symlinks=False)
+            if st.st_uid != os.getuid() or st.st_mode & 0o077:
+                raise ValueError("insecure credential")
+            token = read_regular(fd, path.name, 4096).decode("utf-8").strip()
+        finally:
+            os.close(fd)
+    except (OSError, ValueError, UnicodeError):
+        raise Refused("local evaluation credential is missing or insecure") from None
+    if not token or re.search(r"[\x00-\x20\x7f]", token):
+        raise Refused("local evaluation credential is invalid")
+    return token
+
+
+def _eval_score(text: str, correct: list[str], plausible: list[str]) -> tuple[str, str | None]:
+    match = _POINT_RE.search(text)
+    if not match:
+        return "none", None
+    first = match.group(1)
+    return ("correct" if first in correct else "plausible" if first in plausible else "wrong"), first
+
+
+def _eval_reachable(sha: str, remaining: Callable[[], float]) -> None:
+    def status(head: str) -> str:
+        result = _gh([f"repos/{REPO}/compare/{head}...{sha}", "--jq", ".status"],
+                     timeout=min(60, remaining())).strip()
+        remaining()
+        return result
+
+    try:
+        if status("master") in ("identical", "behind"):
+            return
+        heads = _gh([f"repos/{REPO}/pulls?state=open&per_page=100", "--paginate",
+                     "--jq", ".[].head.sha"], timeout=min(60, remaining())).splitlines()
+        remaining()
+        for head in heads:
+            if SHA_RE.fullmatch(head) and (head == sha or status(head) in ("identical", "behind")):
+                return
+    except (RuntimeError, ValueError, TypeError, subprocess.TimeoutExpired):
+        raise Refused("local evaluator reachability could not be verified on GitHub") from None
+    raise Refused("local evaluator commit is not reachable from origin/master or an open PR head")
+
+
+def _eval_checkout(sha: str, root: Path, remaining: Callable[[], float]) -> None:
+    try:
+        proc = subprocess.Popen(["gh", "api", f"repos/{REPO}/tarball/{sha}"], stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, env=_host_env())
+        try:
+            data = bytearray()
+            assert proc.stdout is not None
+            while True:
+                readable, _, _ = select.select([proc.stdout], [], [], min(1, remaining()))
+                if not readable:
+                    continue
+                chunk = os.read(proc.stdout.fileno(), min(65536, MAX_EVAL_ARCHIVE_BYTES + 1 - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+                if len(data) > MAX_EVAL_ARCHIVE_BYTES:
+                    raise Refused("local evaluation archive download exceeds size limit")
+            if proc.wait(timeout=remaining()) != 0:
+                raise Refused("local evaluator checkout could not be fetched from GitHub")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            proc.stdout.close()
+        extracted = 0
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+            prefix = None
+            for count, member in enumerate(archive, 1):
+                remaining()
+                if count > MAX_EVAL_ARCHIVE_MEMBERS:
+                    raise Refused("local evaluation archive has too many members")
+                parts = Path(member.name).parts
+                if (member.name.startswith("/") or not parts or ".." in parts
+                        or not (member.isdir() or member.isfile())
+                        or (len(parts) == 1 and not member.isdir())
+                        or (prefix is not None and parts[0] != prefix)):
+                    raise Refused("unsafe evaluation archive member")
+                prefix = parts[0]
+                if len(parts) == 1:
+                    continue
+                if member.isfile():
+                    if member.size > MAX_EVAL_EXTRACTED_BYTES - extracted:
+                        raise Refused("local evaluation archive exceeds extracted size limit")
+                    extracted += member.size
+                target = root.joinpath(*parts[1:])
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.extractfile(member) as source, target.open("wb") as output:
+                        while chunk := source.read(65536):
+                            remaining()
+                            output.write(chunk)
+                    target.chmod(0o755 if member.mode & 0o111 else 0o644)
+        remaining()
+    except (OSError, tarfile.TarError, subprocess.SubprocessError):
+        raise Refused("local evaluator checkout could not be fetched from GitHub") from None
+
+
+@contextmanager
+def _eval_tempdir():
+    """Remove an evaluator checkout even if its sandboxed child changes directory modes."""
+    root = Path(tempfile.mkdtemp(prefix="hostops-eval-"))
+    try:
+        yield root
+    finally:
+        if root.is_symlink():
+            raise Failed("local evaluator temporary checkout is unsafe", {})
+        root.chmod(0o700)
+        for current, dirs, _ in os.walk(root, followlinks=False):
+            for name in dirs:
+                child = Path(current) / name
+                if not child.is_symlink():
+                    child.chmod(0o700)
+        shutil.rmtree(root)
+
+
+def op_local_eval_run(ctx: Context) -> dict[str, Any]:
+    conf = ctx.conf("local_eval.run")
+    args = _args(ctx, {"bench"})
+    bench_name = args.get("bench")
+    evaluations = conf.get("evaluations")
+    evaluation = evaluations.get(bench_name) if isinstance(evaluations, dict) and isinstance(bench_name, str) else None
+    if not isinstance(evaluation, dict):
+        raise Refused("local evaluator is not registered")
+    bench_conf = ctx.conf("bench.run")
+    bench = (bench_conf.get("benchmarks") or {}).get(bench_name)
+    if not isinstance(bench, dict) or not isinstance(bench.get("argv"), list):
+        raise Refused("local evaluator benchmark is not registered")
+    result_file = bench.get("result_file")
+    argv = bench["argv"]
+    if (not isinstance(result_file, str) or not result_file
+            or argv.count("--emit-prompts") != 1
+            or argv.index("--emit-prompts") + 1 >= len(argv)
+            or argv[argv.index("--emit-prompts") + 1] != result_file
+            or argv.count("--ids") != 1 or argv.index("--ids") + 1 >= len(argv)
+            or argv[argv.index("--ids") + 1] != evaluation.get("ids")):
+        raise Refused("local evaluator must export registered prompts and ids")
+    base_url = _loopback_base(evaluation.get("base_url"))
+    model = evaluation.get("model")
+    ids = evaluation.get("ids")
+    label = evaluation.get("label")
+    max_tokens = evaluation.get("max_tokens")
+    timeout_s = evaluation.get("timeout_s", 300)
+    if (not isinstance(model, str) or not _EVAL_ID_RE.fullmatch(model)
+            or ids not in ("old", "new") or not isinstance(label, str) or not _EVAL_ID_RE.fullmatch(label)
+            or type(max_tokens) is not int or not 1 <= max_tokens <= 4096
+            or type(timeout_s) is not int or not 1 <= timeout_s <= 300):
+        raise Refused("local evaluator policy settings are invalid")
+    sha = ctx.request.get("sha")
+    if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+        raise Refused("local evaluation needs a candidate sha")
+    deadline = time.monotonic() + timeout_s
+
+    def remaining() -> float:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise Failed("local evaluation exceeded its time limit", {})
+        return left
+
+    _eval_reachable(sha, remaining)
+    try:
+        with _eval_tempdir() as root:
+            _eval_checkout(sha, root, remaining)
+            sub = str(bench.get("cwd") or ".")
+            if Path(sub).is_absolute() or ".." in Path(sub).parts or not (root / sub).is_dir():
+                raise Refused("local evaluator benchmark cwd is invalid")
+            if (not isinstance(result_file, str) or Path(result_file).is_absolute()
+                    or ".." in Path(result_file).parts or "secret_env" in bench):
+                raise Refused("local evaluator benchmark policy is invalid")
+            phase_one = _run_benchmark(ctx, bench_name, bench, root, sub, root / sub / result_file,
+                                       sha, None, scrub_result=False, close_scope=True, deadline=deadline)
+            remaining()
+        prompts = _eval_prompts(phase_one.get("result"))
+    except Failed as exc:
+        if str(exc) == "local evaluation exceeded its time limit" or time.monotonic() >= deadline:
+            raise Failed("local evaluation exceeded its time limit", {}) from None
+        raise Refused("local evaluator prompt phase failed validation or execution") from None
+    except (Refused, Cancelled):
+        raise Refused("local evaluator prompt phase failed validation or execution") from None
+    remaining()
+    token = _eval_credential(evaluation.get("credential_file"), ctx.paths)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirects())
+    rows = []
+    tally = {key: 0 for key in ("correct", "plausible", "wrong", "none")}
+    for row in prompts:
+        remaining()
+        if ctx.cancelled():
+            raise Cancelled({})
+        body = json.dumps({"model": model, "messages": [{"role": "user", "content": row["prompt"]}],
+                           "temperature": 0, "max_tokens": max_tokens, "stream": False,
+                           "chat_template_kwargs": {"enable_thinking": False}}).encode()
+        req = urllib.request.Request(f"{base_url}/chat/completions", data=body, method="POST",
+                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        started = time.monotonic()
+        try:
+            with opener.open(req, timeout=min(remaining(), timeout_s)) as response:
+                status = response.status
+                if type(status) is not int or not 100 <= status <= 599:
+                    raise Failed("local model returned an invalid HTTP status", {})
+                if status != 200:
+                    raise Failed(f"local model returned HTTP {status}", {})
+                payload = json.loads(_eval_response_body(response, remaining))
+            remaining()
+            reply = payload["choices"][0]["message"]["content"] or ""
+            if not isinstance(reply, str):
+                raise TypeError("invalid content")
+        except urllib.error.HTTPError as exc:
+            status = exc.code if type(exc.code) is int and 100 <= exc.code <= 599 else "invalid"
+            raise Failed(f"local model returned HTTP {status}", {}) from None
+        except (OSError, urllib.error.URLError):
+            remaining()
+            raise Failed("local model is unavailable", {}) from None
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise Failed("local model response is invalid", {}) from None
+        verdict, first = _eval_score(reply, row["correct"], row["plausible"])
+        if first is not None and len(first) > 80:
+            raise Failed("local model response is invalid", {})
+        tally[verdict] += 1
+        rows.append({"name": row["name"], "first": first, "verdict": verdict,
+                     "seconds": round(time.monotonic() - started, 1)})
+    remaining()
+    detail = {"model": model, "base_url": base_url, "head": ctx.request["sha"], "ids": label,
+              "tally": tally, "rows": rows}
+    if token in json.dumps(detail, ensure_ascii=False):
+        raise Failed("local evaluation result is invalid", {})
     return detail
 
 
@@ -792,6 +1194,7 @@ OPERATIONS: dict[str, Callable[[Context], dict[str, Any]]] = {
     "browser.screenshot": op_browser_screenshot,
     "http.smoke": op_http_smoke,
     "bench.run": op_bench_run,
+    "local_eval.run": op_local_eval_run,
 }
 
 
@@ -812,7 +1215,7 @@ def real_run(argv: list[str], timeout: float, cwd: str | None = None) -> subproc
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201 - stdlib signature
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise urllib.error.HTTPError(req.full_url, code, "redirect rejected", headers, fp)
 
 
@@ -1135,8 +1538,8 @@ SERVICE_UNIT = (
     "[Install]\nWantedBy=default.target\n")
 
 
-def _gh(args: list[str]) -> str:
-    proc = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60, check=False)
+def _gh(args: list[str], timeout: float = 60) -> str:
+    proc = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=timeout, check=False)
     if proc.returncode != 0:
         raise RuntimeError(f"gh api {args[0]} failed")
     return proc.stdout
@@ -1190,9 +1593,8 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
     install_release(ctx.paths, args.get("sha"))
     ctx.restart_required = True
     unit = "jarvisos-relay-watch.service"
-    if _unit_state(ctx, unit).get("ActiveState") == "active":
-        if _systemctl(ctx, "restart", unit).returncode:
-            raise Failed("watcher restart failed")
+    if _unit_state(ctx, unit).get("ActiveState") == "active" and _systemctl(ctx, "restart", unit).returncode:
+        raise Failed("watcher restart failed")
     return {"sha": args["sha"], "executor_restart": True}
 
 
