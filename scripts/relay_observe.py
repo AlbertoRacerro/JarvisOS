@@ -481,6 +481,8 @@ def digest_text(snap: dict[str, Any], *, since: str | None, merges: list[tuple[s
     update = snap.get("update")
     current = (update if isinstance(update, str) and not machine_marker(update) and not _ISSUE_REF_RE.search(update)
                else fallback)
+    if current is update:
+        current = re.sub(r"^\s*\**\s*Sto facendo:\s*\**\s*", "", current, flags=re.IGNORECASE).strip() or fallback
     lines.append(f"*Sto facendo:* {current}" + (f" ({state_word})" if state_word else ""))
     done = [d for d in snap.get("delivered") or [] if not since or (d.get("at") or "") > since]
     lines.append("*Fatto:*")
