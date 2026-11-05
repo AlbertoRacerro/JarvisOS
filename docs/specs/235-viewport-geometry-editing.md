@@ -1,6 +1,6 @@
 # 235 — Viewport geometry editing, slice 3: freely placed serpentines
 
-Status: ready
+Status: merged
 Depends on: 234
 
 Slices 1 (feature inspector, PR #17) and 2 (feature placement, PR #22) are in Git history. This file is the accepted
