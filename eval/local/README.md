@@ -21,6 +21,7 @@ pulled; none of the scripts pulls a model.
 | Local model selection under resource limits (reservation, swap, real execution) | `python eval/local/decision_routing_smoke.py --confirm-live-local --out out.json` | Use a disposable `JARVISOS_DATA_ROOT`, never the operator data root. |
 | llama.cpp build + GGUF qualification (load time, VRAM/RAM, prompt/generation speed, tool-use probe) | `python eval/local/llamacpp_qualification.py` | Configured by environment variables (`LLAMACPP_DIST`, `GGUF`, `GGUF_SHA256`, `PORT`, `CTX`, `NGL`). Defaults describe a 27B model on the maintainer's machine; set them for a 12 GB card. Run on AC power. |
 | Second-brain retrieval benchmark (recall@10, bundle size, rebuild time) | `python eval/local/second_brain_benchmark.py --embedder e5` | Baseline run: `second_brain_baseline.md`. The registered repository queries target files that may no longer exist: refresh them first. The `hashing` embedder is a fast offline smoke. |
+| Engineering semantic judgment (validity, missing data, contradictions, controls) | `python eval/local/semantic_judgment/semantic_eval.py --emit-prompts prompts.json` | Offline cases and deterministic grader; see `semantic_judgment/README.md`. |
 
 ## Known gaps (to improve)
 
