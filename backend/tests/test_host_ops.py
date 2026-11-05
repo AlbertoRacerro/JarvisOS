@@ -243,10 +243,9 @@ def local_eval_policy(paths, *, base_url="http://127.0.0.1:18081/v1", credential
 
 
 def fake_prompt_phase(host, monkeypatch, prompts):
-    paths, ex, _ = host
-    checkout = paths.home / "src/worktrees/x/backend"
-    checkout.mkdir(parents=True, exist_ok=True)
-    ex.run = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, SHA if "rev-parse" in argv else "", "")
+    _, ex, _ = host
+    monkeypatch.setattr(h, "_gh", lambda args, **kw: "behind" if "compare/" in args[0] else "[]")
+    monkeypatch.setattr(h, "_eval_checkout", lambda sha, root, remaining: (root / "backend").mkdir())
     seen = {}
 
     class Child:
@@ -255,7 +254,9 @@ def fake_prompt_phase(host, monkeypatch, prompts):
         def __init__(self, argv, **kw):
             seen["argv"] = argv
             seen["env"] = kw["env"]
-            (checkout / "prompts.json").write_text(json.dumps(prompts))
+            seen["cwd"] = kw["cwd"]
+            kw["stdout"].write(b"test-local-model-credential")
+            (Path(kw["cwd"]) / "prompts.json").write_text(json.dumps(prompts))
 
         def poll(self):
             return self.returncode
@@ -288,7 +289,7 @@ def test_local_eval_token_stays_on_host_and_receipt_is_scores_only(host, monkeyp
             return Response()
 
     monkeypatch.setattr(h.urllib.request, "build_opener", lambda *args: Opener())
-    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
     assert receipt["outcome"] == "ok"
     assert receipt["detail"] == {"model": "test-model", "base_url": "http://127.0.0.1:18081/v1",
                                  "head": SHA, "ids": "after", "tally": {"correct": 1, "plausible": 0,
@@ -296,19 +297,21 @@ def test_local_eval_token_stays_on_host_and_receipt_is_scores_only(host, monkeyp
                                                                  "verdict": "correct", "seconds": 0.0}]}
     assert "test-local-model-credential" not in json.dumps(receipt)
     assert "test-local-model-credential" not in str(seen)
+    assert not Path(seen["cwd"]).exists()
     assert requests[0][0].get_header("Authorization") == "Bearer test-local-model-credential"
-    assert requests[0][1] == 30
+    assert 0 < requests[0][1] <= 30
     body = json.loads(requests[0][0].data)
     assert body["temperature"] == 0 and body["max_tokens"] == 220
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 @pytest.mark.parametrize("url", ["http://example.com/v1", "https://127.0.0.1:18081/v1",
-                                  "http://127.0.0.2:18081/v1", "http://localhost.evil:18081/v1"])
+                                  "http://127.0.0.2:18081/v1", "http://localhost:18081/v1",
+                                  "http://localhost.evil:18081/v1"])
 def test_local_eval_refuses_non_loopback(host, url):
     paths, _, _ = host
     local_eval_policy(paths, base_url=url)
-    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
     assert receipt["outcome"] == "refused"
     assert "loopback" in receipt["error"]
 
@@ -323,7 +326,7 @@ def test_local_eval_refuses_bad_credential(host, monkeypatch, mode):
         credential.write_text("")
     fake_prompt_phase(host, monkeypatch, [{"name": "case_one", "prompt": "prompt", "correct": ["a"],
                                       "plausible": ["b"]}])
-    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
     assert receipt["outcome"] == "refused"
     assert "credential" in receipt["error"]
 
@@ -337,7 +340,7 @@ def test_local_eval_refuses_malformed_or_oversized_prompts(host, monkeypatch, pr
     paths, _, _ = host
     local_eval_policy(paths)
     fake_prompt_phase(host, monkeypatch, prompts)
-    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
     assert receipt["outcome"] == "refused"
     assert receipt["detail"] == {}
 
@@ -353,7 +356,7 @@ def test_local_eval_http_error_does_not_expose_token(host, monkeypatch):
             raise h.urllib.error.URLError("test-local-model-credential")
 
     monkeypatch.setattr(h.urllib.request, "build_opener", lambda *args: Opener())
-    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
     assert receipt["outcome"] == "failed"
     assert "test-local-model-credential" not in json.dumps(receipt)
 
@@ -369,7 +372,7 @@ def test_local_eval_http_status_reports_code_only(host, monkeypatch):
             raise h.urllib.error.HTTPError(req.full_url, 401, "test-local-model-credential", {}, None)
 
     monkeypatch.setattr(h.urllib.request, "build_opener", lambda *args: Opener())
-    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
     assert receipt["outcome"] == "failed"
     assert receipt["error"] == "local model returned HTTP 401"
     assert "test-local-model-credential" not in json.dumps(receipt)
@@ -378,9 +381,17 @@ def test_local_eval_http_status_reports_code_only(host, monkeypatch):
 def test_local_eval_unregistered_evaluator_refused(host):
     paths, _, _ = host
     local_eval_policy(paths)
-    _, receipt = request(host, "local_eval.run", {"bench": "other", "worktree": "x"}, sha=SHA)
+    _, receipt = request(host, "local_eval.run", {"bench": "other"}, sha=SHA)
     assert receipt["outcome"] == "refused"
     assert "not registered" in receipt["error"]
+
+
+def test_local_eval_rejects_worktree_argument(host):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    assert receipt["outcome"] == "refused"
+    assert "unknown arguments" in receipt["error"]
 
 
 def test_local_eval_rejects_credential_outside_host_config(host):
@@ -415,19 +426,107 @@ def test_bench_request_cannot_supply_secret_env_and_unregistered_refused(host):
     assert "not registered" in receipt["error"]
 
 
-def test_bench_unreachable_commit_refused(host):
+def test_bench_unreachable_commit_refused(host, monkeypatch):
     paths, ex, _ = host
     local_eval_policy(paths)
-    def run(argv, **kw):
-        if "rev-parse" in argv:
-            return subprocess.CompletedProcess(argv, 0, SHA, "")
-        if "merge-base" in argv:
-            return subprocess.CompletedProcess(argv, 1, "", "")
-        return subprocess.CompletedProcess(argv, 0, "[]" if "gh" in argv else "", "")
-    ex.run = run
-    _, receipt = request(host, "local_eval.run", {"bench": "local-eval", "worktree": "x"}, sha=SHA)
+    # A forged sandbox origin/master is irrelevant; only host GitHub answers count.
+    sandbox_calls = []
+    def forged_git(argv, **kw):
+        sandbox_calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, SHA, "")
+    ex.run = forged_git
+    calls = []
+    def gh(args, **kw):
+        calls.append(args)
+        return "ahead" if "compare/" in args[0] else "[]"
+    monkeypatch.setattr(h, "_gh", gh)
+    monkeypatch.setattr(h, "_eval_checkout", lambda *args: pytest.fail("unreachable sha fetched"))
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
     assert receipt["outcome"] == "refused"
     assert "not reachable" in receipt["error"]
+    assert calls and not sandbox_calls
+
+
+def test_local_eval_open_pr_head_is_host_verified(host, monkeypatch):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    head = "b" * 40
+    calls = []
+    def gh(args, **kw):
+        calls.append(args[0])
+        if "pulls?" in args[0]:
+            return head + "\n"
+        return "ahead" if "compare/master" in args[0] else "behind"
+    monkeypatch.setattr(h, "_gh", gh)
+    h._eval_reachable(SHA, lambda: 30)
+    assert any(f"compare/{head}...{SHA}" in call for call in calls)
+
+
+def test_local_eval_total_deadline(host, monkeypatch):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    fake_prompt_phase(host, monkeypatch, [{"name": "case_one", "prompt": "p", "correct": ["a"], "plausible": []}])
+    ticks = iter([0, 0] + [31] * 20)
+    monkeypatch.setattr(h.time, "monotonic", lambda: next(ticks))
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert "time limit" in receipt["error"]
+
+
+def test_bench_result_scrubs_nested_strings():
+    value = {"outer": [{"secret": "sk-" + "x" * 30}]}
+    assert "sk-" not in json.dumps(h.scrub_json(value))
+
+
+def test_bench_result_receipt_keeps_hash_and_limits(host, monkeypatch):
+    paths, ex, _ = host
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["bench.run"]["benchmarks"]["relay-observe-tests"]["result_file"] = "result.json"
+    paths.policy.write_text(json.dumps(policy))
+    checkout = paths.home / "src/worktrees/x/backend"
+    checkout.mkdir(parents=True)
+    ex.run = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, SHA if "rev-parse" in argv else "", "")
+    class Child:
+        returncode = 0
+        def __init__(self, argv, **kw):
+            (Path(kw["cwd"]) / "result.json").write_text(json.dumps({"nested": ["sk-" + "x" * 30]}))
+        def poll(self):
+            return self.returncode
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(h.subprocess, "Popen", lambda argv, **kw: Child(argv, **kw)
+                        if argv[0] == "systemd-run" else real_popen(argv, **kw))
+    _, receipt = request(host, "bench.run", {"bench": "relay-observe-tests", "worktree": "x"}, sha=SHA)
+    assert receipt["outcome"] == "ok"
+    assert "sk-" not in json.dumps(receipt)
+    assert receipt["detail"]["result"]["nested"] == ["[redacted]"]
+    assert len(receipt["detail"]["output_sha256"]) == 64
+    assert receipt["detail"]["limits"]["timeout_s"] == 900
+
+
+def test_eval_checkout_extracts_only_safe_sha_archive(tmp_path, monkeypatch):
+    content = archive([("repo", tarfile.DIRTYPE), ("repo/backend/pointing_eval.py", tarfile.REGTYPE)])
+    def run(argv, **kw):
+        assert argv == ["gh", "api", f"repos/{h.REPO}/tarball/{SHA}"]
+        return subprocess.CompletedProcess(argv, 0, content, b"")
+    monkeypatch.setattr(h.subprocess, "run", run)
+    h._eval_checkout(SHA, tmp_path, lambda: 30)
+    assert (tmp_path / "backend/pointing_eval.py").read_bytes() == b"# release\n"
+
+
+@pytest.mark.parametrize("members", [
+    [("repo", tarfile.REGTYPE)],
+    [("repo", tarfile.DIRTYPE), ("other/file", tarfile.REGTYPE)],
+    [("repo", tarfile.DIRTYPE), ("repo/link", tarfile.SYMTYPE)],
+    [("repo", tarfile.DIRTYPE), ("repo/hardlink", tarfile.LNKTYPE)],
+    [("repo", tarfile.DIRTYPE), ("repo/device", tarfile.CHRTYPE)],
+    [("repo", tarfile.DIRTYPE), ("/absolute", tarfile.REGTYPE)],
+    [("repo", tarfile.DIRTYPE), ("repo/../escape", tarfile.REGTYPE)],
+])
+def test_eval_checkout_refuses_unsafe_archive_member(tmp_path, monkeypatch, members):
+    bad = archive(members)
+    monkeypatch.setattr(h.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, bad, b""))
+    with pytest.raises(h.Refused, match="unsafe"):
+        h._eval_checkout(SHA, tmp_path, lambda: 30)
 
 
 def archive(members):

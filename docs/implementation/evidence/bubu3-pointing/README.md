@@ -20,8 +20,9 @@ To inspect prompts offline, run from `backend/` with the backend venv:
 
 For `local_eval.run`, the host-only policy registers a prompt export benchmark and the trusted host evaluation.
 The paths below are placeholders. The benchmark runs in the sandbox without a credential; the token stays in trusted
-host code and is sent only in a loopback HTTP Authorization header. Request `local_eval.run` with `bench`, `worktree`,
-and the candidate `sha`. The receipt contains scores and timing, with no prompts or replies.
+host code and is sent only in a loopback HTTP Authorization header. Request `local_eval.run` with `bench`
+and the candidate `sha`. The host verifies the commit with GitHub and extracts that commit into a temporary checkout
+for the prompt phase. The receipt contains scores and timing, with no prompts or replies.
 
 ```json
 "bench.run": {"benchmarks": {

@@ -251,6 +251,16 @@ def scrub(text: str, limit: int = 2000) -> str:
     return text[-limit:]
 
 
+def scrub_json(value: Any) -> Any:
+    if isinstance(value, str):
+        return scrub(value)
+    if isinstance(value, list):
+        return [scrub_json(item) for item in value]
+    if isinstance(value, dict):
+        return {scrub(str(key)): scrub_json(item) for key, item in value.items()}
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Signing and verification
 
@@ -748,9 +758,16 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
     reported = str(head.stdout).strip()
     if head.returncode != 0 or dirty.returncode != 0 or reported != sha or str(dirty.stdout).strip():
         raise Refused(f"worktree {worktree} is not a clean checkout of {sha[:12]} (sandbox reports {reported[:12] or '?'})")
+    return _run_benchmark(ctx, args["bench"], bench, root, sub, result_path, reported, worktree)
+
+
+def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: Path, sub: str,
+                   result_path: Path | None, reported: str, worktree: str | None,
+                   remaining: float | None = None, scrub_result: bool = True) -> dict[str, Any]:
+    launcher = str(ctx.conf("bench.run").get("launcher") or ctx.paths.home / ".local" / "bin" / "jarvis-sandbox")
     if result_path is not None and result_path.exists():
         raise Refused("benchmark result_file already exists before the run")
-    limits = {"timeout_s": min(int(bench.get("timeout_s", 1800)), 4 * 3600),
+    limits = {"timeout_s": min(int(bench.get("timeout_s", 1800)), 4 * 3600, remaining) if remaining is not None else min(int(bench.get("timeout_s", 1800)), 4 * 3600),
               "memory_max": str(bench.get("memory_max", "8G")), "cpu_quota": str(bench.get("cpu_quota", "400%")),
               "tasks_max": int(bench.get("tasks_max", 512))}
     scope = f"hostops-bench-{ctx.request['id'][:12]}"
@@ -774,7 +791,7 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
             time.sleep(1)
         out.seek(0)
         output = out.read()
-    detail = {"bench": args["bench"], "worktree": worktree, "sandbox_head": reported, "limits": limits,
+    detail = {"bench": bench_name, "worktree": worktree, "sandbox_head": reported, "limits": limits,
               "returncode": proc.returncode, "wall_s": round(time.monotonic() - started, 2),
               "output_sha256": hashlib.sha256(output).hexdigest(),
               "output_tail": scrub(output.decode("utf-8", "replace"), 1500)}
@@ -796,7 +813,7 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
                 raise TypeError("result is not a JSON object or array")
         except (OSError, ValueError, TypeError, UnicodeError) as exc:
             raise Failed(f"benchmark result_file is missing or invalid ({type(exc).__name__})", detail) from None
-        detail = {"result": result}
+        detail["result"] = scrub_json(result) if scrub_result else result
     return detail
 
 
@@ -837,7 +854,7 @@ def _loopback_base(value: Any) -> str:
         port = parts.port
     except ValueError:
         raise Refused("local evaluation base_url is invalid") from None
-    if (parts.scheme != "http" or parts.hostname not in {"127.0.0.1", "localhost", "::1"}
+    if (parts.scheme != "http" or not re.fullmatch(r"(?:127\.0\.0\.1|\[::1\]):[0-9]+", parts.netloc)
             or not port or parts.username or parts.password or parts.query or parts.fragment
             or parts.path != "/v1" or value != f"http://{parts.netloc}/v1"):
         raise Refused("local evaluation requires a loopback /v1 base_url")
@@ -872,33 +889,59 @@ def _eval_score(text: str, correct: list[str], plausible: list[str]) -> tuple[st
     return ("correct" if first in correct else "plausible" if first in plausible else "wrong"), first
 
 
-def _eval_reachable(ctx: Context, worktree: str, sha: str) -> None:
-    bench_conf = ctx.conf("bench.run")
-    launcher = str(bench_conf.get("launcher") or ctx.paths.home / ".local" / "bin" / "jarvis-sandbox")
-    root = ctx.paths.home / "src" / "worktrees" / worktree
-    master = ctx.run([launcher, "git", "merge-base", "--is-ancestor", sha, "origin/master"],
-                     timeout=60, cwd=str(root))
-    if master.returncode == 0:
-        return
-    prs = ctx.run([launcher, "gh", "pr", "list", "--state", "open", "--json", "headRefOid",
-                   "--limit", "1000"], timeout=60, cwd=str(root))
+def _eval_reachable(sha: str, remaining: Callable[[], float]) -> None:
+    def status(head: str) -> str:
+        result = _gh([f"repos/{REPO}/compare/{head}...{sha}", "--jq", ".status"],
+                     timeout=min(60, remaining())).strip()
+        remaining()
+        return result
+
     try:
-        heads = json.loads(prs.stdout) if prs.returncode == 0 else None
-    except (TypeError, ValueError):
-        heads = None
-    if isinstance(heads, list):
-        for pr in heads:
-            head_sha = pr.get("headRefOid") if isinstance(pr, dict) else None
-            if (isinstance(head_sha, str) and SHA_RE.fullmatch(head_sha)
-                    and (head_sha == sha or ctx.run([launcher, "git", "merge-base", "--is-ancestor", sha, head_sha],
-                                                     timeout=60, cwd=str(root)).returncode == 0)):
+        if status("master") in ("identical", "behind"):
+            return
+        heads = _gh([f"repos/{REPO}/pulls?state=open&per_page=100", "--paginate",
+                     "--jq", ".[].head.sha"], timeout=min(60, remaining())).splitlines()
+        remaining()
+        for head in heads:
+            if SHA_RE.fullmatch(head) and (head == sha or status(head) in ("identical", "behind")):
                 return
+    except (RuntimeError, ValueError, TypeError, subprocess.TimeoutExpired):
+        raise Refused("local evaluator reachability could not be verified on GitHub") from None
     raise Refused("local evaluator commit is not reachable from origin/master or an open PR head")
+
+
+def _eval_checkout(sha: str, root: Path, remaining: Callable[[], float]) -> None:
+    try:
+        proc = subprocess.run(["gh", "api", f"repos/{REPO}/tarball/{sha}"], capture_output=True,
+                              timeout=min(120, remaining()), check=True)
+        with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:gz") as archive:
+            prefix = None
+            for member in archive.getmembers():
+                parts = Path(member.name).parts
+                if (member.name.startswith("/") or not parts or ".." in parts
+                        or not (member.isdir() or member.isfile())
+                        or (len(parts) == 1 and not member.isdir())
+                        or (prefix is not None and parts[0] != prefix)):
+                    raise Refused("unsafe evaluation archive member")
+                prefix = parts[0]
+                if len(parts) == 1:
+                    continue
+                target = root.joinpath(*parts[1:])
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.extractfile(member) as source:
+                        target.write_bytes(source.read())
+                    target.chmod(0o755 if member.mode & 0o111 else 0o644)
+        remaining()
+    except (OSError, tarfile.TarError, subprocess.SubprocessError):
+        raise Refused("local evaluator checkout could not be fetched from GitHub") from None
 
 
 def op_local_eval_run(ctx: Context) -> dict[str, Any]:
     conf = ctx.conf("local_eval.run")
-    args = _args(ctx, {"bench", "worktree"})
+    args = _args(ctx, {"bench"})
     bench_name = args.get("bench")
     evaluations = conf.get("evaluations")
     evaluation = evaluations.get(bench_name) if isinstance(evaluations, dict) and isinstance(bench_name, str) else None
@@ -928,21 +971,45 @@ def op_local_eval_run(ctx: Context) -> dict[str, Any]:
             or type(max_tokens) is not int or not 1 <= max_tokens <= 4096
             or type(timeout_s) is not int or not 1 <= timeout_s <= 300):
         raise Refused("local evaluator policy settings are invalid")
-    worktree = args.get("worktree")
     sha = ctx.request.get("sha")
-    if not isinstance(worktree, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", worktree) or not sha:
-        raise Refused("local evaluation needs a valid worktree and candidate sha")
-    _eval_reachable(ctx, worktree, sha)
+    if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+        raise Refused("local evaluation needs a candidate sha")
+    deadline = time.monotonic() + timeout_s
+
+    def remaining() -> float:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise Failed("local evaluation exceeded its time limit", {})
+        return left
+
+    _eval_reachable(sha, remaining)
     try:
-        phase_one = op_bench_run(ctx)
+        with tempfile.TemporaryDirectory(prefix="hostops-eval-") as tmp:
+            root = Path(tmp)
+            _eval_checkout(sha, root, remaining)
+            sub = str(bench.get("cwd") or ".")
+            if Path(sub).is_absolute() or ".." in Path(sub).parts or not (root / sub).is_dir():
+                raise Refused("local evaluator benchmark cwd is invalid")
+            if (not isinstance(result_file, str) or Path(result_file).is_absolute()
+                    or ".." in Path(result_file).parts or "secret_env" in bench):
+                raise Refused("local evaluator benchmark policy is invalid")
+            phase_one = _run_benchmark(ctx, bench_name, bench, root, sub, root / sub / result_file,
+                                       sha, None, remaining(), scrub_result=False)
+            remaining()
         prompts = _eval_prompts(phase_one.get("result"))
-    except (Refused, Failed, Cancelled):
+    except Failed as exc:
+        if str(exc) == "local evaluation exceeded its time limit" or time.monotonic() >= deadline:
+            raise Failed("local evaluation exceeded its time limit", {}) from None
         raise Refused("local evaluator prompt phase failed validation or execution") from None
+    except (Refused, Cancelled):
+        raise Refused("local evaluator prompt phase failed validation or execution") from None
+    remaining()
     token = _eval_credential(evaluation.get("credential_file"), ctx.paths)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirects())
     rows = []
     tally = {key: 0 for key in ("correct", "plausible", "wrong", "none")}
     for row in prompts:
+        remaining()
         if ctx.cancelled():
             raise Cancelled({})
         body = json.dumps({"model": model, "messages": [{"role": "user", "content": row["prompt"]}],
@@ -952,13 +1019,14 @@ def op_local_eval_run(ctx: Context) -> dict[str, Any]:
                                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
         started = time.monotonic()
         try:
-            with opener.open(req, timeout=timeout_s) as response:
+            with opener.open(req, timeout=min(remaining(), timeout_s)) as response:
                 status = response.status
                 if type(status) is not int or not 100 <= status <= 599:
                     raise Failed("local model returned an invalid HTTP status", {})
                 if status != 200:
                     raise Failed(f"local model returned HTTP {status}", {})
                 payload = json.loads(response.read(1 << 20))
+            remaining()
             reply = payload["choices"][0]["message"]["content"] or ""
             if not isinstance(reply, str):
                 raise TypeError("invalid content")
@@ -975,6 +1043,7 @@ def op_local_eval_run(ctx: Context) -> dict[str, Any]:
         tally[verdict] += 1
         rows.append({"name": row["name"], "first": first, "verdict": verdict,
                      "seconds": round(time.monotonic() - started, 1)})
+    remaining()
     detail = {"model": model, "base_url": base_url, "head": ctx.request["sha"], "ids": label,
               "tally": tally, "rows": rows}
     if token in json.dumps(detail, ensure_ascii=False):
@@ -1340,8 +1409,8 @@ SERVICE_UNIT = (
     "[Install]\nWantedBy=default.target\n")
 
 
-def _gh(args: list[str]) -> str:
-    proc = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60, check=False)
+def _gh(args: list[str], timeout: float = 60) -> str:
+    proc = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=timeout, check=False)
     if proc.returncode != 0:
         raise RuntimeError(f"gh api {args[0]} failed")
     return proc.stdout
