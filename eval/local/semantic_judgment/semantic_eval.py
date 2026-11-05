@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import random
+from collections import Counter
 from pathlib import Path
 
 CASES_PATH = Path(__file__).with_name("cases.json")
@@ -130,6 +131,7 @@ def grade(case: dict, reply_text: str) -> dict:
     reply = first_json_object(reply_text)
     if reply is None:
         return {
+            "verdict": None, "options": None, "missing": None,
             "verdict_ok": False,
             "options_ok": False,
             "missing_ok": False,
@@ -166,6 +168,9 @@ def grade(case: dict, reply_text: str) -> dict:
     else:
         score = int(verdict_ok and options == set())
     return {
+        "verdict": reply.get("verdict") if reply.get("verdict") in VERDICTS else None,
+        "options": sorted(options) if options is not None else None,
+        "missing": sorted(missing) if missing is not None else None,
         "verdict_ok": verdict_ok,
         "options_ok": options_ok,
         "missing_ok": missing_ok,
@@ -174,8 +179,29 @@ def grade(case: dict, reply_text: str) -> dict:
     }
 
 
-def grade_replies(cases: list[dict], replies: dict[str, str]) -> dict:
-    per_case = {case["id"]: grade(case, replies.get(case["id"], "")) for case in cases}
+def grade_replies(cases: list[dict], replies: dict[str, str | list[str]]) -> dict:
+    per_case = {}
+    for case in cases:
+        raw = replies.get(case["id"], "")
+        if isinstance(raw, str):
+            per_case[case["id"]] = grade(case, raw)
+            continue
+        if not isinstance(raw, list) or not raw or any(not isinstance(item, str) for item in raw):
+            raise ValueError("replies must be strings or nonempty lists of strings")
+        attempts = [grade(case, item) for item in raw]
+        keys = [(item["verdict"], tuple(item["options"] or ()), tuple(item["missing"] or ()))
+                for item in attempts]
+        counts = Counter(keys)
+        majority = max(counts, key=lambda key: counts[key])
+        consolidated = grade(case, json.dumps({"verdict": majority[0],
+                                                "options": majority[1], "missing": majority[2]}))
+        per_case[case["id"]] = {
+            "attempts": attempts,
+            "majority": {key: consolidated[key] for key in ("verdict", "options", "missing", "score")},
+            "disagreement": len(counts) > 1,
+            "attempts_scored": sum(item["score"] for item in attempts),
+            "score": consolidated["score"],
+        }
     per_category: dict[str, dict[str, int]] = {}
     for case in cases:
         total = per_category.setdefault(case["category"], {"score": 0, "count": 0})
