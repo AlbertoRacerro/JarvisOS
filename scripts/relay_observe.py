@@ -227,6 +227,45 @@ def parse_open_questions(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def question_text(question: dict[str, Any]) -> str:
+    """The same bounded question and choices exposed to the Jarvis UI, in ledger order."""
+    lines = [question.get("prompt") or "Domanda per te:"]
+    for option in question["options"]:
+        label = option.get("label") or "opzione"
+        mark = " (consigliata)" if option.get("recommended") else ""
+        consequence = option.get("consequence") or "non specificata"
+        lines.append(f"{option['index']}. {label}{mark} — conseguenza: {consequence}")
+    lines.append("Puoi rispondere qui in testo libero, nel thread di questa domanda.")
+    return "\n".join(lines)
+
+
+def record_answer(root: Path, repo: Path, question_id: str, answer: str, *, source: str,
+                  author: str) -> dict[str, Any]:
+    """Serialize a UI or Slack answer with roadmap changes and recheck the open question."""
+    if devctx.find_secret(answer):
+        return {"state": "refused", "reason": "secret_detected"}
+    lock = rc.roadmap_lock(root, wait=5.0)
+    if lock is None:
+        return {"state": "refused", "reason": "roadmap_busy"}
+    try:
+        env = devctx.default_env(repo)
+        if not any(q["id"] == question_id for q in parse_open_questions(devctx.read_ledger(env))):
+            return {"state": "refused", "reason": "question_not_open"}
+        entry = devctx.make_entry(env, "decision", f"Maintainer answer to question {question_id} (via {source}): {answer}",
+                                  status="accepted", supersedes=[question_id], author=author)
+        devctx.append_entry(env, entry)
+        road = rc.load_roadmap(root)
+        if (road and not road.get("corrupt") and road.get("paused") in ("coordinator_blocked", "no_progress")
+                and not road.get("hostops_wait") and not road.get("job_wait")):
+            road.update(paused=None, paused_at=None, no_progress=0)
+            rc.write_json_atomic(rc.roadmap_path(root), road)
+            rc.missions_journal(root, {"event": "roadmap_question_answered", "at": rc.iso(rc.now_utc()),
+                                       "question_id": question_id})
+        return {"state": "ok", "decision_id": entry["id"], "question_id": question_id}
+    finally:
+        lock.release()
+
+
 def _latest(entries: list[dict[str, Any]], kinds: tuple[str, ...], since: str | None) -> str | None:
     for entry in reversed(entries):
         if entry.get("kind") in kinds and (not since or str(entry.get("ts") or "") >= since):
@@ -392,7 +431,7 @@ def incidents(snap: dict[str, Any], now: datetime) -> dict[str, str]:
     reason = snap.get("reason")
     if snap["state"] == "held":
         found[f"held|{mission}|{reason}"] = "il lavoro è fermo in attesa di una tua verifica: scrivi a Claude in chat"
-    if snap["state"] == "paused":
+    if snap["state"] == "paused" and not (reason == "coordinator_blocked" and snap.get("open_questions")):
         question = snap.get("question")
         found[f"paused|{reason}"] = (question if reason == "coordinator_blocked" and isinstance(question, str)
                                         and not machine_marker(question) and not _ISSUE_REF_RE.search(question) else
@@ -498,10 +537,22 @@ def merges_since(repo: Path, since: str | None, run: Callable[..., tuple[int, st
 
 def observe_step(obs: dict[str, Any], snap: dict[str, Any], now: datetime, *, send: Callable[[str, str], bool],
                  digest_every: timedelta, merges: Callable[[str | None], list[tuple[str, str]]],
-                 failures: int = 0) -> None:
+                 failures: int = 0, question_send: Callable[[str, str], str | None] | None = None) -> None:
     """Send alerts for incidents that appeared since the last step, and the digest when due. `obs` is the
     watcher's durable record (`active` incidents, `last_digest`, `failures_reported`); an incident is announced
     once until it clears, also across watcher restarts. `send(kind, text)` must never raise."""
+    sent = obs.setdefault("sent_questions", {})
+    for question in snap.get("open_questions") or []:
+        qid = question["id"]
+        if qid in sent:
+            continue
+        message = question_text(question)
+        if question_send is not None:
+            ts = question_send(qid, message)
+            if ts:
+                sent[qid] = ts
+        elif send(f"question|{qid}", message):
+            sent[qid] = "webhook"
     active = obs.setdefault("active", {})
     onsets = obs.setdefault("onset", {})
     current = incidents(snap, now)

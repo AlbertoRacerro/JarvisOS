@@ -27,6 +27,7 @@ import shlex
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -104,6 +105,7 @@ ROADMAP_PAUSES = ("maintainer_stop", "coordinator_blocked", "no_progress", "cycl
 STOP_REASONS = ("stop_requested", "signal", "idle", "held", "waiting", "legacy_autopilot", "lock_busy", "error")
 DEFAULT_CONTROL = Path.home() / "jarvis-control" / "work" / "continuity"
 WEBHOOK_FILE = Path.home() / ".config" / "jarvis" / "slack_webhook_url"
+SLACK_BOT_FILE = Path.home() / ".config" / "jarvis" / "slack_bot.json"
 MISSION_SCHEMA = "relay-mission.v1"
 MISSION_ID_RE = re.compile(r"m-\d{8}T\d{6}Z-[0-9a-f]{6}")
 DIRECTIVE_ID_RE = re.compile(r"L\d{14}-[0-9a-f]{4}")
@@ -1526,6 +1528,141 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
 
 # Proxies disabled and redirects rejected: the webhook body only ever reaches hooks.slack.com directly.
 _WEBHOOK_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirects())
+_SLACK_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirects())
+
+
+def load_slack_bot(path: Path = SLACK_BOT_FILE) -> dict[str, str] | None:
+    """A host-only credential file; reject symlinks and any permissions beyond 0600."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, encoding="utf-8") as handle:
+            st = os.fstat(handle.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o777 != 0o600:
+                return None
+            raw = handle.read(8193) if st.st_size <= 8192 else ""
+            data = json.loads(raw) if len(raw) <= 8192 and raw else None
+    except (OSError, ValueError, UnicodeError):
+        return None
+    if not isinstance(data, dict) or not all(isinstance(data.get(k), str) and data[k] for k in
+                                               ("bot_token", "channel_id", "maintainer_user_id")):
+        return None
+    return {k: data[k] for k in ("bot_token", "channel_id", "maintainer_user_id")}
+
+
+def slack_api(method: str, config: dict[str, str], params: dict[str, Any], *, opener: Any = _SLACK_OPENER,
+              timeout: float = 10.0, base_url: str = "https://slack.com/api/") -> dict[str, Any] | None:
+    """Only fixed Slack Web API methods; no response or exception containing credentials escapes."""
+    if (method not in ("chat.postMessage", "conversations.history", "conversations.replies")
+            or base_url != "https://slack.com/api/"):
+        return None
+    url = f"{base_url}{method}"
+    parts = urllib.parse.urlsplit(url)
+    if (parts.scheme != "https" or parts.hostname != "slack.com" or parts.port is not None
+            or parts.username or parts.password or not parts.path.startswith("/api/")
+            or parts.query or parts.fragment):
+        return None
+    request = urllib.request.Request(url, data=urllib.parse.urlencode(params).encode(), method="POST",
+                                     headers={"Authorization": f"Bearer {config['bot_token']}",
+                                              "Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            data = json.loads(response.read(1 << 20))
+        return data if isinstance(data, dict) and data.get("ok") is True else None
+    except Exception:  # noqa: BLE001 - credentials and Slack responses must never escape to logs
+        return None
+
+
+def slack_post(config: dict[str, str], text: str, *, thread_ts: str | None = None,
+               api: Callable[..., dict[str, Any] | None] = slack_api) -> str | None:
+    params = {"channel": config["channel_id"], "text": text}
+    if thread_ts:
+        params["thread_ts"] = thread_ts
+    result = api("chat.postMessage", config, params)
+    ts = result.get("ts") if result else None
+    return ts if isinstance(ts, str) and ts else None
+
+
+def poll_slack_questions(obs: dict[str, Any], config: dict[str, str], root: Path, repo: Path, observe: Any,
+                         now: datetime, *, api: Callable[..., dict[str, Any] | None] = slack_api,
+                         post: Callable[..., str | None] = slack_post) -> None:
+    """Poll sent question threads and channel messages, with durable per-stream cursors."""
+    last = parse_ts(obs.get("last_slack_poll"))
+    if last is not None and now - last < timedelta(seconds=30):
+        return
+    obs["last_slack_poll"] = iso(now)
+    sent = {qid: ts for qid, ts in obs.get("sent_questions", {}).items() if ts != "webhook"}
+    open_ids = {q["id"] for q in observe.parse_open_questions(devctx.read_ledger(devctx.default_env(repo)))}
+    start_ts = obs.setdefault("slack_started_ts", f"{now.timestamp():.6f}")
+    cursors = obs.setdefault("slack_cursors", {})
+
+    def handle(message: dict[str, Any], root_ts: str | None) -> bool:
+        ts = message.get("ts")
+        if not isinstance(ts, str):
+            return True
+        if (message.get("channel", config["channel_id"]) != config["channel_id"]
+                or message.get("user") != config["maintainer_user_id"] or message.get("bot_id")
+                or message.get("subtype")):
+            return True
+        answer = message.get("text")
+        if not isinstance(answer, str) or not 1 <= len(answer) <= 1000 or devctx.find_secret(answer):
+            return True
+        answer = answer.strip()
+        if not answer:
+            return True
+        questions = observe.parse_open_questions(devctx.read_ledger(devctx.default_env(repo)))
+        if root_ts:
+            qid = next((qid for qid, posted in sent.items() if posted == root_ts
+                        and any(q["id"] == qid for q in questions)), None)
+            if qid is None:
+                return True
+        elif len(questions) == 1:
+            qid = questions[0]["id"]
+        else:
+            reply = ("Rispondi nel thread della domanda." if questions else "Non ci sono domande aperte.")
+            return post(config, reply, thread_ts=ts, api=api) is not None
+        result = observe.record_answer(root, repo, qid, answer, source="Slack", author="maintainer (slack)")
+        if result["state"] != "ok":
+            return result.get("reason") == "question_not_open"
+        post(config, "Ricevuto, l'ho registrato come tua risposta.", thread_ts=root_ts or ts, api=api)
+        return True
+
+    streams = [("history", None, min(sent.values(), default=start_ts))] + [
+        (f"thread:{ts}", ts, ts) for qid, ts in sent.items() if qid in open_ids]  # answered threads: no more calls
+    for key, thread_ts, initial in streams:
+        cursor = cursors.get(key, initial)
+        params = {"channel": config["channel_id"], "oldest": cursor, "limit": 100}
+        if thread_ts:
+            params["ts"] = thread_ts
+        messages: list[dict[str, Any]] = []
+        page_cursors: set[str] = set()
+        for _ in range(100):
+            result = api("conversations.replies" if thread_ts else "conversations.history", config, params)
+            if result is None or not isinstance(result.get("messages"), list):
+                messages = []
+                break
+            messages.extend(m for m in result["messages"] if isinstance(m, dict))
+            next_page = (result.get("response_metadata") or {}).get("next_cursor")
+            if not result.get("has_more") and not next_page:
+                break
+            if not isinstance(next_page, str) or not next_page or next_page in page_cursors:
+                messages = []
+                break
+            page_cursors.add(next_page)
+            params["cursor"] = next_page
+        else:
+            messages = []  # leave the durable cursor unchanged if Slack has more than the bounded batch
+        if not messages:
+            continue
+        for message in sorted(messages, key=lambda m: m.get("ts", "")):
+            if not isinstance(message, dict) or not isinstance(message.get("ts"), str) or message["ts"] <= cursor:
+                continue
+            # History observes thread roots only; replies are handled by their own stream.
+            if not thread_ts and message.get("thread_ts") and message["thread_ts"] != message["ts"]:
+                cursors[key] = message["ts"]
+                continue
+            if not handle(message, thread_ts):
+                break
+            cursors[key] = message["ts"]
 
 
 def _valid_webhook_url(url: str) -> bool:
@@ -3609,6 +3746,32 @@ def roadmap_lock(root: Path, wait: float = 0.0) -> Lock | None:
     return lock
 
 
+def maintainer_or_hostops_after(repo: Path, paused_at: str | None) -> bool:
+    """Durable human input or a verified completed host operation wakes a stalled roadmap."""
+    if not paused_at:
+        return False
+    try:
+        entries = devctx.read_ledger(devctx.default_env(repo))
+        if any(str(e.get("ts") or "") > paused_at and
+               (e.get("kind") == "directive" and
+                (str(e.get("author") or "").startswith("maintainer") or isinstance(e.get("directive"), dict)) or
+                (e.get("kind") == "decision" and str(e.get("author") or "").startswith("maintainer (")
+                 and str(e.get("text") or "").startswith("Maintainer answer to question ")))
+               for e in entries):
+            return True
+        paths = host_ops.Paths(Path.home())
+        for path in paths.receipts.iterdir():
+            if not host_ops.REQUEST_NAME_RE.fullmatch(path.name):
+                continue
+            receipt, _ = host_ops.load_receipt(paths, path.name[:-5])
+            if (receipt and receipt.get("outcome") in ("ok", "refused", "failed", "cancelled", "timeout")
+                    and str(receipt.get("finished_at") or "") > paused_at):
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def roadmap_step(root: Path, repo: Path, *, fingerprint: Callable[[], str | None],
                  submit: Callable[[str, list[dict[str, Any]], str], tuple[dict[str, Any] | None, str | None]],
                  now: Callable[[], datetime] = now_utc) -> str | None:
@@ -3670,11 +3833,13 @@ def _roadmap_step(root: Path, repo: Path, *, fingerprint: Callable[[], str | Non
             missions_journal(root, {"event": "roadmap_jobs_resumed", "at": iso(now()), "ids": jobs,
                                     "uncertain": uncertain})
         elif road["paused"] == "no_progress":
+            human_wake = maintainer_or_hostops_after(repo, road.get("paused_at"))
             heads = fingerprint()
-            if heads is None:
+            if heads is None and not human_wake:
                 return "roadmap:waiting:remote_unreadable"
             job_states = roadmap_job_states(root)
-            wake = heads != road.get("fingerprint") or job_states != road.get("job_states")
+            wake = (heads != road.get("fingerprint") or job_states != road.get("job_states")
+                    or human_wake)
             pr_ids = roadmap_pr_ids(repo)
             if pr_ids is not None and road.get("pr_ids") is not None:
                 wake = wake or bool(set(pr_ids) - set(road["pr_ids"]))
@@ -3691,7 +3856,8 @@ def _roadmap_step(root: Path, repo: Path, *, fingerprint: Callable[[], str | Non
                 write_json_atomic(roadmap_path(root), road)
             if not wake:
                 return "roadmap:paused:no_progress"
-            road.update(paused=None, paused_at=None, no_progress=0, fingerprint=heads,
+            road.update(paused=None, paused_at=None, no_progress=0,
+                        fingerprint=heads if heads is not None else road.get("fingerprint"),
                         job_ids=sorted(job_states), pr_ids=pr_ids)
             for key in ("job_states", "ci_fingerprint", "ci_checked_at", "wake_at"):
                 road.pop(key, None)
@@ -4330,11 +4496,23 @@ def command_watch(args: argparse.Namespace) -> int:
                 watch_once(state, notifier, repo, now, supervised=supervised, master=lambda: real_master(repo))
             # Spec 205: incidents are announced on detection, the semantic digest every --digest-hours.
             try:
-                observe.observe_step(state["watch"].setdefault("observe", {}), observe.snapshot(root, repo, now), now,
+                obs = state["watch"].setdefault("observe", {})
+                bot = None if args.no_notify else load_slack_bot()
+                webhook = None if args.no_notify or bot else webhook_sender()
+
+                def send_question(_qid: str, message: str, bot: Any = bot, webhook: Any = webhook) -> str | None:
+                    if bot:
+                        return slack_post(bot, message)
+                    return "webhook" if webhook and webhook(message) is None else None
+
+                observe.observe_step(obs, observe.snapshot(root, repo, now), now,
                                      send=lambda kind, text, n=notifier, t=now: n.send_text(kind, text, t),
                                      digest_every=timedelta(hours=args.digest_hours),
                                      merges=lambda since: observe.merges_since(repo, since),
-                                     failures=int(state["notify"].get("failures") or 0))
+                                     failures=int(state["notify"].get("failures") or 0),
+                                     question_send=send_question if bot or webhook else None)
+                if bot:
+                    poll_slack_questions(obs, bot, root, repo, observe, now)
             except Exception as exc:  # noqa: BLE001 - observation never stops the watcher
                 log(f"observe: internal error {type(exc).__name__}")
             store.save(state, now)
