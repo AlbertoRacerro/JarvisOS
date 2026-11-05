@@ -64,9 +64,9 @@ try {
   page.on("pageerror", (e) => summary.page_errors.push(String(e)));
   page.on("request", (r) => { if (!["GET", "HEAD", "OPTIONS"].includes(r.method())) summary.write_requests.push(`${r.method()} ${r.url().replace(base, "").split("?")[0]}`); });
   page.on("response", (r) => { if (r.status() >= 400) summary.error_responses.push(`${r.status()} ${r.request().method()} ${r.url().replace(base, "")}`); });
-  const shot = async (name) => {
+  const shot = async (name, target = page) => {
     const file = join(evidence, `${String(summary.screenshots.length + 1).padStart(2, "0")}-${name}.png`);
-    await page.screenshot({ path: file });
+    await target.screenshot({ path: file });
     summary.screenshots.push({ file: file.slice(evidence.length + 1), sha256: createHash("sha256").update(await readFile(file)).digest("hex") });
   };
   summary.failureShot = async () => page.screenshot({ path: join(evidence, "failure.png") }).catch(() => {});
@@ -126,6 +126,9 @@ try {
   const placed = await record("free placement");
   assert(placed.sequence.features[1].frame.origin[1] === 100 && !placed.sequence.features[1].connect_to, "free frame missing");
   await shot("free-placement");
+  await viewport.locator("canvas").waitFor({ timeout: 60_000 });
+  await page.waitForTimeout(1500);
+  await shot("free-placement-viewport-two-tubes", viewport);
   step("free_placement_rebuilt");
 
   await inspector.getByLabel("Place in viewport").last().check();
@@ -145,11 +148,15 @@ try {
   }
   assert(changed, "could not drag the placement handle");
   await inspector.getByText("Edits not applied yet.").waitFor();
+  await shot("dragged-handle-not-applied-viewport", viewport);
   const dragged = [await inspector.locator("#placement-tube_run_2-0").inputValue(), await y.inputValue(), await inspector.locator("#placement-tube_run_2-2").inputValue()].map(Number);
   await inspector.getByRole("button", { name: "Rebuild geometry", exact: true }).click();
   await lineage.getByText(/Feature history revision 3 /).waitFor();
   const moved = await record("dragged placement");
   assert(JSON.stringify(moved.sequence.features[1].frame.origin) === JSON.stringify(dragged), "dragged frame differs from fields");
+  const heading = Number(await inspector.locator("#placement-tube_run_2-3").inputValue());
+  const direction = moved.sequence.features[1].frame.direction;
+  assert(Math.abs(Math.atan2(direction[1], direction[0]) * 180 / Math.PI - heading) < 1e-6, "dragged heading differs from the field");
   await inspector.getByRole("button", { name: "Undo", exact: true }).click();
   await lineage.getByText(/Feature history revision 4 /).waitFor();
   assert((await history()).sequence.features[1].frame.origin[1] === 100, "undo did not restore placement");
