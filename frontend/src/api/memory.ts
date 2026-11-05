@@ -112,3 +112,13 @@ export function readSensitivityLabel(workspaceId: string, kind: MemoryRecordKind
   const params = new URLSearchParams({ workspace_id: workspaceId, subject_ref: `${kind}:${id}` });
   return requestJson<SensitivityLabel | null>(`/ai/sensitivity/labels/current?${params.toString()}`);
 }
+
+export type FreshnessInvalidationDetail = {
+  id: string; workspace_id: string; source_ref: string; replacement_ref: string;
+  source_graph_digest: string; affected_count: number; unresolved_diagnostic_count: number; cycle_count: number; created_at: string;
+  marks: { record_ref: string; record_kind: string; record_id: string; reason_code: string; path: string[]; path_digest: string; created_at: string }[];
+};
+
+export function readFreshnessInvalidation(workspaceId: string, id: string): Promise<FreshnessInvalidationDetail> {
+  return requestJson<FreshnessInvalidationDetail>(`/workspaces/${encodeURIComponent(workspaceId)}/flowsheet/invalidations/${encodeURIComponent(id)}`);
+}
