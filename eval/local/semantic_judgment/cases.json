@@ -1139,7 +1139,7 @@
         },
         {
           "label": "B",
-          "text": "The stated conclusion has no issue."
+          "text": "The tube length may be too short for fully developed flow."
         },
         {
           "label": "C",
@@ -1181,7 +1181,7 @@
         },
         {
           "label": "C",
-          "text": "The stated conclusion has no issue."
+          "text": "The friction-factor convention should be confirmed as Darcy rather than Fanning."
         }
       ],
       "answer": {
@@ -1211,7 +1211,7 @@
       "options": [
         {
           "label": "A",
-          "text": "The stated conclusion has no issue."
+          "text": "The characteristic length may not represent the solid’s volume-to-surface ratio."
         },
         {
           "label": "B",
@@ -1252,7 +1252,7 @@
         },
         {
           "label": "B",
-          "text": "The stated conclusion has no issue."
+          "text": "The model may miss internal temperature gradients in the part."
         },
         {
           "label": "C",
@@ -1293,7 +1293,7 @@
         },
         {
           "label": "C",
-          "text": "The stated conclusion has no issue."
+          "text": "Each inlet stream should be balanced against a separate outlet."
         }
       ],
       "answer": {
@@ -1326,7 +1326,7 @@
       "options": [
         {
           "label": "A",
-          "text": "The stated conclusion has no issue."
+          "text": "Shaft work should be treated as an energy input to the machine."
         },
         {
           "label": "B",
@@ -1367,7 +1367,7 @@
       "options": [
         {
           "label": "A",
-          "text": "The stated conclusion has no issue."
+          "text": "The gas pressure may be too high for an ideal-gas density estimate."
         },
         {
           "label": "B",
@@ -1407,7 +1407,7 @@
         },
         {
           "label": "B",
-          "text": "The stated conclusion has no issue."
+          "text": "The measured absorbance may exceed the instrument’s calibrated linear range."
         },
         {
           "label": "C",
