@@ -54,7 +54,7 @@ export const TOUR_STOPS: readonly TourStop[] = [
   },
   {
     route: "/design/project?stage=cad", target: "design.panel.feature-inspector", title: "Feature inspector", needs: "component", node: "design.tree.node.geometry",
-    text: "The feature inspector edits the geometry as a list of features: add, edit, enable or disable, rebuild and undo. Rebuild creates a new revision.",
+    text: "The feature inspector edits geometry features: add, edit, enable or disable, rebuild and undo. A later feature can be Connected to previous outlet or Placed freely with Position and Heading; Place in viewport shows a move/rotate handle.",
     absent: "no component with a Geometry node could be opened, so there is no feature inspector"
   },
   {
