@@ -1,6 +1,6 @@
 # 244 — Slack questions with free-text answers
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal
