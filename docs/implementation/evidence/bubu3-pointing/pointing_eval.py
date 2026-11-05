@@ -23,7 +23,9 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "backend"))
 import scenarios
+
 from app.modules.ai.context_builder import assemble_prompt
 from app.modules.ai.thread_service import _jarvis_system_envelope
 from app.modules.ai.thread_ui_context import (
