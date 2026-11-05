@@ -41,13 +41,16 @@ try {
   if (edit.status !== 0) throw Error(`stale edit failed: ${edit.stderr}`);
   browser = await chromium.launch({ headless: true }); const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } }); const page = await context.newPage(); page.setDefaultTimeout(30000);
   page.on('pageerror', e => summary.errors.push(String(e)));
-  let inspecting = false; page.on('request', r => { if (inspecting && !['GET', 'HEAD', 'OPTIONS'].includes(r.method())) summary.inspection_writes.push(`${r.method()} ${new URL(r.url()).pathname}`); });
+  // The Jarvis surface brief is a POST that only computes a preview and stores nothing (same allowance as design_discovery_walk).
+  const PREVIEW_POSTS = [/^POST \/workspaces\/[^/]+\/actions\/brief$/];
+  let inspecting = false; page.on('request', r => { const call = `${r.method()} ${new URL(r.url()).pathname}`; if (inspecting && !['GET', 'HEAD', 'OPTIONS'].includes(r.method()) && !PREVIEW_POSTS.some(p => p.test(call))) summary.inspection_writes.push(call); });
   await page.goto(base + '/', { waitUntil: 'networkidle' });
   const picker = page.getByLabel('Project', { exact: true }); if (await picker.count()) await picker.selectOption({ label: 'Sensitivity Proof' });
   await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Memory', exact: true }).click();
   await page.getByRole('navigation', { name: 'Project knowledge destinations' }).getByRole('link', { name: 'Review', exact: true }).click();
   await page.getByRole('heading', { name: 'Review', exact: true }).waitFor();
-  await page.getByLabel('Status', { exact: true }).selectOption('all');
+  await page.getByTitle('Show navigator').click();
+  await page.getByRole('combobox', { name: 'Status' }).selectOption('all');
   const review = page.getByRole('region', { name: 'Sensitivity review' });
   for (const [name, expected, screenshot] of [['Current proof', 'Current', 'current'], ['Stale proof', 'Stale', 'stale'], ['Unlabelled proof', 'No sensitivity label recorded', 'no-label']]) {
     await page.getByRole('button', { name: new RegExp(name) }).click(); inspecting = true;
