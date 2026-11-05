@@ -215,6 +215,67 @@ try {
   step("server_refusal_keeps_attached_geometry", { out_of_band: oobRequest, page_put_status: refusedStatus, server_message: detail, alert_text: alertText,
     attached_candidate_id: afterRefusal.attached_candidate_id, revision: afterRefusal.revision });
 
+  // Reload after the stale edit, then replace the second tube with a freely placed serpentine.
+  await page.goto(`${base}/`, { waitUntil: "networkidle" });
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Design", exact: true }).click();
+  await page.getByRole("navigation", { name: "Design stages" }).getByRole("button", { name: "CAD", exact: true }).click();
+  await tree.getByRole("treeitem", { name: /^Proof tube\b/ }).click();
+  if (await geometryNode.count()) await geometryNode.first().click();
+  await inspector.waitFor();
+  await lineage.getByText(/Feature history revision 6 /).waitFor();
+  await inspector.getByRole("button", { name: "Remove tube_run_2" }).click();
+  await inspector.getByRole("button", { name: "Add serpentine", exact: true }).click();
+  await inspector.getByLabel("Placement serpentine_1").selectOption("free");
+  await inspector.locator("#placement-serpentine_1-1").fill("300");
+  const rebuiltGlb = page.waitForResponse((r) => r.request().method() === "GET" && /\/bluecad\/artifacts\/[^/]+\/content/.test(r.url()), { timeout: 120_000 });
+  await inspector.getByRole("button", { name: "Rebuild geometry", exact: true }).click();
+  await lineage.getByText(/Feature history revision 7 /).waitFor({ timeout: 120_000 });
+  const coil = await record("free serpentine");
+  assert(coil.sequence.features[1].frame.origin[1] === 300 && !coil.sequence.features[1].connect_to, "serpentine frame missing");
+  const dataWorkspace = versions.versions.find((item) => item.id === versions.active_version_id).data_workspace_id;
+  const aggregate = await getJson(`/workspaces/${dataWorkspace}/bluecad/candidates/${coil.candidate_id}/aggregate`);
+  assert(coil.attached_candidate_id === coil.candidate_id, "revision 7 candidate is not attached");
+  const glbResponse = await rebuiltGlb;
+  assert(glbResponse.ok() && glbResponse.url().includes(`/artifacts/${aggregate.candidate.glb_artifact_id}/content`), "viewer did not fetch revision 7 GLB");
+  await viewport.getByText("Drag to orbit · right-drag to pan · scroll to zoom · click a mesh to inspect it.").waitFor({ timeout: 120_000 });
+  const manifestRef = aggregate.artifacts.find((item) => item.roles.includes("attempt.manifest_artifact_id"));
+  assert(manifestRef, "revision 7 manifest missing");
+  const manifest = await getJson(manifestRef.content_url);
+  const glb = Buffer.from(await glbResponse.body());
+  assert(glb.toString("ascii", 0, 4) === "glTF", "viewer response is not a GLB");
+  const gltf = JSON.parse(glb.toString("utf8", 20, 20 + glb.readUInt32LE(12)).trim());
+  const hasMesh = (index) => gltf.nodes[index].mesh !== undefined || (gltf.nodes[index].children ?? []).some(hasMesh);
+  for (const partId of ["tube_run_1", "serpentine_1_run_1"]) {
+    const key = Object.entries(manifest.scene_binding.objects).find(([, value]) => value.part_id === partId)?.[0];
+    const index = gltf.nodes.findIndex((node) => node.name === key);
+    assert(key && index >= 0 && hasMesh(index), `revision 7 GLB has no mesh for ${partId}`);
+  }
+  const tubePorts = manifest.resolved_ports.tube_run_1;
+  const coilPorts = manifest.resolved_ports.serpentine_1_run_1;
+  assert(tubePorts && coilPorts, "built tube or serpentine ports missing");
+  const tubeY = Object.values(tubePorts).map((port) => port.origin[1]);
+  const coilY = Object.values(coilPorts).map((port) => port.origin[1]);
+  assert(Math.abs(coilPorts.port_a.origin[1] - 300) < 1e-6 && Math.min(...coilY) - Math.max(...tubeY) > 250,
+    `built serpentine is not separated from tube: tube=${tubeY} serpentine=${coilY}`);
+  const tubeBounds = manifest.parts.tube_run_1.bbox_mm;
+  const coilBounds = Object.entries(manifest.parts).filter(([id]) => id.startsWith("serpentine_1_")).map(([, part]) => part.bbox_mm);
+  assert(coilBounds.length > 0 && coilBounds.every((bounds) => bounds.min[1] > tubeBounds.max[1]), "built serpentine overlaps tube along Y");
+  await viewport.getByRole("button", { name: "Top view" }).click();
+  await shot("free-serpentine-away-from-tube", viewport);
+  step("free_serpentine_rebuilt");
+
+  await inspector.getByLabel("Placement serpentine_1").selectOption("connected");
+  await inspector.getByRole("button", { name: "Rebuild geometry", exact: true }).click();
+  await lineage.getByText(/Feature history revision 8 /).waitFor({ timeout: 120_000 });
+  const connectedCoil = await record("connected serpentine");
+  assert(connectedCoil.sequence.features[1].connect_to && !connectedCoil.sequence.features[1].frame, "serpentine connection was not restored");
+  await inspector.getByRole("button", { name: "Undo", exact: true }).click();
+  await lineage.getByText(/Feature history revision 9 /).waitFor({ timeout: 120_000 });
+  const undoneCoil = await record("undo connected serpentine");
+  assert(undoneCoil.sequence.features[1].frame.origin[1] === 300 && !undoneCoil.sequence.features[1].connect_to, "undo did not restore free serpentine");
+  await shot("undo-connected-serpentine");
+  step("serpentine_connection_restored_and_undone");
+
   assert(summary.page_errors.length === 0, `page errors: ${summary.page_errors.join("; ")}`);
 } catch (error) {
   failure = error;

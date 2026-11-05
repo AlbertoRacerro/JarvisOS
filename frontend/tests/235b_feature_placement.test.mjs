@@ -32,3 +32,10 @@ const toDirection = helper(inspector, "headingToDirection"), toHeading = helper(
 for (const heading of [-170, -45, 0, 60, 179]) assert.ok(Math.abs(toHeading(toDirection(heading)) - heading) < 1e-10);
 const toGltf = helper(viewer, "cadToGltf"), toCad = helper(viewer, "gltfToCad");
 for (const point of [[0, 0, 0], [12, -35, 100]]) assert.deepEqual(Array.from(toCad(toGltf(point))), point);
+// All feature kinds share the free-placement controls and the add button remains available after a manifold.
+assert.match(inspector, /<option value="free">Placed freely<\/option>/);
+assert.match(inspector, /!feature\.connect_to \? <>/);
+assert.match(inspector, /disabled=\{locked\} onClick=\{\(\) => add\(item\.kind\)\}/);
+assert.match(inspector, /connect_to: connect \? .* : null/);
+assert.match(inspector, /connect_to: null, frame: item\.frame \?\?/);
+assert.match(inspector, /frame: _frame, placement: _placement, \.\.\.item.*connect_to:/);

@@ -15,30 +15,28 @@ ABS_TOL = 1e-6
 
 def assemble_parts(spec: dict[str, Any]) -> dict[str, BuiltPart]:
     local_parts = {part.part_id: part for part in (build_part(item) for item in spec["parts"])}
-    part_specs = {part["part_id"]: part for part in spec["parts"]}
     connections = spec.get("connections", [])
     graph = _connection_graph(connections)
     placements: dict[str, tuple[float, tuple[float, float, float]]] = {}
-    first_id = spec["parts"][0]["part_id"]
-    placements[first_id] = _frame_placement(part_specs[first_id].get("frame"))
-    queue: deque[str] = deque([first_id])
-    while queue:
-        known_id = queue.popleft()
-        known_part = _placed(local_parts[known_id], placements[known_id])
-        for connection, known_endpoint, candidate_endpoint in graph[known_id]:
-            candidate_id, candidate_port_name = candidate_endpoint
-            known_port = known_part.ports[known_endpoint[1]]
-            candidate_local_port = local_parts[candidate_id].ports[candidate_port_name]
-            candidate_placement = _placement_for_connection(candidate_local_port, known_port)
-            if candidate_id in placements:
-                _assert_consistent_placement(local_parts[candidate_id], placements[candidate_id], candidate_placement, connection)
-                continue
-            placements[candidate_id] = candidate_placement
-            queue.append(candidate_id)
     for part in spec["parts"]:
         part_id = part["part_id"]
-        if part_id not in placements:
-            placements[part_id] = _frame_placement(part.get("frame"))
+        if part_id in placements:
+            continue
+        placements[part_id] = _frame_placement(part.get("frame"))
+        queue: deque[str] = deque([part_id])
+        while queue:
+            known_id = queue.popleft()
+            known_part = _placed(local_parts[known_id], placements[known_id])
+            for connection, known_endpoint, candidate_endpoint in graph[known_id]:
+                candidate_id, candidate_port_name = candidate_endpoint
+                known_port = _port({known_id: known_part}, known_id, known_endpoint[1])
+                candidate_local_port = _port(local_parts, candidate_id, candidate_port_name)
+                candidate_placement = _placement_for_connection(candidate_local_port, known_port)
+                if candidate_id in placements:
+                    _assert_consistent_placement(local_parts[candidate_id], placements[candidate_id], candidate_placement, connection)
+                    continue
+                placements[candidate_id] = candidate_placement
+                queue.append(candidate_id)
     placed = {part_id: _placed(local_parts[part_id], placement) for part_id, placement in placements.items()}
     for connection in connections:
         left_part_id, left_port_name = _split_endpoint(connection["from"])
