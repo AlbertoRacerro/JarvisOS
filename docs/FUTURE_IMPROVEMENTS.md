@@ -144,7 +144,7 @@ Each entry must contain:
 ### F22 — Local evaluator checkout private to the sandboxed run — PARK
 
 - **Origin:** spec 243 independent review of PR #43, 2026-11-05.
-- **Observation:** `local_eval.run` extracts the evaluator checkout under `~/src/worktrees`, which sandboxed agents can write. The host compares the checkout with the extracted archive's hashes before and after the prompt export and refuses any difference, but an agent that changes a file and restores it while the export runs is not detected.
-- **Disposition:** PARK; closing it needs the launcher to bind the checkout privately (read-only or outside the agents' view) for that one run, a sandbox launcher change outside the 243 scope.
+- **Observation:** `local_eval.run` extracts the evaluator checkout under `~/src/worktrees`, which sandboxed agents can write. The host compares the checkout with the extracted archive's hashes before and after the prompt export and refuses any difference, but an agent that changes a file and restores it while the export runs is not detected. More broadly, `bench.run` and `local_eval.run` use the interpreter in `~/src/JarvisOS/backend/.venv`, which sandboxed agents can also write. The host checks therefore catch accidental or stale trees, not a deliberately adversarial agent running as the same user.
+- **Disposition:** PARK; closing it needs the launcher to bind the checkout and the interpreter read-only (or outside the agents' view) for that one run, a sandbox launcher change outside the 243 scope.
 - **Expected benefit:** the prompt export runs exactly the reviewed commit, with no race window.
 - **Likely surface:** `op_local_eval_run` and `_run_benchmark` in `scripts/host_ops.py`; the `jarvis-sandbox` launcher.

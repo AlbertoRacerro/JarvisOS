@@ -764,12 +764,20 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
     # The checkout is agent-controlled: its revision is read inside the sandbox, never by host git.
     git = [launcher, "git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", str(root)]
     head = ctx.run([*git, "rev-parse", "HEAD"], timeout=60, cwd=str(root))
-    dirty = ctx.run([*git, "status", "--porcelain"], timeout=60, cwd=str(root))
+    dirty = ctx.run([*git, "status", "--porcelain", "--ignored", "--untracked-files=all"],
+                    timeout=60, cwd=str(root))
     flags = ctx.run([*git, "ls-files", "-v"], timeout=60, cwd=str(root))
     reported = str(head.stdout).strip()
     hidden = any(line and (line[0].islower() or line[0] == "S") for line in str(flags.stdout).splitlines())
+    unexpected = False
+    for line in str(dirty.stdout).splitlines():
+        path = Path(line[3:])
+        if not (line.startswith("!! ") and (".pytest_cache" in path.parts
+                or ("__pycache__" in path.parts and path.suffix == ".pyc"))):
+            unexpected = True
+            break
     if (head.returncode != 0 or dirty.returncode != 0 or flags.returncode != 0
-            or reported != sha or str(dirty.stdout).strip() or hidden):
+            or reported != sha or unexpected or hidden):
         raise Refused(f"worktree {worktree} is not a clean checkout of {sha[:12]} (sandbox reports {reported[:12] or '?'})")
     return _run_benchmark(ctx, args["bench"], bench, root, sub, result_path, reported, worktree)
 

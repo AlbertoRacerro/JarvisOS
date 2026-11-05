@@ -228,7 +228,9 @@ def test_bench_clean_head_and_plain_launcher(host, dirty, head):
     launcher = str(paths.home / ".local/bin/jarvis-sandbox")
     git = [launcher, "git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", str(root)]
     assert [a for a, _ in calls] == [
-        [*git, "rev-parse", "HEAD"], [*git, "status", "--porcelain"], [*git, "ls-files", "-v"],
+        [*git, "rev-parse", "HEAD"],
+        [*git, "status", "--porcelain", "--ignored", "--untracked-files=all"],
+        [*git, "ls-files", "-v"],
     ]
     assert all(k["cwd"] == str(root) for _, k in calls)
 
@@ -263,6 +265,36 @@ def test_bench_clean_check_real_linked_worktree(host, monkeypatch):
     (root / "tracked.txt").write_text("original\n")
     subprocess.run(["git", "-C", str(root), "update-index", "--skip-worktree", "tracked.txt"], check=True)
     assert outcome() == "refused"
+    subprocess.run(["git", "-C", str(root), "update-index", "--no-skip-worktree", "tracked.txt"], check=True)
+    assert outcome() == "ok"
+
+    common_dir = Path(subprocess.check_output(["git", "-C", str(root), "rev-parse", "--git-common-dir"],
+                                              text=True).strip())
+    (common_dir / "info/exclude").write_text("conftest.py\n__pycache__/\n.pytest_cache/\n")
+    tests = root / "backend/tests"
+    tests.mkdir(parents=True)
+    conftest = tests / "conftest.py"
+    conftest.write_text("raise RuntimeError('unexpected execution')\n")
+    assert outcome() == "refused"
+    conftest.unlink()
+
+    subprocess.run(["git", "-C", str(repo), "config", "status.showUntrackedFiles", "no"], check=True)
+    untracked = tests / "unexpected.txt"
+    untracked.write_text("unexpected\n")
+    assert outcome() == "refused"
+    untracked.unlink()
+
+    pycache = tests / "__pycache__"
+    pycache.mkdir()
+    (pycache / "x.cpython-312.pyc").write_bytes(b"cache")
+    assert outcome() == "ok"
+    (pycache / "unexpected.py").write_text("unexpected\n")
+    assert outcome() == "refused"
+    (pycache / "unexpected.py").unlink()
+    pytest_cache = tests / ".pytest_cache"
+    pytest_cache.mkdir()
+    (pytest_cache / "README.md").write_text("cache\n")
+    assert outcome() == "ok"
 
 
 def local_eval_policy(paths, *, base_url="http://127.0.0.1:18081/v1", credential=True):
