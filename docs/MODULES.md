@@ -41,7 +41,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `backend/app/schemas` | backlog-candidate | One shared dataclass (ServiceStatus) with no consumer in the app; delete it or give it a purpose. | `common.py` | <100 |
 | `backend/tests` | live | Backend test suite (pytest): offline, fake providers, isolated data root, a fake project pack. | `conftest.py`, `scripts/test_backend_sharded.sh` | 95100 |
 | `configs` | live | Declarative configuration: AI provider catalog, cloud escalation and egress policy, architecture-enforcement rules, BLUECAD tool registry, relay gateway. | `ai_providers.yaml`, `ai_egress_policy.json`, `architecture_enforcement.json` | <100 |
-| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 3400 |
+| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 3500 |
 | `eval` | in-development | Local-model re-evaluation: classification and intake quality, latency, llama.cpp qualification and the second-brain retrieval benchmark. Everything here is marked to improve. | `local/README.md`, `local/llamacpp_qualification.py` | 700 |
 | `frontend/src/api` | live | Typed API client wrappers per backend area, plus the generated contract types (generated/). | `client.ts`, `generated/` | 4300 |
 | `frontend/src/app` | live | Routing table and router hook, navigation history, selection, and the owner and target registries Bubu uses to find controls. | `routes.ts`, `useAppRouter.ts`, `designTargets.ts` | 700 |
@@ -50,7 +50,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `frontend/src/components/analytics` | live | Analytics dock content and its state logic. | `AnalyticsDockContent.tsx`, `analyticsState.ts` | 700 |
 | `frontend/src/components/bluecad` | live | BLUECAD workbench: project tree, 3D scene binding and selection. | `BluecadWorkbench.tsx`, `sceneBinding.ts` | 1600 |
 | `frontend/src/components/bubu` | live | Bubu, the assistant that points: chat bubble, guided tour, pointer overlay, dictation, page-context capture and conversation store. | `BubuBubble.tsx`, `useBubuIntegration.tsx`, `pointerDirectives.ts`, `guidedTour.ts` | 1900 |
-| `frontend/src/components/coding` | live | Coding workspace panels: provider quota rings and the relay monitor. | `ProviderQuotaPanel.tsx`, `RelayMonitorPanel.tsx` | 300 |
+| `frontend/src/components/coding` | live | Coding workspace panels: provider quota rings and the relay monitor. | `ProviderQuotaPanel.tsx`, `RelayMonitorPanel.tsx` | 400 |
 | `frontend/src/components/design` | live | Design workspace pieces: component tree, splitter, node status and labels. | `DesignComponentTree.tsx` | 300 |
 | `frontend/src/components/dynamic` | live | Dynamic plant simulation UI: scenario, schedule and controller editors, plant view, run results and synchronized charts. | `DynamicPanel.tsx`, `dynamicApi.ts` | 1900 |
 | `frontend/src/components/engineering` | live | Engineering properties panel, Jarvis engineering actions and previous-run loading. | `EngineeringProperties.tsx` | 1100 |
