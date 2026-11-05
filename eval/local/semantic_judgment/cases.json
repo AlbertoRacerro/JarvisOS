@@ -1,0 +1,1434 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "vd01",
+      "category": "validity_domain",
+      "title": "Tube heat-transfer estimate A",
+      "context": "Water with density 1000 kg/m3, mean speed 0.08 m/s, tube diameter 0.02 m, and dynamic viscosity 0.001 Pa s has computed Re = 1600. The solver applies the Dittus–Boelter tube heat-transfer correlation.",
+      "question": "Which choice identifies the engineering issue?",
+      "options": [
+        {
+          "label": "A",
+          "text": "Dittus–Boelter is outside its Reynolds range."
+        },
+        {
+          "label": "B",
+          "text": "The Reynolds arithmetic is wrong."
+        },
+        {
+          "label": "C",
+          "text": "No validity issue exists."
+        }
+      ],
+      "answer": {
+        "verdict": "invalid_assumption",
+        "options": [
+          "A"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "reynolds",
+        "inputs": {
+          "rho": 1000,
+          "v": 0.08,
+          "D": 0.02,
+          "mu": 0.001
+        },
+        "comparison": "lt",
+        "threshold": 10000,
+        "expected": true
+      }
+    },
+    {
+      "id": "vd02",
+      "category": "validity_domain",
+      "title": "Tube heat-transfer estimate B",
+      "context": "A liquid has density 1000 kg/m3, speed 0.25 m/s, tube diameter 0.02 m, and viscosity 0.001 Pa s. The solver obtains Re = 5000 and applies the Dittus–Boelter tube heat-transfer correlation.",
+      "question": "Which choice identifies the engineering issue?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The viscosity must be converted from Pa s to cP before computing Re."
+        },
+        {
+          "label": "B",
+          "text": "Dittus–Boelter is outside its Reynolds range."
+        },
+        {
+          "label": "C",
+          "text": "The reported Reynolds number is inconsistent with the inputs."
+        }
+      ],
+      "answer": {
+        "verdict": "invalid_assumption",
+        "options": [
+          "B"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "reynolds",
+        "inputs": {
+          "rho": 1000,
+          "v": 0.25,
+          "D": 0.02,
+          "mu": 0.001
+        },
+        "comparison": "lt",
+        "threshold": 10000,
+        "expected": true
+      }
+    },
+    {
+      "id": "vd03",
+      "category": "validity_domain",
+      "title": "Pipe pressure-drop estimate",
+      "context": "A Newtonian fluid of density 1000 kg/m3 flows at 2.5 m/s through a diameter 0.02 m tube with viscosity 0.001 Pa s. The solver obtains Re = 50000 and uses the Hagen–Poiseuille pressure-drop law.",
+      "question": "Which choice identifies the engineering issue?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The reported Reynolds number is inconsistent with the inputs."
+        },
+        {
+          "label": "B",
+          "text": "The pipe diameter must be converted to millimetres before computing Re."
+        },
+        {
+          "label": "C",
+          "text": "Hagen–Poiseuille is outside its laminar-flow domain."
+        }
+      ],
+      "answer": {
+        "verdict": "invalid_assumption",
+        "options": [
+          "C"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "reynolds",
+        "inputs": {
+          "rho": 1000,
+          "v": 2.5,
+          "D": 0.02,
+          "mu": 0.001
+        },
+        "comparison": "gt",
+        "threshold": 2300,
+        "expected": true
+      }
+    },
+    {
+      "id": "vd04",
+      "category": "validity_domain",
+      "title": "Pipe friction-factor estimate",
+      "context": "A Newtonian fluid has density 1000 kg/m3, speed 1 m/s, pipe diameter 0.02 m and viscosity 0.001 Pa s. The solver obtains Re = 20000 and uses the Darcy friction factor f = 64/Re.",
+      "question": "Which choice identifies the engineering issue?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The laminar friction-factor law is out of range."
+        },
+        {
+          "label": "B",
+          "text": "The reported Reynolds number is inconsistent with the inputs."
+        },
+        {
+          "label": "C",
+          "text": "There is no issue."
+        }
+      ],
+      "answer": {
+        "verdict": "invalid_assumption",
+        "options": [
+          "A"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "reynolds",
+        "inputs": {
+          "rho": 1000,
+          "v": 1,
+          "D": 0.02,
+          "mu": 0.001
+        },
+        "comparison": "gt",
+        "threshold": 2300,
+        "expected": true
+      }
+    },
+    {
+      "id": "vd05",
+      "category": "validity_domain",
+      "title": "Slab cooling estimate",
+      "context": "A slab has convection coefficient h = 100 W/(m2 K), characteristic length L = 0.01 m, and conductivity k = 2 W/(m K). The solver obtains Bi = 0.5 and uses a lumped-capacitance temperature history.",
+      "question": "Which choice identifies the engineering issue?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The given conductivity should be multiplied by the characteristic length to compute Bi."
+        },
+        {
+          "label": "B",
+          "text": "The lumped-temperature assumption fails its Bi criterion."
+        },
+        {
+          "label": "C",
+          "text": "Bi should be 0.05."
+        }
+      ],
+      "answer": {
+        "verdict": "invalid_assumption",
+        "options": [
+          "B"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "biot",
+        "inputs": {
+          "h": 100,
+          "L": 0.01,
+          "k": 2
+        },
+        "comparison": "gt",
+        "threshold": 0.1,
+        "expected": true
+      }
+    },
+    {
+      "id": "vd06",
+      "category": "validity_domain",
+      "title": "Part cooling estimate",
+      "context": "A part has h = 20 W/(m2 K), characteristic length L = 0.01 m, and k = 1 W/(m K). The solver obtains Bi = 0.2 and models the internal temperature as uniform.",
+      "question": "Which choice identifies the engineering issue?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The characteristic length should be omitted from the Bi calculation."
+        },
+        {
+          "label": "B",
+          "text": "Bi arithmetic is wrong."
+        },
+        {
+          "label": "C",
+          "text": "The uniform-temperature assumption is outside its domain."
+        }
+      ],
+      "answer": {
+        "verdict": "invalid_assumption",
+        "options": [
+          "C"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "biot",
+        "inputs": {
+          "h": 20,
+          "L": 0.01,
+          "k": 1
+        },
+        "comparison": "gt",
+        "threshold": 0.1,
+        "expected": true
+      }
+    },
+    {
+      "id": "vd07",
+      "category": "validity_domain",
+      "title": "Arrhenius rate estimate",
+      "context": "An empirical Arrhenius fit used measurements from 300 K to 350 K. At reference temperature 300 K, its fitted rate constant is 1 s^-1 and its fitted Ea/R is 1500 K. The solver evaluates k(T) = k(300 K) exp[-(Ea/R)(1/T - 1/300 K)] at 500 K and reports k = 7.389 s^-1.",
+      "question": "Which choice identifies the engineering issue?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The prediction extrapolates beyond the temperatures used to fit the Arrhenius parameters."
+        },
+        {
+          "label": "B",
+          "text": "Arrhenius temperature must be expressed in Celsius."
+        },
+        {
+          "label": "C",
+          "text": "The prediction interpolates between measured fit temperatures."
+        }
+      ],
+      "answer": {
+        "verdict": "invalid_assumption",
+        "options": [
+          "A"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "range_value",
+        "inputs": {
+          "value": 500
+        },
+        "comparison": "gt",
+        "threshold": 350,
+        "expected": true
+      }
+    },
+    {
+      "id": "vd08",
+      "category": "validity_domain",
+      "title": "Henry-law partial-pressure estimate",
+      "context": "An empirical Henry-law fit used liquid solute mole fractions from 0.001 to 0.05. Its fitted Henry coefficient is H = 100 kPa per unit mole fraction. The solver substitutes x = 0.2 into p = H x and reports p = 20 kPa.",
+      "question": "Which choice identifies the engineering issue?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The mole fraction must be converted to mol/L before using the stated fit."
+        },
+        {
+          "label": "B",
+          "text": "The calculation extrapolates beyond the fit compositions."
+        },
+        {
+          "label": "C",
+          "text": "The substitution is within the fit compositions."
+        }
+      ],
+      "answer": {
+        "verdict": "invalid_assumption",
+        "options": [
+          "B"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "range_value",
+        "inputs": {
+          "value": 0.2
+        },
+        "comparison": "gt",
+        "threshold": 0.05,
+        "expected": true
+      }
+    },
+    {
+      "id": "vd09",
+      "category": "validity_domain",
+      "title": "Carbon dioxide density estimate",
+      "context": "Carbon dioxide at T = 310 K and P = 7.0 MPa has critical temperature Tc = 304.13 K and critical pressure Pc = 7.3773 MPa. With molar mass M = 0.04401 kg/mol and R = 8.314 J/(mol K), the solver obtains reduced temperature Tr = 1.0193 and ideal-gas density rho = 119.53 kg/m3.",
+      "question": "Which choice identifies the engineering issue?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The ideal-gas density model is unreliable near this critical state."
+        },
+        {
+          "label": "B",
+          "text": "The reduced-temperature arithmetic is inconsistent with the inputs."
+        },
+        {
+          "label": "C",
+          "text": "Ideal-gas density is appropriate at this state."
+        }
+      ],
+      "answer": {
+        "verdict": "invalid_assumption",
+        "options": [
+          "A"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "reduced_temperature",
+        "inputs": {
+          "T": 310,
+          "Tc": 304.13
+        },
+        "comparison": "lt",
+        "threshold": 1.1,
+        "expected": true
+      }
+    },
+    {
+      "id": "vd10",
+      "category": "validity_domain",
+      "title": "Culture absorbance estimate",
+      "context": "A dense cell culture has a scattering coefficient of 20 cm^-1 across a 0.2 cm optical path. The solver obtains scattering optical depth 4. From measured absorbance A = 2.0 and an absorption calibration coefficient of 5 L/(mmol cm), it uses single-pass Beer–Lambert absorption to report absorber concentration c = 2 mmol/L.",
+      "question": "Which choice identifies the engineering issue?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The scattering optical depth is negligible, so the calibration applies."
+        },
+        {
+          "label": "B",
+          "text": "Multiple scattering makes the single-pass absorption calibration unreliable."
+        },
+        {
+          "label": "C",
+          "text": "The scattering optical-depth multiplication is incorrect."
+        }
+      ],
+      "answer": {
+        "verdict": "invalid_assumption",
+        "options": [
+          "B"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "optical_depth",
+        "inputs": {
+          "coefficient": 20,
+          "length": 0.2
+        },
+        "comparison": "gt",
+        "threshold": 1,
+        "expected": true
+      }
+    },
+    {
+      "id": "id01",
+      "category": "insufficient_data",
+      "title": "Pump shaft power",
+      "context": "For hydraulic pump shaft power, use P = rho g Q H / eta. Supplied values: density rho = 1000 kg/m3, flow Q = 0.02 m3/s, head H = 10 m, and standard gravitational acceleration g.",
+      "question": "Can the requested quantity be determined from the supplied information? Select every missing input needed; do not select irrelevant inputs.",
+      "options": [
+        {
+          "label": "A",
+          "text": "Pump efficiency eta",
+          "distractor": false
+        },
+        {
+          "label": "B",
+          "text": "Inlet temperature",
+          "distractor": true
+        },
+        {
+          "label": "C",
+          "text": "Suction-pipe length",
+          "distractor": true
+        }
+      ],
+      "answer": {
+        "verdict": "cannot_conclude",
+        "options": [],
+        "missing": [
+          "A"
+        ]
+      },
+      "check": {
+        "function": "required_data_present",
+        "inputs": {
+          "known": {
+            "rho": 1000,
+            "Q": 0.02,
+            "H": 10
+          },
+          "required": [
+            "rho",
+            "Q",
+            "H",
+            "eta"
+          ]
+        },
+        "comparison": "eq",
+        "threshold": true,
+        "expected": false
+      }
+    },
+    {
+      "id": "id02",
+      "category": "insufficient_data",
+      "title": "Sensible heat duty",
+      "context": "For sensible heat duty, use Qdot = m_dot cp DeltaT. Supplied values: mass flow m_dot = 2 kg/s and temperature change DeltaT = 20 K.",
+      "question": "Can the requested quantity be determined from the supplied information? Select every missing input needed; do not select irrelevant inputs.",
+      "options": [
+        {
+          "label": "A",
+          "text": "Pipe diameter",
+          "distractor": true
+        },
+        {
+          "label": "B",
+          "text": "Heat capacity cp",
+          "distractor": false
+        },
+        {
+          "label": "C",
+          "text": "Ambient humidity",
+          "distractor": true
+        }
+      ],
+      "answer": {
+        "verdict": "cannot_conclude",
+        "options": [],
+        "missing": [
+          "B"
+        ]
+      },
+      "check": {
+        "function": "required_data_present",
+        "inputs": {
+          "known": {
+            "m_dot": 2,
+            "DeltaT": 20
+          },
+          "required": [
+            "m_dot",
+            "cp",
+            "DeltaT"
+          ]
+        },
+        "comparison": "eq",
+        "threshold": true,
+        "expected": false
+      }
+    },
+    {
+      "id": "id03",
+      "category": "insufficient_data",
+      "title": "Tank residence time",
+      "context": "For mean residence time in a well-mixed steady tank, use tau = V / Q. Supplied value: volume V = 3 m3.",
+      "question": "Can the requested quantity be determined from the supplied information? Select every missing input needed; do not select irrelevant inputs.",
+      "options": [
+        {
+          "label": "A",
+          "text": "Wall conductivity",
+          "distractor": true
+        },
+        {
+          "label": "B",
+          "text": "Tank shape",
+          "distractor": true
+        },
+        {
+          "label": "C",
+          "text": "Volumetric flow Q",
+          "distractor": false
+        }
+      ],
+      "answer": {
+        "verdict": "cannot_conclude",
+        "options": [],
+        "missing": [
+          "C"
+        ]
+      },
+      "check": {
+        "function": "required_data_present",
+        "inputs": {
+          "known": {
+            "V": 3
+          },
+          "required": [
+            "V",
+            "Q"
+          ]
+        },
+        "comparison": "eq",
+        "threshold": true,
+        "expected": false
+      }
+    },
+    {
+      "id": "id04",
+      "category": "insufficient_data",
+      "title": "Axial stress",
+      "context": "For average axial stress, use sigma = F / A. Supplied value: axial force F = 1000 N.",
+      "question": "Can the requested quantity be determined from the supplied information? Select every missing input needed; do not select irrelevant inputs.",
+      "options": [
+        {
+          "label": "A",
+          "text": "Cross-sectional area A",
+          "distractor": false
+        },
+        {
+          "label": "B",
+          "text": "Ambient pressure",
+          "distractor": true
+        },
+        {
+          "label": "C",
+          "text": "Member length",
+          "distractor": true
+        }
+      ],
+      "answer": {
+        "verdict": "cannot_conclude",
+        "options": [],
+        "missing": [
+          "A"
+        ]
+      },
+      "check": {
+        "function": "required_data_present",
+        "inputs": {
+          "known": {
+            "F": 1000
+          },
+          "required": [
+            "F",
+            "A"
+          ]
+        },
+        "comparison": "eq",
+        "threshold": true,
+        "expected": false
+      }
+    },
+    {
+      "id": "id05",
+      "category": "insufficient_data",
+      "title": "Reynolds number",
+      "context": "For pipe Reynolds number, use Re = rho v D / mu. Supplied values: density rho = 1000 kg/m3, mean speed v = 1 m/s and pipe diameter D = 0.01 m.",
+      "question": "Can the requested quantity be determined from the supplied information? Select every missing input needed; do not select irrelevant inputs.",
+      "options": [
+        {
+          "label": "A",
+          "text": "Pipe length",
+          "distractor": true
+        },
+        {
+          "label": "B",
+          "text": "Dynamic viscosity mu",
+          "distractor": false
+        },
+        {
+          "label": "C",
+          "text": "Inlet elevation",
+          "distractor": true
+        }
+      ],
+      "answer": {
+        "verdict": "cannot_conclude",
+        "options": [],
+        "missing": [
+          "B"
+        ]
+      },
+      "check": {
+        "function": "required_data_present",
+        "inputs": {
+          "known": {
+            "rho": 1000,
+            "v": 1,
+            "D": 0.01
+          },
+          "required": [
+            "rho",
+            "v",
+            "D",
+            "mu"
+          ]
+        },
+        "comparison": "eq",
+        "threshold": true,
+        "expected": false
+      }
+    },
+    {
+      "id": "id06",
+      "category": "insufficient_data",
+      "title": "Two-liquid mixing temperature",
+      "context": "For adiabatic mixing of two different liquids with no phase change, use m1 cp1 (Tf - T1) + m2 cp2 (Tf - T2) = 0. Supplied values: m1 = 2 kg, m2 = 3 kg, T1 = 20 C, T2 = 50 C.",
+      "question": "Can the requested quantity be determined from the supplied information? Select every missing input needed; do not select irrelevant inputs.",
+      "options": [
+        {
+          "label": "A",
+          "text": "Vessel diameter",
+          "distractor": true
+        },
+        {
+          "label": "B",
+          "text": "Heat capacity cp1",
+          "distractor": false
+        },
+        {
+          "label": "C",
+          "text": "Heat capacity cp2",
+          "distractor": false
+        }
+      ],
+      "answer": {
+        "verdict": "cannot_conclude",
+        "options": [],
+        "missing": [
+          "B",
+          "C"
+        ]
+      },
+      "check": {
+        "function": "required_data_present",
+        "inputs": {
+          "known": {
+            "m1": 2,
+            "m2": 3,
+            "T1": 20,
+            "T2": 50
+          },
+          "required": [
+            "m1",
+            "m2",
+            "T1",
+            "T2",
+            "cp1",
+            "cp2"
+          ]
+        },
+        "comparison": "eq",
+        "threshold": true,
+        "expected": false
+      }
+    },
+    {
+      "id": "id07",
+      "category": "insufficient_data",
+      "title": "Resistive voltage drop",
+      "context": "For Ohm-law voltage drop, use V = I R. Supplied value: current I = 5 A.",
+      "question": "Can the requested quantity be determined from the supplied information? Select every missing input needed; do not select irrelevant inputs.",
+      "options": [
+        {
+          "label": "A",
+          "text": "Resistance R",
+          "distractor": false
+        },
+        {
+          "label": "B",
+          "text": "Ambient humidity",
+          "distractor": true
+        },
+        {
+          "label": "C",
+          "text": "Conductor length",
+          "distractor": true
+        }
+      ],
+      "answer": {
+        "verdict": "cannot_conclude",
+        "options": [],
+        "missing": [
+          "A"
+        ]
+      },
+      "check": {
+        "function": "required_data_present",
+        "inputs": {
+          "known": {
+            "I": 5
+          },
+          "required": [
+            "I",
+            "R"
+          ]
+        },
+        "comparison": "eq",
+        "threshold": true,
+        "expected": false
+      }
+    },
+    {
+      "id": "id08",
+      "category": "insufficient_data",
+      "title": "Stokes settling prediction",
+      "context": "For the Stokes-law formula prediction v = (rho_p - rho_f) g d^2 / (18 mu), supplied values are particle density rho_p = 2500 kg/m3, fluid density rho_f = 1000 kg/m3, diameter d = 0.001 m and standard gravitational acceleration g. Evaluate the formula prediction.",
+      "question": "Can the requested quantity be determined from the supplied information? Select every missing input needed; do not select irrelevant inputs.",
+      "options": [
+        {
+          "label": "A",
+          "text": "Vessel depth",
+          "distractor": true
+        },
+        {
+          "label": "B",
+          "text": "Particle shape factor",
+          "distractor": true
+        },
+        {
+          "label": "C",
+          "text": "Dynamic viscosity mu",
+          "distractor": false
+        }
+      ],
+      "answer": {
+        "verdict": "cannot_conclude",
+        "options": [],
+        "missing": [
+          "C"
+        ]
+      },
+      "check": {
+        "function": "required_data_present",
+        "inputs": {
+          "known": {
+            "rho_p": 2500,
+            "rho_f": 1000,
+            "d": 0.001
+          },
+          "required": [
+            "rho_p",
+            "rho_f",
+            "d",
+            "mu"
+          ]
+        },
+        "comparison": "eq",
+        "threshold": true,
+        "expected": false
+      }
+    },
+    {
+      "id": "ct01",
+      "category": "contradiction",
+      "title": "Steady mixer flow account",
+      "context": "At steady state with no reaction or storage, mass enters a mixer at 5 kg/s and 5 kg/s. Its only reported outlet is 8 kg/s. Measurement tolerance is 0.01 kg/s.",
+      "question": "Which choice identifies the contradiction and a plausible explanation?",
+      "options": [
+        {
+          "label": "A",
+          "text": "A 2 kg/s unreported outlet or leak could explain the deficit."
+        },
+        {
+          "label": "B",
+          "text": "The streams balance exactly."
+        },
+        {
+          "label": "C",
+          "text": "An unreported inlet could account for the measured outlet deficit."
+        }
+      ],
+      "answer": {
+        "verdict": "contradiction",
+        "options": [
+          "A"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "mass_balance_residual",
+        "inputs": {
+          "inlets": [
+            5,
+            5
+          ],
+          "outlets": [
+            8
+          ]
+        },
+        "comparison": "gt",
+        "threshold": 0.01,
+        "expected": true
+      }
+    },
+    {
+      "id": "ct02",
+      "category": "contradiction",
+      "title": "Separator flow account",
+      "context": "A steady nonreacting separator has inlet mass flow 10 kg/s and reported outlets 6 kg/s and 6 kg/s. There is no storage; tolerance is 0.01 kg/s.",
+      "question": "Which choice identifies the contradiction and a plausible explanation?",
+      "options": [
+        {
+          "label": "A",
+          "text": "A missing outlet explains the excess."
+        },
+        {
+          "label": "B",
+          "text": "The 2 kg/s outlet excess suggests an unreported inlet or meter error."
+        },
+        {
+          "label": "C",
+          "text": "The mass balance closes."
+        }
+      ],
+      "answer": {
+        "verdict": "contradiction",
+        "options": [
+          "B"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "mass_balance_residual",
+        "inputs": {
+          "inlets": [
+            10
+          ],
+          "outlets": [
+            6,
+            6
+          ]
+        },
+        "comparison": "gt",
+        "threshold": 0.01,
+        "expected": true
+      }
+    },
+    {
+      "id": "ct03",
+      "category": "contradiction",
+      "title": "Dryer flow account",
+      "context": "A steady dryer has total inlet mass 4 kg/s and reported outlet streams of 3 kg/s and 2 kg/s, including evaporated material. No accumulation occurs; tolerance is 0.01 kg/s.",
+      "question": "Which choice identifies the contradiction and a plausible explanation?",
+      "options": [
+        {
+          "label": "A",
+          "text": "Evaporation accounts for the extra total outlet mass."
+        },
+        {
+          "label": "B",
+          "text": "The balance closes."
+        },
+        {
+          "label": "C",
+          "text": "An outlet meter over-read or unreported inlet could explain the 1 kg/s excess."
+        }
+      ],
+      "answer": {
+        "verdict": "contradiction",
+        "options": [
+          "C"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "mass_balance_residual",
+        "inputs": {
+          "inlets": [
+            4
+          ],
+          "outlets": [
+            3,
+            2
+          ]
+        },
+        "comparison": "gt",
+        "threshold": 0.01,
+        "expected": true
+      }
+    },
+    {
+      "id": "ct04",
+      "category": "contradiction",
+      "title": "Pipe-junction flow account",
+      "context": "At a steady pipe junction, two inlet flows are 2 kg/s and 3 kg/s, and measured outlets are 1 kg/s and 2 kg/s. No storage or reaction occurs; tolerance is 0.01 kg/s.",
+      "question": "Which choice identifies the contradiction and a plausible explanation?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The 2 kg/s shortfall suggests a leak or omitted outlet."
+        },
+        {
+          "label": "B",
+          "text": "The four streams satisfy continuity."
+        },
+        {
+          "label": "C",
+          "text": "Pressure loss accounts for the difference between total inlet and outlet mass flow."
+        }
+      ],
+      "answer": {
+        "verdict": "contradiction",
+        "options": [
+          "A"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "mass_balance_residual",
+        "inputs": {
+          "inlets": [
+            2,
+            3
+          ],
+          "outlets": [
+            1,
+            2
+          ]
+        },
+        "comparison": "gt",
+        "threshold": 0.01,
+        "expected": true
+      }
+    },
+    {
+      "id": "ct05",
+      "category": "contradiction",
+      "title": "Heater energy account",
+      "context": "A steady heater receives 100 kW in the process stream and 20 kW electric power. The only reported output is 110 kW in the process stream; heat loss is stated zero and tolerance is 0.1 kW.",
+      "question": "Which choice identifies the contradiction and a plausible explanation?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The electrical power can be omitted from the energy balance because it is converted to heat."
+        },
+        {
+          "label": "B",
+          "text": "The missing 10 kW indicates an unmeasured loss or a meter error."
+        },
+        {
+          "label": "C",
+          "text": "Energy closes to tolerance."
+        }
+      ],
+      "answer": {
+        "verdict": "contradiction",
+        "options": [
+          "B"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "energy_balance_residual",
+        "inputs": {
+          "inputs": [
+            100,
+            20
+          ],
+          "outputs": [
+            110
+          ]
+        },
+        "comparison": "gt",
+        "threshold": 0.1,
+        "expected": true
+      }
+    },
+    {
+      "id": "ct06",
+      "category": "contradiction",
+      "title": "Turbine energy account",
+      "context": "A steady adiabatic turbine receives 500 kW of inlet energy flow and reports 400 kW outlet energy flow plus 120 kW shaft power. Changes in stored energy are zero; tolerance is 0.1 kW.",
+      "question": "Which choice identifies the contradiction and a plausible explanation?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The extra shaft power can be attributed to an unreported heat loss."
+        },
+        {
+          "label": "B",
+          "text": "The energy balance closes."
+        },
+        {
+          "label": "C",
+          "text": "The 20 kW reported output excess suggests an over-read or omitted input."
+        }
+      ],
+      "answer": {
+        "verdict": "contradiction",
+        "options": [
+          "C"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "energy_balance_residual",
+        "inputs": {
+          "inputs": [
+            500
+          ],
+          "outputs": [
+            400,
+            120
+          ]
+        },
+        "comparison": "gt",
+        "threshold": 0.1,
+        "expected": true
+      }
+    },
+    {
+      "id": "ct07",
+      "category": "contradiction",
+      "title": "Heat-exchanger energy account",
+      "context": "Across the whole steady insulated exchanger, inlet enthalpy flows total 200 kW and 300 kW; outlet flows are 250 kW and 240 kW. No work or accumulation occurs; tolerance is 0.1 kW.",
+      "question": "Which choice identifies the contradiction and a plausible explanation?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The 10 kW output deficit suggests heat leakage or a measurement error."
+        },
+        {
+          "label": "B",
+          "text": "Heat transfer between the two sides can account for the whole-exchanger deficit."
+        },
+        {
+          "label": "C",
+          "text": "The whole-exchanger balance closes."
+        }
+      ],
+      "answer": {
+        "verdict": "contradiction",
+        "options": [
+          "A"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "energy_balance_residual",
+        "inputs": {
+          "inputs": [
+            200,
+            300
+          ],
+          "outputs": [
+            250,
+            240
+          ]
+        },
+        "comparison": "gt",
+        "threshold": 0.1,
+        "expected": true
+      }
+    },
+    {
+      "id": "ct08",
+      "category": "contradiction",
+      "title": "Battery discharge energy account",
+      "context": "Over a stated discharge interval, measured stored-energy decrease is 50 kJ and electrical input is 0 kJ. Electrical output is 40 kJ and measured heat output is 15 kJ. No other transfers or storage changes occur; tolerance is 0.1 kJ.",
+      "question": "Which choice identifies the contradiction and a plausible explanation?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The electrical output alone accounts for the stored-energy decrease."
+        },
+        {
+          "label": "B",
+          "text": "The 5 kJ output excess indicates a measurement or accounting error."
+        },
+        {
+          "label": "C",
+          "text": "The energy account closes."
+        }
+      ],
+      "answer": {
+        "verdict": "contradiction",
+        "options": [
+          "B"
+        ],
+        "missing": []
+      },
+      "check": {
+        "function": "energy_balance_residual",
+        "inputs": {
+          "inputs": [
+            50,
+            0
+          ],
+          "outputs": [
+            40,
+            15
+          ]
+        },
+        "comparison": "gt",
+        "threshold": 0.1,
+        "expected": true
+      }
+    },
+    {
+      "id": "co01",
+      "category": "control",
+      "title": "Tube heat-transfer estimate C",
+      "context": "A smooth, fully developed turbulent tube has fluid density 1000 kg/m3, speed 1 m/s, diameter 0.02 m and viscosity 0.001 Pa s. The solver obtains Re = 20000 and applies the Dittus–Boelter heat-transfer correlation; other correlation conditions are met.",
+      "question": "Is there an engineering issue in the stated conclusion?",
+      "options": [
+        {
+          "label": "A",
+          "text": "Re is below the correlation minimum."
+        },
+        {
+          "label": "B",
+          "text": "The tube length may be too short for fully developed flow."
+        },
+        {
+          "label": "C",
+          "text": "The Re arithmetic is wrong."
+        }
+      ],
+      "answer": {
+        "verdict": "no_issue",
+        "options": [],
+        "missing": []
+      },
+      "check": {
+        "function": "reynolds",
+        "inputs": {
+          "rho": 1000,
+          "v": 1,
+          "D": 0.02,
+          "mu": 0.001
+        },
+        "comparison": "ge",
+        "threshold": 10000,
+        "expected": true
+      }
+    },
+    {
+      "id": "co02",
+      "category": "control",
+      "title": "Pipe friction-factor estimate B",
+      "context": "A Newtonian fluid has density 1000 kg/m3, speed 0.05 m/s, pipe diameter 0.02 m and viscosity 0.001 Pa s. The solver obtains Re = 1000 and uses f = 64/Re for steady, fully developed pipe flow.",
+      "question": "Is there an engineering issue in the stated conclusion?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The law is outside its Re range."
+        },
+        {
+          "label": "B",
+          "text": "The pressure drop violates mass conservation."
+        },
+        {
+          "label": "C",
+          "text": "The friction-factor convention should be confirmed as Darcy rather than Fanning."
+        }
+      ],
+      "answer": {
+        "verdict": "no_issue",
+        "options": [],
+        "missing": []
+      },
+      "check": {
+        "function": "reynolds",
+        "inputs": {
+          "rho": 1000,
+          "v": 0.05,
+          "D": 0.02,
+          "mu": 0.001
+        },
+        "comparison": "lt",
+        "threshold": 2300,
+        "expected": true
+      }
+    },
+    {
+      "id": "co03",
+      "category": "control",
+      "title": "Solid cooling estimate A",
+      "context": "A solid has h = 10 W/(m2 K), characteristic length L = 0.005 m and k = 1 W/(m K). The solver obtains Bi = 0.05 and uses a lumped-capacitance temperature model.",
+      "question": "Is there an engineering issue in the stated conclusion?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The characteristic length may not represent the solid’s volume-to-surface ratio."
+        },
+        {
+          "label": "B",
+          "text": "Bi exceeds the threshold."
+        },
+        {
+          "label": "C",
+          "text": "The conductivity is missing."
+        }
+      ],
+      "answer": {
+        "verdict": "no_issue",
+        "options": [],
+        "missing": []
+      },
+      "check": {
+        "function": "biot",
+        "inputs": {
+          "h": 10,
+          "L": 0.005,
+          "k": 1
+        },
+        "comparison": "lt",
+        "threshold": 0.1,
+        "expected": true
+      }
+    },
+    {
+      "id": "co04",
+      "category": "control",
+      "title": "Solid cooling estimate B",
+      "context": "A metal part has h = 100 W/(m2 K), characteristic length L = 0.001 m and k = 10 W/(m K). The solver obtains Bi = 0.01 and uses a uniform-temperature model.",
+      "question": "Is there an engineering issue in the stated conclusion?",
+      "options": [
+        {
+          "label": "A",
+          "text": "Bi equals 1."
+        },
+        {
+          "label": "B",
+          "text": "The model may miss internal temperature gradients in the part."
+        },
+        {
+          "label": "C",
+          "text": "Mass is not conserved."
+        }
+      ],
+      "answer": {
+        "verdict": "no_issue",
+        "options": [],
+        "missing": []
+      },
+      "check": {
+        "function": "biot",
+        "inputs": {
+          "h": 100,
+          "L": 0.001,
+          "k": 10
+        },
+        "comparison": "lt",
+        "threshold": 0.1,
+        "expected": true
+      }
+    },
+    {
+      "id": "co05",
+      "category": "control",
+      "title": "Steady mixer flow account B",
+      "context": "A steady nonreacting mixer receives 3 kg/s and 2 kg/s and discharges 5 kg/s. The solver totals 5 kg/s entering and 5 kg/s leaving. The mass-balance tolerance is 0.01 kg/s and no storage occurs.",
+      "question": "Is there an engineering issue in the stated conclusion?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The outlet is short by 1 kg/s."
+        },
+        {
+          "label": "B",
+          "text": "A hidden source is required."
+        },
+        {
+          "label": "C",
+          "text": "Each inlet stream should be balanced against a separate outlet."
+        }
+      ],
+      "answer": {
+        "verdict": "no_issue",
+        "options": [],
+        "missing": []
+      },
+      "check": {
+        "function": "mass_balance_residual",
+        "inputs": {
+          "inlets": [
+            3,
+            2
+          ],
+          "outlets": [
+            5
+          ]
+        },
+        "comparison": "le",
+        "threshold": 0.01,
+        "expected": true
+      }
+    },
+    {
+      "id": "co06",
+      "category": "control",
+      "title": "Machine energy account",
+      "context": "A steady adiabatic machine receives 100 kW of energy flow and discharges 70 kW as fluid energy and 30 kW as shaft work. The solver totals 100 kW of output energy. No storage occurs; balance tolerance is 0.1 kW.",
+      "question": "Is there an engineering issue in the stated conclusion?",
+      "options": [
+        {
+          "label": "A",
+          "text": "Shaft work should be treated as an energy input to the machine."
+        },
+        {
+          "label": "B",
+          "text": "The output exceeds the input."
+        },
+        {
+          "label": "C",
+          "text": "Shaft work should be added to the inlet rather than the outlet."
+        }
+      ],
+      "answer": {
+        "verdict": "no_issue",
+        "options": [],
+        "missing": []
+      },
+      "check": {
+        "function": "energy_balance_residual",
+        "inputs": {
+          "inputs": [
+            100
+          ],
+          "outputs": [
+            70,
+            30
+          ]
+        },
+        "comparison": "le",
+        "threshold": 0.1,
+        "expected": true
+      }
+    },
+    {
+      "id": "co07",
+      "category": "control",
+      "title": "Carbon dioxide density estimate B",
+      "context": "Carbon dioxide at T = 450 K and P = 0.1 MPa has critical temperature Tc = 304.13 K and critical pressure Pc = 7.3773 MPa. With molar mass M = 0.04401 kg/mol and R = 8.314 J/(mol K), the solver obtains reduced temperature Tr = 1.4796 and ideal-gas density rho = 1.1763 kg/m3 for a preliminary estimate.",
+      "question": "Is there an engineering issue in the stated conclusion?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The gas pressure may be too high for an ideal-gas density estimate."
+        },
+        {
+          "label": "B",
+          "text": "The state is too close to the critical point for an ideal-gas estimate."
+        },
+        {
+          "label": "C",
+          "text": "The reduced-temperature arithmetic is inconsistent with the inputs."
+        }
+      ],
+      "answer": {
+        "verdict": "no_issue",
+        "options": [],
+        "missing": []
+      },
+      "check": {
+        "function": "reduced_temperature",
+        "inputs": {
+          "T": 450,
+          "Tc": 304.13
+        },
+        "comparison": "gt",
+        "threshold": 1.4,
+        "expected": true
+      }
+    },
+    {
+      "id": "co08",
+      "category": "control",
+      "title": "Dye-solution absorbance estimate",
+      "context": "A clear, homogeneous dye solution has a scattering coefficient of 0.01 cm^-1 across a 1 cm optical path. The solver obtains scattering optical depth 0.01. With monochromatic light, measured absorbance A = 0.4 and calibrated absorption coefficient 2 L/(mmol cm), Beer–Lambert gives dye concentration c = 0.2 mmol/L.",
+      "question": "Is there an engineering issue in the stated conclusion?",
+      "options": [
+        {
+          "label": "A",
+          "text": "The scattering optical depth makes multiple scattering dominant."
+        },
+        {
+          "label": "B",
+          "text": "The measured absorbance may exceed the instrument’s calibrated linear range."
+        },
+        {
+          "label": "C",
+          "text": "The optical-depth multiplication is inconsistent with the inputs."
+        }
+      ],
+      "answer": {
+        "verdict": "no_issue",
+        "options": [],
+        "missing": []
+      },
+      "check": {
+        "function": "optical_depth",
+        "inputs": {
+          "coefficient": 0.01,
+          "length": 1
+        },
+        "comparison": "lt",
+        "threshold": 0.1,
+        "expected": true
+      }
+    }
+  ]
+}
