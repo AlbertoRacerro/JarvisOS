@@ -1,0 +1,15 @@
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+const panel = readFileSync(new URL('../src/components/fusion/ProjectKnowledgePanel.tsx', import.meta.url), 'utf8');
+const basis = readFileSync(new URL('../src/components/fusion/FinalOperatorReadSurface.tsx', import.meta.url), 'utf8');
+assert.match(panel, /operation_kind: "update", owner_id: editing.id, expected_updated_at: editing.updated_at, fields: editFields/);
+for (const field of ['statement', 'rationale', 'notes']) assert.match(panel, new RegExp(`editFields\\.${field} =`));
+assert.match(panel, /!editStatement\.trim\(\) \|\| !Object\.keys\(editFields\)\.length/);
+assert.match(panel, /stale\|conflict/);
+assert.match(panel, /Reload records/);
+assert.match(panel, /!readOnly && editing/);
+assert.match(basis, /!readOnly && row\.id\.startsWith/);
+assert.match(basis, /readOnly=\{readOnly\}/);
+assert.match(basis, /setEditing\(null\); }, \[workspaceId\]/);
+assert.doesNotMatch(panel, /PATCH/);
+console.log('246 requirement edit conformance: PASS');

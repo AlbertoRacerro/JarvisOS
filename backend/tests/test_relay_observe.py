@@ -179,6 +179,18 @@ def test_digest_answers_what_delivered_next_problem(tmp_path: Path) -> None:
     assert "nessuna novità" in quiet
 
 
+@pytest.mark.parametrize(("update", "expected"), [
+    ("Sto facendo: migliorare il riepilogo.", "migliorare il riepilogo."),
+    ("  * sto FACENDO: *  migliorare il riepilogo.  ", "migliorare il riepilogo."),
+    (" ** Sto facendo: ** ", "nessun lavoro attivo"),
+])
+def test_digest_does_not_repeat_sto_facendo(update: str, expected: str) -> None:
+    snapshot = {"at": rc.iso(T0), "state": "idle", "problems": [], "update": update}
+    text = ro.digest_text(snapshot, since=None, merges=[])
+    assert f"*Sto facendo:* {expected}" in text
+    assert text.count("Sto facendo:") == 1
+
+
 def _visible(text: str) -> str:
     return re.sub(r"<[^|>]+\|", "<", text)
 

@@ -39,9 +39,9 @@ nested modules listed separately, rounded to the nearest 100.
 | `backend/app/modules/workspace_actions` | live | Typed, governed assistant actions over Process and BLUECAD owners, with apply and undo. | `/workspaces/{id}/actions`, `service.py` | 2400 |
 | `backend/app/modules/workspaces` | live | Workspaces (create, archive, restore, rename), design versions and design components; seeds the default workspace. | `/workspaces`, `/workspaces/{id}/design-versions`, `service.py` | 1800 |
 | `backend/app/schemas` | backlog-candidate | One shared dataclass (ServiceStatus) with no consumer in the app; delete it or give it a purpose. | `common.py` | <100 |
-| `backend/tests` | live | Backend test suite (pytest): offline, fake providers, isolated data root, a fake project pack. | `conftest.py`, `scripts/test_backend_sharded.sh` | 95100 |
+| `backend/tests` | live | Backend test suite (pytest): offline, fake providers, isolated data root, a fake project pack. | `conftest.py`, `scripts/test_backend_sharded.sh` | 95200 |
 | `configs` | live | Declarative configuration: AI provider catalog, cloud escalation and egress policy, architecture-enforcement rules, BLUECAD tool registry, relay gateway. | `ai_providers.yaml`, `ai_egress_policy.json`, `architecture_enforcement.json` | <100 |
-| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 3400 |
+| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 3600 |
 | `eval` | in-development | Local-model re-evaluation: classification and intake quality, latency, llama.cpp qualification and the second-brain retrieval benchmark. Everything here is marked to improve. | `local/README.md`, `local/llamacpp_qualification.py` | 700 |
 | `frontend/src/api` | live | Typed API client wrappers per backend area, plus the generated contract types (generated/). | `client.ts`, `generated/` | 4300 |
 | `frontend/src/app` | live | Routing table and router hook, navigation history, selection, and the owner and target registries Bubu uses to find controls. | `routes.ts`, `useAppRouter.ts`, `designTargets.ts` | 700 |
@@ -50,13 +50,13 @@ nested modules listed separately, rounded to the nearest 100.
 | `frontend/src/components/analytics` | live | Analytics dock content and its state logic. | `AnalyticsDockContent.tsx`, `analyticsState.ts` | 700 |
 | `frontend/src/components/bluecad` | live | BLUECAD workbench: project tree, 3D scene binding and selection. | `BluecadWorkbench.tsx`, `sceneBinding.ts` | 1600 |
 | `frontend/src/components/bubu` | live | Bubu, the assistant that points: chat bubble, guided tour, pointer overlay, dictation, page-context capture and conversation store. | `BubuBubble.tsx`, `useBubuIntegration.tsx`, `pointerDirectives.ts`, `guidedTour.ts` | 1900 |
-| `frontend/src/components/coding` | live | Coding workspace panels: provider quota rings and the relay monitor. | `ProviderQuotaPanel.tsx`, `RelayMonitorPanel.tsx` | 300 |
+| `frontend/src/components/coding` | live | Coding workspace panels: provider quota rings and the relay monitor. | `ProviderQuotaPanel.tsx`, `RelayMonitorPanel.tsx` | 400 |
 | `frontend/src/components/design` | live | Design workspace pieces: component tree, splitter, node status and labels. | `DesignComponentTree.tsx` | 300 |
 | `frontend/src/components/dynamic` | live | Dynamic plant simulation UI: scenario, schedule and controller editors, plant view, run results and synchronized charts. | `DynamicPanel.tsx`, `dynamicApi.ts` | 1900 |
 | `frontend/src/components/engineering` | live | Engineering properties panel, Jarvis engineering actions and previous-run loading. | `EngineeringProperties.tsx` | 1100 |
 | `frontend/src/components/engineering-data` | live | State logic for the Engineering Data page. | `engineeringDataState.ts` | 100 |
 | `frontend/src/components/environment` | live | Environment profile UI: site form, import wizard, generators, profile chart and table, provenance. | `ImportWizard.tsx`, `ProfileList.tsx` | 700 |
-| `frontend/src/components/fusion` | live | Operator surfaces shared across workspaces: workspace header, settings surface, project archive, knowledge and search panels. | `FinalWorkspaceHeader.tsx`, `FinalSettingsSurface.tsx` | 600 |
+| `frontend/src/components/fusion` | live | Operator surfaces shared across workspaces: workspace header, settings surface, project archive, knowledge and search panels. | `FinalWorkspaceHeader.tsx`, `FinalSettingsSurface.tsx` | 700 |
 | `frontend/src/components/process` | live | Process workspace panels: PBR model picker, inspector and results, biology model library, reactor kinetics, dynamic runs and proposals. | `PbrInspector.tsx`, `ReactorKinetics.tsx`, `BiologyModelLibrary.tsx` | 3400 |
 | `frontend/src/components/review` | live | State logic for the Review stage. | `reviewState.ts` | 200 |
 | `frontend/src/components/runs` | live | State logic for the Runs workbench. | `state.ts` | <100 |
@@ -65,7 +65,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `frontend/src/components/threads` | live | State logic for AI threads. | `threadState.ts` | 100 |
 | `frontend/src/components/ui` | live | Shared UI primitives: button, field, surface, status badge, numeric input, context menu. | `Button.tsx`, `Field.tsx`, `Surface.tsx` | 500 |
 | `frontend/src/pages` | live | Page-level screens: Design project, Studio, Runs, Coding, Settings, Literature, Model dossier, Engineering Data, Development roadmap, AI threads, and the CFD panels. | `DesignProject.tsx`, `Studio.tsx`, `CodingWorkbench.tsx` | 6400 |
-| `frontend/src/stages` | live | Stage containers for the Design workspace (process, studies, model, review), the environment panel and the process draft editor. | `registry.ts`, `ProcessStage.tsx`, `ModelStage.tsx` | 6400 |
+| `frontend/src/stages` | live | Stage containers for the Design workspace (process, studies, model, review), the environment panel and the process draft editor. | `registry.ts`, `ProcessStage.tsx`, `ModelStage.tsx` | 6500 |
 | `frontend/src/styles` | live | Design tokens and style sheets for the shell and each surface. | `tokens.css`, `global.css`, `lumen.css` | 5300 |
 | `frontend/tests` | live | Static frontend tests (node .mjs) run by `npm run build`; they assert literal strings and source patterns. | `package.json (scripts.build)` | 6100 |
 | `schemas` | live | JSON schemas for BLUECAD specs, results and tool registry, and Jarvis records. | `bluecad_geometry_spec_v0_1.schema.json` | <100 |
