@@ -167,7 +167,6 @@ def answer_question(question_id: str, option_index: int | None = None, custom_te
     ro, root, repo = observe(), control_root(), relay_repo()
     if not root.is_dir():
         return {"state": "refused", "reason": "owner_state_missing"}
-    env = ro.devctx.default_env(repo)
     question = next((q for q in ro.parse_open_questions(ro._ledger(repo)) if q["id"] == question_id), None)
     if question is None:
         return {"state": "refused", "reason": "question_not_open"}
@@ -186,20 +185,7 @@ def answer_question(question_id: str, option_index: int | None = None, custom_te
         return {"state": "refused", "reason": "answer_empty"}
     if ro.devctx.find_secret(answer):
         return {"state": "refused", "reason": "secret_detected"}
-    lock = ro.rc.roadmap_lock(root, wait=5.0)
-    if lock is None:
-        return {"state": "refused", "reason": "roadmap_busy"}
     now = datetime.now(UTC)
-    try:
-        if not any(q["id"] == question_id for q in ro.parse_open_questions(ro._ledger(repo))):
-            return {"state": "refused", "reason": "question_not_open"}
-        entry = ro.devctx.make_entry(env, "decision", answer, status="accepted", supersedes=[question_id], author="maintainer (jarvis-ui)")
-        ro.devctx.append_entry(env, entry)
-        road = ro.rc.load_roadmap(root)
-        if road and not road.get("corrupt") and road.get("paused") == "coordinator_blocked" and not road.get("hostops_wait") and not road.get("job_wait"):
-            road.update(paused=None, paused_at=None, no_progress=0)
-            ro.rc.write_json_atomic(ro.rc.roadmap_path(root), road)
-            ro.rc.missions_journal(root, {"event": "roadmap_question_answered", "at": ro.rc.iso(now), "question_id": question_id})
-    finally:
-        lock.release()
-    return {"state": "ok", "decision_id": entry["id"], "question_id": question_id, "snapshot": snapshot(now=now)}
+    result = ro.record_answer(root, repo, question_id, answer[len(prefix):], source="Jarvis UI",
+                              author="maintainer (jarvis-ui)")
+    return {**result, "snapshot": snapshot(now=now)} if result["state"] == "ok" else result

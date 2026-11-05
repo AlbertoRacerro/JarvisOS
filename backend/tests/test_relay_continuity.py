@@ -2589,6 +2589,8 @@ class Roadmap:
         self.repo.mkdir()
         monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(self.root))
         monkeypatch.setattr(rc, "repo_root", lambda: self.repo)
+        host_paths = rc.host_ops.Paths
+        monkeypatch.setattr(rc.host_ops, "Paths", lambda _home: host_paths(tmp_path))
         monkeypatch.setattr(rc.devctx, "read_ledger", lambda env: [{"id": DIRECTIVE, "kind": "directive"}])
         monkeypatch.setattr(rc.devctx, "append_entry", lambda env, entry: None)
         monkeypatch.setattr(rc, "roadmap_ci_fingerprint", lambda repo: "ci0")

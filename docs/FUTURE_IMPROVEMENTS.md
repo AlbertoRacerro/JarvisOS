@@ -132,3 +132,11 @@ Each entry must contain:
 - **Disposition:** PARK; a cross-workspace lineage edge needs a graph/authority decision outside the 234 scope.
 - **Expected benefit:** candidate ancestry can be followed across Design versions.
 - **Likely surface:** `backend/app/modules/workspaces/design_components.py` (`put_component_feature_history` parent selection) and the workspace graph builder in `backend/app/modules/flowsheet/service.py`.
+
+### F21 — Slack answer confirmation durability and watch-state pruning — PARK
+
+- **Origin:** spec 244 independent re-review of PR #41, 2026-11-05.
+- **Observation:** the watcher records a Slack answer in the ledger before it queues a failed "Ricevuto" confirmation in its observation state, which is saved later in the watch loop; a crash in between loses that one confirmation (the answer itself is recorded). Answered questions also stay in `sent_questions` and `slack_cursors`, so the watch state grows by one small entry per question.
+- **Disposition:** PARK; both are P2 with no authority or correctness effect on recorded answers.
+- **Expected benefit:** a confirmation survives a watcher crash; the watch state stays bounded.
+- **Likely surface:** `poll_slack_questions` in `scripts/relay_continuity.py` and `observe_step` in `scripts/relay_observe.py`.
