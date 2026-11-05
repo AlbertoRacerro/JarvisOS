@@ -1,6 +1,6 @@
 # 243 — Supervisor waste fixes and host-run local evaluation
 
-Status: ready
+Status: in_review
 Depends on: none
 
 ## Goal
