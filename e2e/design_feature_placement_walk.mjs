@@ -127,6 +127,7 @@ try {
   assert(placed.sequence.features[1].frame.origin[1] === 100 && !placed.sequence.features[1].connect_to, "free frame missing");
   await shot("free-placement");
   await viewport.locator("canvas").waitFor({ timeout: 60_000 });
+  await viewport.scrollIntoViewIfNeeded();
   await page.waitForTimeout(1500);
   await shot("free-placement-viewport-two-tubes", viewport);
   step("free_placement_rebuilt");
