@@ -31,6 +31,7 @@ import select
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tarfile
@@ -761,10 +762,14 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
     if "secret_env" in bench:
         raise Refused("benchmark secret_env is forbidden")
     # The checkout is agent-controlled: its revision is read inside the sandbox, never by host git.
-    head = ctx.run([launcher, "git", "-C", str(root), "rev-parse", "HEAD"], timeout=60, cwd=str(root))
-    dirty = ctx.run([launcher, "git", "-C", str(root), "status", "--porcelain"], timeout=60, cwd=str(root))
+    git = [launcher, "git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", str(root)]
+    head = ctx.run([*git, "rev-parse", "HEAD"], timeout=60, cwd=str(root))
+    dirty = ctx.run([*git, "status", "--porcelain"], timeout=60, cwd=str(root))
+    flags = ctx.run([*git, "ls-files", "-v"], timeout=60, cwd=str(root))
     reported = str(head.stdout).strip()
-    if head.returncode != 0 or dirty.returncode != 0 or reported != sha or str(dirty.stdout).strip():
+    hidden = any(line and (line[0].islower() or line[0] == "S") for line in str(flags.stdout).splitlines())
+    if (head.returncode != 0 or dirty.returncode != 0 or flags.returncode != 0
+            or reported != sha or str(dirty.stdout).strip() or hidden):
         raise Refused(f"worktree {worktree} is not a clean checkout of {sha[:12]} (sandbox reports {reported[:12] or '?'})")
     return _run_benchmark(ctx, args["bench"], bench, root, sub, result_path, reported, worktree)
 
@@ -788,6 +793,7 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
             "-p", f"MemoryMax={limits['memory_max']}", "-p", f"CPUQuota={limits['cpu_quota']}",
             "-p", f"TasksMax={limits['tasks_max']}", "--",
             "timeout", "-k", "15", str(limits["timeout_s"]), launcher, "env", "-C", str(root / sub),
+            *(["PYTHONDONTWRITEBYTECODE=1"] if close_scope else []),
             *[str(a) for a in bench["argv"]]]
     started = time.monotonic()
     proc = None
@@ -991,7 +997,9 @@ def _eval_reachable(sha: str, remaining: Callable[[], float]) -> None:
     raise Refused("local evaluator commit is not reachable from origin/master or an open PR head")
 
 
-def _eval_checkout(sha: str, root: Path, remaining: Callable[[], float]) -> None:
+def _eval_checkout(sha: str, root: Path, remaining: Callable[[], float]) -> tuple[dict[Path, tuple[int, str]], set[Path]]:
+    files: dict[Path, tuple[int, str]] = {}
+    directories: set[Path] = set()
     try:
         proc = subprocess.Popen(["gh", "api", f"repos/{REPO}/tarball/{sha}"], stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, env=_host_env())
@@ -1038,16 +1046,65 @@ def _eval_checkout(sha: str, root: Path, remaining: Callable[[], float]) -> None
                 target = root.joinpath(*parts[1:])
                 if member.isdir():
                     target.mkdir(parents=True, exist_ok=True)
+                    directories.add(Path(*parts[1:]))
                 else:
                     target.parent.mkdir(parents=True, exist_ok=True)
+                    directories.update(parent for parent in Path(*parts[1:]).parents if parent != Path("."))
+                    digest = hashlib.sha256()
+                    size = 0
                     with archive.extractfile(member) as source, target.open("wb") as output:
                         while chunk := source.read(65536):
                             remaining()
                             output.write(chunk)
+                            digest.update(chunk)
+                            size += len(chunk)
                     target.chmod(0o755 if member.mode & 0o111 else 0o644)
+                    files[Path(*parts[1:])] = (size, digest.hexdigest())
         remaining()
+        return files, directories
     except (OSError, tarfile.TarError, subprocess.SubprocessError):
         raise Refused("local evaluator checkout could not be fetched from GitHub") from None
+
+
+def _eval_check_checkout(root: Path, files: dict[Path, tuple[int, str]],
+                         directories: set[Path], result: Path) -> None:
+    """Compare the host-visible checkout with the extracted archive manifest."""
+    seen: set[Path] = set()
+
+    def walk(directory: Path) -> None:
+        for entry in os.scandir(root / directory):
+            path = directory / entry.name
+            mode = entry.stat(follow_symlinks=False).st_mode
+            if stat.S_ISDIR(mode):
+                if path not in directories:
+                    raise Refused("local evaluator checkout changed during evaluation")
+                walk(path)
+            elif stat.S_ISREG(mode):
+                if path in files:
+                    fd = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    try:
+                        actual = os.fstat(fd)
+                        if not stat.S_ISREG(actual.st_mode):
+                            raise Refused("local evaluator checkout changed during evaluation")
+                        digest = hashlib.sha256()
+                        while chunk := os.read(fd, 65536):
+                            digest.update(chunk)
+                        if (actual.st_size, digest.hexdigest()) != files[path]:
+                            raise Refused("local evaluator checkout changed during evaluation")
+                    finally:
+                        os.close(fd)
+                    seen.add(path)
+                elif path != result:
+                    raise Refused("local evaluator checkout changed during evaluation")
+            else:
+                raise Refused("local evaluator checkout changed during evaluation")
+
+    try:
+        walk(Path("."))
+    except OSError:
+        raise Refused("local evaluator checkout changed during evaluation") from None
+    if seen != files.keys():
+        raise Refused("local evaluator checkout changed during evaluation")
 
 
 @contextmanager
@@ -1116,15 +1173,19 @@ def op_local_eval_run(ctx: Context) -> dict[str, Any]:
     _eval_reachable(sha, remaining)
     try:
         with _eval_tempdir(ctx.paths.home / "src" / "worktrees") as root:
-            _eval_checkout(sha, root, remaining)
+            files, directories = _eval_checkout(sha, root, remaining)
             sub = str(bench.get("cwd") or ".")
             if Path(sub).is_absolute() or ".." in Path(sub).parts or not (root / sub).is_dir():
                 raise Refused("local evaluator benchmark cwd is invalid")
             if (not isinstance(result_file, str) or Path(result_file).is_absolute()
                     or ".." in Path(result_file).parts or "secret_env" in bench):
                 raise Refused("local evaluator benchmark policy is invalid")
+            result = Path(sub) / result_file
+            _eval_check_checkout(root, files, directories, result)
+            # A transient modify-and-restore race during the run needs a launcher-private bind to close.
             phase_one = _run_benchmark(ctx, bench_name, bench, root, sub, root / sub / result_file,
                                        sha, None, scrub_result=False, close_scope=True, deadline=deadline)
+            _eval_check_checkout(root, files, directories, result)
             remaining()
         prompts = _eval_prompts(phase_one.get("result"))
     except Failed as exc:

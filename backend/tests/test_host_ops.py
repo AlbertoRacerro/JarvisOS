@@ -219,17 +219,50 @@ def test_bench_clean_head_and_plain_launcher(host, dirty, head):
 
     def run(argv, **kw):
         calls.append((argv, kw))
-        return subprocess.CompletedProcess(argv, 0, head if "rev-parse" in argv else dirty, "")
+        return subprocess.CompletedProcess(argv, 0, head if "rev-parse" in argv else
+                                           dirty if "status" in argv else "H x\n", "")
 
     ex.run = run
     assert request(host, "bench.run", {"bench": "relay-observe-tests", "worktree": "x"}, sha=SHA)[1]["outcome"] == "refused"
     root = paths.home / "src/worktrees/x"
     launcher = str(paths.home / ".local/bin/jarvis-sandbox")
+    git = [launcher, "git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", str(root)]
     assert [a for a, _ in calls] == [
-        [launcher, "git", "-C", str(root), "rev-parse", "HEAD"],
-        [launcher, "git", "-C", str(root), "status", "--porcelain"],
+        [*git, "rev-parse", "HEAD"], [*git, "status", "--porcelain"], [*git, "ls-files", "-v"],
     ]
     assert all(k["cwd"] == str(root) for _, k in calls)
+
+
+def test_bench_clean_check_real_linked_worktree(host, monkeypatch):
+    paths, ex, _ = host
+    repo = paths.home / "repo"
+    root = paths.home / "src/worktrees/x"
+    root.parent.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "tracked.txt").write_text("original\n")
+    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "initial"], check=True)
+    sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "--detach", str(root)], check=True)
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["bench.run"]["launcher"] = "/usr/bin/env"
+    paths.policy.write_text(json.dumps(policy))
+    ex.run = lambda argv, **kw: subprocess.run(argv, capture_output=True, text=True, **kw)
+    monkeypatch.setattr(h, "_run_benchmark", lambda *_args, **_kw: {"accepted": True})
+
+    def outcome():
+        return request(host, "bench.run", {"bench": "relay-observe-tests", "worktree": "x"}, sha=sha)[1]["outcome"]
+
+    assert outcome() == "ok"
+    subprocess.run(["git", "-C", str(root), "update-index", "--assume-unchanged", "tracked.txt"], check=True)
+    (root / "tracked.txt").write_text("edited\n")
+    assert outcome() == "refused"
+    subprocess.run(["git", "-C", str(root), "update-index", "--no-assume-unchanged", "tracked.txt"], check=True)
+    assert outcome() == "refused"
+    (root / "tracked.txt").write_text("original\n")
+    subprocess.run(["git", "-C", str(root), "update-index", "--skip-worktree", "tracked.txt"], check=True)
+    assert outcome() == "refused"
 
 
 def local_eval_policy(paths, *, base_url="http://127.0.0.1:18081/v1", credential=True):
@@ -251,10 +284,15 @@ def local_eval_policy(paths, *, base_url="http://127.0.0.1:18081/v1", credential
     return key_file
 
 
-def fake_prompt_phase(host, monkeypatch, prompts):
+def fake_prompt_phase(host, monkeypatch, prompts, change=None):
     _, ex, _ = host
     monkeypatch.setattr(h, "_gh", lambda args, **kw: "behind" if "compare/" in args[0] else "[]")
-    monkeypatch.setattr(h, "_eval_checkout", lambda sha, root, remaining: (root / "backend").mkdir())
+    def checkout(sha, root, remaining):
+        (root / "backend").mkdir()
+        data = b"# evaluator\n"
+        (root / "backend/pointing_eval.py").write_bytes(data)
+        return {Path("backend/pointing_eval.py"): (len(data), h.hashlib.sha256(data).hexdigest())}, {Path("backend")}
+    monkeypatch.setattr(h, "_eval_checkout", checkout)
     seen = {}
 
     class Child:
@@ -266,6 +304,14 @@ def fake_prompt_phase(host, monkeypatch, prompts):
             seen["cwd"] = kw["cwd"]
             kw["stdout"].write(b"test-local-model-credential")
             (Path(kw["cwd"]) / "prompts.json").write_text(json.dumps(prompts))
+            if change == "modified":
+                (Path(kw["cwd"]) / "pointing_eval.py").write_text("changed\n")
+            elif change == "new":
+                (Path(kw["cwd"]) / "extra.py").write_text("new\n")
+            elif change == "cache":
+                cache = Path(kw["cwd"]) / "__pycache__"
+                cache.mkdir()
+                (cache / "x.pyc").write_bytes(b"cache")
 
         def poll(self):
             return self.returncode
@@ -322,6 +368,7 @@ def test_local_eval_token_stays_on_host_and_receipt_is_scores_only(host, monkeyp
     launcher = str(paths.home / ".local/bin/jarvis-sandbox")
     index = seen["argv"].index(launcher)
     assert seen["argv"][index:index + 4] == [launcher, "env", "-C", str(seen["cwd"])]
+    assert seen["argv"][index + 4] == "PYTHONDONTWRITEBYTECODE=1"
     assert not Path(seen["cwd"]).exists()
     assert seen["stopped"]
     assert requests[0][0].get_header("Authorization") == "Bearer test-local-model-credential"
@@ -329,6 +376,18 @@ def test_local_eval_token_stays_on_host_and_receipt_is_scores_only(host, monkeyp
     body = json.loads(requests[0][0].data)
     assert body["temperature"] == 0 and body["max_tokens"] == 220
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+@pytest.mark.parametrize("change,expected", [("modified", "refused"), ("new", "refused"),
+                                              ("cache", "refused")])
+def test_local_eval_checkout_integrity_after_prompt_run(host, monkeypatch, change, expected):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    seen = fake_prompt_phase(host, monkeypatch, [], change=change)
+    monkeypatch.setattr(h, "_eval_prompts", lambda _: [])
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
+    assert receipt["outcome"] == expected
+    assert not Path(seen["cwd"]).exists()
 
 
 @pytest.mark.parametrize("url", ["http://example.com/v1", "https://127.0.0.1:18081/v1",
