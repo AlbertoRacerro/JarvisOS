@@ -3,6 +3,7 @@
 import pytest
 
 from app.modules.bluecad.assembly import assemble_parts
+from app.modules.bluecad.models import BluecadError
 from app.modules.bluecad.template import SerpentineTemplateParams, _serpentine_parts
 
 
@@ -57,3 +58,15 @@ def test_connected_chain_ignores_non_root_frames():
     for name, y in [("a", 20), ("b", 120), ("c", 220)]:
         assert built[name].ports["port_a"].origin == pytest.approx((10, y, 0), abs=1e-6)
         assert built[name].ports["port_b"].origin == pytest.approx((10, y + 100, 0), abs=1e-6)
+
+
+@pytest.mark.parametrize("detached", [False, True])
+@pytest.mark.parametrize("unknown_known_port", [False, True])
+def test_unknown_port_in_connected_group_is_refused(detached, unknown_known_port):
+    parts = ([tube("feed")] if detached else []) + [tube("a"), tube("b")]
+    connection = {"from": "a.no_port" if unknown_known_port else "a.port_b",
+                  "to": "b.port_a" if unknown_known_port else "b.no_port"}
+    with pytest.raises(BluecadError) as error:
+        assemble_parts({"parts": parts, "connections": [connection]})
+    assert error.value.code == "PORT_MISMATCH"
+    assert error.value.detail["message"] == "unknown port"

@@ -29,8 +29,8 @@ def assemble_parts(spec: dict[str, Any]) -> dict[str, BuiltPart]:
             known_part = _placed(local_parts[known_id], placements[known_id])
             for connection, known_endpoint, candidate_endpoint in graph[known_id]:
                 candidate_id, candidate_port_name = candidate_endpoint
-                known_port = known_part.ports[known_endpoint[1]]
-                candidate_local_port = local_parts[candidate_id].ports[candidate_port_name]
+                known_port = _port({known_id: known_part}, known_id, known_endpoint[1])
+                candidate_local_port = _port(local_parts, candidate_id, candidate_port_name)
                 candidate_placement = _placement_for_connection(candidate_local_port, known_port)
                 if candidate_id in placements:
                     _assert_consistent_placement(local_parts[candidate_id], placements[candidate_id], candidate_placement, connection)
