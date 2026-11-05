@@ -118,18 +118,24 @@ def test_launch_commands() -> None:
     assert "bypassPermissions" not in claude and "dangerously" not in claude
     for model in wr.MODELS:
         command = wr.launch_command(model)
-        assert command.startswith('python3 scripts/relay_jobs.py start --label "$LABEL" --authority "$AUTHORITY" --spec "$SPEC" --wall-hours 1 --cwd "$WORKTREE" -- bash -c ')
+        assert command.startswith('python3 scripts/relay_jobs.py start --label "$LABEL" --authority "$AUTHORITY" --spec "$SPEC" '
+                                  '--wall-hours "${WALL_HOURS:-1}" --cwd "$WORKTREE" --input "$TASK_FILE" -- bash -c ')
         assert wr.bare_command(model) in command
 
 
 def test_launch_command_shell_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wr, "bare_command", lambda model: 'printf "%s\\n" "$WORKTREE" "$TASK_FILE"')
     command = wr.launch_command(wr.MODELS[0])
-    script = ("python3() { shift 13; \"$@\"; }\n"
+    # The stub stands in for relay_jobs.py start: it records the wrapper arguments and runs what follows "--".
+    script = ("python3() { while [ \"$1\" != -- ]; do printf 'arg %s\\n' \"$1\"; shift; done; shift; \"$@\"; }\n"
               "export WORKTREE='/tmp/work tree' TASK_FILE='/tmp/task file' LABEL='test job' AUTHORITY=spec SPEC=243\n"
               + command)
     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
-    assert result.stdout.splitlines() == ["/tmp/work tree", "/tmp/task file"]
+    lines = result.stdout.splitlines()
+    assert lines[-2:] == ["/tmp/work tree", "/tmp/task file"]
+    args = [line[4:] for line in lines if line.startswith("arg ")]
+    assert args[args.index("--input") + 1] == "/tmp/task file" and args[args.index("--wall-hours") + 1] == "1"
+    assert args[args.index("--label") + 1] == "test job" and args[args.index("--cwd") + 1] == "/tmp/work tree"
 
 
 def test_gemini_parse_requires_both_enabled_buckets() -> None:

@@ -11,7 +11,7 @@ itself or waits.
 
 Quota is read without a model turn: Codex through `codex app-server` `account/rateLimits/read`, Gemini through
 `agy -p /quota`, Copilot through `gh api copilot_internal/user`, Claude through `agent-relay --json limits --refresh`. This tool only reads quota and prints a decision; it launches nothing, writes nothing and holds no
-credentials. Launch lines require exported WORKTREE, TASK_FILE, LABEL, AUTHORITY and SPEC. Stdlib only.
+credentials. Launch lines require exported absolute WORKTREE and TASK_FILE, LABEL, AUTHORITY and SPEC (WALL_HOURS optional). Stdlib only.
 """
 
 from __future__ import annotations
@@ -608,8 +608,10 @@ def bare_command(model: Model) -> str:
 
 
 def launch_command(model: Model) -> str:
+    # --input digests the task file, so a new task for the same worker and worktree is not refused as a duplicate.
     return ('python3 scripts/relay_jobs.py start --label "$LABEL" --authority "$AUTHORITY" --spec "$SPEC" '
-            '--wall-hours 1 --cwd "$WORKTREE" -- bash -c ' + shlex.quote(bare_command(model)))
+            '--wall-hours "${WALL_HOURS:-1}" --cwd "$WORKTREE" --input "$TASK_FILE" -- bash -c '
+            + shlex.quote(bare_command(model)))
 
 
 def decide(difficulty: str, risk: str, pools: dict[str, Pool]) -> dict[str, Any]:
@@ -674,7 +676,7 @@ def render(decision: dict[str, Any]) -> str:
     lines = [f"worker: {decision['worker']} ({decision['model']}, pool {decision['pool']}"
              + (", quota from snapshot)" if decision["source"] == "snapshot" else ")"),
              f"tier: {decision['required_tier']} (difficulty {decision['difficulty']}, risk {decision['risk']})",
-             "launch requires exported WORKTREE, TASK_FILE, LABEL, AUTHORITY and SPEC (LABEL: 1-80 letters, digits, spaces or _.:/+-):",
+             "launch requires exported absolute WORKTREE and TASK_FILE, LABEL (1-80 letters, digits, spaces or _.:/+-), AUTHORITY, SPEC; optional WALL_HOURS (default 1):",
              f"launch: {decision['command']}",
              f"review: {decision['review']}"]
     if decision.get("note"):
