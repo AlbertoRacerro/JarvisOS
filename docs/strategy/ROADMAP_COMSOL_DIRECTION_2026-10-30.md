@@ -37,10 +37,13 @@ Proposed quick wins (one small spec, frontend + prompt; no new authority):
 ## 2. Audit — what exists today (master `c2945ee5`)
 
 **Backend → frontend coverage.** 308 routes; Design/components/versions, process drafts, studio, coding, threads are
-almost fully surfaced. No UI found for: BlueCAD CAD-link 047/072 topology preflight/execute, sensitivity labels and
+almost fully surfaced. BlueCAD CAD-link 047/072 topology preflight/execute is not an implemented backend capability:
+`backend/app/core/cad_link_schema.py` defines the `bluecad_cad_links` table and
+`backend/app/modules/flowsheet/service.py` reads it for references, but there is no CAD-link preflight/execute route
+or service in `backend/app`, and no frontend call. Genuine backend-only UI gaps include sensitivity labels and
 derivative review (beyond approve), Relay context releases, local llama.cpp runtime control, Hermes status, flow
-grading/cohorts, project-knowledge scalars/validation/snapshots, flowsheet invalidations, model requirements
-(`/requirements*`), bio-model set history. (Count is string-match based; a few may be dynamic calls.)
+grading/cohorts, project-knowledge scalars/validation/snapshots, flowsheet invalidations, and bio-model set history.
+(Count is string-match based; a few may be dynamic calls.)
 
 **CAD.** build123d 0.11.1 in process (OpenCASCADE via OCP), typed builders/specs (`bluecad/builders.py`, `spec.py`),
 Studio geometry scripts in a bwrap sandbox, STEP/STL/GLB/3MF export. Viewer `BluecadGlbViewer.tsx` (three.js 0.171,
@@ -78,8 +81,9 @@ symmetry is implied by the template, not stored on the run.
 - Reverse-engineering scope: public documentation, UX conventions and file formats of COMSOL / Fusion / AutoCAD —
   never proprietary code or assets.
 
-**W4 · Backend coverage in the UI.** One small spec per gap above, starting with CAD-link topology preflight (feeds
-W2/W3), sensitivity review, and model requirements.
+**W4 · Backend coverage in the UI.** Distinguish genuinely backend-only UI gaps from capabilities not yet implemented
+in the backend. CAD-link topology preflight/execute is the latter, not an existing backend surface to expose and not
+the starting point for a UI slice; begin with a confirmed backend-only UI gap such as sensitivity review.
 
 **W5 · Later physics.** Generalise `cfd_pipe` beyond `tube_run` (bends, the PBR module), FEM (CalculiX) on the same
 feature-history geometry, optics coupling — after W1–W3.
@@ -140,7 +144,7 @@ not permission to build a larger system than the accepted slice needs.
 | W1: CFD 3D and honest full-object symmetry display | 233 | Freeze exported field/domain provenance, units, coordinate frame and symmetry applicability; specify scalar versus vector reflection and probe provenance. Never mirror a non-symmetric solution or label reconstruction as newly computed data. Bound artifact size and browser performance using a real retained run. |
 | W2: parametric feature history | 234 | Freeze version/parameter ownership, deterministic regeneration, failure atomicity and existing geometry compatibility; no second geometry authority. Decompose the first useful sequence before expanding the operation catalogue. |
 | W3: direct viewport modelling | 235 | First useful geometry created/edited through visible controls without Studio; undo/version lineage and stale downstream results proven. Add sketching/constraints and command-line or Bubu proposals only in bounded accepted follow-ups. |
-| W4: backend capabilities missing from UI | 236 | Verify each candidate against endpoint and visible navigation evidence; distinguish absent UI from intentionally privileged/backend-only operations. Select useful gaps, do not expose all endpoints indiscriminately. |
+| W4: backend capabilities missing from UI | 236 | Verify each candidate against endpoint and visible navigation evidence; distinguish an unimplemented capability such as CAD-link topology preflight/execute from a genuinely backend-only UI gap. Select useful UI gaps, do not expose all endpoints indiscriminately, and do not authorize CAD-link implementation by planning alone. |
 | W5: later physics/coupling | 237 | After W1–W3, choose a concrete user calculation with numerical validation and physical validity limits; no claim that separately proven solvers form a coupled chain. |
 | Copilot and GitHub Models | 238 | Separate terms/account/quota/sandbox qualification from product adapter authority; no provider enabled by planning alone, no dependency of the primary lanes. |
 | Third-party licence inventory | 239 | Non-urgent exact-version licence/notice and distribution-boundary inventory; no redistribution commitment. |
