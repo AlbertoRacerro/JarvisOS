@@ -21,7 +21,7 @@ assert.deepEqual(stops.map((s) => s.title), [
 ]);
 assert.deepEqual(stops.map((s) => s.route.split("?")[0]).filter((r, i, all) => r !== all[i - 1]),
   ["/design/project", "/memory/project-basis", "/development/roadmap/timeline", "/coding/repository", "/settings/appearance"]);
-assert.match(tour, /title: "Feature inspector"[\s\S]*?\n    text: ".*Placed freely.*Place in viewport/);
+assert.match(tour, /title: "Feature inspector"[\s\S]*?\n    text: ".*Add a serpentine as a later feature, choose Placed freely, set Position X\/Y\/Z and Heading, then Rebuild geometry; it appears as a detached group in the geometry viewport\..*Place in viewport/);
 assert.equal(tour.split("title: \"").length - 1, stops.length, "every stop declares route, target and title on one line");
 for (const part of [/\n    text: "/g, /absent: [A-Z"]/g]) assert.equal([...tour.matchAll(part)].length, stops.length, `every stop has ${part}`);
 
