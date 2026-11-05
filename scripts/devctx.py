@@ -336,7 +336,7 @@ def github_state(env: Env) -> dict[str, Any]:
         opened = env.gh(["pr", "list", "--state", "open", "--limit", "30", "--json",
                          "number,title,headRefName,headRefOid,isDraft,mergeable,statusCheckRollup,updatedAt,createdAt"]) or []
         merged = env.gh(["pr", "list", "--state", "merged", "--limit", "500", "--json",
-                         "number,title,mergedAt,headRefName,headRefOid"]) or []
+                         "number,title,mergedAt,headRefName,headRefOid,createdAt"]) or []
     except (RuntimeError, ValueError, OSError) as exc:
         return {"ok": False, "error": str(exc)[:300], "open": [], "merged": []}
     for pr in opened:
@@ -345,20 +345,22 @@ def github_state(env: Env) -> dict[str, Any]:
             state = check.get("conclusion") or check.get("state") or check.get("status") or "UNKNOWN"
             counts[state] = counts.get(state, 0) + 1
         pr["checks"] = counts
-    return {"ok": True, "error": None, "open": opened, "merged": merged}
+    # Bounds of this repository's PRs: a reference outside them is a previous-repository number (see pr_lookup).
+    created = [parse_ts(pr["createdAt"]) for pr in opened + merged if pr.get("createdAt")]
+    numbers = [pr["number"] for pr in opened + merged]
+    return {"ok": True, "error": None, "open": opened, "merged": merged,
+            "first_pr_at": min(created) if created else None, "max_pr": max(numbers) if numbers else None}
 
 
 def pr_lookup(env: Env, gh_state: dict[str, Any], number: int,
               cache: dict[int, dict[str, Any] | None], entry_ts: str) -> dict[str, Any] | None:
-    dates = [pr["mergedAt"] for pr in gh_state["merged"] if pr.get("mergedAt")]
-    dates += [pr["createdAt"] for pr in gh_state["open"] if pr.get("createdAt")]
-    # Older than this repository's first PR: a previous-repository number, so no lookup.
-    if dates and (when := parse_ts(entry_ts)) and when < min(parse_ts(date) for date in dates):
+    # Written before this repository's first PR, or above its highest number: a previous-repository PR, no lookup.
+    first, highest = gh_state.get("first_pr_at"), gh_state.get("max_pr")
+    if first is not None and parse_ts(entry_ts) < first:
         return None
     if number in cache:
         return cache[number]
-    numbers = [pr["number"] for pr in gh_state["open"] + gh_state["merged"]]
-    if not numbers or number > max(numbers):
+    if highest is None or number > highest:
         cache[number] = None
         return None
     found = next((dict(pr, state="OPEN") for pr in gh_state["open"] if pr["number"] == number), None)

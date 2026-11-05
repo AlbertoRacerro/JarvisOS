@@ -310,7 +310,7 @@ def test_merged_pr_lookup_uses_listed_merged_prs_without_view(world) -> None:
 
 def test_old_and_out_of_range_pr_references_do_not_trigger_views(world) -> None:
     env, gh, base = world["env"], world["gh"], world["base"]
-    gh.merged = [{"number": 9, "mergedAt": "2026-01-01T00:00:00Z"}]
+    gh.merged = [{"number": 9, "createdAt": "2026-01-01T00:00:00Z", "mergedAt": "2026-03-01T00:00:00Z"}]
     gh.views[8] = {"number": 8, "state": "CLOSED"}
     gh.views[743] = {"number": 743, "state": "OPEN", "headRefOid": base}
     state = devctx.github_state(env)
@@ -327,6 +327,10 @@ def test_old_and_out_of_range_pr_references_do_not_trigger_views(world) -> None:
     assert "now CLOSED" in devctx.freshness(env, recent, state, cache, [])["why"]
     assert gh.view_calls == [8]
     assert devctx.freshness(env, old, state, cache, [])["verdict"] == "unverified"
+    # Written after the first PR was opened but before it merged: still this repository's PR.
+    waiting = devctx.make_entry(env, "blocker", "PR #9 waits for CI", refs={"pr": 9}, author="test")
+    waiting["ts"] = "2026-02-01T00:00:00Z"
+    assert "now MERGED" in devctx.freshness(env, waiting, state, cache, [])["why"]
 
 
 def test_handoff_is_latest_coordinator_entry_and_renders_before_directives(world) -> None:
