@@ -126,10 +126,6 @@ try {
   const placed = await record("free placement");
   assert(placed.sequence.features[1].frame.origin[1] === 100 && !placed.sequence.features[1].connect_to, "free frame missing");
   await shot("free-placement");
-  await viewport.locator("canvas").waitFor({ timeout: 60_000 });
-  await viewport.scrollIntoViewIfNeeded();
-  await page.waitForTimeout(1500);
-  await shot("free-placement-viewport-two-tubes", viewport);
   step("free_placement_rebuilt");
 
   await inspector.getByLabel("Place in viewport").last().check();
@@ -149,7 +145,8 @@ try {
   }
   assert(changed, "could not drag the placement handle");
   await inspector.getByText("Edits not applied yet.").waitFor();
-  await shot("dragged-handle-not-applied-viewport", viewport);
+  // Both separately placed tubes (server mesh, revision 2) and the handle at the second tube's frame origin.
+  await shot("dragged-handle-not-applied-viewport-two-tubes", viewport);
   const dragged = [await inspector.locator("#placement-tube_run_2-0").inputValue(), await y.inputValue(), await inspector.locator("#placement-tube_run_2-2").inputValue()].map(Number);
   await inspector.getByRole("button", { name: "Rebuild geometry", exact: true }).click();
   await lineage.getByText(/Feature history revision 3 /).waitFor();
