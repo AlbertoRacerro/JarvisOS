@@ -30,6 +30,7 @@ import {
   type RepositoryTruthResult,
   type RuntimeTruth
 } from "../api/coding";
+import LocalModelPanel from "../components/coding/LocalModelPanel";
 import RelayMonitorPanel from "../components/coding/RelayMonitorPanel";
 import ProviderQuotaPanel from "../components/coding/ProviderQuotaPanel";
 import { pullRequestEvidenceSummary, runtimeDeltaSummary } from "../operatorSemantics";
@@ -736,6 +737,7 @@ function RuntimeSurface({ jarvis }: Readonly<{ jarvis?: ReactNode }>) {
         {semanticDelta.files.length ? <details className="coding-changed-files"><summary>Show changed file names ({semanticDelta.files.length})</summary><ul>{semanticDelta.files.map((file) => <li key={file.name}><code>{file.name}</code> · {humanize(file.status, "Changed")}</li>)}</ul></details> : null}
         {runtimeError ? <div className="final-fusion__source-empty" role="status"><strong>Control room unavailable</strong><span>{readableReason(runtimeError)}</span></div> : null}
       </section>
+      <LocalModelPanel />
       <div className="coding-relay-row"><RelayMonitorPanel /><ProviderQuotaPanel /></div>
       {room?.warnings.length ? <div className="final-fusion__context-note coding-control-warnings" role="status"><strong>Some evidence is incomplete</strong><ul>{room.warnings.map((code) => <li key={code}>{controlRoomWarning(code)}</li>)}</ul></div> : null}
       <section className="coding-control-section" aria-label="Recent work">

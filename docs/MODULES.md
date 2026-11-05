@@ -50,7 +50,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `frontend/src/components/analytics` | live | Analytics dock content and its state logic. | `AnalyticsDockContent.tsx`, `analyticsState.ts` | 700 |
 | `frontend/src/components/bluecad` | live | BLUECAD workbench: project tree, 3D scene binding and selection. | `BluecadWorkbench.tsx`, `sceneBinding.ts` | 1600 |
 | `frontend/src/components/bubu` | live | Bubu, the assistant that points: chat bubble, guided tour, pointer overlay, dictation, page-context capture and conversation store. | `BubuBubble.tsx`, `useBubuIntegration.tsx`, `pointerDirectives.ts`, `guidedTour.ts` | 1900 |
-| `frontend/src/components/coding` | live | Coding workspace panels: provider quota rings and the relay monitor. | `ProviderQuotaPanel.tsx`, `RelayMonitorPanel.tsx` | 300 |
+| `frontend/src/components/coding` | live | Coding workspace panels: provider quota rings and the relay monitor. | `ProviderQuotaPanel.tsx`, `RelayMonitorPanel.tsx` | 400 |
 | `frontend/src/components/design` | live | Design workspace pieces: component tree, splitter, node status and labels. | `DesignComponentTree.tsx` | 300 |
 | `frontend/src/components/dynamic` | live | Dynamic plant simulation UI: scenario, schedule and controller editors, plant view, run results and synchronized charts. | `DynamicPanel.tsx`, `dynamicApi.ts` | 1900 |
 | `frontend/src/components/engineering` | live | Engineering properties panel, Jarvis engineering actions and previous-run loading. | `EngineeringProperties.tsx` | 1100 |
