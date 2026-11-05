@@ -761,8 +761,8 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
     if "secret_env" in bench:
         raise Refused("benchmark secret_env is forbidden")
     # The checkout is agent-controlled: its revision is read inside the sandbox, never by host git.
-    head = ctx.run([launcher, "git", "rev-parse", "HEAD"], timeout=60, cwd=str(root))
-    dirty = ctx.run([launcher, "git", "status", "--porcelain"], timeout=60, cwd=str(root))
+    head = ctx.run([launcher, "git", "-C", str(root), "rev-parse", "HEAD"], timeout=60, cwd=str(root))
+    dirty = ctx.run([launcher, "git", "-C", str(root), "status", "--porcelain"], timeout=60, cwd=str(root))
     reported = str(head.stdout).strip()
     if head.returncode != 0 or dirty.returncode != 0 or reported != sha or str(dirty.stdout).strip():
         raise Refused(f"worktree {worktree} is not a clean checkout of {sha[:12]} (sandbox reports {reported[:12] or '?'})")
@@ -787,7 +787,7 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
     argv = ["systemd-run", "--user", "--scope", "--quiet", f"--unit={scope}",
             "-p", f"MemoryMax={limits['memory_max']}", "-p", f"CPUQuota={limits['cpu_quota']}",
             "-p", f"TasksMax={limits['tasks_max']}", "--",
-            "timeout", "-k", "15", str(limits["timeout_s"]), launcher,
+            "timeout", "-k", "15", str(limits["timeout_s"]), launcher, "env", "-C", str(root / sub),
             *[str(a) for a in bench["argv"]]]
     started = time.monotonic()
     proc = None
@@ -1051,9 +1051,11 @@ def _eval_checkout(sha: str, root: Path, remaining: Callable[[], float]) -> None
 
 
 @contextmanager
-def _eval_tempdir():
+def _eval_tempdir(parent: Path):
     """Remove an evaluator checkout even if its sandboxed child changes directory modes."""
-    root = Path(tempfile.mkdtemp(prefix="hostops-eval-"))
+    if parent.is_symlink() or not parent.is_dir():
+        raise Refused("local evaluator checkout parent is unsafe")
+    root = Path(tempfile.mkdtemp(prefix=".hostops-eval-", dir=parent))
     try:
         yield root
     finally:
@@ -1113,7 +1115,7 @@ def op_local_eval_run(ctx: Context) -> dict[str, Any]:
 
     _eval_reachable(sha, remaining)
     try:
-        with _eval_tempdir() as root:
+        with _eval_tempdir(ctx.paths.home / "src" / "worktrees") as root:
             _eval_checkout(sha, root, remaining)
             sub = str(bench.get("cwd") or ".")
             if Path(sub).is_absolute() or ".." in Path(sub).parts or not (root / sub).is_dir():

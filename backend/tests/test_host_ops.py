@@ -223,10 +223,17 @@ def test_bench_clean_head_and_plain_launcher(host, dirty, head):
 
     ex.run = run
     assert request(host, "bench.run", {"bench": "relay-observe-tests", "worktree": "x"}, sha=SHA)[1]["outcome"] == "refused"
-    assert all("--cwd" not in a and "--" not in a and k["cwd"] == str(paths.home / "src/worktrees/x") for a, k in calls)
+    root = paths.home / "src/worktrees/x"
+    launcher = str(paths.home / ".local/bin/jarvis-sandbox")
+    assert [a for a, _ in calls] == [
+        [launcher, "git", "-C", str(root), "rev-parse", "HEAD"],
+        [launcher, "git", "-C", str(root), "status", "--porcelain"],
+    ]
+    assert all(k["cwd"] == str(root) for _, k in calls)
 
 
 def local_eval_policy(paths, *, base_url="http://127.0.0.1:18081/v1", credential=True):
+    (paths.home / "src/worktrees").mkdir(parents=True, exist_ok=True)
     key_file = paths.config / "local-model-key"
     if credential:
         key_file.write_text("test-local-model-credential\n")
@@ -311,6 +318,10 @@ def test_local_eval_token_stays_on_host_and_receipt_is_scores_only(host, monkeyp
                                                                  "verdict": "correct", "seconds": 0.0}]}
     assert "test-local-model-credential" not in json.dumps(receipt)
     assert "test-local-model-credential" not in str(seen)
+    assert Path(seen["cwd"]).parent.parent == paths.home / "src/worktrees"
+    launcher = str(paths.home / ".local/bin/jarvis-sandbox")
+    index = seen["argv"].index(launcher)
+    assert seen["argv"][index:index + 4] == [launcher, "env", "-C", str(seen["cwd"])]
     assert not Path(seen["cwd"]).exists()
     assert seen["stopped"]
     assert requests[0][0].get_header("Authorization") == "Bearer test-local-model-credential"
@@ -671,6 +682,9 @@ def test_bench_result_receipt_keeps_hash_and_limits(host, monkeypatch):
     class Child:
         returncode = 0
         def __init__(self, argv, **kw):
+            launcher = str(paths.home / ".local/bin/jarvis-sandbox")
+            index = argv.index(launcher)
+            assert argv[index:index + 4] == [launcher, "env", "-C", str(checkout)]
             (Path(kw["cwd"]) / "result.json").write_text(json.dumps({"nested": ["sk-" + "x" * 30]}))
         def poll(self):
             return self.returncode
@@ -767,13 +781,27 @@ def test_eval_checkout_refuses_member_count_and_deadline(tmp_path, monkeypatch):
     assert calls >= 4
 
 
-def test_eval_tempdir_restores_permission_for_cleanup():
-    with h._eval_tempdir() as root:
+def test_eval_tempdir_restores_permission_for_cleanup(tmp_path):
+    with h._eval_tempdir(tmp_path) as root:
+        assert root.parent == tmp_path
+        assert root.name.startswith(".hostops-eval-")
         child = root / "child"
         child.mkdir()
         (child / "file").write_text("x")
         child.chmod(0)
     assert not root.exists()
+
+
+@pytest.mark.parametrize("kind", ["missing", "file", "symlink"])
+def test_eval_tempdir_refuses_unsafe_parent(tmp_path, kind):
+    parent = tmp_path / "worktrees"
+    if kind == "file":
+        parent.write_text("x")
+    elif kind == "symlink":
+        parent.symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(h.Refused, match="checkout parent"):
+        with h._eval_tempdir(parent):
+            pytest.fail("unsafe parent accepted")
 
 
 def release_archive(extra=()):
