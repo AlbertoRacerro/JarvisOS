@@ -20,6 +20,14 @@ def biot(h: float, L: float, k: float) -> float:
     return h * L / k
 
 
+def reduced_temperature(T: float, Tc: float) -> float:
+    return T / Tc
+
+
+def optical_depth(coefficient: float, length: float) -> float:
+    return coefficient * length
+
+
 def mass_balance_residual(inlets: list[float], outlets: list[float]) -> float:
     return abs(sum(inlets) - sum(outlets))
 
@@ -39,6 +47,8 @@ def required_data_present(known: dict[str, float], required: list[str]) -> bool:
 CHECK_FUNCTIONS = {
     "reynolds": reynolds,
     "biot": biot,
+    "reduced_temperature": reduced_temperature,
+    "optical_depth": optical_depth,
     "mass_balance_residual": mass_balance_residual,
     "energy_balance_residual": energy_balance_residual,
     "range_value": range_value,

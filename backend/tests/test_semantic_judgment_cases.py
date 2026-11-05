@@ -83,6 +83,35 @@ def test_checks_and_context_numbers(case):
         assert all(name in case["context"] for name in missing_names)
 
 
+def test_prompts_do_not_supply_the_judgment():
+    for case in CASES:
+        context = case["context"].lower()
+        if case["category"] in ("validity_domain", "control"):
+            assert "criterion" not in context
+            assert "requirement" not in context
+            assert "validated only" not in context
+        elif case["category"] == "insufficient_data":
+            assert "not supplied" not in context
+            assert "not given" not in context
+            assert "missing" not in context
+        else:
+            assert "residual" not in context
+            assert "exceeds the tolerance" not in context
+            assert "larger than the" not in context
+
+
+def test_critical_and_scattering_examples():
+    cases = {case["id"]: case for case in CASES}
+    for case_id in ("vd09", "co07"):
+        assert cases[case_id]["check"]["function"] == "reduced_temperature"
+    for case_id in ("vd10", "co08"):
+        assert cases[case_id]["check"]["function"] == "optical_depth"
+    assert semantic_eval.reduced_temperature(310, 304.13) == pytest.approx(1.0193, abs=0.0001)
+    assert semantic_eval.reduced_temperature(450, 304.13) == pytest.approx(1.4796, abs=0.0001)
+    assert semantic_eval.optical_depth(20, 0.2) == pytest.approx(4)
+    assert semantic_eval.optical_depth(0.01, 1) == pytest.approx(0.01)
+
+
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])
 def test_known_answer_and_wrong_verdict(case):
     assert semantic_eval.grade(case, reply(case))["score"] == 1

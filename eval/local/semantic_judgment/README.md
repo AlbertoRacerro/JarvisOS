@@ -6,9 +6,13 @@
 `comparison`, `threshold`, `expected`). For missing-input choices, mark
 irrelevant candidates with `distractor: true`.
 
-To add a case, state every check input and its units in the context, calculate
-the result independently, set the answer labels, and run the focused test. The
-check must prove the answer from the stated quantities.
+To add a case, state every check input and its units in the context, give the
+solver's computed result, calculate it independently, set the answer labels,
+and run the focused test. The check must prove the answer from the stated
+quantities. Keep validity limits in `check`, except for the observed data range
+of an empirical fit. In insufficient-data cases, list supplied values only;
+put candidate missing inputs in the choices. For conservation cases, state the
+flows and conditions without calculating the residual in the prompt.
 
 From the repository root:
 
