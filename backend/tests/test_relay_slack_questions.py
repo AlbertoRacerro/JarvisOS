@@ -62,7 +62,7 @@ class FakeSlack:
 def deliver(repo: Path, fake: FakeSlack, obs: dict) -> None:
     ro.observe_step(obs, open_snap(repo), NOW, send=lambda _k, _t: True,
                     digest_every=timedelta(hours=2), merges=lambda _s: [],
-                    question_send=lambda _qid, text: fake.post(CONFIG, text))
+                    question_send=lambda qid, text: fake.post(CONFIG, rc.mention_urgent(f"question|{qid}", text, CONFIG)))
 
 
 def test_delivery_once_and_generic_suppressed(space):
@@ -71,10 +71,12 @@ def test_delivery_once_and_generic_suppressed(space):
     fake, obs = FakeSlack(), {}
     deliver(repo, fake, obs)
     assert len(fake.posts) == 1
+    assert fake.posts[0]["text"].startswith("<@U123> ")
     assert "Come procedere?" in fake.posts[0]["text"]
     assert "1. Prima (consigliata) — conseguenza: veloce" in fake.posts[0]["text"]
     assert "2. Dopo — conseguenza: lento" in fake.posts[0]["text"]
     assert obs["sent_questions"][q["id"]] == "1000.000001"
+    assert "U123" not in json.dumps(obs)
     deliver(repo, fake, json.loads(json.dumps(obs)))
     assert len(fake.posts) == 1
     paused = {**open_snap(repo), "state": "paused", "reason": "coordinator_blocked"}
@@ -96,6 +98,22 @@ def test_webhook_fallback_records_delivery_without_inbound(space):
         ro.observe_step(obs, open_snap(repo), NOW, send=send, digest_every=timedelta(hours=2), merges=lambda _s: [])
         obs = json.loads(json.dumps(obs))
     assert len(sent) == 1 and obs["sent_questions"][q["id"]] == "webhook"
+    assert not sent[0].startswith("<@")
+
+
+@pytest.mark.parametrize("bot", [CONFIG, None])
+def test_incident_mentions_with_bot_but_digest_never_does(space, bot):
+    _root, repo = space
+    snapshot = {**open_snap(repo), "problems": ["hostops_down"]}
+    sent: list[str] = []
+    notifier = rc.Notifier(rc.default_state(), sender=lambda text: sent.append(text) or None, log=lambda _m: None)
+    ro.observe_step({}, snapshot, NOW,
+                    send=lambda kind, text: notifier.send_text(kind, rc.mention_urgent(kind, text, bot), NOW),
+                    digest_every=timedelta(hours=2), merges=lambda _s: [])
+    assert len(sent) == 2
+    assert sent[0].startswith("<@U123> ") is (bot is not None)
+    assert sent[1].startswith("*JarvisOS — aggiornamento")
+    assert "<@U123>" not in sent[1]
 
 
 def test_inbound_answer_replay_and_filters(space):
