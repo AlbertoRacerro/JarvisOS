@@ -128,6 +128,7 @@ class Limits:
     max_wait: timedelta = timedelta(days=8)
     reading_freshness: timedelta = timedelta(minutes=15)
     max_reset_ahead: timedelta = timedelta(days=8)
+    min_free_percent: float = 25.0
     reap_grace: float = 5.0  # seconds a leftover process gets to exit on SIGTERM before SIGKILL
 
 
@@ -2434,6 +2435,27 @@ class Supervisor:
             self.state["cooldowns"].pop(agent, None)
         return True
 
+    def low_headroom(self, agent: str) -> bool:
+        """Whether a usable quota reading shows less than the minimum free room in any window."""
+        native = agent in NATIVE_AGENTS
+        entry = self.host.relay.argon_limits(agent) if native else self.reading(agent)
+        if not isinstance(entry, dict) or not isinstance(entry.get("windows"), list) or not entry["windows"]:
+            return False
+        now = self.host.now()
+        used_values = []
+        for window in entry["windows"]:
+            if not isinstance(window, dict):
+                return False
+            used = window.get("used_percent")
+            if isinstance(used, bool) or not isinstance(used, (int, float)) or not 0 <= used <= 100:
+                return False
+            if not native:
+                reset = parse_ts(window.get("resets_at"))
+                if reset is None or not now < reset <= now + self.limits.max_reset_ahead:
+                    return False
+            used_values.append(used)
+        return any(100 - used < self.limits.min_free_percent for used in used_values)
+
     def set_cooldown(self, agent: str, report: TurnReport) -> None:
         now = self.host.now()
         existing = self.state["cooldowns"].get(agent)
@@ -2710,21 +2732,29 @@ class Supervisor:
         return verdicts
 
     def _choose(self, current: str) -> str | None:
-        """Keep an available preferred coordinator within its mission; use Codex only as emergency fallback."""
-        # A completed mission rotates the next mission's seed; fallback Codex never outranks a preferred route.
+        """Prefer available coordinators with quota room, retaining the first available if all are low."""
+        # A completed mission rotates the next mission's seed; Codex follows the preferred routes in this order.
         order = ([current] + [a for a in PREFERRED_AGENTS if a != current]) if current in PREFERRED_AGENTS else list(PREFERRED_AGENTS)
+        first_available = None
         for agent in [*order, "codex"]:
             if self.available(agent):
-                if agent != current:
-                    now = self.host.now()
-                    self.state["switches"] = [t for t in self.state["switches"]
-                                              if (ts := parse_ts(t)) and now - ts < timedelta(days=1)] + [iso(now)]
-                    self.state["last_switch_at"] = iso(now)
-                    self.notify("provider_switched", session=self.state["head_session"], from_agent=current,
-                                agent=agent, outcome=self.state.get("last_outcome") or "success")
-                    self.record("decision", f"relay-continuity: switched coordinator {current} -> {agent} "
-                                            f"after {self.state.get('last_outcome')} on {self.state['head_session']}.")
-                return agent
+                first_available = first_available or agent
+                if self.low_headroom(agent):
+                    continue
+                break
+        else:
+            agent = first_available
+        if agent is not None:
+            if agent != current:
+                now = self.host.now()
+                self.state["switches"] = [t for t in self.state["switches"]
+                                          if (ts := parse_ts(t)) and now - ts < timedelta(days=1)] + [iso(now)]
+                self.state["last_switch_at"] = iso(now)
+                self.notify("provider_switched", session=self.state["head_session"], from_agent=current,
+                            agent=agent, outcome=self.state.get("last_outcome") or "success")
+                self.record("decision", f"relay-continuity: switched coordinator {current} -> {agent} "
+                                        f"after {self.state.get('last_outcome')} on {self.state['head_session']}.")
+            return agent
         return None
 
     def _wait_or_hold(self, make_prompt: Callable[[str], str]) -> tuple[str, str] | str:

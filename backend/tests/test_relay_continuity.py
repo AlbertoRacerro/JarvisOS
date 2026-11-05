@@ -338,6 +338,35 @@ def test_subagent_calls_settle_with_their_parent(tmp_path: Path) -> None:
 # Continuation policy
 
 
+def test_choose_skips_current_coordinator_with_low_headroom(tmp_path: Path) -> None:
+    env = Env(tmp_path, readings={"claude": reading("claude", 86, T0 + timedelta(days=5), T0),
+                                  "codex": reading("codex", 10, T0 + timedelta(days=5), T0)})
+    assert env.supervisor()._choose("claude") == "codex"
+
+
+def test_choose_keeps_first_available_when_everyone_is_low(tmp_path: Path) -> None:
+    env = Env(tmp_path, readings={"claude": reading("claude", 86, T0 + timedelta(days=5), T0),
+                                  "codex": reading("codex", 90, T0 + timedelta(days=5), T0)})
+    assert env.supervisor()._choose("claude") == "claude"
+
+
+@pytest.mark.parametrize("kind", ["missing", "stale", "unusable"])
+def test_choose_does_not_treat_unproven_headroom_as_low(tmp_path: Path, kind: str) -> None:
+    readings = {"codex": reading("codex", 10, T0 + timedelta(days=5), T0)}
+    if kind == "stale":
+        readings["claude"] = reading("claude", 86, T0 + timedelta(days=5), T0 - timedelta(hours=2))
+    elif kind == "unusable":
+        readings["claude"] = reading("claude", 86, T0 - timedelta(hours=1), T0)
+    env = Env(tmp_path, readings=readings)
+    assert env.supervisor()._choose("claude") == "claude"
+
+
+def test_choose_skips_native_coordinator_with_low_headroom(tmp_path: Path) -> None:
+    env = Env(tmp_path, readings={"claude": reading("claude", 10, T0 + timedelta(days=5), T0)})
+    env.relay.argon_limits = lambda agent: {"windows": [{"used_percent": 86}]} if agent == "argon" else None
+    assert env.supervisor()._choose("argon") == "claude"
+
+
 def test_claude_quota_switches_to_codex_and_goes_idle(tmp_path: Path) -> None:
     env = Env(tmp_path, [("codex", CODEX_SUCCESS)])
     env.relay.readings = room(env, "codex")
