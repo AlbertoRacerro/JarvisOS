@@ -23,6 +23,15 @@ def state(**changes):
     return launcher.GitState(**base)
 
 
+def test_launcher_passes_api_key_file_setting_without_echoing_it(monkeypatch, tmp_path):
+    name = "JARVISOS_LLAMACPP_API_KEY_FILE"
+    value = str(tmp_path / "key")
+    assert launcher.backend_env({name: value}, 8081)[name] == value
+    assert launcher.is_secret_key(name)
+    monkeypatch.setattr(launcher.Path, "read_bytes", lambda _self: f"{name}={value}\0".encode())
+    assert name not in launcher.capture_process_env(123)
+
+
 @pytest.mark.parametrize(
     ("changes", "action"),
     [
