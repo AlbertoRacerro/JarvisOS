@@ -334,7 +334,7 @@ def github_state(env: Env) -> dict[str, Any]:
         return {"ok": False, "error": "gh disabled", "open": [], "merged": []}
     try:
         opened = env.gh(["pr", "list", "--state", "open", "--limit", "30", "--json",
-                         "number,title,headRefName,headRefOid,isDraft,mergeable,statusCheckRollup,updatedAt"]) or []
+                         "number,title,headRefName,headRefOid,isDraft,mergeable,statusCheckRollup,updatedAt,createdAt"]) or []
         merged = env.gh(["pr", "list", "--state", "merged", "--limit", "500", "--json",
                          "number,title,mergedAt,headRefName,headRefOid"]) or []
     except (RuntimeError, ValueError, OSError) as exc:
@@ -349,9 +349,18 @@ def github_state(env: Env) -> dict[str, Any]:
 
 
 def pr_lookup(env: Env, gh_state: dict[str, Any], number: int,
-              cache: dict[int, dict[str, Any] | None]) -> dict[str, Any] | None:
+              cache: dict[int, dict[str, Any] | None], entry_ts: str) -> dict[str, Any] | None:
+    dates = [pr["mergedAt"] for pr in gh_state["merged"] if pr.get("mergedAt")]
+    dates += [pr["createdAt"] for pr in gh_state["open"] if pr.get("createdAt")]
+    # Older than this repository's first PR: a previous-repository number, so no lookup.
+    if dates and (when := parse_ts(entry_ts)) and when < min(parse_ts(date) for date in dates):
+        return None
     if number in cache:
         return cache[number]
+    numbers = [pr["number"] for pr in gh_state["open"] + gh_state["merged"]]
+    if not numbers or number > max(numbers):
+        cache[number] = None
+        return None
     found = next((dict(pr, state="OPEN") for pr in gh_state["open"] if pr["number"] == number), None)
     # Merged PRs are already listed; one `gh pr view` per old ledger reference dominated recover time.
     found = found or next((dict(pr, state="MERGED") for pr in gh_state["merged"] if pr["number"] == number), None)
@@ -491,9 +500,10 @@ def relay_prompts(env: Env, since: datetime | None, limit: int = 3) -> list[dict
 # Freshness
 
 
-def resolve_target(env: Env, refs: dict[str, Any], gh_state: dict[str, Any], cache: dict[int, Any]) -> tuple[str | None, str]:
+def resolve_target(env: Env, refs: dict[str, Any], gh_state: dict[str, Any], cache: dict[int, Any],
+                   entry_ts: str) -> tuple[str | None, str]:
     if pr_ref := refs.get("pr"):
-        pr = pr_lookup(env, gh_state, int(pr_ref), cache)
+        pr = pr_lookup(env, gh_state, int(pr_ref), cache, entry_ts)
         if pr is None:
             return None, f"PR #{pr_ref} state unavailable"
         if pr.get("state") == "MERGED":
@@ -537,11 +547,11 @@ def _freshness(env: Env, entry: dict[str, Any], gh_state: dict[str, Any], cache:
     sha = refs.get("sha")
     if not sha:
         if pr_ref := refs.get("pr"):
-            pr = pr_lookup(env, gh_state, int(pr_ref), cache)
+            pr = pr_lookup(env, gh_state, int(pr_ref), cache, entry["ts"])
             state = (pr or {}).get("state", "unknown")
             return {"verdict": "unverified", "why": f"no SHA binding; PR #{pr_ref} is now {state}"}
         return {"verdict": "unverified", "why": "no SHA binding"}
-    target, how = resolve_target(env, refs, gh_state, cache)
+    target, how = resolve_target(env, refs, gh_state, cache, entry["ts"])
     if not target:
         return {"verdict": "unverified", "why": how}
     if env.git("cat-file", "-e", f"{target}^{{commit}}") is None:

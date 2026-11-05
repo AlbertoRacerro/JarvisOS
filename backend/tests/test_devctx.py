@@ -45,6 +45,7 @@ class FakeGH:
         self.open: list[dict] = []
         self.merged: list[dict] = []
         self.views: dict[int, dict] = {}
+        self.view_calls: list[int] = []
         self.fail = False
 
     def __call__(self, args: list[str]):
@@ -53,6 +54,7 @@ class FakeGH:
         if args[:2] == ["pr", "list"]:
             return [dict(pr) for pr in (self.open if args[3] == "open" else self.merged)]
         if args[:2] == ["pr", "view"]:
+            self.view_calls.append(int(args[2]))
             return self.views.get(int(args[2]))
         raise AssertionError(args)
 
@@ -155,6 +157,8 @@ def test_supersession_conflicts_and_claims(world) -> None:
 
 def test_pr_bound_entries_report_current_pr_state(world) -> None:
     env, gh, base = world["env"], world["gh"], world["base"]
+    gh.merged = [{"number": 10, "title": "other", "mergedAt": "2026-01-01T00:00:00Z",
+                  "headRefName": "impl/other", "headRefOid": base}]
     gh.views[9] = {"number": 9, "state": "MERGED", "headRefName": "impl/x", "headRefOid": base}
     entry = note(env, "blocker", "PR #9 waits for CI", refs={"pr": 9})
     proof = note(env, "proof", "exact-head proof", refs={"pr": 9, "sha": base, "paths": ["app/core.py"]})
@@ -302,6 +306,27 @@ def test_merged_pr_lookup_uses_listed_merged_prs_without_view(world) -> None:
     fresh = {e["id"]: e["freshness"] for e in devctx.build_packet(env, fetch=True)["ledger"]}
     assert "now MERGED" in fresh[entry["id"]]["why"]
     assert fresh[proof["id"]]["verdict"] == "current" and "merged" in fresh[proof["id"]]["why"]
+
+
+def test_old_and_out_of_range_pr_references_do_not_trigger_views(world) -> None:
+    env, gh, base = world["env"], world["gh"], world["base"]
+    gh.merged = [{"number": 9, "mergedAt": "2026-01-01T00:00:00Z"}]
+    gh.views[8] = {"number": 8, "state": "CLOSED"}
+    gh.views[743] = {"number": 743, "state": "OPEN", "headRefOid": base}
+    state = devctx.github_state(env)
+    cache = {}
+    old = devctx.make_entry(env, "proof", "old", refs={"pr": 8, "sha": base}, author="test")
+    old["ts"] = "2025-01-01T00:00:00Z"
+    high = devctx.make_entry(env, "proof", "high", refs={"pr": 743, "sha": base}, author="test")
+    recent = devctx.make_entry(env, "blocker", "recent", refs={"pr": 8}, author="test")
+    recent["ts"] = "2026-02-01T00:00:00Z"
+    for entry in (old, high):
+        fresh = devctx.freshness(env, entry, state, cache, [])
+        assert fresh["verdict"] == "unverified" and "state unavailable" in fresh["why"]
+    assert not gh.view_calls
+    assert "now CLOSED" in devctx.freshness(env, recent, state, cache, [])["why"]
+    assert gh.view_calls == [8]
+    assert devctx.freshness(env, old, state, cache, [])["verdict"] == "unverified"
 
 
 def test_handoff_is_latest_coordinator_entry_and_renders_before_directives(world) -> None:
