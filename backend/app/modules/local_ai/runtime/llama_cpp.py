@@ -237,6 +237,23 @@ class LlamaCppRuntimeOwner:
         self._crashed = False
         self._recovery_in_flight = False
         self._automatic_restart_times: deque[float] = deque()
+        self.active_model_id: str | None = None
+        self.default_model_id: str | None = None
+
+    @property
+    def non_default_active(self) -> bool:
+        return self.active_model_id is not None and self.active_model_id != self.default_model_id
+
+    def switch_model(self, config: LlamaCppRuntimeConfig, model_id: str, default_id: str) -> dict[str, Any]:
+        with self._lock:
+            # Keep product requests blocked throughout a switch away from the default.
+            self.active_model_id = model_id if model_id != default_id else self.active_model_id
+            self.default_model_id = default_id
+            self.stop()
+            self.config = config
+            result = self.start()
+            self.active_model_id = model_id
+            return result
 
     @property
     def api_key(self) -> str | None:
@@ -289,6 +306,7 @@ class LlamaCppRuntimeOwner:
             "request_slots": None, "spawned_by_jarvis": self._process is not None,
             "digest_state": None, "last_exit_code": self._exit_code,
             "thinking": config.thinking, "crash_count": self._crash_count,
+            "model_id": self.active_model_id or config.model_id,
             "last_crash_at": self._last_crash_at,
         }
         if include_recovery and self._recovery_in_flight:
@@ -470,5 +488,17 @@ def get_llama_cpp_runtime_owner() -> LlamaCppRuntimeOwner:
     global _OWNER
     with _OWNER_LOCK:
         if _OWNER is None:
-            _OWNER = LlamaCppRuntimeOwner()
+            from fastapi import HTTPException
+
+            from app.modules.local_ai.runtime.model_registry import config_for_entry, read_registry
+
+            try:
+                entries, present = read_registry()
+                default = next(entry for entry in entries if entry.qualification == "default") if present else None
+            except HTTPException:
+                default = None
+            _OWNER = LlamaCppRuntimeOwner(config_for_entry(default) if default else None)
+            if default:
+                _OWNER.default_model_id = default.id
+                _OWNER.active_model_id = default.id
         return _OWNER

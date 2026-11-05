@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { controlLlama, readLlamaStatus, type LlamaAction, type LlamaStatus } from "../../api/llamaRuntime";
+import { activateLocalModel, controlLlama, readLlamaStatus, readLocalModels, restoreDefaultLocalModel, type LlamaAction, type LlamaStatus, type LocalModels } from "../../api/llamaRuntime";
 
 const busyStatus = (s: LlamaStatus | null) => s?.reason_code === "LLAMACPP_LOADING" || s?.reason_code === "LLAMACPP_RECOVERING";
 export function buttons(s: LlamaStatus | null, busy: boolean) {
@@ -14,8 +14,9 @@ const yes = (value: boolean) => value ? "Yes" : "No";
 
 export default function LocalModelPanel() {
   const [status, setStatus] = useState<LlamaStatus | null>(null);
+  const [models, setModels] = useState<LocalModels | null>(null);
   const [loading, setLoading] = useState(true);
-  const [pending, setPending] = useState<LlamaAction | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const actionLock = useRef(false);
   const generation = useRef(0);
@@ -23,7 +24,7 @@ export default function LocalModelPanel() {
   const refresh = async () => {
     const current = ++generation.current;
     setLoading(true);
-    try { const next = await readLlamaStatus(); if (current === generation.current) { setStatus(next); setError(null); } }
+    try { const [next, entries] = await Promise.all([readLlamaStatus(), readLocalModels()]); if (current === generation.current) { setStatus(next); setModels(entries); setError(null); } }
     catch (cause) { if (current === generation.current) setError(cause instanceof Error ? cause.message : "Status request failed"); }
     finally { if (current === generation.current) setLoading(false); }
   };
@@ -48,6 +49,20 @@ export default function LocalModelPanel() {
     catch (cause) { ++generation.current; setError(cause instanceof Error ? cause.message : "Action failed"); }
     finally { actionLock.current = false; setPending(null); setLoading(false); }
   };
+  const switchModel = async (id: string | null) => {
+    if (actionLock.current || loading || pending || !models?.registry_present) return;
+    const entry = id ? models.models.find(row => row.id === id) : models.models.find(row => row.qualification === "default");
+    if (!entry || entry.runtime !== "llama_cpp" || !entry.installed || entry.digest_state === "mismatch") return;
+    if (!window.confirm(id ? `Activate ${entry.label}?` : "Restore the default local model?")) return;
+    actionLock.current = true; setPending(id ? "activate" : "restore default"); setError(null); ++generation.current;
+    try {
+      const next = id ? await activateLocalModel(id) : await restoreDefaultLocalModel();
+      ++generation.current; setStatus(next);
+      setModels(await readLocalModels());
+      if (next.reason_code && !["LLAMACPP_LOADING", "LLAMACPP_RECOVERING"].includes(next.reason_code)) setError(`${next.reason_code}: ${next.message}`);
+    } catch (cause) { ++generation.current; setError(cause instanceof Error ? cause.message : "Action failed"); }
+    finally { actionLock.current = false; setPending(null); setLoading(false); }
+  };
   const enabled = buttons(status, loading || !!pending || !!error);
   return <section className="coding-control-runtime" aria-label="Local model">
     <div className="coding-control-runtime__head"><h3>Local model</h3><button type="button" onClick={() => { polls.current = 0; void refresh(); }} disabled={loading || !!pending}>Refresh</button></div>
@@ -65,5 +80,14 @@ export default function LocalModelPanel() {
       </div>
     </> : null}
     <div className="final-fusion__toolbar-line">{(["start", "stop", "restart"] as const).map(action => <button key={action} type="button" disabled={!enabled[action]} onClick={() => void act(action)}>{action[0].toUpperCase() + action.slice(1)}</button>)}</div>
+    {models?.registry_present ? <div aria-label="Registered local models">
+      <h4>Registered models</h4>
+      <ul>{models.models.map(entry => <li key={entry.id}>
+        <strong>{entry.label}</strong> · <span className="coding-control-runtime__badge">{entry.qualification.replace(/_/g, " ")}</span> · {entry.model_file.split(/[\\/]/).pop()} · {entry.installed ? entry.digest_state.replace(/_/g, " ") : "Not installed"}
+        {models.active_id === entry.id ? <span> · Active</span> : null}
+        {entry.runtime === "strata" ? <span> · requires host start</span> : models.active_id !== entry.id ? <button type="button" disabled={loading || !!pending || !!error || !entry.installed || entry.digest_state === "mismatch"} onClick={() => void switchModel(entry.id)}>Activate</button> : null}
+      </li>)}</ul>
+      {models.active_id !== models.models.find(entry => entry.qualification === "default")?.id ? <button type="button" disabled={loading || !!pending || !!error} onClick={() => void switchModel(null)}>Restore default</button> : null}
+    </div> : null}
   </section>;
 }

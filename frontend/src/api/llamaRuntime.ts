@@ -23,3 +23,23 @@ async function request(action?: LlamaAction): Promise<LlamaStatus> {
 }
 export const readLlamaStatus = () => request();
 export const controlLlama = (action: LlamaAction) => request(action);
+
+export type LocalModelEntry = {
+  id: string; label: string; runtime: "llama_cpp" | "strata";
+  qualification: "default" | "qualified" | "under_qualification";
+  model_file: string; installed: boolean;
+  digest_state: "missing" | "hashing" | "not_verified" | "verified" | "mismatch";
+};
+export type LocalModels = { registry_present: boolean; models: LocalModelEntry[]; active_id: string | null };
+async function modelRequest(path: string, method?: "POST"): Promise<LocalModels | LlamaStatus> {
+  const response = await fetch(`${API_BASE_URL}/local-ai/models${path}`, method ? { method } : undefined);
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`;
+    try { const body: { detail?: string } = await response.json(); if (typeof body.detail === "string") message = body.detail; } catch { /* Keep status. */ }
+    throw new Error(message);
+  }
+  return response.json();
+}
+export const readLocalModels = () => modelRequest("") as Promise<LocalModels>;
+export const activateLocalModel = (id: string) => modelRequest(`/${encodeURIComponent(id)}/activate`, "POST") as Promise<LlamaStatus>;
+export const restoreDefaultLocalModel = () => modelRequest("/restore-default", "POST") as Promise<LlamaStatus>;

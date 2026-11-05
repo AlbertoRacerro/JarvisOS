@@ -119,6 +119,7 @@
 .coding-control-runtime { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--fusion-line); border-radius: 5px; background: var(--fusion-panel); }
 .coding-control-runtime__head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .coding-control-runtime__head > button { margin-left: auto; }
+.coding-control-runtime__badge { display: inline-block; padding: 2px 7px; border: 1px solid var(--fusion-line); border-radius: 999px; font-size: 0.8em; }
 .final-fusion__workbench[data-testid="coding-runtime-surface"] .coding-alignment { flex-direction: row; color: inherit; }
 .final-fusion__workbench[data-testid="coding-runtime-surface"] .coding-alignment span { margin: 0; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--fusion-line); background: var(--color-bg-subtle); color: var(--color-text-secondary); font-weight: 500; font-size: 13px; }
 .final-fusion__workbench[data-testid="coding-runtime-surface"] .coding-alignment[data-alignment="aligned"] span { border-color: var(--color-accent-border-strong); background: var(--fusion-green-soft); color: var(--fusion-green-deep); }
