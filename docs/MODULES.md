@@ -41,7 +41,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `backend/app/schemas` | backlog-candidate | One shared dataclass (ServiceStatus) with no consumer in the app; delete it or give it a purpose. | `common.py` | <100 |
 | `backend/tests` | live | Backend test suite (pytest): offline, fake providers, isolated data root, a fake project pack. | `conftest.py`, `scripts/test_backend_sharded.sh` | 95100 |
 | `configs` | live | Declarative configuration: AI provider catalog, cloud escalation and egress policy, architecture-enforcement rules, BLUECAD tool registry, relay gateway. | `ai_providers.yaml`, `ai_egress_policy.json`, `architecture_enforcement.json` | <100 |
-| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 3400 |
+| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 3500 |
 | `eval` | in-development | Local-model re-evaluation: classification and intake quality, latency, llama.cpp qualification and the second-brain retrieval benchmark. Everything here is marked to improve. | `local/README.md`, `local/llamacpp_qualification.py` | 700 |
 | `frontend/src/api` | live | Typed API client wrappers per backend area, plus the generated contract types (generated/). | `client.ts`, `generated/` | 4300 |
 | `frontend/src/app` | live | Routing table and router hook, navigation history, selection, and the owner and target registries Bubu uses to find controls. | `routes.ts`, `useAppRouter.ts`, `designTargets.ts` | 700 |
@@ -56,7 +56,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `frontend/src/components/engineering` | live | Engineering properties panel, Jarvis engineering actions and previous-run loading. | `EngineeringProperties.tsx` | 1100 |
 | `frontend/src/components/engineering-data` | live | State logic for the Engineering Data page. | `engineeringDataState.ts` | 100 |
 | `frontend/src/components/environment` | live | Environment profile UI: site form, import wizard, generators, profile chart and table, provenance. | `ImportWizard.tsx`, `ProfileList.tsx` | 700 |
-| `frontend/src/components/fusion` | live | Operator surfaces shared across workspaces: workspace header, settings surface, project archive, knowledge and search panels. | `FinalWorkspaceHeader.tsx`, `FinalSettingsSurface.tsx` | 600 |
+| `frontend/src/components/fusion` | live | Operator surfaces shared across workspaces: workspace header, settings surface, project archive, knowledge and search panels. | `FinalWorkspaceHeader.tsx`, `FinalSettingsSurface.tsx` | 700 |
 | `frontend/src/components/process` | live | Process workspace panels: PBR model picker, inspector and results, biology model library, reactor kinetics, dynamic runs and proposals. | `PbrInspector.tsx`, `ReactorKinetics.tsx`, `BiologyModelLibrary.tsx` | 3400 |
 | `frontend/src/components/review` | live | State logic for the Review stage. | `reviewState.ts` | 200 |
 | `frontend/src/components/runs` | live | State logic for the Runs workbench. | `state.ts` | <100 |
