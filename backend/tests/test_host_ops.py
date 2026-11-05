@@ -212,21 +212,110 @@ def test_slack_allowed_and_rate_limit(host):
     assert request(host, "slack.deliver", {"text": "Pronto"})[1]["outcome"] == "refused"
 
 
-@pytest.mark.parametrize("dirty,head", [(" M x", SHA), ("?? x", SHA), ("", "b" * 40)])
+@pytest.mark.parametrize("dirty,head", [(" M x\0", SHA), ("?? x\0", SHA), ("", "b" * 40)])
 def test_bench_clean_head_and_plain_launcher(host, dirty, head):
     paths, ex, _ = host
     calls = []
 
     def run(argv, **kw):
         calls.append((argv, kw))
-        return subprocess.CompletedProcess(argv, 0, head if "rev-parse" in argv else dirty, "")
+        return subprocess.CompletedProcess(argv, 0, head if "rev-parse" in argv else
+                                           dirty if "status" in argv else "H x\n", "")
 
     ex.run = run
     assert request(host, "bench.run", {"bench": "relay-observe-tests", "worktree": "x"}, sha=SHA)[1]["outcome"] == "refused"
-    assert all("--cwd" not in a and "--" not in a and k["cwd"] == str(paths.home / "src/worktrees/x") for a, k in calls)
+    root = paths.home / "src/worktrees/x"
+    launcher = str(paths.home / ".local/bin/jarvis-sandbox")
+    git = [launcher, "git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", str(root)]
+    assert [a for a, _ in calls] == [
+        [*git, "rev-parse", "HEAD"],
+        [*git, "status", "--porcelain", "-z", "--ignored", "--untracked-files=all"],
+        [*git, "ls-files", "-v"],
+    ]
+    assert all(k["cwd"] == str(root) for _, k in calls)
+
+
+def test_bench_clean_check_real_linked_worktree(host, monkeypatch):
+    paths, ex, _ = host
+    repo = paths.home / "repo"
+    root = paths.home / "src/worktrees/x"
+    root.parent.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "tracked.txt").write_text("original\n")
+    subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "initial"], check=True)
+    sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "--detach", str(root)], check=True)
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["bench.run"]["launcher"] = "/usr/bin/env"
+    paths.policy.write_text(json.dumps(policy))
+    ex.run = lambda argv, **kw: subprocess.run(argv, capture_output=True, text=True, **kw)
+    monkeypatch.setattr(h, "_run_benchmark", lambda *_args, **_kw: {"accepted": True})
+
+    def outcome():
+        return request(host, "bench.run", {"bench": "relay-observe-tests", "worktree": "x"}, sha=sha)[1]["outcome"]
+
+    assert outcome() == "ok"
+    subprocess.run(["git", "-C", str(root), "update-index", "--assume-unchanged", "tracked.txt"], check=True)
+    (root / "tracked.txt").write_text("edited\n")
+    assert outcome() == "refused"
+    subprocess.run(["git", "-C", str(root), "update-index", "--no-assume-unchanged", "tracked.txt"], check=True)
+    assert outcome() == "refused"
+    (root / "tracked.txt").write_text("original\n")
+    subprocess.run(["git", "-C", str(root), "update-index", "--skip-worktree", "tracked.txt"], check=True)
+    assert outcome() == "refused"
+    subprocess.run(["git", "-C", str(root), "update-index", "--no-skip-worktree", "tracked.txt"], check=True)
+    assert outcome() == "ok"
+
+    common_dir = Path(subprocess.check_output(["git", "-C", str(root), "rev-parse", "--git-common-dir"],
+                                              text=True).strip())
+    (common_dir / "info/exclude").write_text(
+        "conftest.py\n__pycache__/\n.pytest_cache/\n.venv/\n.ruff_cache/\nnode_modules\n.env\n"
+    )
+    tests = root / "backend/tests"
+    tests.mkdir(parents=True)
+    conftest = tests / "conftest.py"
+    conftest.write_text("raise RuntimeError('unexpected execution')\n")
+    assert outcome() == "refused"
+    conftest.unlink()
+
+    subprocess.run(["git", "-C", str(repo), "config", "status.showUntrackedFiles", "no"], check=True)
+    untracked = tests / "unexpected.txt"
+    untracked.write_text("unexpected\n")
+    assert outcome() == "refused"
+    untracked.unlink()
+
+    pycache = tests / "__pycache__"
+    pycache.mkdir()
+    (pycache / "a b.pyc").write_bytes(b"cache")
+    assert outcome() == "ok"
+    (pycache / "unexpected.py").write_text("unexpected\n")
+    assert outcome() == "refused"
+    (pycache / "unexpected.py").unlink()
+    pytest_cache = tests / ".pytest_cache"
+    pytest_cache.mkdir()
+    (pytest_cache / "README.md").write_text("cache\n")
+    assert outcome() == "ok"
+    venv_python = root / "backend/.venv/bin/python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text("python\n")
+    ruff_cache = root / "backend/.ruff_cache/x"
+    ruff_cache.parent.mkdir(parents=True)
+    ruff_cache.write_text("cache\n")
+    assert outcome() == "ok"
+    shared_modules = paths.home / "shared_modules"
+    shared_modules.mkdir()
+    (root / "frontend").mkdir()
+    (root / "frontend/node_modules").symlink_to(shared_modules, target_is_directory=True)
+    assert outcome() == "ok"
+    env_file = root / "backend/.env"
+    env_file.write_text("ignored\n")
+    assert outcome() == "refused"
 
 
 def local_eval_policy(paths, *, base_url="http://127.0.0.1:18081/v1", credential=True):
+    (paths.home / "src/worktrees").mkdir(parents=True, exist_ok=True)
     key_file = paths.config / "local-model-key"
     if credential:
         key_file.write_text("test-local-model-credential\n")
@@ -244,10 +333,15 @@ def local_eval_policy(paths, *, base_url="http://127.0.0.1:18081/v1", credential
     return key_file
 
 
-def fake_prompt_phase(host, monkeypatch, prompts):
+def fake_prompt_phase(host, monkeypatch, prompts, change=None):
     _, ex, _ = host
     monkeypatch.setattr(h, "_gh", lambda args, **kw: "behind" if "compare/" in args[0] else "[]")
-    monkeypatch.setattr(h, "_eval_checkout", lambda sha, root, remaining: (root / "backend").mkdir())
+    def checkout(sha, root, remaining):
+        (root / "backend").mkdir()
+        data = b"# evaluator\n"
+        (root / "backend/pointing_eval.py").write_bytes(data)
+        return {Path("backend/pointing_eval.py"): (len(data), h.hashlib.sha256(data).hexdigest())}, {Path("backend")}
+    monkeypatch.setattr(h, "_eval_checkout", checkout)
     seen = {}
 
     class Child:
@@ -259,6 +353,14 @@ def fake_prompt_phase(host, monkeypatch, prompts):
             seen["cwd"] = kw["cwd"]
             kw["stdout"].write(b"test-local-model-credential")
             (Path(kw["cwd"]) / "prompts.json").write_text(json.dumps(prompts))
+            if change == "modified":
+                (Path(kw["cwd"]) / "pointing_eval.py").write_text("changed\n")
+            elif change == "new":
+                (Path(kw["cwd"]) / "extra.py").write_text("new\n")
+            elif change == "cache":
+                cache = Path(kw["cwd"]) / "__pycache__"
+                cache.mkdir()
+                (cache / "x.pyc").write_bytes(b"cache")
 
         def poll(self):
             return self.returncode
@@ -311,6 +413,11 @@ def test_local_eval_token_stays_on_host_and_receipt_is_scores_only(host, monkeyp
                                                                  "verdict": "correct", "seconds": 0.0}]}
     assert "test-local-model-credential" not in json.dumps(receipt)
     assert "test-local-model-credential" not in str(seen)
+    assert Path(seen["cwd"]).parent.parent == paths.home / "src/worktrees"
+    launcher = str(paths.home / ".local/bin/jarvis-sandbox")
+    index = seen["argv"].index(launcher)
+    assert seen["argv"][index:index + 4] == [launcher, "env", "-C", str(seen["cwd"])]
+    assert seen["argv"][index + 4] == "PYTHONDONTWRITEBYTECODE=1"
     assert not Path(seen["cwd"]).exists()
     assert seen["stopped"]
     assert requests[0][0].get_header("Authorization") == "Bearer test-local-model-credential"
@@ -318,6 +425,18 @@ def test_local_eval_token_stays_on_host_and_receipt_is_scores_only(host, monkeyp
     body = json.loads(requests[0][0].data)
     assert body["temperature"] == 0 and body["max_tokens"] == 220
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+@pytest.mark.parametrize("change,expected", [("modified", "refused"), ("new", "refused"),
+                                              ("cache", "refused")])
+def test_local_eval_checkout_integrity_after_prompt_run(host, monkeypatch, change, expected):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    seen = fake_prompt_phase(host, monkeypatch, [], change=change)
+    monkeypatch.setattr(h, "_eval_prompts", lambda _: [])
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
+    assert receipt["outcome"] == expected
+    assert not Path(seen["cwd"]).exists()
 
 
 @pytest.mark.parametrize("url", ["http://example.com/v1", "https://127.0.0.1:18081/v1",
@@ -671,6 +790,9 @@ def test_bench_result_receipt_keeps_hash_and_limits(host, monkeypatch):
     class Child:
         returncode = 0
         def __init__(self, argv, **kw):
+            launcher = str(paths.home / ".local/bin/jarvis-sandbox")
+            index = argv.index(launcher)
+            assert argv[index:index + 4] == [launcher, "env", "-C", str(checkout)]
             (Path(kw["cwd"]) / "result.json").write_text(json.dumps({"nested": ["sk-" + "x" * 30]}))
         def poll(self):
             return self.returncode
@@ -767,13 +889,27 @@ def test_eval_checkout_refuses_member_count_and_deadline(tmp_path, monkeypatch):
     assert calls >= 4
 
 
-def test_eval_tempdir_restores_permission_for_cleanup():
-    with h._eval_tempdir() as root:
+def test_eval_tempdir_restores_permission_for_cleanup(tmp_path):
+    with h._eval_tempdir(tmp_path) as root:
+        assert root.parent == tmp_path
+        assert root.name.startswith(".hostops-eval-")
         child = root / "child"
         child.mkdir()
         (child / "file").write_text("x")
         child.chmod(0)
     assert not root.exists()
+
+
+@pytest.mark.parametrize("kind", ["missing", "file", "symlink"])
+def test_eval_tempdir_refuses_unsafe_parent(tmp_path, kind):
+    parent = tmp_path / "worktrees"
+    if kind == "file":
+        parent.write_text("x")
+    elif kind == "symlink":
+        parent.symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(h.Refused, match="checkout parent"):
+        with h._eval_tempdir(parent):
+            pytest.fail("unsafe parent accepted")
 
 
 def release_archive(extra=()):
