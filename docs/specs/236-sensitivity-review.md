@@ -1,6 +1,6 @@
 # 236 — Selected source sensitivity review
 
-Status: draft
+Status: ready
 Depends on: none
 
 ## Goal
@@ -52,4 +52,4 @@ Verify against actual code before starting; report conflicts instead of guessing
 
 ## Definition of done
 
-Acceptance criteria and relevant tests and lint pass; required CI and review evidence for the implementation and the UI browser walk pass; update the canonical registry as work advances. This draft does not authorize implementation.
+Acceptance criteria and relevant tests and lint pass; required CI and review evidence for the implementation and the UI browser walk pass; update the canonical registry as work advances. Accepted under maintainer directive `L20261105071756-367c` item 3b.

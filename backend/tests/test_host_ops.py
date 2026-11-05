@@ -10,8 +10,10 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -286,12 +288,14 @@ def test_local_eval_token_stays_on_host_and_receipt_is_scores_only(host, monkeyp
 
     class Response:
         status = 200
+        fp = SimpleNamespace(raw=SimpleNamespace(_sock=SimpleNamespace(settimeout=lambda _: None)))
+        chunks = [json.dumps({"choices": [{"message": {"content": "[[point:good]] secret echo"}}]}).encode()]
         def __enter__(self):
             return self
         def __exit__(self, *_):
             return False
-        def read(self, _):
-            return json.dumps({"choices": [{"message": {"content": "[[point:good]] secret echo"}}]}).encode()
+        def read1(self, _):
+            return self.chunks.pop(0) if self.chunks else b""
 
     class Opener:
         def open(self, req, timeout):
@@ -367,8 +371,10 @@ def test_local_eval_cancel_stops_scope_before_credential(host, monkeypatch):
         returncode = None
         def poll(self):
             return self.returncode
+        def kill(self):
+            self.returncode = -9
         def wait(self, **_):
-            self.returncode = -15
+            return self.returncode
     monkeypatch.setattr(h.subprocess, "Popen", lambda argv, **kw: RunningChild()
                         if argv[0] == "systemd-run" else real_popen(argv, **kw))
     ctx = h.Context(paths, h.load_policy(paths)[0], {"id": "a" * 32}, lambda *_a, **_k: None,
@@ -522,6 +528,131 @@ def test_local_eval_total_deadline(host, monkeypatch):
     _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
     assert receipt["outcome"] == "failed"
     assert "time limit" in receipt["error"]
+
+
+def test_local_eval_stalled_launcher_stops_scope_and_reaps_before_credential(host, monkeypatch):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    seen = fake_prompt_phase(host, monkeypatch, [])
+    clock = [0.0]
+    child = None
+
+    class StalledChild:
+        returncode = None
+        killed = False
+        reaped = False
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, **_):
+            self.reaped = True
+            return self.returncode
+
+    real_popen = subprocess.Popen
+
+    def popen(argv, **kw):
+        nonlocal child
+        if argv[0] == "systemd-run":
+            child = StalledChild()
+            kw["stdout"].write(b"test-local-model-credential")
+            return child
+        return real_popen(argv, **kw)
+
+    monkeypatch.setattr(h.subprocess, "Popen", popen)
+    scope_run = h.subprocess.run
+
+    def run(argv, **kw):
+        if argv[:3] == ["systemctl", "--user", "show"]:
+            assert child.killed and child.reaped
+        return scope_run(argv, **kw)
+
+    monkeypatch.setattr(h.subprocess, "run", run)
+    monkeypatch.setattr(h.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(h.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(h, "_eval_credential", lambda *_: pytest.fail("credential read after deadline"))
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert receipt["error"] == "local evaluation exceeded its time limit"
+    assert receipt["detail"] == {}
+    assert seen["stopped"] and child.killed and child.reaped
+    assert "test-local-model-credential" not in json.dumps(receipt)
+
+
+def test_local_eval_dripping_response_obeys_absolute_deadline(host, monkeypatch):
+    paths, _, _ = host
+    local_eval_policy(paths)
+    fake_prompt_phase(host, monkeypatch, [{"name": "case", "prompt": "p", "correct": ["a"], "plausible": []}])
+    clock = [0.0]
+    socket_timeouts = []
+    reads = []
+
+    class Response:
+        status = 200
+        fp = SimpleNamespace(raw=SimpleNamespace(_sock=SimpleNamespace(
+            settimeout=lambda seconds: socket_timeouts.append(seconds))))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read1(self, size):
+            reads.append(size)
+            clock[0] += 1
+            return b"{"  # One byte arrives within every socket timeout.
+
+    class Opener:
+        def open(self, req, timeout):
+            return Response()
+
+    monkeypatch.setattr(h.urllib.request, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(h.time, "monotonic", lambda: clock[0])
+    _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert receipt["error"] == "local evaluation exceeded its time limit"
+    assert receipt["detail"] == {}
+    assert len(reads) == 30 and all(size <= 64 << 10 for size in reads)
+    assert socket_timeouts[0] == 30 and socket_timeouts[-1] == 1
+    assert "test-local-model-credential" not in json.dumps(receipt)
+
+
+def test_local_eval_chunked_header_cannot_extend_body_deadline():
+    stopped = h.threading.Event()
+
+    class Socket:
+        def settimeout(self, _):
+            pass
+
+        def shutdown(self, _):
+            stopped.set()
+
+    class Response:
+        fp = SimpleNamespace(raw=SimpleNamespace(_sock=Socket()))
+
+        def read1(self, _):
+            # Chunked header parsing can make repeated reads inside one read1 call.
+            assert stopped.wait(timeout=1)
+            raise h.http.client.IncompleteRead(b"")
+
+    started = time.monotonic()
+    deadline = started + 0.15
+
+    def remaining():
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise h.Failed("local evaluation exceeded its time limit", {})
+        return left
+
+    with pytest.raises(h.Failed, match="time limit"):
+        h._eval_response_body(Response(), remaining)
+    assert stopped.is_set()
+    assert time.monotonic() - started < 0.8
 
 
 def test_bench_result_scrubs_nested_strings():

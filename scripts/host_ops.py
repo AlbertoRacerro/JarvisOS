@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -34,6 +35,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -770,10 +772,14 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
 def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: Path, sub: str,
                    result_path: Path | None, reported: str, worktree: str | None,
                    remaining: float | None = None, scrub_result: bool = True,
-                   close_scope: bool = False) -> dict[str, Any]:
+                   close_scope: bool = False, deadline: float | None = None) -> dict[str, Any]:
     launcher = str(ctx.conf("bench.run").get("launcher") or ctx.paths.home / ".local" / "bin" / "jarvis-sandbox")
     if result_path is not None and result_path.exists():
         raise Refused("benchmark result_file already exists before the run")
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Failed("local evaluation exceeded its time limit", {})
     limits = {"timeout_s": min(int(bench.get("timeout_s", 1800)), 4 * 3600, remaining) if remaining is not None else min(int(bench.get("timeout_s", 1800)), 4 * 3600),
               "memory_max": str(bench.get("memory_max", "8G")), "cpu_quota": str(bench.get("cpu_quota", "400%")),
               "tasks_max": int(bench.get("tasks_max", 512))}
@@ -784,24 +790,39 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
             "timeout", "-k", "15", str(limits["timeout_s"]), launcher,
             *[str(a) for a in bench["argv"]]]
     started = time.monotonic()
+    proc = None
+    cancelled = False
+    expired = False
     try:
         with tempfile.TemporaryFile() as out:
             proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
                                     env=_host_env(), cwd=root / sub)
-            cancelled = False
             while proc.poll() is None:
+                if deadline is not None and time.monotonic() >= deadline:
+                    expired = True
+                    break
                 if ctx.cancelled():
                     cancelled = True
-                    subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], check=False,
-                                   capture_output=True, timeout=60, env=_host_env())
-                    proc.wait(timeout=60)
                     break
-                time.sleep(1)
+                time.sleep(min(1, max(0, deadline - time.monotonic())) if deadline is not None else 1)
             out.seek(0)
             output = out.read()
     finally:
-        if close_scope:
-            _close_eval_scope(scope)
+        try:
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                proc.wait(timeout=60)
+        finally:
+            if close_scope:
+                _close_eval_scope(scope)
+            elif cancelled:
+                subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], check=False,
+                               capture_output=True, timeout=60, env=_host_env())
+    if expired or (deadline is not None and time.monotonic() >= deadline):
+        raise Failed("local evaluation exceeded its time limit", {})
     detail = {"bench": bench_name, "worktree": worktree, "sandbox_head": reported, "limits": limits,
               "returncode": proc.returncode, "wall_s": round(time.monotonic() - started, 2),
               "output_sha256": hashlib.sha256(output).hexdigest(),
@@ -842,6 +863,39 @@ def _close_eval_scope(scope: str) -> None:
     except (OSError, subprocess.SubprocessError):
         pass
     raise Failed("local evaluator prompt scope could not be stopped", {})
+
+
+def _eval_response_body(response: Any, remaining: Callable[[], float]) -> bytes:
+    """Read at most 1 MiB while enforcing the evaluation's absolute deadline."""
+    body = bytearray()
+    sock = response.fp.raw._sock
+    expired = threading.Event()
+
+    def stop_read() -> None:
+        expired.set()
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    timer = threading.Timer(remaining(), stop_read)
+    timer.start()
+    try:
+        while len(body) < 1 << 20:
+            sock.settimeout(remaining())
+            try:
+                chunk = response.read1(min(64 << 10, (1 << 20) - len(body)))
+            except (OSError, ValueError, http.client.HTTPException):
+                if expired.is_set():
+                    remaining()
+                raise ValueError("invalid local model response") from None
+            remaining()
+            if not chunk:
+                break
+            body.extend(chunk)
+    finally:
+        timer.cancel()
+    return bytes(body)
 
 
 _POINT_RE = re.compile(r"\[\[\s*point\s*:\s*([\w.:-]+)\s*(?:\|([^\]]*))?\]\]", re.IGNORECASE)
@@ -1068,7 +1122,7 @@ def op_local_eval_run(ctx: Context) -> dict[str, Any]:
                     or ".." in Path(result_file).parts or "secret_env" in bench):
                 raise Refused("local evaluator benchmark policy is invalid")
             phase_one = _run_benchmark(ctx, bench_name, bench, root, sub, root / sub / result_file,
-                                       sha, None, remaining(), scrub_result=False, close_scope=True)
+                                       sha, None, scrub_result=False, close_scope=True, deadline=deadline)
             remaining()
         prompts = _eval_prompts(phase_one.get("result"))
     except Failed as exc:
@@ -1099,7 +1153,7 @@ def op_local_eval_run(ctx: Context) -> dict[str, Any]:
                     raise Failed("local model returned an invalid HTTP status", {})
                 if status != 200:
                     raise Failed(f"local model returned HTTP {status}", {})
-                payload = json.loads(response.read(1 << 20))
+                payload = json.loads(_eval_response_body(response, remaining))
             remaining()
             reply = payload["choices"][0]["message"]["content"] or ""
             if not isinstance(reply, str):
@@ -1108,6 +1162,7 @@ def op_local_eval_run(ctx: Context) -> dict[str, Any]:
             status = exc.code if type(exc.code) is int and 100 <= exc.code <= 599 else "invalid"
             raise Failed(f"local model returned HTTP {status}", {}) from None
         except (OSError, urllib.error.URLError):
+            remaining()
             raise Failed("local model is unavailable", {}) from None
         except (ValueError, KeyError, IndexError, TypeError):
             raise Failed("local model response is invalid", {}) from None
