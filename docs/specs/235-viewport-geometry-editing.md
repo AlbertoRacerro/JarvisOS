@@ -1,6 +1,6 @@
 # 235 — Viewport geometry editing, slice 2: feature placement
 
-Status: ready
+Status: merged
 Depends on: 234
 
 Slice 1 (feature inspector, merged in PR #17) is in Git history. This file is the accepted contract for slice 2.
