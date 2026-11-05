@@ -21,6 +21,7 @@ assert.deepEqual(stops.map((s) => s.title), [
 ]);
 assert.deepEqual(stops.map((s) => s.route.split("?")[0]).filter((r, i, all) => r !== all[i - 1]),
   ["/design/project", "/memory/project-basis", "/development/roadmap/timeline", "/coding/repository", "/settings/appearance"]);
+assert.match(tour, /title: "Feature inspector"[\s\S]*?\n    text: ".*Placed freely.*Place in viewport/);
 assert.equal(tour.split("title: \"").length - 1, stops.length, "every stop declares route, target and title on one line");
 for (const part of [/\n    text: "/g, /absent: [A-Z"]/g]) assert.equal([...tour.matchAll(part)].length, stops.length, `every stop has ${part}`);
 
@@ -65,5 +66,5 @@ assert.match(read("src/components/Layout.tsx"), /tour=\{bubu\?\.tour\} onStartTo
 
 // ---- build chain ----
 assert.match(pkg, /"test:242": "node tests\/242_bubu_guided_tour\.test\.mjs"/);
-assert.match(pkg, /npm run test:235 && npm run test:242 &&/);
+assert.match(pkg, /npm run test:235 && npm run test:235b && npm run test:242 &&/);
 console.log("242 bubu guided tour: ok");

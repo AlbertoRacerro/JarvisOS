@@ -62,7 +62,9 @@ _DESIGN_STAGES = {
         "CAD: select the component, node Geometry (design.tree.node.geometry); the viewport shows the geometry. The "
         "Inspector has the Feature inspector (design.panel.feature-inspector): Add tube, bend, manifold or serpentine; "
         "edit dimensions; Enabled checkbox and Remove per feature; Rebuild geometry makes a new revision; Undo "
-        "restores the previous one. Attach a BlueCad candidate (design.node.attach-model) or generate geometry from Process."
+        "restores the previous one. A later feature Placed freely (instead of Connected to previous outlet) sets Position "
+        "X/Y/Z mm and Heading deg; Place in viewport shows a Move/Rotate handle; edits stay not applied until Rebuild "
+        "geometry. Attach a BlueCad candidate (design.node.attach-model) or generate geometry from Process."
     ),
     "reduced-model": "Reduced model: select the component, node Reduced model: published reduced models and their status.",
     "optics": "Optics lists the optics inputs of every photobioreactor unit and the stored Dynamic Studio prediction (design.panel.optics).",
