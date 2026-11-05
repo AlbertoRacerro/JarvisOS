@@ -1583,6 +1583,12 @@ def slack_post(config: dict[str, str], text: str, *, thread_ts: str | None = Non
     return ts if isinstance(ts, str) and ts else None
 
 
+def mention_urgent(kind: str, text: str, bot: dict[str, str] | None) -> str:
+    if bot and kind.startswith(("question|", "alert|")):
+        return f"<@{bot['maintainer_user_id']}> {text}"
+    return text
+
+
 def poll_slack_questions(obs: dict[str, Any], config: dict[str, str], root: Path, repo: Path, observe: Any,
                          now: datetime, *, api: Callable[..., dict[str, Any] | None] = slack_api,
                          post: Callable[..., str | None] = slack_post) -> None:
@@ -4522,11 +4528,12 @@ def command_watch(args: argparse.Namespace) -> int:
 
                 def send_question(_qid: str, message: str, bot: Any = bot, webhook: Any = webhook) -> str | None:
                     if bot:
-                        return slack_post(bot, message)
+                        return slack_post(bot, mention_urgent(f"question|{_qid}", message, bot))
                     return "webhook" if webhook and webhook(message) is None else None
 
                 observe.observe_step(obs, observe.snapshot(root, repo, now), now,
-                                     send=lambda kind, text, n=notifier, t=now: n.send_text(kind, text, t),
+                                     send=lambda kind, text, n=notifier, t=now, b=bot:
+                                         n.send_text(kind, mention_urgent(kind, text, b), t),
                                      digest_every=timedelta(hours=args.digest_hours),
                                      merges=lambda since: observe.merges_since(repo, since),
                                      failures=int(state["notify"].get("failures") or 0),
