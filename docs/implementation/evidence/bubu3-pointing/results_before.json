@@ -1,0 +1,205 @@
+{
+  "label": "before",
+  "head": "a660a0077bb4ca96ae3f70df1c1bacc54b3df63e",
+  "ids": "old",
+  "model": "gemma-4-12b-it-qat-q4_0",
+  "base_url": "http://127.0.0.1:18081/v1",
+  "max_tokens": 220,
+  "temperature": 0,
+  "tally": {
+    "correct": 6,
+    "plausible": 3,
+    "wrong": 3,
+    "none": 0
+  },
+  "rows": [
+    {
+      "name": "c1_cfd_turbulent_results",
+      "question": "how can I see the results of the turbulent simulations?",
+      "verdict": "plausible",
+      "first_id": "design.tree",
+      "correct": [
+        "el-14"
+      ],
+      "plausible": [
+        "design.tree",
+        "design.stage.cfd"
+      ],
+      "prompt_chars": 6534,
+      "text": "To see the results of the turbulent simulations, please follow these steps:\n\n1. Select the component in the tree: [[point:design.tree|1. Select the component]]\n2. Then choose the **Results** node (this will open automatically in the CFD stage).\n3. In the Inspector, use the **Compare runs** section to select the turbulent simulations you wish to view.",
+      "seconds": 5.3,
+      "prompt_tokens": 1667
+    },
+    {
+      "name": "c1_cfd_pathway_followup",
+      "question": "no, I know there's a specific pathway to see the turbulent CFD results",
+      "verdict": "plausible",
+      "first_id": "design.tree",
+      "correct": [
+        "el-14"
+      ],
+      "plausible": [
+        "design.tree",
+        "design.stage.cfd"
+      ],
+      "prompt_chars": 6549,
+      "text": "To view the turbulent CFD results for the current component, please follow these steps:\n\n1. Select the component in the tree: [[point:design.tree|1. Select the component]]\n2. Then choose the **Results** node.\n3. In the Inspector, use the **Compare runs** section to select the turbulent simulation runs.",
+      "seconds": 2.0,
+      "prompt_tokens": 1672
+    },
+    {
+      "name": "c1_cfd_vs_horizontal",
+      "question": "Where do I open the CFD results for C1?",
+      "verdict": "wrong",
+      "first_id": "design.tree.component.C1-CFD",
+      "correct": [
+        "el-14"
+      ],
+      "plausible": [
+        "design.tree",
+        "design.stage.cfd"
+      ],
+      "prompt_chars": 6518,
+      "text": "To open the CFD results for C1, please follow these steps:\n\n1. Click on the component in the tree: [[point:design.tree.component.C1-CFD]]\n2. Then choose the **Results** node.",
+      "seconds": 1.5,
+      "prompt_tokens": 1667
+    },
+    {
+      "name": "c1_cfd_mesh_nothing_selected",
+      "question": "where do I change the mesh?",
+      "verdict": "plausible",
+      "first_id": "design.tree",
+      "correct": [
+        "el-14"
+      ],
+      "plausible": [
+        "design.tree"
+      ],
+      "prompt_chars": 6506,
+      "text": "To change the mesh, please follow these steps:\n\n1. Select the component you wish to modify in the tree: [[point:design.tree]]\n2. Once selected, expand the component and click on the **Mesh** node.",
+      "seconds": 1.5,
+      "prompt_tokens": 1663
+    },
+    {
+      "name": "c1_cfd_mesh_selected",
+      "question": "where do I change the mesh?",
+      "verdict": "correct",
+      "first_id": "design.tree.node.mesh",
+      "correct": [
+        "design.tree.node.mesh"
+      ],
+      "plausible": [],
+      "prompt_chars": 7380,
+      "text": "To change the mesh, you need to navigate to the Mesh node of the selected component.\n\n1. [[point:design.tree.node.mesh|Mesh]]",
+      "seconds": 2.6,
+      "prompt_tokens": 1941
+    },
+    {
+      "name": "c1_cfd_compare_runs",
+      "question": "how do I compare laminar and turbulent runs?",
+      "verdict": "correct",
+      "first_id": "design.field.run",
+      "correct": [
+        "design.field.run"
+      ],
+      "plausible": [
+        "el-27",
+        "el-28",
+        "design.panel.cfd-field"
+      ],
+      "prompt_chars": 7397,
+      "text": "To compare the laminar and turbulent runs, follow these steps:\n\n1. In the Inspector on the right, locate the \"Compare runs\" group and check the boxes for both the \"Laminar\" and \"Turbulent\" runs.\n2. Use the field buttons to toggle between pressure ($p$) and velocity ($|U|$) visualizations.\n\n[[point:design.field.run]]",
+      "seconds": 2.3,
+      "prompt_tokens": 1943
+    },
+    {
+      "name": "plant_turbulent_results",
+      "question": "how can I see the results of the turbulent CFD simulations?",
+      "verdict": "correct",
+      "first_id": "design.stage.cfd",
+      "correct": [
+        "design.stage.cfd"
+      ],
+      "plausible": [],
+      "prompt_chars": 5913,
+      "text": "To view the results of the turbulent CFD simulations, please follow these steps:\n\n1. Click on the CFD stage button [[point:design.stage.cfd|1. CFD]].\n2. Select the relevant component from the tree on the left.\n3. Expand the component to view its nodes and select the Results node.",
+      "seconds": 3.2,
+      "prompt_tokens": 1497
+    },
+    {
+      "name": "plant_solver_console",
+      "question": "where is the solver console?",
+      "verdict": "correct",
+      "first_id": "el-16",
+      "correct": [
+        "el-16"
+      ],
+      "plausible": [
+        "el-15"
+      ],
+      "prompt_chars": 5882,
+      "text": "The solver console is located in the Plant panel toolbar. You can find it here:\n\n[[point:el-16|1. Solver console]]",
+      "seconds": 1.2,
+      "prompt_tokens": 1491
+    },
+    {
+      "name": "case_study_back_home",
+      "question": "how do I go back to Zephyr?",
+      "verdict": "correct",
+      "first_id": "el-6",
+      "correct": [
+        "el-6"
+      ],
+      "plausible": [],
+      "prompt_chars": 6506,
+      "text": "To go back to Zephyr, click on the button located at the top of the page:\n\n[[point:el-6|Back to Zephyr]]",
+      "seconds": 2.1,
+      "prompt_tokens": 1665
+    },
+    {
+      "name": "dynamic_run_simulation",
+      "question": "how do I run a dynamic simulation?",
+      "verdict": "wrong",
+      "first_id": "design.dynamic.draft",
+      "correct": [
+        "el-13"
+      ],
+      "plausible": [
+        "design.dynamic.steps",
+        "design.panel.dynamic"
+      ],
+      "prompt_chars": 5695,
+      "text": "To run a dynamic simulation in the Zephyr project, please follow these steps:\n\n1. Select the process draft you wish to simulate from the **Process draft to simulate** dropdown.\n2. Proceed through the **Dynamic simulation steps** in order:\n    - **1 Scenario**: Define your simulation parameters.\n    - **2 Schedule & controllers**: (Optional) Set up your control logic.\n    - **3 Run**: Execute the simulation.\n    - **4 Results & compare**: Review the output data.\n\nYou can begin by selecting your draft here: [[point:design.dynamic.draft]]",
+      "seconds": 4.6,
+      "prompt_tokens": 1416
+    },
+    {
+      "name": "studio_python_code",
+      "question": "where can I read the Python code of this model?",
+      "verdict": "correct",
+      "first_id": "el-19",
+      "correct": [
+        "el-19"
+      ],
+      "plausible": [],
+      "prompt_chars": 4641,
+      "text": "To read the Python code for the current model, please follow these steps:\n\n1. Click on the **Explanation & code** tab [[point:el-19]].\n2. Once that tab is active, use the **Python** button to switch the view to the code editor.",
+      "seconds": 2.6,
+      "prompt_tokens": 1163
+    },
+    {
+      "name": "memory_literature",
+      "question": "where do I find the literature?",
+      "verdict": "wrong",
+      "first_id": "el-7",
+      "correct": [
+        "el-2"
+      ],
+      "plausible": [],
+      "prompt_chars": 4107,
+      "text": "To find the literature, please follow these steps:\n\n1. Click on the Memory link in the left rail.\n2. Then, select the Literature page from the navigation options.\n\n[[point:el-7|1. Memory]]",
+      "seconds": 2.7,
+      "prompt_tokens": 1002
+    }
+  ]
+}

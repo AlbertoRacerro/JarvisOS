@@ -241,3 +241,7 @@
 #bubu-bubble button.bubu-tour__btn--primary { border-color: var(--color-accent-foreground); background: var(--color-accent-foreground); color: var(--color-bg-surface); }
 
 @media print { #bubu-bubble { display: none; } }
+
+/* Spec 231: a pointed-at target reads as its name; a target that is not on the page says so in a muted note. */
+.bubu-bubble .jarvis-message-text__target { font-weight: 650; color: inherit; box-shadow: inset 0 -2px 0 var(--color-accent-primary); }
+.bubu-bubble .jarvis-message-text__note { color: var(--color-text-muted); font-style: italic; }

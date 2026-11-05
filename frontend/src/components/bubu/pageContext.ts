@@ -10,6 +10,7 @@ export const MAX_TEXT = 160;
 const MAX_CANDIDATES = 4000;
 const TARGET_ATTR = "data-jarvis-target";
 const REF_ATTR = "data-bubu-ref";
+const FACTS_ATTR = "data-jarvis-facts";
 const BUBU_UI = "[data-bubu-ui], #bubu-launcher";
 
 export const INTERACTIVE_SELECTOR = [
@@ -115,6 +116,9 @@ function stateText(el: Element): string | undefined {
   const expanded = el.getAttribute("aria-expanded");
   if (expanded === "true") parts.push("expanded"); else if (expanded === "false") parts.push("collapsed");
   if ((el as HTMLButtonElement).disabled || el.getAttribute("aria-disabled") === "true") parts.push("disabled");
+  // Spec 231: facts the page already holds about the element (e.g. a Design component row), bounded like any text.
+  const facts = el.getAttribute(FACTS_ATTR);
+  if (facts && clean(facts)) parts.push(clean(facts));
   const text = truncate(parts.join(", "));
   return text || undefined;
 }
@@ -175,4 +179,10 @@ export function collectPageContext(root: ParentNode = document): UiContext {
 export function resolveTarget(id: string, root: ParentNode = document): Element | null {
   const found = Array.from(root.querySelectorAll(`${attrSelector(TARGET_ATTR, id)}, ${attrSelector(REF_ATTR, id)}`)).filter((el) => !isBubuUi(el));
   return found.find(isRenderable) ?? found[0] ?? null;
+}
+
+/** Spec 231: the current name of a pointable target; null when it is not rendered on the page, "" when it has none. */
+export function targetName(id: string, root: ParentNode = document): string | null {
+  const el = resolveTarget(id, root);
+  return el && isRenderable(el) ? accessibleName(el) : null;
 }

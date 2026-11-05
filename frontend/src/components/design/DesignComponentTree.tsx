@@ -14,7 +14,7 @@ const NODE_TARGET: Record<DesignNode, DesignTargetId> = {
   Results: "design.tree.node.results", "Reduced model": "design.tree.node.reduced-model"
 };
 
-type Row = { id: string; level: number; label: string; meta?: NodeBadge; target?: string; expandable: boolean; expanded: boolean; selected: boolean; parentId: string | null; activate(): void };
+type Row = { id: string; level: number; label: string; meta?: NodeBadge; target?: string; facts?: string; expandable: boolean; expanded: boolean; selected: boolean; parentId: string | null; activate(): void };
 
 type Props = Readonly<{
   components: readonly DesignComponent[];
@@ -34,6 +34,24 @@ export function componentNodeStatus(item: DesignComponent, node: DesignNode): No
   return count ? { state: "ready", detail: `${count} model${count === 1 ? "" : "s"}` } : { state: "empty" };
 }
 
+/**
+ * Spec 231: what the page already holds about a component, as one line for Bubu's page context (and the row tooltip).
+ * CFD results are read only for the selected component; any other component says so instead of guessing.
+ */
+export function componentFacts(item: DesignComponent, selected: boolean, results?: NodeBadge): string {
+  const counts = new Map<string, number>();
+  for (const model of item.models) counts.set(model.node, (counts.get(model.node) ?? 0) + 1);
+  const models = item.models.length
+    ? `${item.models.length} model${item.models.length === 1 ? "" : "s"} (${[...counts].map(([node, count]) => `${node} ${count}`).join(", ")})`
+    : "no models";
+  const cfd = !selected ? "CFD results not read (select it to check)"
+    : !results || results.state === "checking" ? "CFD results: checking"
+    : results.state === "unknown" ? "CFD results: could not be read"
+    : `CFD results: ${results.state}${results.detail ? ` (${results.detail})` : ""}`;
+  return ["Component", item.source_unit_id ? "from a Process unit" : "not from Process",
+    item.geometry_candidate_id ? "BlueCad geometry attached" : "no geometry", models, cfd].join(" · ");
+}
+
 function DesignComponentTree({ components, selectedId, selectedNode, onSelectComponent, onSelectNode, nodeStatus }: Props) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [tabStop, setTabStop] = useState<string | null>(null);
@@ -48,7 +66,7 @@ function DesignComponentTree({ components, selectedId, selectedNode, onSelectCom
         const isSelected = item.id === selectedId;
         const expandable = hasChildren || isSelected;
         const expanded = expandable && !collapsed.has(id);
-        out.push({ id, level, label: item.name, target: componentTargetId(item.name, taken), expandable, expanded, selected: isSelected, parentId: parentRow, activate: () => onSelectComponent(item) });
+        out.push({ id, level, label: item.name, target: componentTargetId(item.name, taken), facts: componentFacts(item, isSelected, isSelected ? nodeStatus?.("Results") : undefined), expandable, expanded, selected: isSelected, parentId: parentRow, activate: () => onSelectComponent(item) });
         if (expanded) {
           if (isSelected) for (const node of DESIGN_NODES) {
             out.push({ id: `n:${item.id}:${node}`, level: level + 1, label: node, meta: nodeStatus?.(node) ?? componentNodeStatus(item, node), target: NODE_TARGET[node], expandable: false, expanded: false,
@@ -91,7 +109,7 @@ function DesignComponentTree({ components, selectedId, selectedNode, onSelectCom
     {rows.map((row, index) => <li key={row.id} role="none">
       <div className={`design-tree__item${row.selected ? " is-selected" : ""}`} role="treeitem" aria-level={row.level}
         aria-expanded={row.expandable ? row.expanded : undefined} aria-selected={row.selected} aria-label={row.meta ? undefined : row.label}
-        {...(row.target ? { "data-jarvis-target": row.target } : {})}
+        {...(row.target ? { "data-jarvis-target": row.target } : {})} {...(row.facts ? { "data-jarvis-facts": row.facts, title: row.facts } : {})}
         tabIndex={row.id === stop ? 0 : -1} style={{ paddingInlineStart: `${0.4 + (row.level - 1) * 1}rem` }}
         ref={(node) => { if (node) refs.current.set(row.id, node); else refs.current.delete(row.id); }}
         onFocus={() => setTabStop(row.id)} onClick={() => { setTabStop(row.id); row.activate(); }}

@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 
 # Budget: one area stays around 600-1200 characters so the page block stays short.
 MAX_AREA_CHARS = 1200
-MAX_GUIDE_CHARS = 2400
+MAX_GUIDE_CHARS = 2600
 
 _RAIL = (
     "Everywhere: the left rail has Back/Forward arrows (rail.back, rail.forward); the project picker "
@@ -71,6 +71,13 @@ _DESIGN_STAGES = {
     "optics": "Optics lists the optics inputs of every photobioreactor unit and the stored Dynamic Studio prediction (design.panel.optics).",
 }
 
+_DESIGN_EXAMPLES = (
+    "Examples: For C1 CFD results, point first to the visible C1-CFD component row, "
+    "then Results; C1-horizontal is different. If C1-CFD is absent, point to visible CFD "
+    "stage or version picker. To return from a case study, point to its visible 'Back to "
+    "<project>' button; otherwise use the project picker."
+)
+
 _AREAS: tuple[tuple[str, str], ...] = (
     ("/design/studio", (
         "Studio (calculation models). Left: Library of published models, \"Drafts & models\", \"+ New model\", "
@@ -121,4 +128,5 @@ def app_map_for_route(route: str) -> str:
     if path == "/design/project":
         stage = (parse_qs(parts.query).get("stage") or ["plant"])[0]
         pieces.append(_DESIGN_STAGES.get(stage, ""))
+        pieces.append(_DESIGN_EXAMPLES)
     return "\n".join(piece for piece in pieces if piece)[:MAX_GUIDE_CHARS]

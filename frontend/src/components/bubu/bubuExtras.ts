@@ -5,6 +5,11 @@ type Turn = { id: string; role: "user" | "jarvis"; text: string; pending?: boole
 
 export const MAX_IMAGES = 2;
 
+/** Refresh picked targets against the current page, dropping targets that are no longer available. */
+export function refreshPicked(picked: readonly Target[], resolve: (id: string) => Target | null): Target[] {
+  return picked.map((target) => resolve(target.id)).filter((target): target is Target => target !== null);
+}
+
 /** Targets the user picked ("this one") always reach the model, first, even when the page list is full. */
 export function withPicked(context: Context, picked: readonly Target[], cap = 150): Context {
   const ids = new Set(picked.map((target) => target.id));

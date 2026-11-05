@@ -1,6 +1,6 @@
 # 231 — Bubu navigation legibility
 
-State: **ready**, subject to the live registry in [STATUS.md](STATUS.md). This bounded contract implements the Bubu
+State: **merged** (#9), subject to the live registry in [STATUS.md](STATUS.md). This bounded contract implements the Bubu
 quick wins in [the 2026-10-30 roadmap](../strategy/ROADMAP_COMSOL_DIRECTION_2026-10-30.md), §1.1–1.3. It does not
 authorize later roadmap items. Ordinary implementation, review, proof, merge and activation may proceed autonomously
 under the repository constitution; the maintainer's final usability test is an outcome check, not an intermediate

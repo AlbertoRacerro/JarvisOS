@@ -26,6 +26,8 @@ APP_MAP_HEADER = "How to get around this app (reference data; the screen may dif
 POINTING_INSTRUCTIONS = (
     "To show the user where something is, write [[point:<id>]] or [[point:<id>|1. CFD]] (the label is optional) "
     "using only ids listed above; never invent an id. "
+    "The user sees the directive as the item's name, so put it where the name belongs (\"Click <directive>, then "
+    "choose Results\") and do not also write the name next to it. "
     "When what the user wants is not on screen yet, answer with the steps in order and point only at the FIRST step "
     "the user can do right now, using an id from the list above; name the later steps in words (\"then choose "
     "Results\"). With several steps, number the step in the label as in the example above. "
