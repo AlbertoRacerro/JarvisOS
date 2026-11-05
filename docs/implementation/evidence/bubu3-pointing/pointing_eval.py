@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.request
@@ -40,7 +41,8 @@ def build_prompt(ui_context: dict, question: str) -> str:
 
 def ask(base_url: str, model: str, prompt: str, max_tokens: int) -> dict:
     body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0,
-                       "max_tokens": max_tokens, "stream": False}).encode()
+                       "max_tokens": max_tokens, "stream": False,
+                       "chat_template_kwargs": {"enable_thinking": False}}).encode()
     headers = {"Content-Type": "application/json"}
     key = os.getenv("JARVISOS_LLAMACPP_API_KEY")  # the operator's token for the running server, supplied by the caller
     if key:
@@ -85,7 +87,11 @@ def main() -> int:
         print(f"{scenario['name']:34} {verdict:9} first={first}  ({reply['seconds']}s)", flush=True)
     if not args.dry_run:
         tally = {k: sum(1 for r in rows if r["verdict"] == k) for k in ("correct", "plausible", "wrong", "none")}
-        Path(args.out).write_text(json.dumps({"label": args.label, "ids": args.ids, "model": args.model, "tally": tally, "rows": rows},
+        head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        Path(args.out).write_text(json.dumps({"label": args.label, "head": head, "ids": args.ids,
+                                              "model": args.model, "base_url": args.base_url,
+                                              "max_tokens": args.max_tokens, "temperature": 0,
+                                              "tally": tally, "rows": rows},
                                              indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print("tally", tally)
     return 0

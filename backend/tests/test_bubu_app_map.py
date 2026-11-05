@@ -66,6 +66,8 @@ def test_every_page_gets_the_rail_with_the_way_back_to_the_home_project() -> Non
 def test_design_stage_addendum_follows_the_stage_query() -> None:
     cfd = app_map_for_route("/design/project?stage=cfd")
     assert "design.stage.cfd" in cfd and "design.tree.node.results" in cfd and "design.field.run" in cfd
+    assert "visible C1-CFD component row" in cfd and "C1-horizontal is different" in cfd
+    assert "visible 'Back to <project>' button" in cfd
     assert "NOT where simulation results are" in cfd  # the Library is not results
     assert "Solver console" in app_map_for_route("/design/project") and "Solver console" in app_map_for_route("/design/project?stage=plant")
     assert "design.dynamic.steps" in app_map_for_route("/design/project?stage=dynamic")
@@ -130,6 +132,7 @@ def test_every_target_id_in_the_guide_exists_in_the_frontend_registry() -> None:
 def test_pointing_instruction_is_multi_step_first_step_ids_only() -> None:
     text = POINTING_INSTRUCTIONS
     assert "only ids listed above" in text and "never invent an id" in text
+    assert "sees the directive as the item's name" in text  # spec 231: the directive reads as the name
     assert "not on screen yet" in text and "steps in order" in text and "FIRST step" in text
     assert "name the later steps in words" in text
     assert "do not point at Library entries" in text

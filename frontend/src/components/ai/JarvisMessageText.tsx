@@ -30,7 +30,28 @@ function MathSpan({ src, display, block }: { src: string; display: boolean; bloc
   return <Tag className={block ? "jarvis-math-block" : "jarvis-math"} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
+// Bubu (spec 231) wraps a pointed-at target's name in private-use marks: \uE000name\uE001 is emphasised and
+// \uE002note\uE003 is a muted note. They are split out before Markdown/LaTeX so a name is always plain text.
+const MARK = /\uE000([^\uE000-\uE003\n]*)\uE001|\uE002([^\uE000-\uE003\n]*)\uE003/g;
+const stripMarks = (text: string) => text.replace(/[\uE000-\uE003]/g, "");
+
 function inline(text: string, keyPrefix: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  let last = 0;
+  let index = 0;
+  for (const match of text.matchAll(MARK)) {
+    const at = match.index ?? 0;
+    if (at > last) parts.push(...markdownInline(stripMarks(text.slice(last, at)), `${keyPrefix}-t${index}`));
+    parts.push(match[1] !== undefined
+      ? <strong key={`${keyPrefix}-m${index++}`} className="jarvis-message-text__target">{match[1]}</strong>
+      : <span key={`${keyPrefix}-m${index++}`} className="jarvis-message-text__note">{match[2]}</span>);
+    last = at + match[0].length;
+  }
+  if (last < text.length) parts.push(...markdownInline(stripMarks(text.slice(last)), `${keyPrefix}-t${index}`));
+  return parts;
+}
+
+function markdownInline(text: string, keyPrefix: string): ReactNode[] {
   const parts: ReactNode[] = [];
   const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
   let last = 0;
@@ -49,7 +70,7 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
       const token = match[0];
       parts.push(token.startsWith("`")
         ? <code key={`${keyPrefix}-${index++}`}>{token.slice(1, -1)}</code>
-        : <strong key={`${keyPrefix}-${index++}`}>{inline(token.slice(2, -2), `${keyPrefix}-${index}`)}</strong>);
+        : <strong key={`${keyPrefix}-${index++}`}>{markdownInline(token.slice(2, -2), `${keyPrefix}-${index}`)}</strong>);
       last = match.index + token.length;
     } else break;
   }
@@ -103,11 +124,12 @@ function parse(text: string): Block[] {
   return blocks;
 }
 
-export default function JarvisMessageText({ text }: { text: string }) {
-  return <div className="jarvis-message-text">{parse(text).map((block, index) => {
+/** `marks` opts in to Bubu's target-name marks; any other caller gets them stripped as plain text. */
+export default function JarvisMessageText({ text, marks = false }: { text: string; marks?: boolean }) {
+  return <div className="jarvis-message-text">{parse(marks ? text : stripMarks(text)).map((block, index) => {
     const key = `b${index}`;
-    if (block.kind === "math") return <MathSpan key={key} src={block.src} display block />;
-    if (block.kind === "code") return <pre key={key}><code>{block.lines.join("\n")}</code></pre>;
+    if (block.kind === "math") return <MathSpan key={key} src={stripMarks(block.src)} display block />;
+    if (block.kind === "code") return <pre key={key}><code>{stripMarks(block.lines.join("\n"))}</code></pre>;
     if (block.kind === "h") return <p key={key} className="jarvis-message-text__heading">{inline(block.text, key)}</p>;
     if (block.kind === "ul") return <ul key={key}>{block.items.map((item, n) => <li key={n}>{inline(item, `${key}-${n}`)}</li>)}</ul>;
     if (block.kind === "ol") return <ol key={key}>{block.items.map((item, n) => <li key={n}>{inline(item, `${key}-${n}`)}</li>)}</ol>;
