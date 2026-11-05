@@ -62,8 +62,9 @@ _DESIGN_STAGES = {
         "CAD: select the component, node Geometry (design.tree.node.geometry); the viewport shows the geometry. The "
         "Inspector has the Feature inspector (design.panel.feature-inspector): Add tube, bend, manifold or serpentine; "
         "edit dimensions; Enabled checkbox and Remove per feature; Rebuild geometry makes a new revision; Undo "
-        "restores the previous one. A later feature Placed freely (instead of Connected to previous outlet) sets Position "
-        "X/Y/Z mm and Heading deg; Place in viewport shows a Move/Rotate handle; edits stay not applied until Rebuild "
+        "restores the previous one. Add a serpentine as a later feature, choose Placed freely (instead of Connected to "
+        "previous outlet), set Position X/Y/Z mm and Heading deg, then Rebuild geometry; it appears as a detached group "
+        "in the geometry viewport. Place in viewport shows a Move/Rotate handle; edits stay not applied until Rebuild "
         "geometry. Attach a BlueCad candidate (design.node.attach-model) or generate geometry from Process."
     ),
     "reduced-model": "Reduced model: select the component, node Reduced model: published reduced models and their status.",

@@ -79,7 +79,9 @@ def test_design_stage_addendum_follows_the_stage_query() -> None:
 def test_comsol_line_surfaces_are_described_with_their_real_target_ids() -> None:
     cad = app_map_for_route("/design/project?stage=cad")
     for word in ("Feature inspector", "design.panel.feature-inspector", "Add tube", "Enabled", "Rebuild geometry", "Undo",
-                 "Placed freely", "Connected to previous outlet", "Heading", "Place in viewport", "design.tree.node.geometry"):
+                 "Add a serpentine as a later feature", "Placed freely", "Connected to previous outlet",
+                 "Position X/Y/Z", "Heading", "detached group", "geometry viewport", "Place in viewport",
+                 "design.tree.node.geometry"):
         assert word in cad, word
     cfd = app_map_for_route("/design/project?stage=cfd")
     for word in ("design.panel.cfd-field-3d", "Show full pipe", "symmetry", "not computed", "design.field.run"):
