@@ -44,9 +44,10 @@ assert.match(inspector, /const scope = `\$\{projectId\}:\$\{versionId\}:\$\{comp
 assert.match(inspector, /setUndoStack\(\[\]\); setRead\(null\)/);
 assert.match(inspector, /void send\(last, true\)/);
 
-// $param references and frames are shown read-only and sent back unchanged.
+// $param references are shown read-only and sent back unchanged; frames are editable since slice 2 (235b test),
+// and a tilted direction is preserved until the heading is edited.
 assert.match(inspector, /Parameter reference, preserved unchanged/);
-assert.match(inspector, /\(preserved\)/);
+assert.match(inspector, /tilted direction is preserved until you edit the heading/);
 assert.match(inspector, /parameters: base\?\.parameters \?\? \[\]/);
 
 // No direct provider, filesystem or execution access.
