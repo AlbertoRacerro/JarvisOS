@@ -23,6 +23,7 @@ type ReadKind = "project-basis" | "models" | "runtime";
 
 type Props = Readonly<{
   kind: ReadKind;
+  readOnly?: boolean;
   workspaceId: string | null;
   onWorkspaceChange: (workspaceId: string) => void;
   projectSearch?: React.ReactNode;
@@ -49,7 +50,9 @@ function JarvisReadBoundary({ detail }: Readonly<{ detail: string }>) {
   return <Panel title="Jarvis" className="final-fusion__jarvis" status="Read context only"><div className="final-fusion__jarvis-body"><div className="final-fusion__context-note">Browsing does not add records to Jarvis context. Explicit context insertion remains separately governed.</div><div className="final-fusion__bubble">{detail}</div><div className="final-fusion__composer" aria-disabled="true"><span>Ask Jarvis about an exact selected record…</span><button type="button" disabled>Send</button></div></div></Panel>;
 }
 
-function ProjectBasis({ records, workspaces, workspaceId, onWorkspaceChange, loading, error, searchPanel, requestedRecordRef, jarvis, onRecordSelect, onChanged }: Readonly<{ records: WorkspaceRecords; workspaces: FinalWorkspace[]; workspaceId: string | null; onWorkspaceChange: (id: string) => void; loading: boolean; error: string | null; searchPanel?: React.ReactNode; requestedRecordRef?: string | null; jarvis?: React.ReactNode; onRecordSelect?: (ref: string | null, label?: string) => void; onChanged: () => void }>) {
+function ProjectBasis({ readOnly, records, workspaces, workspaceId, onWorkspaceChange, loading, error, searchPanel, requestedRecordRef, jarvis, onRecordSelect, onChanged }: Readonly<{ readOnly: boolean; records: WorkspaceRecords; workspaces: FinalWorkspace[]; workspaceId: string | null; onWorkspaceChange: (id: string) => void; loading: boolean; error: string | null; searchPanel?: React.ReactNode; requestedRecordRef?: string | null; jarvis?: React.ReactNode; onRecordSelect?: (ref: string | null, label?: string) => void; onChanged: () => void }>) {
+  const [editing, setEditing] = useState<FinalRequirement | null>(null);
+  useEffect(() => { setEditing(null); }, [workspaceId]);
   const [open, setOpen] = useState<Set<string>>(new Set());
   useEffect(() => { setOpen(new Set(requestedRecordRef ? [requestedRecordRef] : [])); }, [workspaceId, requestedRecordRef]);
   const groups = [
@@ -76,6 +79,7 @@ function ProjectBasis({ records, workspaces, workspaceId, onWorkspaceChange, loa
               </button>
               {open.has(row.id) && <div className="basis-record-detail">
                 <dl>{Object.entries(row.data).filter(([key, value]) => value !== null && value !== "" && !["id", "workspace_id", "created_at", "updated_at", "statement", "name", "title"].includes(key) && !/digest|token|schema|_id$/.test(key)).map(([key,value]) => <div key={key}><dt>{key.replace(/_/g, " ")}</dt><dd>{typeof value === "object" ? JSON.stringify(value) : String(value)}</dd></div>)}</dl>
+                {!readOnly && row.id.startsWith("requirement:") && <button type="button" onClick={() => setEditing(row.data as FinalRequirement)}>Edit</button>}
                 <p>Select this record in Jarvis to prepare a proposal with its exact context.</p>
                 <details><summary>Technical details</summary><pre>{JSON.stringify(row.data, null, 2)}</pre></details>
               </div>}
@@ -83,7 +87,7 @@ function ProjectBasis({ records, workspaces, workspaceId, onWorkspaceChange, loa
           </section>)}
         </>}
       </div>
-      <ProjectKnowledgePanel key={workspaceId} workspaceId={workspaceId} onChanged={onChanged} />
+      <ProjectKnowledgePanel key={workspaceId} workspaceId={workspaceId} readOnly={readOnly} onChanged={onChanged} editing={editing} onCancelEdit={() => setEditing(null)} />
     </Panel>
     <section className="final-fusion__panel final-fusion__jarvis" aria-label="Jarvis">{jarvis}</section>
   </div>;
@@ -100,7 +104,7 @@ function Runtime({ system, loading, error }: Readonly<{ system: SystemInfoRespon
   return <div className="final-fusion__workbench final-fusion__workbench--coding"><Panel title="Runtime" className="final-fusion__runtime-main" status="Observed system facts"><div className="final-fusion__repo-status"><div><strong>JarvisOS runtime identity</strong><span>Exact executed SHA vs remote SHA observer unavailable</span></div><span className="final-fusion__unknown">Unknown</span></div><div className="final-fusion__runtime-body"><section className="final-fusion__compare"><div className="final-fusion__version-card"><small>Local current · actually executed</small><strong>LOCAL · Unknown SHA</strong><code>{system?.environment ?? "Environment unknown"}</code><p>{system ? `${system.app_name} ${system.version} is reporting through /system/info, but that does not prove an executed Git SHA.` : "No exact local code identity is proven."}</p></div><div className="final-fusion__delta">→<span>Unknown</span></div><div className="final-fusion__version-card is-remote"><small>GitHub latest · remote exact</small><strong>REMOTE · Unknown</strong><code>Repository observer unavailable</code><p>The frontend does not call GitHub directly or infer alignment.</p></div></section><section className="final-fusion__runtime-services"><Panel title="Observed backend" status={loading ? "Loading" : error ? "Read error" : system?.database.ready ? "Database ready" : "Unknown"}>{error ? <div className="final-fusion__empty">{error}</div> : <div className="final-fusion__facts"><div>Application · {system?.app_name ?? "Unknown"}</div><div>Version · {system?.version ?? "Unknown"}</div><div>Environment · {system?.environment ?? "Unknown"}</div><div>Database initialized · {system ? String(system.database.initialized) : "Unknown"}</div></div>}</Panel><Panel title="Update / terminal" status="Unavailable"><div className="final-fusion__empty">Safe update and terminal EXECUTE authority are not present in 100f.</div></Panel></section></div></Panel><div className="final-fusion__rightstack"><JarvisReadBoundary detail="Observed /system/info facts may be discussed, but local executed SHA, remote exact SHA and alignment remain Unknown." /><Panel title="Runtime facts" className="final-fusion__facts" status="READ"><div className="final-fusion__empty">System observations are backend-provided. No GitHub or process authority exists in the browser.</div></Panel></div></div>;
 }
 
-export default function FinalOperatorReadSurface({ kind, workspaceId, onWorkspaceChange, projectSearch, requestedRecordRef, jarvis, onRecordSelect }: Props) {
+export default function FinalOperatorReadSurface({ kind, readOnly = false, workspaceId, onWorkspaceChange, projectSearch, requestedRecordRef, jarvis, onRecordSelect }: Props) {
   const [reloadNonce, setReloadNonce] = useState(0);
   const [workspaces, setWorkspaces] = useState<FinalWorkspace[]>([]);
   const [records, setRecords] = useState<WorkspaceRecords>(emptyRecords);
@@ -140,5 +144,5 @@ export default function FinalOperatorReadSurface({ kind, workspaceId, onWorkspac
 
   if (kind === "runtime") return <Runtime system={system} loading={loading} error={error} />;
   if (kind === "models") return <Models records={records} workspaces={workspaces} workspaceId={activeWorkspaceId} onWorkspaceChange={onWorkspaceChange} loading={loading} error={error} />;
-  return <ProjectBasis records={records} workspaces={workspaces} workspaceId={activeWorkspaceId} onWorkspaceChange={onWorkspaceChange} loading={loading} error={error} searchPanel={projectSearch} requestedRecordRef={requestedRecordRef} jarvis={jarvis} onRecordSelect={onRecordSelect} onChanged={() => setReloadNonce(n => n + 1)} />;
+  return <ProjectBasis readOnly={readOnly} records={records} workspaces={workspaces} workspaceId={activeWorkspaceId} onWorkspaceChange={onWorkspaceChange} loading={loading} error={error} searchPanel={projectSearch} requestedRecordRef={requestedRecordRef} jarvis={jarvis} onRecordSelect={onRecordSelect} onChanged={() => setReloadNonce(n => n + 1)} />;
 }
