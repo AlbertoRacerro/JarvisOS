@@ -39,6 +39,7 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -1590,10 +1591,23 @@ def poll_slack_questions(obs: dict[str, Any], config: dict[str, str], root: Path
     if last is not None and now - last < timedelta(seconds=30):
         return
     obs["last_slack_poll"] = iso(now)
-    sent = {qid: ts for qid, ts in obs.get("sent_questions", {}).items() if ts != "webhook"}
+    sent = {qid: ts for qid, ts in obs.get("sent_questions", {}).items()
+            if isinstance(ts, str) and re.fullmatch(r"\d+\.\d+", ts)}
     open_ids = {q["id"] for q in observe.parse_open_questions(devctx.read_ledger(devctx.default_env(repo)))}
     start_ts = obs.setdefault("slack_started_ts", f"{now.timestamp():.6f}")
     cursors = obs.setdefault("slack_cursors", {})
+    pending = obs.setdefault("slack_pending_confirmations", [])
+    confirmation = "Ricevuto, l'ho registrato come tua risposta."
+    remaining = []
+    for item in pending:
+        first_failed = parse_ts(item["first_failed_at"])
+        if (item["attempts"] >= 5 or first_failed is None or now - first_failed >= timedelta(hours=24)):
+            continue
+        if post(config, confirmation, thread_ts=item["thread_ts"], api=api) is None:
+            item["attempts"] += 1
+            if item["attempts"] < 5:
+                remaining.append(item)
+    pending[:] = remaining
 
     def handle(message: dict[str, Any], root_ts: str | None) -> bool:
         ts = message.get("ts")
@@ -1617,13 +1631,19 @@ def poll_slack_questions(obs: dict[str, Any], config: dict[str, str], root: Path
                 return True
         elif len(questions) == 1:
             qid = questions[0]["id"]
+            posted = sent.get(qid)
+            if posted is None or re.fullmatch(r"\d+\.\d+", ts) is None or Decimal(ts) <= Decimal(posted):
+                return True
         else:
             reply = ("Rispondi nel thread della domanda." if questions else "Non ci sono domande aperte.")
             return post(config, reply, thread_ts=ts, api=api) is not None
         result = observe.record_answer(root, repo, qid, answer, source="Slack", author="maintainer (slack)")
         if result["state"] != "ok":
             return result.get("reason") == "question_not_open"
-        post(config, "Ricevuto, l'ho registrato come tua risposta.", thread_ts=root_ts or ts, api=api)
+        reply_ts = root_ts or ts
+        if post(config, confirmation, thread_ts=reply_ts, api=api) is None:
+            pending.append({"qid": qid, "thread_ts": reply_ts, "attempts": 1, "first_failed_at": iso(now)})
+            del pending[:-100]
         return True
 
     streams = [("history", None, min(sent.values(), default=start_ts))] + [

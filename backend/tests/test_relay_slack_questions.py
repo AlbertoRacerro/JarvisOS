@@ -43,11 +43,14 @@ class FakeSlack:
     def __init__(self):
         self.messages: list[dict] = []
         self.posts: list[dict] = []
+        self.next_post_ts: str | None = None
 
     def api(self, method: str, _config: dict, params: dict) -> dict:
         if method == "chat.postMessage":
             self.posts.append(params.copy())
-            return {"ok": True, "ts": f"1000.{len(self.posts):06d}"}
+            ts = self.next_post_ts or f"1000.{len(self.posts):06d}"
+            self.next_post_ts = None
+            return {"ok": True, "ts": ts}
         if method == "conversations.history":
             return {"ok": True, "messages": [m for m in self.messages if not m.get("thread_ts")]}
         return {"ok": True, "messages": [m for m in self.messages if m.get("thread_ts") == params["ts"]]}
@@ -123,6 +126,76 @@ def test_inbound_answer_replay_and_filters(space):
     assert CONFIG["bot_token"] not in json.dumps(ro._ledger(repo))
     assert CONFIG["bot_token"] not in json.dumps(obs)
     assert CONFIG["bot_token"] not in json.dumps(fake.posts)
+
+
+@pytest.mark.parametrize("delivery", ["slack", "webhook"])
+def test_old_top_level_answer_does_not_answer_new_question(space, delivery):
+    root, repo = space
+    first = question(repo, "Prima?\n1. Sì — conseguenza: a")
+    fake, obs = FakeSlack(), {}
+    deliver(repo, fake, obs)
+    fake.messages.append({"ts": "1000.000010", "channel": "C123", "user": "U123", "text": "risposta alla prima"})
+    assert ro.record_answer(root, repo, first["id"], "risposta in Jarvis", source="Jarvis UI",
+                            author="maintainer")["state"] == "ok"
+    second = question(repo, "Seconda?\n1. Sì — conseguenza: b")
+    fake.next_post_ts = "1000.000020"
+    deliver(repo, fake, obs)
+    if delivery == "webhook":
+        obs["sent_questions"][second["id"]] = "webhook"
+    posts_before = len(fake.posts)
+    rc.poll_slack_questions(obs, CONFIG, root, repo, ro, NOW, api=fake.api, post=fake.post)
+    assert [q["id"] for q in ro.parse_open_questions(ro._ledger(repo))] == [second["id"]]
+    assert len([e for e in ro._ledger(repo) if e["kind"] == "decision"]) == 1
+    assert len(fake.posts) == posts_before
+    assert obs["slack_cursors"]["history"] == "1000.000010"
+
+
+def test_failed_confirmation_retries_without_recording_answer_again(space):
+    root, repo = space
+    q = question(repo, "Scelta?\n1. Sì — conseguenza: avanti")
+    fake, obs = FakeSlack(), {}
+    deliver(repo, fake, obs)
+    fake.messages.append({"ts": "1000.000010", "channel": "C123", "user": "U123", "text": "sì"})
+    attempts: list[str] = []
+
+    def fail_once(config, text, *, thread_ts=None, api=None):
+        attempts.append(text)
+        if len(attempts) == 1:
+            return None
+        return fake.post(config, text, thread_ts=thread_ts, api=api)
+
+    rc.poll_slack_questions(obs, CONFIG, root, repo, ro, NOW, api=fake.api, post=fail_once)
+    assert len([e for e in ro._ledger(repo) if e["kind"] == "decision"]) == 1
+    assert obs["slack_cursors"]["history"] == "1000.000010"
+    assert obs["slack_pending_confirmations"][0]["qid"] == q["id"]
+    obs = json.loads(json.dumps(obs))  # the watcher persists obs between polls
+    rc.poll_slack_questions(obs, CONFIG, root, repo, ro, NOW + timedelta(seconds=31), api=fake.api, post=fail_once)
+    assert len(attempts) == 2
+    assert len([e for e in ro._ledger(repo) if e["kind"] == "decision"]) == 1
+    assert "Ricevuto" in fake.posts[-1]["text"]
+    assert fake.posts[-1]["thread_ts"] == "1000.000010"
+    assert obs["slack_pending_confirmations"] == []
+
+
+def test_failed_confirmation_stops_after_five_attempts(space):
+    root, repo = space
+    question(repo, "Scelta?\n1. Sì — conseguenza: avanti")
+    fake, obs = FakeSlack(), {}
+    deliver(repo, fake, obs)
+    fake.messages.append({"ts": "1000.000010", "channel": "C123", "user": "U123", "text": "sì"})
+    attempts = []
+
+    def fail_post(_config, text, *, thread_ts=None, api=None):
+        attempts.append((text, thread_ts))
+        return None
+
+    for offset in range(0, 7):
+        rc.poll_slack_questions(obs, CONFIG, root, repo, ro, NOW + timedelta(seconds=31 * offset),
+                                api=fake.api, post=fail_post)
+        obs = json.loads(json.dumps(obs))
+    assert len(attempts) == 5
+    assert obs["slack_pending_confirmations"] == []
+    assert len([e for e in ro._ledger(repo) if e["kind"] == "decision"]) == 1
 
 
 def test_thread_mapping_and_ambiguous_top_level(space):
