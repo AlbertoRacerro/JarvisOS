@@ -41,7 +41,8 @@ def build_prompt(ui_context: dict, question: str) -> str:
 
 def ask(base_url: str, model: str, prompt: str, max_tokens: int) -> dict:
     body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0,
-                       "max_tokens": max_tokens, "stream": False}).encode()
+                       "max_tokens": max_tokens, "stream": False,
+                       "chat_template_kwargs": {"enable_thinking": False}}).encode()
     headers = {"Content-Type": "application/json"}
     key = os.getenv("JARVISOS_LLAMACPP_API_KEY")  # the operator's token for the running server, supplied by the caller
     if key:
