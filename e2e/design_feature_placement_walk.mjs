@@ -215,6 +215,27 @@ try {
   step("server_refusal_keeps_attached_geometry", { out_of_band: oobRequest, page_put_status: refusedStatus, server_message: detail, alert_text: alertText,
     attached_candidate_id: afterRefusal.attached_candidate_id, revision: afterRefusal.revision });
 
+  // Reload after the stale edit, then replace the second tube with a freely placed serpentine.
+  await page.goto(`${base}/`, { waitUntil: "networkidle" });
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Design", exact: true }).click();
+  await page.getByRole("navigation", { name: "Design stages" }).getByRole("button", { name: "CAD", exact: true }).click();
+  await tree.getByRole("treeitem", { name: /^Proof tube\b/ }).click();
+  if (await geometryNode.count()) await geometryNode.first().click();
+  await inspector.waitFor();
+  await lineage.getByText(/Feature history revision 6 /).waitFor();
+  await inspector.getByRole("button", { name: "Remove tube_run_2" }).click();
+  await inspector.getByRole("button", { name: "Add serpentine", exact: true }).click();
+  await inspector.getByLabel("Placement serpentine_1").selectOption("free");
+  await inspector.locator("#placement-serpentine_1-1").fill("300");
+  await inspector.getByRole("button", { name: "Rebuild geometry", exact: true }).click();
+  await lineage.getByText(/Feature history revision 7 /).waitFor({ timeout: 120_000 });
+  const coil = await record("free serpentine");
+  assert(coil.sequence.features[1].frame.origin[1] === 300 && !coil.sequence.features[1].connect_to, "serpentine frame missing");
+  await viewport.getByRole("button", { name: "Top view" }).click();
+  await viewport.locator("canvas").waitFor();
+  await shot("free-serpentine-away-from-tube", viewport);
+  step("free_serpentine_rebuilt");
+
   assert(summary.page_errors.length === 0, `page errors: ${summary.page_errors.join("; ")}`);
 } catch (error) {
   failure = error;

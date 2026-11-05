@@ -206,8 +206,8 @@ export default function DesignFeatureInspector({ projectId, versionId, component
             patch(feature.feature_id, ({ frame: _frame, placement: _placement, ...item }) => ({ ...item, connect_to: { from_port: "port_a", to_feature_id: previous.feature_id, to_port: "port_b" } }));
             setMarkerId(null);
           } else patch(feature.feature_id, (item) => ({ ...item, connect_to: null, frame: item.frame ?? { origin: [0, 0, 0], direction: [1, 0, 0] } }));
-        }}><option value="connected">Connected to previous outlet</option>{feature.kind !== "serpentine" ? <option value="free">Placed freely</option> : null}</select></label> : null}
-        {!feature.connect_to && (index === 0 || feature.kind !== "serpentine") ? <>
+        }}><option value="connected">Connected to previous outlet</option><option value="free">Placed freely</option></select></label> : null}
+        {!feature.connect_to ? <>
           <dl className="design-project__fields">{["Position X (mm)", "Position Y (mm)", "Position Z (mm)", "Heading (deg)"].map((label, i) => <div key={label}><dt><label htmlFor={`placement-${feature.feature_id}-${i}`}>{label}</label></dt><dd><NumericInput id={`placement-${feature.feature_id}-${i}`} value={placementOf(feature)[i]} disabled={locked} onValueChange={(value) => patch(feature.feature_id, (item) => { const placement = [...placementOf(item)] as [string, string, string, string]; placement[i] = value; return { ...item, placement }; })} /></dd></div>)}</dl>
           {feature.frame?.direction[2] ? <p className="design-feature-inspector__note">Only the plan heading is used; the tilted direction is preserved until you edit the heading.</p> : null}
           <label><input type="checkbox" checked={markerId === feature.feature_id} disabled={locked} onChange={(event) => setMarkerId(event.target.checked ? feature.feature_id : null)} /> Place in viewport</label>
@@ -216,7 +216,7 @@ export default function DesignFeatureInspector({ projectId, versionId, component
       </li>)}
     </ol> : null}
     <div className="design-feature-inspector__actions" role="group" aria-label="Add feature">
-      {KINDS.map((item) => <button key={item.kind} type="button" disabled={locked || (item.kind === "serpentine" && features.length > 0 && !CONNECTABLE.has([...features].reverse().find((feature) => feature.enabled)?.kind ?? "manifold"))} onClick={() => add(item.kind)}>Add {item.label.toLowerCase()}</button>)}
+      {KINDS.map((item) => <button key={item.kind} type="button" disabled={locked} onClick={() => add(item.kind)}>Add {item.label.toLowerCase()}</button>)}
     </div>
     {problem ? <p role="alert" className="design-project__error">{problem}</p> : null}
     {refused ? <p role="alert" className="design-project__error">Not applied: {refused} The previous geometry is still attached.</p> : null}
