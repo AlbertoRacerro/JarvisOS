@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   listMemoryProposals,
+  readSensitivityLabel,
+  type SensitivityLabel,
   promoteMemoryRecord,
   promoteParameterReplacement,
   rejectMemoryRecord,
@@ -20,6 +22,7 @@ import {
   type ReviewMutationContext,
   type ReviewRequestContext
 } from "../components/review/reviewState";
+import { acceptsSensitivityRequest, sensitivityIdentity, type SensitivityRequest } from "../components/review/sensitivityRequest";
 import Button from "../components/ui/Button";
 import InlineNotice from "../components/ui/InlineNotice";
 import Surface from "../components/ui/Surface";
@@ -44,6 +47,9 @@ function ReviewStage({ workspaceId, onShellRegionsChange }: PrimaryStageProps) {
   const [message, setMessage] = useState<string | null>(null);
   const [transitionNotice, setTransitionNotice] = useState<string | null>(null);
   const [busyRecordId, setBusyRecordId] = useState<string | null>(null);
+  const [sensitivity, setSensitivity] = useState<{ key: string; state: "loading" | "ready" | "error"; label?: SensitivityLabel | null; error?: string } | null>(null);
+  const sensitivityGeneration = useRef(0);
+  const currentSensitivity = useRef<SensitivityRequest | null>(null);
   const requestGeneration = useRef(0);
   const mutationGeneration = useRef(0);
   const currentRequest = useRef<ReviewRequestContext | null>(null);
@@ -56,6 +62,24 @@ function ReviewStage({ workspaceId, onShellRegionsChange }: PrimaryStageProps) {
   const filterControlRef = useRef<HTMLSelectElement>(null);
   workspaceRef.current = workspaceId; filterRef.current = statusFilter; selectedRef.current = selectedId; recordsRef.current = records;
   const selected = useMemo(() => records.find((record) => record.id === selectedId) ?? null, [records, selectedId]);
+
+  const sensitivityKey = workspaceId && selected ? sensitivityIdentity(workspaceId, statusFilter, selected.record_kind, selected.id) : "";
+  const visibleSensitivity = sensitivity?.key === sensitivityKey ? sensitivity : null;
+  useLayoutEffect(() => { sensitivityGeneration.current += 1; currentSensitivity.current = null; setSensitivity(null); }, [sensitivityKey]);
+  const checkSensitivity = useCallback(async () => {
+    if (!workspaceId || !selected) return;
+    const generation = ++sensitivityGeneration.current;
+    const key = sensitivityKey;
+    const request = { generation, key };
+    currentSensitivity.current = request;
+    setSensitivity({ key, state: "loading" });
+    try {
+      const label = await readSensitivityLabel(workspaceId, selected.record_kind, selected.id);
+      if (acceptsSensitivityRequest(currentSensitivity.current, request)) setSensitivity({ key, state: "ready", label });
+    } catch (error) {
+      if (acceptsSensitivityRequest(currentSensitivity.current, request)) setSensitivity({ key, state: "error", error: error instanceof Error ? error.message : "Sensitivity lookup failed." });
+    }
+  }, [workspaceId, selected, sensitivityKey]);
 
   const loadRecords = useCallback(async (targetWorkspaceId: string, targetFilter: MemoryStatusFilter, preferredSelection: string | null = selectedRef.current, removedId: string | null = null, focusAfterLoad = false) => {
     const previousRecords = recordsRef.current;
@@ -131,6 +155,17 @@ function ReviewStage({ workspaceId, onShellRegionsChange }: PrimaryStageProps) {
         {selected.record_kind === "parameter" && <><Fact label="Name">{selected.name}</Fact><Fact label="Symbol">{selected.symbol}</Fact><Fact label="Value">{selected.value}</Fact><Fact label="Unit">{selected.unit}</Fact><Fact label="Value status">{selected.value_status}</Fact><Fact label="Minimum">{selected.value_min}</Fact><Fact label="Maximum">{selected.value_max}</Fact><Fact label="Confidence">{selected.confidence}</Fact><Fact label="Source reference">{selected.source_ref}</Fact><Fact label="Notes">{selected.notes}</Fact><Fact label="Replacement target">{selected.supersedes_parameter_id}</Fact></>}
         {selected.record_kind === "decision" && <><Fact label="Title">{selected.title}</Fact><Fact label="Decision">{selected.decision_text}</Fact><Fact label="Rationale">{selected.rationale}</Fact><Fact label="Linked run">{selected.linked_run_id}</Fact><Fact label="Notes">{selected.notes}</Fact></>}
       </dl>
+      <section aria-label="Sensitivity review">
+        <h3>Sensitivity</h3>
+        <Button variant="secondary" disabled={visibleSensitivity?.state === "loading"} onClick={() => void checkSensitivity()}>{visibleSensitivity?.state === "error" ? "Retry" : visibleSensitivity ? "Refresh sensitivity" : "Check sensitivity"}</Button>
+        {visibleSensitivity?.state === "loading" && <p role="status">Loading sensitivity…</p>}
+        {visibleSensitivity?.state === "error" && <InlineNotice tone="danger">{visibleSensitivity.error}</InlineNotice>}
+        {visibleSensitivity?.state === "ready" && (visibleSensitivity.label ? <dl className="review-facts">
+          <Fact label="Level">{visibleSensitivity.label.level}</Fact><Fact label="Status">{visibleSensitivity.label.current ? "Current" : "Stale"}</Fact>
+          {visibleSensitivity.label.stale_reason && <Fact label="Stale reason">{visibleSensitivity.label.stale_reason}</Fact>}
+          <Fact label="Classification source">{visibleSensitivity.label.classification_source}</Fact><Fact label="Actor">{visibleSensitivity.label.actor}</Fact><Fact label="Policy version">{visibleSensitivity.label.policy_version}</Fact><Fact label="Created">{visibleSensitivity.label.created_at}</Fact>
+        </dl> : <p>No sensitivity label recorded</p>)}
+      </section>
       {isActionable(selected) ? <div className="review-actions"><Button disabled={busyRecordId !== null} onClick={() => void transition(selected, "accept")}>Accept</Button><Button variant="danger" disabled={busyRecordId !== null} onClick={() => void transition(selected, "reject")}>Reject</Button>{busyRecordId === selected.id && <span role="status">Applying canonical transition…</span>}</div> : <p className="review-card__historical">Historical record. Only proposed records can be transitioned.</p>}
       <details className="review-technical"><summary>Technical details</summary><dl className="review-facts review-facts--meta"><Fact label="Canonical id">{selected.id}</Fact><Fact label="Status">{selected.status}</Fact><Fact label="Source AI job">{selected.source_ai_job_id}</Fact><Fact label="Created">{selected.created_at}</Fact><Fact label="Updated">{selected.updated_at}</Fact><Fact label="Promoted">{selected.promoted_at}</Fact></dl></details>
     </Surface>}

@@ -15,7 +15,8 @@ const groups = {
     tabs: [
       ["Project Basis", "/memory/project-basis", "project-basis"],
       ["Models", "/memory/models", "models"],
-      ["Literature", "/memory/literature", "literature"]
+      ["Literature", "/memory/literature", "literature"],
+      ["Review", "/review", "review"]
     ]
   },
   development: {
