@@ -109,13 +109,27 @@ def test_review_requirement_follows_risk() -> None:
 
 
 def test_launch_commands() -> None:
-    assert wr.decide("medium", "low", pools())["command"] == 'codex exec --model gpt-6.1-terra --cd "$WORKTREE" - < "$TASK_FILE"'
-    assert wr.decide("low", "low", pools())["command"] == (
+    assert wr.bare_command(next(m for m in wr.MODELS if m.key == "terra")) == 'codex exec --model gpt-6.1-terra --cd "$WORKTREE" - < "$TASK_FILE"'
+    assert wr.bare_command(next(m for m in wr.MODELS if m.key == "flash")) == (
         'python3 scripts/agy_worker.py run --task-file "$TASK_FILE" --worktree "$WORKTREE" --model flash')
-    claude = wr.launch_command(next(m for m in wr.MODELS if m.key == "sonnet"))
+    claude = wr.bare_command(next(m for m in wr.MODELS if m.key == "sonnet"))
     assert claude == ('cd "$WORKTREE" && claude -p --model claude-sonnet-5-5 --permission-mode acceptEdits '
                       '--permission-prompts none --output-format json < "$TASK_FILE"')
     assert "bypassPermissions" not in claude and "dangerously" not in claude
+    for model in wr.MODELS:
+        command = wr.launch_command(model)
+        assert command.startswith('python3 scripts/relay_jobs.py start --label "$LABEL" --authority "$AUTHORITY" --spec "$SPEC" --wall-hours 1 --cwd "$WORKTREE" -- bash -c ')
+        assert wr.bare_command(model) in command
+
+
+def test_launch_command_shell_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wr, "bare_command", lambda model: 'printf "%s\\n" "$WORKTREE" "$TASK_FILE"')
+    command = wr.launch_command(wr.MODELS[0])
+    script = ("python3() { shift 13; \"$@\"; }\n"
+              "export WORKTREE='/tmp/work tree' TASK_FILE='/tmp/task file' LABEL='test job' AUTHORITY=spec SPEC=243\n"
+              + command)
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+    assert result.stdout.splitlines() == ["/tmp/work tree", "/tmp/task file"]
 
 
 def test_gemini_parse_requires_both_enabled_buckets() -> None:
@@ -346,7 +360,7 @@ def test_claude_worker_is_chosen_when_the_cheaper_pools_are_below_reserve() -> N
     low = wr.decide("low", "low", pools(claude=pool("claude", 0.8), **LOW_CODEX_GEMINI))
     assert low["worker"] == "haiku" and low["pool"] == "claude" and low["claude_pool_low"] is False
     medium = wr.decide("medium", "low", pools(claude=pool("claude", 0.8), **LOW_CODEX_GEMINI))
-    assert medium["worker"] == "sonnet" and medium["command"].startswith('cd "$WORKTREE" && claude -p --model claude-sonnet-5-5')
+    assert medium["worker"] == "sonnet" and 'cd "$WORKTREE" && claude -p --model claude-sonnet-5-5' in medium["command"]
     assert wr.decide("high", "low", pools(claude=pool("claude", 0.8), **LOW_CODEX_GEMINI))["status"] == "no_worker"  # cap 3 is sol only
 
 
@@ -506,7 +520,7 @@ def test_copilot_routing_priority_and_fourth_column() -> None:
     available["gemini"] = wr.Pool("gemini", {"5h": 0.05, "weekly": 0.05}, 0.05)
     assert wr.decide("low", "low", available)["worker"] == "copilot-auto"
     assert wr.decide("medium", "low", available)["worker"] == "terra"
-    assert wr.launch_command(next(m for m in wr.MODELS if m.key == "copilot-auto")) == (
+    assert wr.bare_command(next(m for m in wr.MODELS if m.key == "copilot-auto")) == (
         'python3 scripts/copilot_worker.py run --task-file "$TASK_FILE" '
         '--worktree "$WORKTREE" --model copilot-auto')
     assert "copilot 80% free" in wr.summary_line(available)

@@ -2260,7 +2260,7 @@ def describe_check(check: dict[str, Any] | None) -> str:
 
 WORKER_ROUTING_BLOCK = """Worker routing
 {summary}
-Classify each delegable task by difficulty and risk, run `python3 scripts/worker_routing.py pick --difficulty D --risk R`, and delegate implementation to the returned worker. Coordinators plan, review and integrate; do not implement delegable work yourself unless pick returns no_worker.
+Classify each delegable task by difficulty and risk, run `python3 scripts/worker_routing.py pick --difficulty D --risk R`, and delegate implementation to the returned worker. The launch line runs the worker as a durable registered job that outlives the coordinator turn, and a later turn collects it with `relay_jobs.py list`. Coordinators plan, review and integrate; do not implement delegable work yourself unless pick returns no_worker.
 Risk is the harm if the worker is wrong: low docs/tests/UI copy; medium feature code covered by tests; high security, auth, egress, migrations/data loss, supervisor/relay/sandbox code, irreversible operations. Review the returned worker's diff as `pick` requires."""
 
 

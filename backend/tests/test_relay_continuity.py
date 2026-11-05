@@ -3739,6 +3739,8 @@ def test_launch_prompt_carries_the_worker_routing_block(tmp_path: Path, monkeypa
     block = task[task.index("Worker routing"):]
     assert "worker quota: gemini 99% free (5h 100%)" in block
     assert "python3 scripts/worker_routing.py pick --difficulty D --risk R" in block
+    assert "durable registered job that outlives the coordinator turn" in block
+    assert "a later turn collects it with `relay_jobs.py list`" in block
     assert "do not implement delegable work yourself unless pick returns no_worker" in block
     assert len(block.splitlines()) <= 8
 
