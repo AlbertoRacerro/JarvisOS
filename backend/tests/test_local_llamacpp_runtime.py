@@ -358,6 +358,109 @@ def _offline_server(**kwargs: object) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(respond), **kwargs)
 
 
+def test_spawn_writes_private_api_key_file_and_replaces_it_on_restart(tmp_path, monkeypatch) -> None:
+    binary = tmp_path / "llama-server"
+    model = tmp_path / "model.gguf"
+    binary.write_text("fake executable")
+    model.write_bytes(b"fake model")
+    key_file = tmp_path / "key"
+    monkeypatch.setenv("JARVISOS_LLAMACPP_API_KEY_FILE", str(key_file))
+    spawned: list[tuple[list[str], dict[str, object]]] = []
+
+    def popen(args: list[str], **kwargs: object) -> _FakeProcess:
+        spawned.append((args, kwargs))
+        return _FakeProcess()
+
+    owner = LlamaCppRuntimeOwner(
+        _config(binary_path=str(binary), model_path=str(model), startup_wait_s=0),
+        popen=popen, client_factory=_offline_server, kill_group=lambda *_args: None,
+    )
+    owner.start()
+    first_key = spawned[0][1]["env"]["LLAMA_API_KEY"]  # type: ignore[index]
+    assert key_file.read_text() == first_key
+    assert key_file.stat().st_mode & 0o777 == 0o600
+    assert first_key not in spawned[0][0]
+    assert first_key not in str(owner.status())
+
+    owner.restart()
+    second_key = spawned[1][1]["env"]["LLAMA_API_KEY"]  # type: ignore[index]
+    assert second_key != first_key
+    assert key_file.read_text() == second_key
+    assert key_file.stat().st_mode & 0o777 == 0o600
+    assert second_key not in spawned[1][0]
+    assert second_key not in str(owner.status())
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+@pytest.mark.parametrize("setting", [None, "relative/key", "missing/key"])
+def test_spawn_continues_without_writable_api_key_file(tmp_path, monkeypatch, caplog, setting) -> None:
+    binary = tmp_path / "llama-server"
+    model = tmp_path / "model.gguf"
+    binary.write_text("fake executable")
+    model.write_bytes(b"fake model")
+    if setting is None:
+        monkeypatch.delenv("JARVISOS_LLAMACPP_API_KEY_FILE", raising=False)
+    else:
+        configured = str(tmp_path / setting) if setting.startswith("missing/") else setting
+        monkeypatch.setenv("JARVISOS_LLAMACPP_API_KEY_FILE", configured)
+    spawned: list[dict[str, object]] = []
+
+    def popen(_args: list[str], **kwargs: object) -> _FakeProcess:
+        spawned.append(kwargs)
+        return _FakeProcess()
+
+    owner = LlamaCppRuntimeOwner(
+        _config(binary_path=str(binary), model_path=str(model), startup_wait_s=0),
+        popen=popen, client_factory=_offline_server,
+    )
+    owner.start()
+    assert len(spawned) == 1
+    key = spawned[0]["env"]["LLAMA_API_KEY"]  # type: ignore[index]
+    assert key
+    assert not (tmp_path / "key").exists()
+    assert not (tmp_path / "missing").exists()
+    assert key not in caplog.text
+    assert "relative/key" not in caplog.text
+    assert str(tmp_path / "missing" / "key") not in caplog.text
+    assert ("Could not write llama-server API key file." in caplog.text) == (setting is not None)
+
+
+def test_spawn_continues_when_api_key_file_open_fails(tmp_path, monkeypatch, caplog) -> None:
+    from app.modules.local_ai.runtime import llama_cpp as runtime_module
+
+    binary = tmp_path / "llama-server"
+    model = tmp_path / "model.gguf"
+    binary.write_text("fake executable")
+    model.write_bytes(b"fake model")
+    key_file = tmp_path / "unwritable-key"
+    monkeypatch.setenv("JARVISOS_LLAMACPP_API_KEY_FILE", str(key_file))
+    original_open = runtime_module.os.open
+
+    def denied_open(path, flags, mode=0o777, *, dir_fd=None):
+        if str(path).startswith(str(tmp_path / ".unwritable-key.")):
+            raise PermissionError("sensitive path and token must stay out of logs")
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(runtime_module.os, "open", denied_open)
+    spawned: list[dict[str, object]] = []
+
+    def popen(_args: list[str], **kwargs: object) -> _FakeProcess:
+        spawned.append(kwargs)
+        return _FakeProcess()
+
+    owner = LlamaCppRuntimeOwner(
+        _config(binary_path=str(binary), model_path=str(model), startup_wait_s=0),
+        popen=popen, client_factory=_offline_server,
+    )
+    owner.start()
+    assert len(spawned) == 1
+    assert not key_file.exists()
+    assert spawned[0]["env"]["LLAMA_API_KEY"] not in caplog.text  # type: ignore[index]
+    assert "sensitive path and token" not in caplog.text
+    assert str(key_file) not in caplog.text
+    assert "Could not write llama-server API key file." in caplog.text
+
+
 def _wait_until(predicate) -> None:
     deadline = time.monotonic() + 2
     while not predicate() and time.monotonic() < deadline:

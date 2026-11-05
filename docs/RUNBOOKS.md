@@ -20,6 +20,10 @@ port, starts the optional managed local model, and opens the browser. `status` a
 settings live in the private `~/.config/jarvisos/operator.env` (`setup` creates it). The launcher only fast-forwards a
 clean checkout and leaves a dirty or diverged one as it is.
 
+For managed llama-server, set `JARVISOS_LLAMACPP_API_KEY_FILE` in `operator.env` to an absolute path in an existing
+private directory (for host-side evaluation, the host-ops config directory). Each launch replaces that file with its
+current API key at mode 0600.
+
 Development, two terminals:
 
 ```bash

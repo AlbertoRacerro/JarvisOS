@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import platform
 import secrets
@@ -21,8 +22,43 @@ from app.core.paths import build_paths
 
 _CONFIG_ENV = "JARVISOS_LLAMACPP_CONFIG"
 _API_KEY_ENV = "JARVISOS_LLAMACPP_API_KEY"
+_API_KEY_FILE_ENV = "JARVISOS_LLAMACPP_API_KEY_FILE"
+_LOGGER = logging.getLogger(__name__)
 _HASH_CACHE: dict[tuple[str, int, int], str] = {}
 _HASH_LOCK = threading.Lock()
+
+
+def _write_api_key_file(api_key: str) -> None:
+    configured = os.getenv(_API_KEY_FILE_ENV)
+    if configured is None:
+        return
+    temporary: Path | None = None
+    try:
+        target = Path(configured)
+        if not target.is_absolute():
+            raise ValueError("relative API key file")
+        temporary = target.parent / f".{target.name}.{secrets.token_hex(8)}.tmp"
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            data = api_key.encode("utf-8")
+            while data:
+                written = os.write(fd, data)
+                if not written:
+                    raise OSError("short API key file write")
+                data = data[written:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(temporary, target)
+    except (OSError, ValueError):
+        _LOGGER.warning("Could not write llama-server API key file.")
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 @dataclass(frozen=True)
@@ -350,6 +386,7 @@ class LlamaCppRuntimeOwner:
             finally:
                 if log_path is not None:
                     log.close()  # type: ignore[union-attr]
+            _write_api_key_file(api_key)
             self._api_key, self._exit_code = api_key, None
             self._stop_requested = False
             self._crashed = False
