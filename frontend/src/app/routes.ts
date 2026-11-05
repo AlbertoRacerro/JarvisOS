@@ -55,7 +55,7 @@ export const PRODUCTION_ROUTES: readonly AppRouteDefinition[] = [
   { id: "settings-system", path: "/settings/system", title: "Settings · System", primaryNav: "settings" },
   { id: "runs", path: "/runs", title: "Runs" },
   { id: "engineering-data", path: "/engineering-data", title: "Engineering Data" },
-  { id: "review", path: "/review", title: "Review", stageKind: "review" },
+  { id: "review", path: "/review", title: "Review", primaryNav: "memory", stageKind: "review" },
   { id: "ai-threads", path: "/ai-threads", title: "AI Threads" }
 ] as const;
 
@@ -77,7 +77,8 @@ export const PEER_NAV_ITEMS: Readonly<Record<PrimaryNavId, readonly PeerNavItem[
   memory: [
     { label: "Project Basis", href: "/memory/project-basis" },
     { label: "Models", href: "/memory/models" },
-    { label: "Literature", href: "/memory/literature" }
+    { label: "Literature", href: "/memory/literature" },
+    { label: "Review", href: "/review" }
   ],
   development: [
     { label: "Roadmap", href: "/development/roadmap/timeline" }

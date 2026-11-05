@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+const routes = await readFile(new URL('../src/app/routes.ts', import.meta.url), 'utf8');
+const header = await readFile(new URL('../src/components/fusion/FinalWorkspaceHeader.tsx', import.meta.url), 'utf8');
+assert.ok(routes.includes('{ id: "review", path: "/review", title: "Review", primaryNav: "memory", stageKind: "review" }'));
+assert.ok(routes.includes('{ label: "Review", href: "/review" }'));
+assert.ok(header.includes('["Review", "/review", "review"]'));
 const stage = await readFile(new URL('../src/stages/ReviewStage.tsx', import.meta.url), 'utf8');
 const api = await readFile(new URL('../src/api/memory.ts', import.meta.url), 'utf8');
 for (const pattern of ['workspace_id: workspaceId', 'subject_ref: `${kind}:${id}`', 'URLSearchParams', '/ai/sensitivity/labels/current?', 'if (!response.ok)', 'throw new MemoryRequestError']) assert.ok(api.includes(pattern), pattern);

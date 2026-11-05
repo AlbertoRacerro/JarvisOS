@@ -19,6 +19,13 @@ const evidence = resolve(process.argv[2]); await mkdir(evidence, { recursive: tr
 const data = await mkdtemp(join(tmpdir(), 'jarvisos-236-')); await mkdir(join(data, 'host'));
 const env = { ...process.env, PYTHONPATH: backend, JARVISOS_DATA_ROOT: data, XDG_STATE_HOME: join(data, 'host'), LOCALAPPDATA: join(data, 'host') };
 const log = openSync(join(evidence, 'backend.log'), 'w');
+const init = spawnSync(python, ['-c', [
+  'from app.core.database import initialize_database, open_sqlite_connection',
+  'from app.modules.events.service import utc_now',
+  'initialize_database()',
+  // Proposals need a source AI job; seed one finished fake job row in the temporary data root.
+  "with open_sqlite_connection() as k: k.execute(\"INSERT INTO ai_jobs (id, created_at, status, task_kind, route_reason_json) VALUES ('sensitivity-walk-job', ?, 'succeeded', 'walk_seed', '{}')\", (utc_now(),)); k.commit()"].join('\n')], { cwd: backend, env, encoding: 'utf8' });
+if (init.status !== 0) throw Error(`database initialization failed: ${init.stderr}`);
 const server = spawn(python, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)], { cwd: backend, env, stdio: ['ignore', log, log] });
 const summary = { spec: 236, head: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(), steps: [], screenshots: [], inspection_writes: [], errors: [] };
 let browser, failure;
@@ -26,16 +33,19 @@ try {
   for (let i = 0; ; i++) { if (server.exitCode !== null) throw Error('backend exited'); try { if ((await fetch(base + '/health')).ok) break; } catch {} if (i > 120) throw Error('backend timeout'); await delay(500); }
   const post = async (path, body) => { const r = await fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); if (!r.ok) throw Error(`${path}: ${r.status} ${await r.text()}`); return r.json(); };
   const ws = await post('/workspaces', { name: 'Sensitivity Proof', slug: 'sensitivity-proof' });
-  const make = (statement) => post('/memory/proposals', { workspace_id: ws.id, record_kind: 'assumption', statement });
+  const make = (statement) => post('/memory/proposals', { workspace_id: ws.id, record_kind: 'assumption', statement, source_ai_job_id: 'sensitivity-walk-job' });
   const current = await make('Current proof'); const stale = await make('Stale proof'); await make('Unlabelled proof');
   for (const record of [current, stale]) await post('/ai/sensitivity/labels', { workspace_id: ws.id, subject_ref: `assumption:${record.id}`, level: 'S1' });
-  await post(`/memory/assumption/${stale.id}/promote`, {});
+  // A label goes stale when its source content changes after labelling; simulate that edit in the temporary data root.
+  const edit = spawnSync(python, ['-c', 'import sys\nfrom app.core.database import open_sqlite_connection\nwith open_sqlite_connection() as k: k.execute("UPDATE assumptions SET statement = ? WHERE id = ?", ("Stale proof (edited)", sys.argv[1])); k.commit()', stale.id], { cwd: backend, env, encoding: 'utf8' });
+  if (edit.status !== 0) throw Error(`stale edit failed: ${edit.stderr}`);
   browser = await chromium.launch({ headless: true }); const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } }); const page = await context.newPage(); page.setDefaultTimeout(30000);
   page.on('pageerror', e => summary.errors.push(String(e)));
   let inspecting = false; page.on('request', r => { if (inspecting && !['GET', 'HEAD', 'OPTIONS'].includes(r.method())) summary.inspection_writes.push(`${r.method()} ${new URL(r.url()).pathname}`); });
   await page.goto(base + '/', { waitUntil: 'networkidle' });
-  const picker = page.getByLabel('Project'); if (await picker.count()) await picker.selectOption({ label: 'Sensitivity Proof' });
-  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Review', exact: true }).click();
+  const picker = page.getByLabel('Project', { exact: true }); if (await picker.count()) await picker.selectOption({ label: 'Sensitivity Proof' });
+  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Memory', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Project knowledge destinations' }).getByRole('link', { name: 'Review', exact: true }).click();
   await page.getByRole('heading', { name: 'Review', exact: true }).waitFor();
   await page.getByLabel('Status', { exact: true }).selectOption('all');
   const review = page.getByRole('region', { name: 'Sensitivity review' });

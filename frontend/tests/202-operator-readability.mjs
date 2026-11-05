@@ -27,7 +27,7 @@ const Header = component("src/components/fusion/FinalWorkspaceHeader.tsx", {
   "../../app/AppLink": { default: AppLink }
 });
 for (const [group, active, title, hrefs] of [
-  ["memory", "models", "Project knowledge", ["/memory/project-basis", "/memory/models", "/memory/literature"]],
+  ["memory", "models", "Project knowledge", ["/memory/project-basis", "/memory/models", "/memory/literature", "/review"]],
   ["development", "roadmap", "Development", ["/development/roadmap/timeline"]],
   ["coding", "runtime", "Coding", ["/coding/repository", "/coding/runtime"]]
 ]) {
