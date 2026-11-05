@@ -101,3 +101,14 @@ export function rejectMemoryRecord(kind: MemoryRecordKind, id: string): Promise<
 export function promoteParameterReplacement(id: string): Promise<ReplacementResult> {
   return requestJson<ReplacementResult>(`/memory/parameter/${encodeURIComponent(id)}/promote-replacement`, { method: "POST" });
 }
+
+export type SensitivityLabel = {
+  id: string; workspace_id: string; subject_ref: string; content_digest: string;
+  level: string; classification_source: string; policy_version: string; actor: string;
+  prior_label_id: string | null; created_at: string; current: boolean; stale_reason: string | null;
+};
+
+export function readSensitivityLabel(workspaceId: string, kind: MemoryRecordKind, id: string): Promise<SensitivityLabel | null> {
+  const params = new URLSearchParams({ workspace_id: workspaceId, subject_ref: `${kind}:${id}` });
+  return requestJson<SensitivityLabel | null>(`/ai/sensitivity/labels/current?${params.toString()}`);
+}
