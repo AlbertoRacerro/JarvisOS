@@ -1924,7 +1924,7 @@ def test_semantic_restore_has_own_budget_after_timeout(host, monkeypatch):
     assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
 
 
-def test_semantic_default_restores_after_unit_stop_exhausts_budget(host, monkeypatch):
+def test_semantic_default_stays_stopped_after_unit_stop_exhausts_budget(host, monkeypatch):
     paths, ex, calls = host
     semantic_policy(paths)
     events, _ = fake_semantic(host, monkeypatch)
@@ -1940,8 +1940,28 @@ def test_semantic_default_restores_after_unit_stop_exhausts_budget(host, monkeyp
     _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
     assert receipt["outcome"] == "failed"
     assert receipt["error"] == "semantic evaluation restore failed"
-    assert events[-2:] == ["unit_stop", "default_start"]
-    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "failed"}
+    assert events[-1] == "unit_stop"
+    assert "default_start" not in events
+    assert receipt["detail"]["restore"] == {"default": "failed", "server_unit": "failed"}
+
+
+def test_semantic_failed_unit_stop_does_not_start_default(host, monkeypatch):
+    paths, ex, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = ex.run
+    def run(argv, **kwargs):
+        if argv[:4] == ["systemctl", "--user", "stop", "candidate.service"]:
+            events.append("unit_stop_failed")
+            return subprocess.CompletedProcess(argv, 1, "", "")
+        return original(argv, **kwargs)
+    ex.run = run
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert receipt["error"] == "semantic evaluation restore failed"
+    assert "unit_stop_failed" in events
+    assert "default_start" not in events
+    assert receipt["detail"]["restore"] == {"default": "failed", "server_unit": "failed"}
 
 
 def test_semantic_unit_failed_during_stop_still_restores_default(host, monkeypatch):
@@ -2457,6 +2477,46 @@ def test_semantic_http_uses_loopback_post_and_no_redirect_or_proxy(monkeypatch):
     assert handlers[0].proxies == {}
     assert isinstance(handlers[1], h._RejectRedirects)
     assert isinstance(handlers[2], h._SemanticHTTPHandler)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_semantic_http_connect_stall_is_bounded(monkeypatch, cancel):
+    monkeypatch.setattr(h, "SEMANTIC_CONNECT_S", 0.05)
+    timeouts = []
+    def connect(_address, timeout, source_address=None):
+        timeouts.append(timeout)
+        time.sleep(timeout)
+        raise h.socket.timeout("connect timed out")
+    monkeypatch.setattr(h.socket, "create_connection", connect)
+    opener = h.urllib.request.build_opener(h.urllib.request.ProxyHandler({}), h._RejectRedirects(),
+                                           h._SemanticHTTPHandler())
+    started = time.monotonic()
+    with pytest.raises(h.Cancelled if cancel else h.Failed,
+                       match=None if cancel else "local HTTP endpoint is unavailable"):
+        h._semantic_http(opener, "http://127.0.0.1:18080/models", lambda: 2,
+                         cancelled=(lambda: time.monotonic() - started >= 0.02) if cancel else None)
+    assert time.monotonic() - started < 0.5
+    assert timeouts == [pytest.approx(h.SEMANTIC_CONNECT_S)]
+
+
+def test_semantic_http_connect_restores_socket_timeout(monkeypatch):
+    timeouts = []
+    class Socket:
+        def settimeout(self, value):
+            timeouts.append(value)
+    def connect(self):
+        timeouts.append(self.timeout)
+        self.sock = Socket()
+    monkeypatch.setattr(h.http.client.HTTPConnection, "connect", connect)
+    handler = h._SemanticHTTPHandler()
+    def open_connection(connection, req):
+        instance = connection("127.0.0.1", timeout=30)
+        instance.connect()
+        assert instance.timeout == 30
+        assert req._semantic_socket is instance.sock
+    monkeypatch.setattr(handler, "do_open", open_connection)
+    handler.http_open(h.urllib.request.Request("http://127.0.0.1:18080/models"))
+    assert timeouts == [h.SEMANTIC_CONNECT_S, 30]
 
 
 def test_semantic_http_deadline_covers_dribbling_headers():

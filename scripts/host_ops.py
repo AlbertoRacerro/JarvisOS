@@ -971,6 +971,7 @@ def _eval_response_body(response: Any, remaining: Callable[[], float]) -> bytes:
 _POINT_RE = re.compile(r"\[\[\s*point\s*:\s*([\w.:-]+)\s*(?:\|([^\]]*))?\]\]", re.IGNORECASE)
 _EVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,79}\Z")
 SEMANTIC_RESTORE_S = 300
+SEMANTIC_CONNECT_S = 5
 SEMANTIC_REPLIES_MAX_BYTES = 32 * 1024 * 1024
 
 
@@ -1303,7 +1304,13 @@ class _SemanticHTTPHandler(urllib.request.HTTPHandler):
     def http_open(self, req: urllib.request.Request) -> Any:
         class Connection(http.client.HTTPConnection):
             def connect(self) -> None:
-                super().connect()
+                original = self.timeout
+                self.timeout = min(original, SEMANTIC_CONNECT_S)
+                try:
+                    super().connect()
+                finally:
+                    self.timeout = original
+                self.sock.settimeout(original)
                 req._semantic_socket = self.sock
 
         return self.do_open(Connection, req)
@@ -1665,9 +1672,11 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                     try:
                         _semantic_unit(ctx, "stop", unit, restore_remaining, check_cancel=False)
                         restore["server_unit"] = "ok"
-                    except Exception:  # noqa: BLE001 - continue the default restore after a unit failure
+                    except Exception:  # noqa: BLE001 - report failed restore without starting another model
                         restore["server_unit"] = "failed"
-                if default_stopped:
+                if default_stopped and restore["server_unit"] == "failed":
+                    restore["default"] = "failed"
+                elif default_stopped:
                     try:
                         restore_deadline = time.monotonic() + SEMANTIC_RESTORE_S
                         started = _semantic_http(opener, backend_url + "/start", restore_remaining,
