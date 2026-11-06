@@ -1300,7 +1300,8 @@ def _semantic_lock(paths: Paths):
 
 
 def _semantic_http(opener: Any, url: str, deadline: Callable[[], float], *,
-                   data: bytes | None = None, token: str | None = None) -> dict[str, Any]:
+                   data: bytes | None = None, token: str | None = None,
+                   abandoned: list[threading.Thread] | None = None) -> dict[str, Any]:
     headers = {"Content-Type": "application/json"}
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
@@ -1345,6 +1346,8 @@ def _semantic_http(opener: Any, url: str, deadline: Callable[[], float], *,
         deadline()
     except Failed:
         expired.set()
+        if data is not None and worker.is_alive() and abandoned is not None:
+            abandoned.append(worker)
         response = outcome.get("response")
         if response is not None:
             try:
@@ -1514,6 +1517,7 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
             unit = setting.get("server_unit")
             backend_url = f"http://127.0.0.1:{setting.get('backend_port')}/local-ai/runtime/llama-cpp"
             default_stopped = False
+            abandoned: list[threading.Thread] = []
             unit_started = False
             restore = {"default": "not_needed", "server_unit": "not_needed"}
             replies: dict[str, list[str]] = {row["name"]: [] for row in prompts}
@@ -1544,7 +1548,8 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                             or status.get("pid") is not None
                             or status.get("reason_code") == "LLAMACPP_LOADING"):
                         default_stopped = True
-                        stopped = _semantic_http(opener, backend_url + "/stop", remaining, data=b"{}")
+                        stopped = _semantic_http(opener, backend_url + "/stop", remaining,
+                                                 data=b"{}", abandoned=abandoned)
                         if not isinstance(stopped, dict) or type(stopped.get("runtime_reachable")) is not bool:
                             stopped = _semantic_http(opener, backend_url, remaining)
                         if not valid_default_status(stopped):
@@ -1649,7 +1654,11 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                 if default_stopped:
                     try:
                         restore_deadline = time.monotonic() + SEMANTIC_RESTORE_S
-                        started = _semantic_http(opener, backend_url + "/start", restore_remaining, data=b"{}")
+                        for worker in abandoned:
+                            while worker.is_alive():
+                                worker.join(timeout=min(0.1, restore_remaining()))
+                        started = _semantic_http(opener, backend_url + "/start", restore_remaining,
+                                                 data=b"{}", abandoned=abandoned)
                         if started.get("reason_code") in ("LLAMACPP_NOT_CONFIGURED", "LLAMACPP_FILE_MISSING",
                                                           "LLAMACPP_UNSUPPORTED_WINDOWS_WSL_TOPOLOGY",
                                                           "LLAMACPP_NON_LOOPBACK_ENDPOINT"):

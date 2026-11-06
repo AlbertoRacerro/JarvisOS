@@ -1436,7 +1436,7 @@ def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False, rep
         return subprocess.CompletedProcess(argv, 0, f"ActiveState={'active' if state['active'] else 'inactive'}\n", "")
     ex.run = run
     default = {"reachable": True}
-    def http(_opener, url, _remaining, *, data=None, token=None):
+    def http(_opener, url, _remaining, *, data=None, token=None, abandoned=None):
         if url.endswith("/stop"):
             events.append("default_stop")
             default["reachable"] = False
@@ -1855,6 +1855,80 @@ def test_semantic_failed_stop_request_still_restores_default(host, monkeypatch):
     assert receipt["outcome"] == "failed"
     assert events == ["default_stop", "default_start"]
     assert receipt["detail"]["restore"]["default"] == "ok"
+
+
+def test_semantic_restore_waits_for_abandoned_stop(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths, timeout_s=1)
+    real_http = h._semantic_http
+    events, _ = fake_semantic(host, monkeypatch)
+    fake_http = h._semantic_http
+    release = threading.Event()
+
+    class Response:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def close(self):
+            pass
+
+    class Opener:
+        def open(self, _req, *, timeout):
+            assert timeout > 0
+            timer = threading.Timer(1.1, release.set)
+            timer.daemon = True
+            timer.start()
+            assert release.wait(2)
+            events.append("stop_finished")
+            return Response()
+
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/stop"):
+            events.append("default_stop")
+            return real_http(Opener(), url, remaining, **kwargs)
+        return fake_http(opener, url, remaining, **kwargs)
+
+    monkeypatch.setattr(h, "_semantic_http", http)
+    try:
+        _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    finally:
+        release.set()
+    assert receipt["outcome"] == "failed"
+    assert receipt["detail"]["restore"]["default"] == "ok"
+    assert events.index("stop_finished") < events.index("default_start")
+
+
+def test_semantic_restore_fails_while_abandoned_stop_is_running(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths, timeout_s=1)
+    monkeypatch.setattr(h, "SEMANTIC_RESTORE_S", 0.2)
+    real_http = h._semantic_http
+    events, _ = fake_semantic(host, monkeypatch)
+    fake_http = h._semantic_http
+    release = threading.Event()
+
+    class Opener:
+        def open(self, _req, *, timeout):
+            assert timeout > 0
+            release.wait(2)
+            events.append("stop_finished")
+            raise OSError("stop response lost")
+
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/stop"):
+            events.append("default_stop")
+            return real_http(Opener(), url, remaining, **kwargs)
+        return fake_http(opener, url, remaining, **kwargs)
+
+    monkeypatch.setattr(h, "_semantic_http", http)
+    try:
+        _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+        assert receipt["outcome"] == "failed"
+        assert receipt["detail"]["restore"]["default"] == "failed"
+        assert "default_start" not in events
+    finally:
+        release.set()
 
 
 def test_semantic_invalid_initial_default_status_fails_without_restore(host, monkeypatch):
