@@ -2424,3 +2424,67 @@ def test_semantic_http_uses_loopback_post_and_no_redirect_or_proxy(monkeypatch):
     assert isinstance(handlers[0], h.urllib.request.ProxyHandler)
     assert handlers[0].proxies == {}
     assert isinstance(handlers[1], h._RejectRedirects)
+
+
+def test_semantic_http_deadline_covers_dribbling_headers():
+    stopped = threading.Event()
+
+    class Model(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_GET(self):
+            self.connection.sendall(b"HTTP/1.1 200 OK\r\nX-Slow: ")
+            while not stopped.is_set():
+                try:
+                    self.connection.sendall(b"x")
+                except OSError:
+                    return
+                stopped.wait(0.2)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        opener = h.urllib.request.build_opener(h.urllib.request.ProxyHandler({}), h._RejectRedirects())
+        end = time.monotonic() + 1
+
+        def deadline():
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                raise h.Failed("local evaluation exceeded its time limit", {})
+            return remaining
+
+        started = time.monotonic()
+        with pytest.raises(h.Failed, match="local evaluation exceeded its time limit"):
+            h._semantic_http(opener, f"http://127.0.0.1:{server.server_port}/models", deadline)
+        assert time.monotonic() - started < 2
+    finally:
+        stopped.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_semantic_http_deadline_covers_blocked_open():
+    release = threading.Event()
+
+    class Opener:
+        def open(self, _req, *, timeout):
+            assert timeout > 0
+            release.wait(2)
+            raise OSError("released")
+
+    end = time.monotonic() + 0.1
+
+    def deadline():
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            raise h.Failed("local evaluation exceeded its time limit", {})
+        return remaining
+
+    try:
+        with pytest.raises(h.Failed, match="local evaluation exceeded its time limit"):
+            h._semantic_http(Opener(), "http://127.0.0.1:18080/models", deadline)
+    finally:
+        release.set()

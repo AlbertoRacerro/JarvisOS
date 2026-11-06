@@ -1305,25 +1305,60 @@ def _semantic_http(opener: Any, url: str, deadline: Callable[[], float], *,
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, method="POST" if data is not None else "GET", headers=headers)
+    outcome: dict[str, Any] = {}
+    expired = threading.Event()
+
+    def request() -> None:
+        try:
+            try:
+                with opener.open(req, timeout=deadline()) as response:
+                    outcome["response"] = response
+                    if expired.is_set():
+                        response.close()
+                        return
+                    status = response.status
+                    if type(status) is not int or not 100 <= status <= 599:
+                        raise Failed("local HTTP returned an invalid status", {})
+                    if status != 200:
+                        raise Failed(f"local HTTP returned status {status}", {})
+                    if data is None and not url.endswith(("/local-ai/runtime/llama-cpp", "/models")):
+                        outcome["result"] = {}
+                        return
+                    raw = _eval_response_body(response, deadline)
+                    outcome["result"] = json.loads(raw) if raw else {}
+            except urllib.error.HTTPError as exc:
+                status = exc.code if type(exc.code) is int and 100 <= exc.code <= 599 else "invalid"
+                raise Failed(f"local HTTP returned status {status}", {}) from None
+            except (OSError, urllib.error.URLError):
+                deadline()
+                raise Failed("local HTTP endpoint is unavailable", {}) from None
+            except (ValueError, TypeError):
+                raise Failed("local HTTP response is invalid", {}) from None
+        except BaseException as exc:
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=request, daemon=True)
+    worker.start()
     try:
-        with opener.open(req, timeout=deadline()) as response:
-            status = response.status
-            if type(status) is not int or not 100 <= status <= 599:
-                raise Failed("local HTTP returned an invalid status", {})
-            if status != 200:
-                raise Failed(f"local HTTP returned status {status}", {})
-            if data is None and not url.endswith(("/local-ai/runtime/llama-cpp", "/models")):
-                return {}
-            raw = _eval_response_body(response, deadline)
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        status = exc.code if type(exc.code) is int and 100 <= exc.code <= 599 else "invalid"
-        raise Failed(f"local HTTP returned status {status}", {}) from None
-    except (OSError, urllib.error.URLError):
+        while worker.is_alive():
+            worker.join(timeout=min(0.5, deadline()))
         deadline()
-        raise Failed("local HTTP endpoint is unavailable", {}) from None
-    except (ValueError, TypeError):
-        raise Failed("local HTTP response is invalid", {}) from None
+    except Failed:
+        expired.set()
+        response = outcome.get("response")
+        if response is not None:
+            try:
+                response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
+            except (AttributeError, OSError):
+                pass
+            try:
+                response.close()
+            except (OSError, ValueError):
+                pass
+        raise
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["result"]
 
 
 def _semantic_unit(ctx: Context, action: str, unit: str, remaining: Callable[[], float],
