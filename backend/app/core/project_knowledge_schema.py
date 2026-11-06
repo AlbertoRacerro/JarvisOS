@@ -4,6 +4,12 @@ PROJECT_KNOWLEDGE_MIGRATION_RECORD = {
     "checksum": None,
 }
 
+SIM_RESULT_INGESTION_MIGRATION_RECORD = {
+    "migration_id": "0030_sim_result_ingestion",
+    "name": "Validated simulation result ingestion batches and checks",
+    "checksum": None,
+}
+
 PROJECT_KNOWLEDGE_SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS project_knowledge_drafts (
@@ -89,6 +95,53 @@ PROJECT_KNOWLEDGE_SCHEMA_STATEMENTS = (
         created_at TEXT NOT NULL,
         FOREIGN KEY (run_id) REFERENCES simulation_runs(id),
         UNIQUE(run_id, output_name)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS simulation_result_batches (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        source_payload_digest TEXT NOT NULL,
+        extractor_version TEXT NOT NULL,
+        notification_state TEXT NOT NULL DEFAULT 'none'
+            CHECK (notification_state IN ('none', 'pending', 'read')),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id),
+        FOREIGN KEY (run_id) REFERENCES simulation_runs(id),
+        UNIQUE(run_id, source_payload_digest, extractor_version)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS simulation_result_values (
+        id TEXT PRIMARY KEY,
+        batch_id TEXT NOT NULL,
+        output_name TEXT NOT NULL,
+        source_payload_digest TEXT NOT NULL,
+        extractor_id TEXT NOT NULL,
+        extractor_version TEXT NOT NULL,
+        quantity TEXT,
+        value_text TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        conditions_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('passed', 'exception')),
+        admitted_scalar_id TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (batch_id) REFERENCES simulation_result_batches(id),
+        FOREIGN KEY (admitted_scalar_id) REFERENCES simulation_run_scalar_results(id),
+        UNIQUE(batch_id, output_name)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS simulation_result_checks (
+        id TEXT PRIMARY KEY,
+        value_id TEXT NOT NULL,
+        check_name TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'failed')),
+        reason_code TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (value_id) REFERENCES simulation_result_values(id),
+        UNIQUE(value_id, check_name)
     )
     """,
     """
@@ -191,4 +244,6 @@ PROJECT_KNOWLEDGE_INDEX_STATEMENTS = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_pk_validation_superseded_once ON project_knowledge_validation(supersedes_validation_id) WHERE supersedes_validation_id IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_pk_validation_slot ON project_knowledge_validation(working_revision_id, requirement_id, rule_version, validated_basis_digest)",
     "CREATE INDEX IF NOT EXISTS idx_pk_reconcile_workspace ON project_knowledge_reconciliation_requests(workspace_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_sim_result_batches_workspace ON simulation_result_batches(workspace_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_sim_result_values_status ON simulation_result_values(batch_id, status)",
 )
