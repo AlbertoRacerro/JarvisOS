@@ -190,3 +190,55 @@ def test_grade_cli_totals(tmp_path):
     result = json.loads(process.stdout)
     assert sum(item["score"] for item in result["categories"].values()) == len(CASES)
     assert sum(item["count"] for item in result["categories"].values()) == len(CASES)
+
+
+def test_grade_cli_consolidates_attempts_and_ties(tmp_path):
+    case = CASES[0]
+    correct = reply(case)
+    wrong = reply(case, verdict=next(v for v in semantic_eval.VERDICTS
+                                     if v != case["answer"]["verdict"]))
+    replies_path = tmp_path / "replies.json"
+    replies_path.write_text(json.dumps({case["id"]: [correct, wrong, correct]}))
+    process = subprocess.run(
+        [sys.executable, str(MODULE_PATH), "--grade", str(replies_path)],
+        check=True, capture_output=True, text=True, cwd=ROOT,
+    )
+    row = json.loads(process.stdout)["cases"][case["id"]]
+    assert [item["score"] for item in row["attempts"]] == [1, 0, 1]
+    assert row["majority"]["verdict"] == case["answer"]["verdict"]
+    assert row["majority"]["score"] == row["score"] == 1
+    assert row["attempts_scored"] == 2
+    assert row["disagreement"] is True
+    tied = semantic_eval.grade_replies([case], {case["id"]: [correct, wrong]})["cases"][case["id"]]
+    assert tied["disagreement"] is True
+    assert tied["attempts_scored"] == 1
+    assert tied["majority"] == {"verdict": None, "options": None, "missing": None, "score": 0}
+    assert tied["score"] == 0
+
+
+@pytest.mark.parametrize("labels,expected_score", [
+    (["A", "A", "B", "C"], 0), (["A", "A", "A", "B"], 1),
+])
+def test_four_attempts_require_strict_majority(labels, expected_score):
+    case = CASES[0]
+    other = [v for v in semantic_eval.VERDICTS if v != case["answer"]["verdict"]]
+    verdicts = {"A": case["answer"]["verdict"], "B": other[0], "C": other[1]}
+    replies = [reply(case, verdict=verdicts[label]) for label in labels]
+    result = semantic_eval.grade_replies([case], {case["id"]: replies})
+    row = result["cases"][case["id"]]
+    assert row["majority"]["verdict"] == (verdicts["A"] if expected_score else None)
+    assert row["majority"]["score"] == row["score"] == expected_score
+    assert result["categories"][case["category"]]["score"] == expected_score
+
+
+def test_control_majority_missing_options_scores_zero():
+    case = next(case for case in CASES if case["category"] == "control")
+    malformed = json.dumps({"verdict": case["answer"]["verdict"], "missing": []})
+    correct = reply(case)
+    result = semantic_eval.grade_replies([case], {case["id"]: [malformed, correct, malformed]})
+    row = result["cases"][case["id"]]
+    assert [item["score"] for item in row["attempts"]] == [0, 1, 0]
+    assert row["majority"] == {"verdict": case["answer"]["verdict"],
+                               "options": None, "missing": [], "score": 0}
+    assert row["score"] == result["categories"]["control"]["score"] == 0
+    assert row["attempts_scored"] == 1 and row["disagreement"] is True

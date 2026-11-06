@@ -20,6 +20,7 @@ Stdlib only: the installed copy must not import anything from a checkout an agen
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import http.client
 import io
@@ -66,6 +67,8 @@ MAX_CLOCK_SKEW = timedelta(minutes=5)
 MAX_EVAL_ARCHIVE_BYTES = 32 << 20
 MAX_EVAL_EXTRACTED_BYTES = 256 << 20
 MAX_EVAL_ARCHIVE_MEMBERS = 20000
+_BENCH_OUTPUT_MAX = 1 << 20
+_BENCH_LOG_MAX = 64 << 20
 OUTCOMES = ("ok", "failed", "refused", "cancelled", "interrupted", "timeout")
 BENCH_IGNORED_COMPONENTS = frozenset({".venv", "node_modules", "dist", ".vite", ".pytest_cache", ".ruff_cache", ".mypy_cache"})
 
@@ -431,9 +434,9 @@ def _systemctl(ctx: Context, *argv: str, timeout: float = 60) -> subprocess.Comp
     return ctx.run(["systemctl", "--user", *argv], timeout=timeout)
 
 
-def _unit_state(ctx: Context, unit: str) -> dict[str, str]:
+def _unit_state(ctx: Context, unit: str, *, timeout: float = 30) -> dict[str, str]:
     props = "ActiveState,SubState,UnitFileState,MainPID,NRestarts,ExecMainStatus,ActiveEnterTimestamp"
-    out = _systemctl(ctx, "show", unit, "-p", props, timeout=30).stdout
+    out = _systemctl(ctx, "show", unit, "-p", props, timeout=timeout).stdout
     return {k: v for k, _, v in (line.partition("=") for line in str(out).splitlines()) if k}
 
 
@@ -786,7 +789,8 @@ def op_bench_run(ctx: Context) -> dict[str, Any]:
 def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: Path, sub: str,
                    result_path: Path | None, reported: str, worktree: str | None,
                    remaining: float | None = None, scrub_result: bool = True,
-                   close_scope: bool = False, deadline: float | None = None) -> dict[str, Any]:
+                   close_scope: bool = False, deadline: float | None = None,
+                   json_stdout: bool = False) -> dict[str, Any]:
     launcher = str(ctx.conf("bench.run").get("launcher") or ctx.paths.home / ".local" / "bin" / "jarvis-sandbox")
     if result_path is not None and result_path.exists():
         raise Refused("benchmark result_file already exists before the run")
@@ -808,20 +812,44 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
     proc = None
     cancelled = False
     expired = False
+    oversized = False
+    output_max = _BENCH_OUTPUT_MAX if json_stdout else _BENCH_LOG_MAX
+    output_bytes = bytearray()
+    output_exceeded = threading.Event()
+    reader = None
+    def read_output() -> None:
+        assert proc is not None and proc.stdout is not None
+        while True:
+            try:
+                chunk = proc.stdout.read(min(65536, output_max + 1 - len(output_bytes)))
+            except (OSError, ValueError):  # closed during cleanup
+                break
+            if not chunk:
+                break
+            output_bytes.extend(chunk)
+            if len(output_bytes) > output_max:
+                output_exceeded.set()
+                break
     try:
-        with tempfile.TemporaryFile() as out:
-            proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
-                                    env=_host_env(), cwd=root / sub)
-            while proc.poll() is None:
-                if deadline is not None and time.monotonic() >= deadline:
-                    expired = True
-                    break
-                if ctx.cancelled():
-                    cancelled = True
-                    break
-                time.sleep(min(1, max(0, deadline - time.monotonic())) if deadline is not None else 1)
-            out.seek(0)
-            output = out.read()
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
+                                start_new_session=True,
+                                env=_host_env(), cwd=root / sub)
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
+        while proc.poll() is None:
+            if output_exceeded.is_set():
+                oversized = True
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                expired = True
+                break
+            if ctx.cancelled():
+                cancelled = True
+                break
+            time.sleep(min(1, max(0, deadline - time.monotonic())) if deadline is not None else 1)
+        if proc.poll() is not None:
+            reader.join(timeout=1)
+        oversized = oversized or output_exceeded.is_set()
     finally:
         try:
             if proc is not None and proc.poll() is None:
@@ -831,23 +859,47 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
                     pass
                 proc.wait(timeout=60)
         finally:
-            if close_scope:
-                _close_eval_scope(scope)
-            elif cancelled:
-                subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], check=False,
-                               capture_output=True, timeout=60, env=_host_env())
+            try:
+                if close_scope:
+                    _close_eval_scope(scope)
+                elif cancelled or oversized or (reader is not None and reader.is_alive()):
+                    subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], check=False,
+                                   capture_output=True, timeout=60, env=_host_env())
+            finally:
+                if reader is not None:
+                    reader.join(timeout=1)
+                if proc is not None and proc.stdout is not None:
+                    proc.stdout.close()
+                if reader is not None:
+                    reader.join(timeout=1)
+    if reader is not None and reader.is_alive():
+        raise Failed("benchmark output did not close", {"bench": bench_name, "worktree": worktree,
+                                                       "limits": limits})
+    oversized = oversized or output_exceeded.is_set()
+    output = bytes(output_bytes) if not oversized else b""
+    if oversized:
+        raise Failed("benchmark output exceeded its size limit",
+                     {"bench": bench_name, "worktree": worktree, "limits": limits,
+                      "wall_s": round(time.monotonic() - started, 2)})
     if expired or (deadline is not None and time.monotonic() >= deadline):
         raise Failed("local evaluation exceeded its time limit", {})
     detail = {"bench": bench_name, "worktree": worktree, "sandbox_head": reported, "limits": limits,
               "returncode": proc.returncode, "wall_s": round(time.monotonic() - started, 2),
               "output_sha256": hashlib.sha256(output).hexdigest(),
-              "output_tail": scrub(output.decode("utf-8", "replace"), 1500)}
+              "output_tail": "" if json_stdout else scrub(output.decode("utf-8", "replace"), 1500)}
     if cancelled:
         raise Cancelled(detail)
     if proc.returncode == 124:
         raise Failed("benchmark exceeded its time limit", detail)
     if proc.returncode != 0:
         raise Failed(f"benchmark exited {proc.returncode}", detail)
+    if json_stdout:
+        try:
+            if len(output) > _BENCH_OUTPUT_MAX:
+                raise ValueError("oversized output")
+            detail["result"] = json.loads(output)
+        except (ValueError, UnicodeError):
+            raise Failed("benchmark JSON output is invalid", {}) from None
     if result_path is not None:
         try:
             fd = open_dir(result_path.parent)
@@ -897,8 +949,8 @@ def _eval_response_body(response: Any, remaining: Callable[[], float]) -> bytes:
     timer.start()
     try:
         while len(body) < 1 << 20:
-            sock.settimeout(remaining())
             try:
+                sock.settimeout(remaining())
                 chunk = response.read1(min(64 << 10, (1 << 20) - len(body)))
             except (OSError, ValueError, http.client.HTTPException):
                 if expired.is_set():
@@ -908,6 +960,9 @@ def _eval_response_body(response: Any, remaining: Callable[[], float]) -> bytes:
             if not chunk:
                 break
             body.extend(chunk)
+            if getattr(response, "isclosed", lambda: False)():
+                remaining()
+                break
     finally:
         timer.cancel()
     return bytes(body)
@@ -915,6 +970,9 @@ def _eval_response_body(response: Any, remaining: Callable[[], float]) -> bytes:
 
 _POINT_RE = re.compile(r"\[\[\s*point\s*:\s*([\w.:-]+)\s*(?:\|([^\]]*))?\]\]", re.IGNORECASE)
 _EVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,79}\Z")
+SEMANTIC_RESTORE_S = 300
+SEMANTIC_CONNECT_S = 5
+SEMANTIC_REPLIES_MAX_BYTES = 32 * 1024 * 1024
 
 
 def _eval_prompts(value: Any) -> list[dict[str, Any]]:
@@ -1076,7 +1134,7 @@ def _eval_checkout(sha: str, root: Path, remaining: Callable[[], float]) -> tupl
 
 
 def _eval_check_checkout(root: Path, files: dict[Path, tuple[int, str]],
-                         directories: set[Path], result: Path) -> None:
+                         directories: set[Path], result: Path | set[Path]) -> None:
     """Compare the host-visible checkout with the extracted archive manifest."""
     seen: set[Path] = set()
 
@@ -1103,7 +1161,7 @@ def _eval_check_checkout(root: Path, files: dict[Path, tuple[int, str]],
                     finally:
                         os.close(fd)
                     seen.add(path)
-                elif path != result:
+                elif path not in (result if isinstance(result, set) else {result}):
                     raise Refused("local evaluator checkout changed during evaluation")
             else:
                 raise Refused("local evaluator checkout changed during evaluation")
@@ -1136,6 +1194,563 @@ def _eval_tempdir(parent: Path):
         shutil.rmtree(root)
 
 
+def _semantic_settings(ctx: Context, name: str, setting: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    allowed = {"kind", "model", "base_url", "credential_file", "thinking", "verification",
+               "max_tokens", "per_request_timeout_s", "timeout_s", "attempts", "temperature",
+               "server_unit", "stop_default", "backend_port"}
+    if set(setting) - allowed:
+        raise Refused("semantic policy has unknown settings")
+    bench = (ctx.conf("bench.run").get("benchmarks") or {}).get(name)
+    if not isinstance(bench, dict):
+        raise Refused("semantic benchmark is not registered")
+    argv, grade_argv, result = bench.get("argv"), bench.get("grade_argv"), bench.get("result_file")
+    if (not isinstance(argv, list) or any(not isinstance(a, str) for a in argv)
+            or not isinstance(result, str) or not result or Path(result).is_absolute()
+            or ".." in Path(result).parts or argv.count("--emit-prompts") != 1
+            or argv.index("--emit-prompts") + 1 >= len(argv)
+            or argv[argv.index("--emit-prompts") + 1] != result
+            or "--grade" in argv or not isinstance(grade_argv, list)
+            or any(not isinstance(a, str) for a in grade_argv)
+            or grade_argv.count("--grade") != 1 or "--emit-prompts" in grade_argv
+            or grade_argv.index("--grade") + 1 >= len(grade_argv)
+            or grade_argv[grade_argv.index("--grade") + 1] != "{replies_file}"
+            or "secret_env" in bench):
+        raise Refused("semantic benchmark policy is invalid")
+    _loopback_base(setting.get("base_url"))
+    model = setting.get("model")
+    if not isinstance(model, str) or not _EVAL_ID_RE.fullmatch(model):
+        raise Refused("semantic model is invalid")
+    for key, low, high, default in (("max_tokens", 1, 8192, None),
+                                     ("per_request_timeout_s", 1, 1800, None),
+                                     ("timeout_s", 1, 28800, None),
+                                     ("attempts", 1, 8, None)):
+        value = setting.get(key, default)
+        if type(value) is not int or not low <= value <= high:
+            raise Refused(f"semantic {key} is invalid")
+    attempts = setting["attempts"]
+    temperature = setting.get("temperature")
+    if (type(temperature) not in (int, float) or not 0 <= temperature <= 2
+            or (attempts == 1 and temperature != 0)):
+        raise Refused("semantic temperature is invalid")
+    if setting.get("thinking") not in ("on", "off"):
+        raise Refused("semantic thinking is invalid")
+    if "verification" in setting and type(setting["verification"]) is not bool:
+        raise Refused("semantic verification is invalid")
+    if type(setting.get("stop_default", False)) is not bool:
+        raise Refused("semantic stop_default is invalid")
+    unit = setting.get("server_unit")
+    if unit is not None:
+        units = ctx.conf("service.control").get("units")
+        if not isinstance(unit, str) or not isinstance(units, list) or unit not in units:
+            raise Refused("semantic server_unit is not allowed")
+        limited = ctx.conf("service.control").get("actions")
+        limited = limited if isinstance(limited, dict) else OWNER_ACTIONS
+        if unit in limited and any(a not in limited[unit] for a in ("start", "stop")):
+            raise Refused("semantic server_unit actions are not allowed")
+        if not setting.get("stop_default", False):
+            raise Refused("semantic server_unit requires stop_default")
+    port = setting.get("backend_port")
+    if (setting.get("stop_default", False) or port is not None) and (
+            type(port) is not int or not 1 <= port <= 65535):
+        raise Refused("semantic backend_port is invalid")
+    return bench, setting
+
+
+def _semantic_prompts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 50:
+        raise Refused("semantic prompts are invalid")
+    names: set[str] = set()
+    for row in value:
+        if not isinstance(row, dict) or set(row) != {"name", "prompt", "category", "answer"}:
+            raise Refused("semantic prompt row is invalid")
+        name, prompt, category, answer = (row[k] for k in ("name", "prompt", "category", "answer"))
+        if not isinstance(name, str) or not _EVAL_ID_RE.fullmatch(name) or name in names:
+            raise Refused("semantic prompt name is invalid")
+        names.add(name)
+        if not isinstance(prompt, str) or not 100 <= len(prompt) <= 16000 or "\x00" in prompt:
+            raise Refused("semantic prompt text is invalid")
+        if category not in ("validity_domain", "contradiction", "insufficient_data", "control"):
+            raise Refused("semantic prompt category is invalid")
+        if (not isinstance(answer, dict) or set(answer) != {"verdict", "options", "missing"}
+                or answer["verdict"] not in ("no_issue", "invalid_assumption", "cannot_conclude", "contradiction")):
+            raise Refused("semantic answer is invalid")
+        for field in ("options", "missing"):
+            labels = answer[field]
+            if (not isinstance(labels, list) or len(labels) > 20
+                    or any(not isinstance(label, str) or not _EVAL_ID_RE.fullmatch(label) for label in labels)
+                    or len(labels) != len(set(labels))):
+                raise Refused("semantic answer labels are invalid")
+    return value
+
+
+@contextmanager
+def _semantic_lock(paths: Paths):
+    fd = open_dir(paths.state, create=True)
+    try:
+        lock = os.open("semantic-eval.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+    finally:
+        os.close(fd)
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused("another semantic evaluation is running") from None
+        yield
+    finally:
+        os.close(lock)
+
+
+class _SemanticHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> Any:
+        class Connection(http.client.HTTPConnection):
+            def connect(self) -> None:
+                original = self.timeout
+                self.timeout = min(original, SEMANTIC_CONNECT_S)
+                try:
+                    super().connect()
+                finally:
+                    self.timeout = original
+                self.sock.settimeout(original)
+                req._semantic_socket = self.sock
+
+        return self.do_open(Connection, req)
+
+
+def _semantic_http(opener: Any, url: str, deadline: Callable[[], float], *,
+                   data: bytes | None = None, token: str | None = None,
+                   cancelled: Callable[[], bool] | None = None) -> dict[str, Any]:
+    headers = {"Content-Type": "application/json"}
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=data, method="POST" if data is not None else "GET", headers=headers)
+    if cancelled is not None and cancelled():
+        raise Cancelled({})
+    end = time.monotonic() + deadline()
+    stopped = threading.Event()
+    timed_out = threading.Event()
+    was_cancelled = threading.Event()
+
+    def watch() -> None:
+        while not stopped.is_set():
+            if cancelled is not None and cancelled():
+                was_cancelled.set()
+            if time.monotonic() >= end:
+                timed_out.set()
+            if timed_out.is_set() or was_cancelled.is_set():
+                sock = getattr(req, "_semantic_socket", None)
+                if sock is not None:
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+            wait = 0.25 if timed_out.is_set() or was_cancelled.is_set() else min(0.25, max(0, end - time.monotonic()))
+            stopped.wait(wait)
+
+    watchdog = threading.Thread(target=watch, daemon=True)
+    watchdog.start()
+    result: dict[str, Any] = {}
+    failure: BaseException | None = None
+    try:
+        try:
+            with opener.open(req, timeout=deadline()) as response:
+                status = response.status
+                if type(status) is not int or not 100 <= status <= 599:
+                    raise Failed("local HTTP returned an invalid status", {})
+                if status != 200:
+                    raise Failed(f"local HTTP returned status {status}", {})
+                if data is None and not url.endswith(("/local-ai/runtime/llama-cpp", "/models")):
+                    result = {}
+                else:
+                    raw = _eval_response_body(response, deadline)
+                    result = json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            status = exc.code if type(exc.code) is int and 100 <= exc.code <= 599 else "invalid"
+            raise Failed(f"local HTTP returned status {status}", {}) from None
+        except (OSError, urllib.error.URLError):
+            deadline()
+            raise Failed("local HTTP endpoint is unavailable", {}) from None
+        except (ValueError, TypeError):
+            raise Failed("local HTTP response is invalid", {}) from None
+    except BaseException as exc:
+        failure = exc
+    finally:
+        stopped.set()
+        watchdog.join()
+    if timed_out.is_set():
+        deadline()
+    if was_cancelled.is_set() or (cancelled is not None and cancelled()):
+        raise Cancelled({})
+    deadline()
+    if failure is not None:
+        raise failure
+    return result
+
+
+def _semantic_unit(ctx: Context, action: str, unit: str, remaining: Callable[[], float],
+                   *, check_cancel: bool = True) -> None:
+    if check_cancel and ctx.cancelled():
+        raise Cancelled({})
+    proc = _systemctl(ctx, action, unit, timeout=min(60, remaining()))
+    want = "active" if action == "start" else "inactive"
+    if proc.returncode != 0:
+        raise Failed(f"candidate server {action} failed", {})
+    while True:
+        if check_cancel and ctx.cancelled():
+            raise Cancelled({})
+        remaining()
+        state = _unit_state(ctx, unit, timeout=min(30, remaining())).get("ActiveState")
+        if state == want or (action == "stop" and state == "failed"):
+            return
+        if state == "failed":
+            raise Failed("candidate server start failed", {})
+        if check_cancel and ctx.cancelled():
+            raise Cancelled({})
+        time.sleep(min(1, remaining()))
+
+
+def _semantic_memory(stop: threading.Event, peaks: dict[str, int | None]) -> None:
+    while not stop.is_set():
+        try:
+            values = Path("/proc/meminfo").read_text().splitlines()
+            mem = {line.split(":")[0]: int(line.split(":")[1].strip().split()[0]) for line in values}
+            used = (mem["MemTotal"] - mem["MemAvailable"]) * 1024
+            peaks["ram_bytes"] = max(peaks["ram_bytes"] or 0, used)
+        except (OSError, ValueError, KeyError, IndexError):
+            pass
+        try:
+            proc = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+                                  capture_output=True, text=True, timeout=5, check=False, env=_host_env())
+            if proc.returncode == 0:
+                used = sum(int(value.strip()) for value in proc.stdout.splitlines())
+                peaks["vram_mib"] = max(peaks["vram_mib"] or 0, used)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        stop.wait(0.25)
+
+
+def _semantic_grade(value: Any, prompts: list[dict[str, Any]], attempts: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not isinstance(value, dict) or set(value) != {"cases", "categories"}:
+        raise Failed("semantic grader output is invalid", {})
+    cases, categories = value["cases"], value["categories"]
+    if not isinstance(cases, dict) or set(cases) != {row["name"] for row in prompts}:
+        raise Failed("semantic grader cases are invalid", {})
+    expected_categories: dict[str, int] = {}
+    for row in prompts:
+        expected_categories[row["category"]] = expected_categories.get(row["category"], 0) + 1
+    if not isinstance(categories, dict) or set(categories) != set(expected_categories):
+        raise Failed("semantic grader categories are invalid", {})
+    for category, entry in categories.items():
+        if (not isinstance(entry, dict) or set(entry) != {"score", "count"}
+                or type(entry["score"]) is not int or type(entry["count"]) is not int
+                or not 0 <= entry["score"] <= entry["count"] == expected_categories[category]):
+            raise Failed("semantic grader totals are invalid", {})
+    def valid_grade(item: Any) -> bool:
+        return (isinstance(item, dict)
+                and set(item) == {"verdict", "options", "missing", "verdict_ok", "options_ok",
+                                  "missing_ok", "score", "parse_error"}
+                and (item["verdict"] is None or item["verdict"] in (
+                    "no_issue", "invalid_assumption", "cannot_conclude", "contradiction"))
+                and all(item[k] is None or (isinstance(item[k], list)
+                    and len(item[k]) <= 26
+                    and all(isinstance(v, str) and re.fullmatch(r"[A-Z]\Z", v) for v in item[k])
+                    and len(set(item[k])) == len(item[k])) for k in ("options", "missing"))
+                and all(type(item[k]) is bool for k in ("verdict_ok", "options_ok", "missing_ok", "parse_error"))
+                and type(item["score"]) is int and item["score"] in (0, 1))
+    for case in cases.values():
+        if (not isinstance(case, dict) or set(case) != {"attempts", "majority", "disagreement",
+                                                        "attempts_scored", "score"}
+                or not isinstance(case["attempts"], list) or len(case["attempts"]) != attempts
+                or not all(valid_grade(item) for item in case["attempts"])
+                or not isinstance(case["majority"], dict)
+                or set(case["majority"]) != {"verdict", "options", "missing", "score"}
+                or not valid_grade({**case["attempts"][0], **case["majority"]})
+                or type(case["disagreement"]) is not bool
+                or type(case["attempts_scored"]) is not int
+                or case["attempts_scored"] != sum(item["score"] for item in case["attempts"])
+                or type(case["score"]) is not int or case["score"] != case["majority"]["score"]):
+            raise Failed("semantic grader case is invalid", {})
+        def key(item: dict[str, Any]) -> tuple[Any, ...]:
+            return (item["verdict"], tuple(item["options"]) if item["options"] is not None else None,
+                    tuple(item["missing"]) if item["missing"] is not None else None)
+        keys = [key(item) for item in case["attempts"]]
+        top = max(keys.count(item) for item in keys)
+        leaders = {item for item in keys if keys.count(item) == top}
+        first = (case["attempts"][keys.index(next(iter(leaders)))]
+                 if len(leaders) == 1 and top > attempts / 2 else None)
+        expected = ({k: first[k] for k in ("verdict", "options", "missing", "score")}
+                    if first else {"verdict": None, "options": None, "missing": None, "score": 0})
+        if (case["majority"] != expected
+                or case["disagreement"] != (len(set(keys)) > 1)):
+            raise Failed("semantic grader majority is inconsistent", {})
+    for category in categories:
+        total = sum(cases[row["name"]]["score"] for row in prompts if row["category"] == category)
+        if categories[category]["score"] != total:
+            raise Failed("semantic grader totals are inconsistent", {})
+    return cases, categories
+
+
+def _semantic_check_result(detail: dict[str, Any], token: str, prompts: list[dict[str, Any]],
+                           replies: dict[str, list[str]], restore: dict[str, str]) -> None:
+    encoded = json.dumps(detail, ensure_ascii=False)
+    windows = {encoded[index:index + 32] for index in range(len(encoded) - 31)}
+    if (token in encoded or any(row["prompt"] in encoded for row in prompts)
+            or any(row["prompt"][index:index + 32] in windows
+                   for row in prompts for index in range(len(row["prompt"]) - 31))
+            or any(len(text) >= 32 and text in encoded
+                   for texts in replies.values() for text in texts)):
+        raise Failed("semantic evaluation result is invalid", {"restore": restore})
+
+
+def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[str, Any]:
+    bench, _ = _semantic_settings(ctx, name, setting)
+    sha = ctx.request.get("sha")
+    if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+        raise Refused("local evaluation needs a candidate sha")
+    deadline = time.monotonic() + setting["timeout_s"]
+    def remaining() -> float:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise Failed("local evaluation exceeded its time limit", {})
+        return left
+    with _semantic_lock(ctx.paths):
+        _eval_reachable(sha, remaining)
+        with _eval_tempdir(ctx.paths.home / "src" / "worktrees") as root:
+            files, directories = _eval_checkout(sha, root, remaining)
+            sub = str(bench.get("cwd") or ".")
+            result_name = bench["result_file"]
+            if Path(sub).is_absolute() or ".." in Path(sub).parts or not (root / sub).is_dir():
+                raise Refused("semantic benchmark cwd is invalid")
+            result = Path(sub) / result_name
+            _eval_check_checkout(root, files, directories, result)
+            try:
+                phase = _run_benchmark(ctx, name, bench, root, sub, root / result, sha, None,
+                                       scrub_result=False, close_scope=True, deadline=deadline)
+                _eval_check_checkout(root, files, directories, result)
+                prompts = _semantic_prompts(phase["result"])
+            except Cancelled:
+                raise Cancelled({}) from None
+            except (Failed, Refused):
+                raise Refused("semantic prompt phase failed") from None
+            (root / result).unlink()
+            _eval_check_checkout(root, files, directories, result)
+            token = _eval_credential(setting.get("credential_file"), ctx.paths)
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirects(),
+                                                 _SemanticHTTPHandler())
+            stop_default = setting.get("stop_default", False)
+            unit = setting.get("server_unit")
+            backend_url = f"http://127.0.0.1:{setting.get('backend_port')}/local-ai/runtime/llama-cpp"
+            default_stopped = False
+            unit_started = False
+            restore = {"default": "not_needed", "server_unit": "not_needed"}
+            replies: dict[str, list[str]] = {row["name"]: [] for row in prompts}
+            replies_bytes = 0
+            measurements: dict[str, list[dict[str, Any]]] = {row["name"]: [] for row in prompts}
+            peaks: dict[str, int | None] = {"ram_bytes": None, "vram_mib": None}
+            stop_sample = threading.Event()
+            sampler: threading.Thread | None = None
+            sampler_started = False
+            readiness_errors = 0
+            restarts = 0
+            initial_restarts: int | None = None
+            error: BaseException | None = None
+            try:
+                if stop_default:
+                    status = _semantic_http(opener, backend_url, remaining, cancelled=ctx.cancelled)
+                    def valid_default_status(value: Any) -> bool:
+                        return (isinstance(value, dict)
+                                and type(value.get("runtime_reachable")) is bool
+                                and ("spawned_by_jarvis" not in value
+                                     or type(value["spawned_by_jarvis"]) is bool)
+                                and (value.get("pid") is None or type(value["pid"]) is int))
+                    if not valid_default_status(status):
+                        raise Failed("default runtime status is invalid", {})
+                    if status.get("reason_code") == "LLAMACPP_RECOVERING":
+                        raise Refused("default runtime is recovering")
+                    if (status["runtime_reachable"] or status.get("spawned_by_jarvis") is True
+                            or status.get("pid") is not None
+                            or status.get("reason_code") == "LLAMACPP_LOADING"):
+                        default_stopped = True
+                        stopped = _semantic_http(opener, backend_url + "/stop", remaining,
+                                                 data=b"{}", cancelled=ctx.cancelled)
+                        if not isinstance(stopped, dict) or type(stopped.get("runtime_reachable")) is not bool:
+                            stopped = _semantic_http(opener, backend_url, remaining, cancelled=ctx.cancelled)
+                        if not valid_default_status(stopped):
+                            raise Failed("default runtime status is invalid", {})
+                        if (stopped["runtime_reachable"] or stopped.get("spawned_by_jarvis") is True
+                                or stopped.get("pid") is not None
+                                or stopped.get("reason_code") in ("LLAMACPP_LOADING", "LLAMACPP_RECOVERING")):
+                            raise Failed("default runtime stop was not confirmed", {})
+                if unit:
+                    unit_started = True
+                    initial = _unit_state(ctx, unit, timeout=min(30, remaining())).get("NRestarts", "0")
+                    initial_restarts = int(initial) if initial.isdecimal() else None
+                    _semantic_unit(ctx, "start", unit, remaining)
+                while True:
+                    if ctx.cancelled():
+                        raise Cancelled({})
+                    try:
+                        models = _semantic_http(opener, setting["base_url"] + "/models", remaining,
+                                                token=token, cancelled=ctx.cancelled)
+                        if (not isinstance(models, dict) or not isinstance(models.get("data"), list)
+                                or not any(isinstance(model, dict) and model.get("id") == setting["model"]
+                                           for model in models["data"])):
+                            raise Failed("local model is not ready", {})
+                        break
+                    except Failed:
+                        readiness_errors = min(readiness_errors + 1, 1_000_000)
+                        if ctx.cancelled():
+                            raise Cancelled({}) from None
+                        time.sleep(min(1, remaining()))
+                sampler = threading.Thread(target=_semantic_memory, args=(stop_sample, peaks), daemon=True)
+                sampler.start()
+                sampler_started = True
+                for row in prompts:
+                    for attempt in range(setting["attempts"]):
+                        remaining()
+                        if ctx.cancelled():
+                            raise Cancelled({})
+                        per_deadline = min(deadline, time.monotonic() + setting["per_request_timeout_s"])
+                        def per_remaining(limit: float = per_deadline) -> float:
+                            left = limit - time.monotonic()
+                            if left <= 0:
+                                raise Failed("local model request exceeded its time limit", {})
+                            return left
+                        kwargs = {"enable_thinking": setting["thinking"] == "on"}
+                        if "verification" in setting:
+                            kwargs["verification"] = setting["verification"]
+                        body = json.dumps({"model": setting["model"], "messages": [
+                            {"role": "user", "content": row["prompt"]}], "temperature": setting["temperature"],
+                            "max_tokens": setting["max_tokens"], "seed": attempt, "stream": False,
+                            "chat_template_kwargs": kwargs}).encode()
+                        started = time.monotonic()
+                        payload = _semantic_http(opener, setting["base_url"] + "/chat/completions",
+                                                 per_remaining, data=body, token=token, cancelled=ctx.cancelled)
+                        try:
+                            message = payload["choices"][0]["message"]
+                            content = message["content"]
+                            reply = "" if content is None else content
+                            tokens = payload["usage"]["completion_tokens"]
+                            if not isinstance(reply, str) or type(tokens) is not int or tokens < 0:
+                                raise ValueError
+                            reasoning_content = message.get("reasoning_content")
+                            if reasoning_content is not None and not isinstance(reasoning_content, str):
+                                raise ValueError
+                            reasoning = bool(reasoning_content)
+                        except (KeyError, IndexError, TypeError, ValueError):
+                            raise Failed("local model response is invalid", {}) from None
+                        replies[row["name"]].append(reply)
+                        replies_bytes += len(reply.encode("utf-8"))
+                        if replies_bytes > SEMANTIC_REPLIES_MAX_BYTES:
+                            raise Failed("local model replies exceeded their size limit", {})
+                        measurements[row["name"]].append({"completion_tokens": tokens,
+                                                           "reasoning_present": reasoning,
+                                                           "seconds": round(time.monotonic() - started, 2)})
+                remaining()
+            except Exception as exc:  # noqa: BLE001 - restore must run after every operation failure
+                error = exc
+            finally:
+                restore_deadline = time.monotonic() + SEMANTIC_RESTORE_S
+                def restore_remaining() -> float:
+                    left = restore_deadline - time.monotonic()
+                    if left <= 0:
+                        raise Failed("semantic restore exceeded its time limit", {})
+                    return left
+                stop_sample.set()
+                if sampler_started and sampler is not None:
+                    try:
+                        sampler.join(timeout=6)
+                    except Exception:  # noqa: BLE001 - still stop the unit and restore the default
+                        if error is None:
+                            error = Failed("semantic memory sampler cleanup failed", {})
+                if unit_started:
+                    try:
+                        current = _unit_state(ctx, unit, timeout=min(30, restore_remaining())).get("NRestarts", "0")
+                        if initial_restarts is not None and current.isdecimal():
+                            restarts = min(max(int(current) - initial_restarts, 0), 1_000_000)
+                    except Exception:  # noqa: BLE001 - still stop the unit and restore the default
+                        restarts = 0
+                    try:
+                        _semantic_unit(ctx, "stop", unit, restore_remaining, check_cancel=False)
+                        restore["server_unit"] = "ok"
+                    except Exception:  # noqa: BLE001 - report failed restore without starting another model
+                        restore["server_unit"] = "failed"
+                if default_stopped and restore["server_unit"] == "failed":
+                    restore["default"] = "failed"
+                elif default_stopped:
+                    try:
+                        restore_deadline = time.monotonic() + SEMANTIC_RESTORE_S
+                        started = _semantic_http(opener, backend_url + "/start", restore_remaining,
+                                                 data=b"{}")
+                        if started.get("reason_code") in ("LLAMACPP_NOT_CONFIGURED", "LLAMACPP_FILE_MISSING",
+                                                          "LLAMACPP_UNSUPPORTED_WINDOWS_WSL_TOPOLOGY",
+                                                          "LLAMACPP_NON_LOOPBACK_ENDPOINT"):
+                            raise Failed("default runtime cannot start", {})
+                        while True:
+                            status = _semantic_http(opener, backend_url, restore_remaining)
+                            if status.get("runtime_reachable") is True:
+                                break
+                            time.sleep(min(1, restore_remaining()))
+                        restore["default"] = "ok"
+                    except Exception:  # noqa: BLE001 - report failed restore without leaking response text
+                        restore["default"] = "failed"
+            if "failed" in restore.values():
+                raise Failed("semantic evaluation restore failed", {"restore": restore}) from None
+            if error is not None:
+                if isinstance(error, Refused):
+                    raise Refused(str(error)) from None
+                if isinstance(error, Failed):
+                    raise Failed(str(error), {"restore": restore}) from None
+                if isinstance(error, Cancelled):
+                    raise Cancelled({"restore": restore}) from None
+                raise Failed("semantic evaluation failed", {"restore": restore}) from None
+            reply_file = "semantic-replies.json"
+            if (root / sub / reply_file).exists() or Path(sub, reply_file) in files:
+                raise Refused("semantic replies path is occupied")
+            reply_fd = open_dir(root / sub)
+            try:
+                write_at(reply_fd, reply_file, json.dumps(replies).encode(), mode=0o600)
+            finally:
+                os.close(reply_fd)
+            grade_bench = {**bench, "argv": [reply_file if arg == "{replies_file}" else arg
+                                              for arg in bench["grade_argv"]], "result_file": None}
+            try:
+                graded = _run_benchmark(ctx, name, grade_bench, root, sub, None, sha, None,
+                                        close_scope=True, deadline=deadline, json_stdout=True)
+                _eval_check_checkout(root, files, directories, {Path(sub, reply_file)})
+                cases, categories = _semantic_grade(graded["result"], prompts, setting["attempts"])
+            except Cancelled:
+                raise Cancelled({"restore": restore}) from None
+            except (Failed, Refused):
+                raise Failed("semantic grading failed", {"restore": restore}) from None
+            finally:
+                reply_fd = open_dir(root / sub)
+                try:
+                    unlink_at(reply_fd, reply_file)
+                finally:
+                    os.close(reply_fd)
+            rows = []
+            total_tokens = 0
+            total_seconds = 0.0
+            for index, row in enumerate(prompts, 1):
+                grades = cases[row["name"]]
+                attempts = []
+                for grade, measure in zip(grades["attempts"], measurements[row["name"]], strict=True):
+                    attempts.append({**{k: grade[k] for k in ("verdict", "options", "missing", "score", "parse_error")},
+                                     **measure})
+                    total_tokens += measure["completion_tokens"]
+                    total_seconds += measure["seconds"]
+                rows.append({"case": f"case-{index:02d}", "category": row["category"], "attempts": attempts,
+                             "majority": grades["majority"], "disagreement": grades["disagreement"],
+                             "attempts_scored": grades["attempts_scored"], "score": grades["score"]})
+            detail = {"model": setting["model"], "head": sha, "rows": rows, "categories": categories,
+                      "completion_tokens": total_tokens,
+                      "tokens_per_second": round(total_tokens / total_seconds, 2) if total_seconds else None,
+                      "peak_vram_mib": peaks["vram_mib"], "peak_ram_bytes": peaks["ram_bytes"],
+                      "errors": readiness_errors, "restarts": restarts, "restore": restore}
+            _semantic_check_result(detail, token, prompts, replies, restore)
+            return detail
+
+
 def op_local_eval_run(ctx: Context) -> dict[str, Any]:
     conf = ctx.conf("local_eval.run")
     args = _args(ctx, {"bench"})
@@ -1144,6 +1759,11 @@ def op_local_eval_run(ctx: Context) -> dict[str, Any]:
     evaluation = evaluations.get(bench_name) if isinstance(evaluations, dict) and isinstance(bench_name, str) else None
     if not isinstance(evaluation, dict):
         raise Refused("local evaluator is not registered")
+    kind = evaluation.get("kind", "pointing")
+    if kind == "semantic_judgment":
+        return _op_semantic_eval(ctx, bench_name, evaluation)
+    if kind != "pointing":
+        raise Refused("local evaluator kind is invalid")
     bench_conf = ctx.conf("bench.run")
     bench = (bench_conf.get("benchmarks") or {}).get(bench_name)
     if not isinstance(bench, dict) or not isinstance(bench.get("argv"), list):
