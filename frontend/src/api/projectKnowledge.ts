@@ -66,6 +66,7 @@ export type ProjectKnowledgeRevalidation = {
   known_fail_requirement_ids: string[];
   recomputation_required: string[];
   selected_validation_set_digest: string;
+  applicability_set_digest: string;
   diagnostics: string[];
 };
 
