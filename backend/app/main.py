@@ -31,6 +31,7 @@ from app.modules.environment.routes import router as environment_router
 from app.modules.flowsheet.routes import router as flowsheet_router
 from app.modules.local_ai.runtime.lifecycle import create_local_ai_runtime_lifecycle_from_env
 from app.modules.local_ai.runtime.llama_cpp import get_llama_cpp_runtime_owner, llama_cpp_runtime_config
+from app.modules.local_ai.runtime.routes import models_router as local_ai_models_router
 from app.modules.local_ai.runtime.routes import router as local_ai_runtime_router
 from app.modules.memory.literature_routes import router as literature_router
 from app.modules.memory.routes import router as memory_router
@@ -204,6 +205,7 @@ def create_app() -> FastAPI:
     app.include_router(project_knowledge_router)
     app.include_router(coding_runtime_router)
     app.include_router(local_ai_runtime_router)
+    app.include_router(local_ai_models_router)
     app.include_router(development_router)
     app.include_router(relay_gateway_router)
 

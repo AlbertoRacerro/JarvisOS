@@ -13,6 +13,10 @@ class JarvisPaths:
     artifacts_dir: Path
     logs_dir: Path
 
+    @property
+    def local_models_file(self) -> Path:
+        return self.data_root / "settings" / "local_models.json"
+
     def environment_workspace_dir(self, workspace_id: str) -> Path:
         return self.data_root / "workspaces" / workspace_id / "environment"
 
