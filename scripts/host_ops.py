@@ -1299,69 +1299,84 @@ def _semantic_lock(paths: Paths):
         os.close(lock)
 
 
+class _SemanticHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> Any:
+        class Connection(http.client.HTTPConnection):
+            def connect(self) -> None:
+                super().connect()
+                req._semantic_socket = self.sock
+
+        return self.do_open(Connection, req)
+
+
 def _semantic_http(opener: Any, url: str, deadline: Callable[[], float], *,
                    data: bytes | None = None, token: str | None = None,
-                   abandoned: list[threading.Thread] | None = None) -> dict[str, Any]:
+                   cancelled: Callable[[], bool] | None = None) -> dict[str, Any]:
     headers = {"Content-Type": "application/json"}
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, method="POST" if data is not None else "GET", headers=headers)
-    outcome: dict[str, Any] = {}
-    expired = threading.Event()
+    if cancelled is not None and cancelled():
+        raise Cancelled({})
+    end = time.monotonic() + deadline()
+    stopped = threading.Event()
+    timed_out = threading.Event()
+    was_cancelled = threading.Event()
 
-    def request() -> None:
-        try:
-            try:
-                with opener.open(req, timeout=deadline()) as response:
-                    outcome["response"] = response
-                    if expired.is_set():
-                        response.close()
-                        return
-                    status = response.status
-                    if type(status) is not int or not 100 <= status <= 599:
-                        raise Failed("local HTTP returned an invalid status", {})
-                    if status != 200:
-                        raise Failed(f"local HTTP returned status {status}", {})
-                    if data is None and not url.endswith(("/local-ai/runtime/llama-cpp", "/models")):
-                        outcome["result"] = {}
-                        return
-                    raw = _eval_response_body(response, deadline)
-                    outcome["result"] = json.loads(raw) if raw else {}
-            except urllib.error.HTTPError as exc:
-                status = exc.code if type(exc.code) is int and 100 <= exc.code <= 599 else "invalid"
-                raise Failed(f"local HTTP returned status {status}", {}) from None
-            except (OSError, urllib.error.URLError):
-                deadline()
-                raise Failed("local HTTP endpoint is unavailable", {}) from None
-            except (ValueError, TypeError):
-                raise Failed("local HTTP response is invalid", {}) from None
-        except BaseException as exc:
-            outcome["error"] = exc
+    def watch() -> None:
+        while not stopped.is_set():
+            if cancelled is not None and cancelled():
+                was_cancelled.set()
+            if time.monotonic() >= end:
+                timed_out.set()
+            if timed_out.is_set() or was_cancelled.is_set():
+                sock = getattr(req, "_semantic_socket", None)
+                if sock is not None:
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+            wait = 0.25 if timed_out.is_set() or was_cancelled.is_set() else min(0.25, max(0, end - time.monotonic()))
+            stopped.wait(wait)
 
-    worker = threading.Thread(target=request, daemon=True)
-    worker.start()
+    watchdog = threading.Thread(target=watch, daemon=True)
+    watchdog.start()
+    result: dict[str, Any] = {}
+    failure: BaseException | None = None
     try:
-        while worker.is_alive():
-            worker.join(timeout=min(0.5, deadline()))
+        try:
+            with opener.open(req, timeout=deadline()) as response:
+                status = response.status
+                if type(status) is not int or not 100 <= status <= 599:
+                    raise Failed("local HTTP returned an invalid status", {})
+                if status != 200:
+                    raise Failed(f"local HTTP returned status {status}", {})
+                if data is None and not url.endswith(("/local-ai/runtime/llama-cpp", "/models")):
+                    result = {}
+                else:
+                    raw = _eval_response_body(response, deadline)
+                    result = json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            status = exc.code if type(exc.code) is int and 100 <= exc.code <= 599 else "invalid"
+            raise Failed(f"local HTTP returned status {status}", {}) from None
+        except (OSError, urllib.error.URLError):
+            deadline()
+            raise Failed("local HTTP endpoint is unavailable", {}) from None
+        except (ValueError, TypeError):
+            raise Failed("local HTTP response is invalid", {}) from None
+    except BaseException as exc:
+        failure = exc
+    finally:
+        stopped.set()
+        watchdog.join()
+    if timed_out.is_set():
         deadline()
-    except Failed:
-        expired.set()
-        if data is not None and worker.is_alive() and abandoned is not None:
-            abandoned.append(worker)
-        response = outcome.get("response")
-        if response is not None:
-            try:
-                response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
-            except (AttributeError, OSError):
-                pass
-            try:
-                response.close()
-            except (OSError, ValueError):
-                pass
-        raise
-    if "error" in outcome:
-        raise outcome["error"]
-    return outcome["result"]
+    if was_cancelled.is_set() or (cancelled is not None and cancelled()):
+        raise Cancelled({})
+    deadline()
+    if failure is not None:
+        raise failure
+    return result
 
 
 def _semantic_unit(ctx: Context, action: str, unit: str, remaining: Callable[[], float],
@@ -1512,12 +1527,12 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
             (root / result).unlink()
             _eval_check_checkout(root, files, directories, result)
             token = _eval_credential(setting.get("credential_file"), ctx.paths)
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirects())
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirects(),
+                                                 _SemanticHTTPHandler())
             stop_default = setting.get("stop_default", False)
             unit = setting.get("server_unit")
             backend_url = f"http://127.0.0.1:{setting.get('backend_port')}/local-ai/runtime/llama-cpp"
             default_stopped = False
-            abandoned: list[threading.Thread] = []
             unit_started = False
             restore = {"default": "not_needed", "server_unit": "not_needed"}
             replies: dict[str, list[str]] = {row["name"]: [] for row in prompts}
@@ -1533,7 +1548,7 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
             error: BaseException | None = None
             try:
                 if stop_default:
-                    status = _semantic_http(opener, backend_url, remaining)
+                    status = _semantic_http(opener, backend_url, remaining, cancelled=ctx.cancelled)
                     def valid_default_status(value: Any) -> bool:
                         return (isinstance(value, dict)
                                 and type(value.get("runtime_reachable")) is bool
@@ -1549,9 +1564,9 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                             or status.get("reason_code") == "LLAMACPP_LOADING"):
                         default_stopped = True
                         stopped = _semantic_http(opener, backend_url + "/stop", remaining,
-                                                 data=b"{}", abandoned=abandoned)
+                                                 data=b"{}", cancelled=ctx.cancelled)
                         if not isinstance(stopped, dict) or type(stopped.get("runtime_reachable")) is not bool:
-                            stopped = _semantic_http(opener, backend_url, remaining)
+                            stopped = _semantic_http(opener, backend_url, remaining, cancelled=ctx.cancelled)
                         if not valid_default_status(stopped):
                             raise Failed("default runtime status is invalid", {})
                         if (stopped["runtime_reachable"] or stopped.get("spawned_by_jarvis") is True
@@ -1567,7 +1582,8 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                     if ctx.cancelled():
                         raise Cancelled({})
                     try:
-                        models = _semantic_http(opener, setting["base_url"] + "/models", remaining, token=token)
+                        models = _semantic_http(opener, setting["base_url"] + "/models", remaining,
+                                                token=token, cancelled=ctx.cancelled)
                         if (not isinstance(models, dict) or not isinstance(models.get("data"), list)
                                 or not any(isinstance(model, dict) and model.get("id") == setting["model"]
                                            for model in models["data"])):
@@ -1601,7 +1617,7 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                             "chat_template_kwargs": kwargs}).encode()
                         started = time.monotonic()
                         payload = _semantic_http(opener, setting["base_url"] + "/chat/completions",
-                                                 per_remaining, data=body, token=token)
+                                                 per_remaining, data=body, token=token, cancelled=ctx.cancelled)
                         try:
                             message = payload["choices"][0]["message"]
                             content = message["content"]
@@ -1654,11 +1670,8 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                 if default_stopped:
                     try:
                         restore_deadline = time.monotonic() + SEMANTIC_RESTORE_S
-                        for worker in abandoned:
-                            while worker.is_alive():
-                                worker.join(timeout=min(0.1, restore_remaining()))
                         started = _semantic_http(opener, backend_url + "/start", restore_remaining,
-                                                 data=b"{}", abandoned=abandoned)
+                                                 data=b"{}")
                         if started.get("reason_code") in ("LLAMACPP_NOT_CONFIGURED", "LLAMACPP_FILE_MISSING",
                                                           "LLAMACPP_UNSUPPORTED_WINDOWS_WSL_TOPOLOGY",
                                                           "LLAMACPP_NON_LOOPBACK_ENDPOINT"):

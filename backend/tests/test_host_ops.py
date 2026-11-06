@@ -1436,7 +1436,7 @@ def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False, rep
         return subprocess.CompletedProcess(argv, 0, f"ActiveState={'active' if state['active'] else 'inactive'}\n", "")
     ex.run = run
     default = {"reachable": True}
-    def http(_opener, url, _remaining, *, data=None, token=None, abandoned=None):
+    def http(_opener, url, _remaining, *, data=None, token=None, cancelled=None):
         if url.endswith("/stop"):
             events.append("default_stop")
             default["reachable"] = False
@@ -1857,78 +1857,35 @@ def test_semantic_failed_stop_request_still_restores_default(host, monkeypatch):
     assert receipt["detail"]["restore"]["default"] == "ok"
 
 
-def test_semantic_restore_waits_for_abandoned_stop(host, monkeypatch):
-    paths, _, _ = host
-    semantic_policy(paths, timeout_s=1)
-    real_http = h._semantic_http
+def test_semantic_restore_ignores_cancellation(host, monkeypatch):
+    paths, ex, _ = host
+    semantic_policy(paths)
     events, _ = fake_semantic(host, monkeypatch)
-    fake_http = h._semantic_http
-    release = threading.Event()
-
-    class Response:
-        def __enter__(self):
-            return self
-        def __exit__(self, *_args):
-            return False
-        def close(self):
-            pass
-
-    class Opener:
-        def open(self, _req, *, timeout):
-            assert timeout > 0
-            timer = threading.Timer(1.1, release.set)
-            timer.daemon = True
-            timer.start()
-            assert release.wait(2)
-            events.append("stop_finished")
-            return Response()
+    original = h._semantic_http
+    req = h.make_request("local_eval.run", {"bench": "semantic"}, SHA, "test", ex.now())
+    h.submit(paths, req)
+    restoring = False
 
     def http(opener, url, remaining, **kwargs):
-        if url.endswith("/stop"):
-            events.append("default_stop")
-            return real_http(Opener(), url, remaining, **kwargs)
-        return fake_http(opener, url, remaining, **kwargs)
+        nonlocal restoring
+        if url.endswith("/models"):
+            (paths.requests / f"{req['id']}.cancel").write_bytes(b"")
+            raise h.Cancelled({})
+        if url.endswith("/start"):
+            restoring = True
+            assert "cancelled" not in kwargs
+        if restoring and url.endswith("/local-ai/runtime/llama-cpp"):
+            assert "cancelled" not in kwargs
+        return original(opener, url, remaining, **kwargs)
 
     monkeypatch.setattr(h, "_semantic_http", http)
-    try:
-        _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
-    finally:
-        release.set()
-    assert receipt["outcome"] == "failed"
+    ex.step()
+    receipt, why = h.load_receipt(paths, req["id"])
+    assert receipt, why
+    assert receipt["outcome"] == "cancelled"
     assert receipt["detail"]["restore"]["default"] == "ok"
-    assert events.index("stop_finished") < events.index("default_start")
-
-
-def test_semantic_restore_fails_while_abandoned_stop_is_running(host, monkeypatch):
-    paths, _, _ = host
-    semantic_policy(paths, timeout_s=1)
-    monkeypatch.setattr(h, "SEMANTIC_RESTORE_S", 0.2)
-    real_http = h._semantic_http
-    events, _ = fake_semantic(host, monkeypatch)
-    fake_http = h._semantic_http
-    release = threading.Event()
-
-    class Opener:
-        def open(self, _req, *, timeout):
-            assert timeout > 0
-            release.wait(2)
-            events.append("stop_finished")
-            raise OSError("stop response lost")
-
-    def http(opener, url, remaining, **kwargs):
-        if url.endswith("/stop"):
-            events.append("default_stop")
-            return real_http(Opener(), url, remaining, **kwargs)
-        return fake_http(opener, url, remaining, **kwargs)
-
-    monkeypatch.setattr(h, "_semantic_http", http)
-    try:
-        _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
-        assert receipt["outcome"] == "failed"
-        assert receipt["detail"]["restore"]["default"] == "failed"
-        assert "default_start" not in events
-    finally:
-        release.set()
+    assert events[-2:] == ["unit_stop", "default_start"]
+    assert restoring
 
 
 def test_semantic_invalid_initial_default_status_fails_without_restore(host, monkeypatch):
@@ -2491,13 +2448,15 @@ def test_semantic_http_uses_loopback_post_and_no_redirect_or_proxy(monkeypatch):
         handlers.extend(args)
         return Opener()
     monkeypatch.setattr(h.urllib.request, "build_opener", build)
-    opener = h.urllib.request.build_opener(h.urllib.request.ProxyHandler({}), h._RejectRedirects())
+    opener = h.urllib.request.build_opener(h.urllib.request.ProxyHandler({}), h._RejectRedirects(),
+                                           h._SemanticHTTPHandler())
     h._semantic_http(opener, "http://127.0.0.1:18080/local-ai/runtime/llama-cpp/stop",
                      lambda: 5, data=b"{}")
     assert seen == [("http://127.0.0.1:18080/local-ai/runtime/llama-cpp/stop", "POST", 5)]
     assert isinstance(handlers[0], h.urllib.request.ProxyHandler)
     assert handlers[0].proxies == {}
     assert isinstance(handlers[1], h._RejectRedirects)
+    assert isinstance(handlers[2], h._SemanticHTTPHandler)
 
 
 def test_semantic_http_deadline_covers_dribbling_headers():
@@ -2520,7 +2479,8 @@ def test_semantic_http_deadline_covers_dribbling_headers():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        opener = h.urllib.request.build_opener(h.urllib.request.ProxyHandler({}), h._RejectRedirects())
+        opener = h.urllib.request.build_opener(h.urllib.request.ProxyHandler({}), h._RejectRedirects(),
+                                               h._SemanticHTTPHandler())
         end = time.monotonic() + 1
 
         def deadline():
@@ -2540,14 +2500,82 @@ def test_semantic_http_deadline_covers_dribbling_headers():
         thread.join(timeout=2)
 
 
-def test_semantic_http_deadline_covers_blocked_open():
-    release = threading.Event()
+def test_semantic_http_deadline_closes_connection_and_joins_watchdog():
+    closed = threading.Event()
 
+    class Model(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_GET(self):
+            self.connection.sendall(b"HTTP/1.1 200 OK\r\nX-Slow: ")
+            if self.connection.recv(1) == b"":
+                closed.set()
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        opener = h.urllib.request.build_opener(h.urllib.request.ProxyHandler({}), h._RejectRedirects(),
+                                               h._SemanticHTTPHandler())
+        baseline = threading.active_count()
+        end = time.monotonic() + 0.4
+
+        def deadline():
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                raise h.Failed("local evaluation exceeded its time limit", {})
+            return remaining
+
+        with pytest.raises(h.Failed, match="local evaluation exceeded its time limit"):
+            h._semantic_http(opener, f"http://127.0.0.1:{server.server_port}/models", deadline)
+        assert closed.wait(1)
+        until = time.monotonic() + 1
+        while threading.active_count() != baseline and time.monotonic() < until:
+            time.sleep(0.01)
+        assert threading.active_count() == baseline
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
+
+def test_semantic_http_cancels_stalled_request():
+    closed = threading.Event()
+
+    class Model(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_GET(self):
+            self.connection.sendall(b"HTTP/1.1 200 OK\r\nX-Slow: ")
+            if self.connection.recv(1) == b"":
+                closed.set()
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        opener = h.urllib.request.build_opener(h.urllib.request.ProxyHandler({}), h._RejectRedirects(),
+                                               h._SemanticHTTPHandler())
+        started = time.monotonic()
+        with pytest.raises(h.Cancelled):
+            h._semantic_http(opener, f"http://127.0.0.1:{server.server_port}/models", lambda: 2,
+                             cancelled=lambda: time.monotonic() - started >= 0.3)
+        assert time.monotonic() - started < 1.5
+        assert closed.wait(1)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
+
+def test_semantic_http_deadline_covers_blocked_open():
     class Opener:
         def open(self, _req, *, timeout):
             assert timeout > 0
-            release.wait(2)
-            raise OSError("released")
+            time.sleep(timeout)
+            raise OSError("timed out")
 
     end = time.monotonic() + 0.1
 
@@ -2557,8 +2585,5 @@ def test_semantic_http_deadline_covers_blocked_open():
             raise h.Failed("local evaluation exceeded its time limit", {})
         return remaining
 
-    try:
-        with pytest.raises(h.Failed, match="local evaluation exceeded its time limit"):
-            h._semantic_http(Opener(), "http://127.0.0.1:18080/models", deadline)
-    finally:
-        release.set()
+    with pytest.raises(h.Failed, match="local evaluation exceeded its time limit"):
+        h._semantic_http(Opener(), "http://127.0.0.1:18080/models", deadline)
