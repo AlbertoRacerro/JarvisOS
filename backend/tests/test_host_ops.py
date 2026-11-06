@@ -353,7 +353,7 @@ def fake_prompt_phase(host, monkeypatch, prompts, change=None):
             seen["argv"] = argv
             seen["env"] = kw["env"]
             seen["cwd"] = kw["cwd"]
-            kw["stdout"].write(b"test-local-model-credential")
+            self.stdout = io.BytesIO(b"test-local-model-credential")
             (Path(kw["cwd"]) / "prompts.json").write_text(json.dumps(prompts))
             if change == "modified":
                 (Path(kw["cwd"]) / "pointing_eval.py").write_text("changed\n")
@@ -524,6 +524,7 @@ def test_local_eval_cancel_stops_scope_before_credential(host, monkeypatch):
     real_popen = h.subprocess.Popen
     class RunningChild:
         returncode = None
+        stdout = io.BytesIO()
         def poll(self):
             return self.returncode
         def kill(self):
@@ -714,7 +715,7 @@ def test_local_eval_stalled_launcher_stops_scope_and_reaps_before_credential(hos
         nonlocal child
         if argv[0] == "systemd-run":
             child = StalledChild()
-            kw["stdout"].write(b"test-local-model-credential")
+            child.stdout = io.BytesIO(b"test-local-model-credential")
             return child
         return real_popen(argv, **kw)
 
@@ -852,6 +853,7 @@ def test_bench_result_receipt_keeps_hash_and_limits(host, monkeypatch):
             launcher = str(paths.home / ".local/bin/jarvis-sandbox")
             index = argv.index(launcher)
             assert argv[index:index + 4] == [launcher, "env", "-C", str(checkout)]
+            self.stdout = io.BytesIO()
             (Path(kw["cwd"]) / "result.json").write_text(json.dumps({"nested": ["sk-" + "x" * 30]}))
         def poll(self):
             return self.returncode
@@ -874,12 +876,18 @@ def test_bench_oversized_output_kills_child_and_stops_scope(host, monkeypatch):
     (root / "backend").mkdir(parents=True)
     seen = {}
 
+    class TrackedOutput(io.BytesIO):
+        def close(self):
+            seen["retained"] = self.tell()
+            super().close()
+
     class Child:
         returncode = None
 
         def __init__(self, argv, **kw):
-            kw["stdout"].write(b"x" * (h._BENCH_OUTPUT_MAX + 1))
-            kw["stdout"].flush()
+            assert kw["stdout"] == subprocess.PIPE
+            assert kw["bufsize"] == 0
+            self.stdout = TrackedOutput(b"x" * (h._BENCH_OUTPUT_MAX * 20))
             seen["child"] = self
 
         def poll(self):
@@ -898,15 +906,66 @@ def test_bench_oversized_output_kills_child_and_stops_scope(host, monkeypatch):
 
     monkeypatch.setattr(h.subprocess, "Popen", Child)
     monkeypatch.setattr(h.subprocess, "run", stop)
-    monkeypatch.setattr(h.time, "sleep", lambda _: pytest.fail("oversized child was allowed to run"))
     with pytest.raises(h.Failed, match="benchmark output exceeded its size limit") as error:
         h._run_benchmark(ctx, "sample", {"argv": ["python", "bench.py"]}, root, "backend", None,
                          SHA, "x", json_stdout=True)
     assert seen["killed_while_running"]
+    assert seen["retained"] == h._BENCH_OUTPUT_MAX + 1
     assert seen["stop"] == ["systemctl", "--user", "stop", "hostops-bench-aaaaaaaaaaaa.scope"]
     assert error.value.detail["bench"] == "sample"
     assert "output_tail" not in error.value.detail
     assert "output_sha256" not in error.value.detail
+
+
+def test_bench_exited_child_stops_scope_to_close_output(host, monkeypatch):
+    paths, _, _ = host
+    ctx = h.Context(paths, h.load_policy(paths)[0], {"id": "a" * 32}, lambda *_a, **_k: None,
+                    lambda *_a: 200, h.now_utc, lambda: False, [])
+    root = paths.home / "checkout"
+    (root / "backend").mkdir(parents=True)
+    reading = threading.Event()
+    stopped = threading.Event()
+    seen = {}
+
+    class BlockingOutput:
+        def __init__(self):
+            self.reads = 0
+
+        def read(self, size):
+            reading.set()
+            assert stopped.wait(3), "benchmark scope was not stopped"
+            self.reads += 1
+            return b'{"score": 1}' if self.reads == 1 else b""
+
+        def close(self):
+            seen["closed"] = True
+
+    class Child:
+        returncode = 0
+
+        def __init__(self, argv, **kw):
+            assert kw["stdout"] == subprocess.PIPE
+            assert kw["bufsize"] == 0
+            self.stdout = BlockingOutput()
+
+        def poll(self):
+            return self.returncode
+
+    def stop(argv, **_):
+        assert reading.is_set()
+        seen["stop"] = argv
+        stopped.set()
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(h.subprocess, "Popen", Child)
+    monkeypatch.setattr(h.subprocess, "run", stop)
+    started = time.monotonic()
+    result = h._run_benchmark(ctx, "sample", {"argv": ["python", "bench.py"]}, root, "backend",
+                              None, SHA, "x", json_stdout=True)
+    assert time.monotonic() - started < 3
+    assert seen["stop"] == ["systemctl", "--user", "stop", "hostops-bench-aaaaaaaaaaaa.scope"]
+    assert seen["closed"]
+    assert result["result"] == {"score": 1}
 
 
 def test_bench_json_stdout_within_limit_succeeds(host, monkeypatch):
@@ -920,7 +979,7 @@ def test_bench_json_stdout_within_limit_succeeds(host, monkeypatch):
         returncode = 0
 
         def __init__(self, argv, **kw):
-            kw["stdout"].write(b'{"score": 1}')
+            self.stdout = io.BytesIO(b'{"score": 1}')
 
         def poll(self):
             return self.returncode
@@ -943,7 +1002,7 @@ def test_bench_plain_log_over_json_cap_keeps_tail(host, monkeypatch):
         returncode = 0
 
         def __init__(self, argv, **kw):
-            kw["stdout"].write(b"log line\n" * (h._BENCH_OUTPUT_MAX // 9 + 1) + b"done")
+            self.stdout = io.BytesIO(b"log line\n" * (h._BENCH_OUTPUT_MAX // 9 + 1) + b"done")
 
         def poll(self):
             return self.returncode
@@ -1807,6 +1866,26 @@ def test_semantic_restore_has_own_budget_after_timeout(host, monkeypatch):
     assert events[-2:] == ["unit_stop", "default_start"]
     assert remaining_at_restore[0] > h.SEMANTIC_RESTORE_S - 10
     assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
+
+
+def test_semantic_default_restores_after_unit_stop_exhausts_budget(host, monkeypatch):
+    paths, ex, calls = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    monkeypatch.setattr(h, "SEMANTIC_RESTORE_S", 0.01)
+    original = ex.run
+    def run(argv, **kwargs):
+        if argv[:3] == ["systemctl", "--user", "stop"] and argv[3] == "candidate.service":
+            events.append("unit_stop")
+            time.sleep(0.02)
+            raise h.Failed("semantic restore exceeded its time limit", {})
+        return original(argv, **kwargs)
+    ex.run = run
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert receipt["error"] == "semantic evaluation restore failed"
+    assert events[-2:] == ["unit_stop", "default_start"]
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "failed"}
 
 
 def test_semantic_unit_failed_during_stop_still_restores_default(host, monkeypatch):

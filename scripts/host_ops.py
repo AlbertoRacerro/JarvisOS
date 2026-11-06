@@ -814,27 +814,42 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
     expired = False
     oversized = False
     output_max = _BENCH_OUTPUT_MAX if json_stdout else _BENCH_LOG_MAX
+    output_bytes = bytearray()
+    output_exceeded = threading.Event()
+    reader = None
+    def read_output() -> None:
+        assert proc is not None and proc.stdout is not None
+        while True:
+            try:
+                chunk = proc.stdout.read(min(65536, output_max + 1 - len(output_bytes)))
+            except (OSError, ValueError):  # closed during cleanup
+                break
+            if not chunk:
+                break
+            output_bytes.extend(chunk)
+            if len(output_bytes) > output_max:
+                output_exceeded.set()
+                break
     try:
-        with tempfile.TemporaryFile() as out:
-            proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
-                                    env=_host_env(), cwd=root / sub)
-            while proc.poll() is None:
-                if os.fstat(out.fileno()).st_size > output_max:
-                    oversized = True
-                    break
-                if deadline is not None and time.monotonic() >= deadline:
-                    expired = True
-                    break
-                if ctx.cancelled():
-                    cancelled = True
-                    break
-                time.sleep(min(1, max(0, deadline - time.monotonic())) if deadline is not None else 1)
-            oversized = oversized or os.fstat(out.fileno()).st_size > output_max
-            output = b""
-            if not oversized:
-                out.seek(0)
-                output = out.read(output_max + 1)
-                oversized = len(output) > output_max
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
+                                start_new_session=True,
+                                env=_host_env(), cwd=root / sub)
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
+        while proc.poll() is None:
+            if output_exceeded.is_set():
+                oversized = True
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                expired = True
+                break
+            if ctx.cancelled():
+                cancelled = True
+                break
+            time.sleep(min(1, max(0, deadline - time.monotonic())) if deadline is not None else 1)
+        if proc.poll() is not None:
+            reader.join(timeout=1)
+        oversized = oversized or output_exceeded.is_set()
     finally:
         try:
             if proc is not None and proc.poll() is None:
@@ -844,11 +859,24 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
                     pass
                 proc.wait(timeout=60)
         finally:
-            if close_scope:
-                _close_eval_scope(scope)
-            elif cancelled or oversized:
-                subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], check=False,
-                               capture_output=True, timeout=60, env=_host_env())
+            try:
+                if close_scope:
+                    _close_eval_scope(scope)
+                elif cancelled or oversized or (reader is not None and reader.is_alive()):
+                    subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], check=False,
+                                   capture_output=True, timeout=60, env=_host_env())
+            finally:
+                if reader is not None:
+                    reader.join(timeout=1)
+                if proc is not None and proc.stdout is not None:
+                    proc.stdout.close()
+                if reader is not None:
+                    reader.join(timeout=1)
+    if reader is not None and reader.is_alive():
+        raise Failed("benchmark output did not close", {"bench": bench_name, "worktree": worktree,
+                                                       "limits": limits})
+    oversized = oversized or output_exceeded.is_set()
+    output = bytes(output_bytes) if not oversized else b""
     if oversized:
         raise Failed("benchmark output exceeded its size limit",
                      {"bench": bench_name, "worktree": worktree, "limits": limits,
@@ -1563,6 +1591,7 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                         restore["server_unit"] = "failed"
                 if default_stopped:
                     try:
+                        restore_deadline = time.monotonic() + SEMANTIC_RESTORE_S
                         started = _semantic_http(opener, backend_url + "/start", restore_remaining, data=b"{}")
                         if started.get("reason_code") in ("LLAMACPP_NOT_CONFIGURED", "LLAMACPP_FILE_MISSING",
                                                           "LLAMACPP_UNSUPPORTED_WINDOWS_WSL_TOPOLOGY",
