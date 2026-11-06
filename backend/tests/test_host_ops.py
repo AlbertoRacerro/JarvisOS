@@ -2202,6 +2202,48 @@ def test_semantic_grader_failure_keeps_replies_out_of_receipt(host, monkeypatch)
     assert events[-2:] == ["unit_stop", "default_start"]
 
 
+@pytest.mark.parametrize("target", ["attempts", "majority"])
+def test_semantic_rejects_prompt_excerpt_in_grader_option(host, monkeypatch, target):
+    paths, _, _ = host
+    semantic_policy(paths)
+    prompt = "A" * 100
+    excerpt = prompt[:31]
+    events, case = fake_semantic(host, monkeypatch, row_override={"prompt": prompt})
+    original = h._run_benchmark
+    def bench(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if "--grade" in args[2]["argv"]:
+            grade = result["result"]["cases"][case["id"]]
+            (grade["attempts"][0] if target == "attempts" else grade["majority"])["options"] = [excerpt]
+        return result
+    monkeypatch.setattr(h, "_run_benchmark", bench)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert receipt["error"] == "semantic grading failed"
+    assert excerpt not in json.dumps(receipt)
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
+    assert events.index("unit_stop") < events.index("default_start") < events.index("grade")
+
+
+@pytest.mark.parametrize("field", ["options", "missing"])
+def test_semantic_rejects_duplicate_grader_letter(host, monkeypatch, field):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, case = fake_semantic(host, monkeypatch)
+    original = h._run_benchmark
+    def bench(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if "--grade" in args[2]["argv"]:
+            result["result"]["cases"][case["id"]]["attempts"][0][field] = ["A", "A"]
+        return result
+    monkeypatch.setattr(h, "_run_benchmark", bench)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert receipt["error"] == "semantic grading failed"
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
+    assert events.index("unit_stop") < events.index("default_start") < events.index("grade")
+
+
 @pytest.mark.parametrize("change", [
     {"max_tokens": 8193}, {"per_request_timeout_s": 1801}, {"timeout_s": 28801},
     {"attempts": 9}, {"temperature": 2.1}, {"thinking": "maybe"}, {"verification": 1},

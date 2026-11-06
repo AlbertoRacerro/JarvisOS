@@ -1391,8 +1391,9 @@ def _semantic_grade(value: Any, prompts: list[dict[str, Any]], attempts: int) ->
                 and (item["verdict"] is None or item["verdict"] in (
                     "no_issue", "invalid_assumption", "cannot_conclude", "contradiction"))
                 and all(item[k] is None or (isinstance(item[k], list)
-                    and len(item[k]) <= 20 and all(isinstance(v, str) and _EVAL_ID_RE.fullmatch(v)
-                                                   for v in item[k])) for k in ("options", "missing"))
+                    and len(item[k]) <= 26
+                    and all(isinstance(v, str) and re.fullmatch(r"[A-Z]\Z", v) for v in item[k])
+                    and len(set(item[k])) == len(item[k])) for k in ("options", "missing"))
                 and all(type(item[k]) is bool for k in ("verdict_ok", "options_ok", "missing_ok", "parse_error"))
                 and type(item["score"]) is int and item["score"] in (0, 1))
     for case in cases.values():
