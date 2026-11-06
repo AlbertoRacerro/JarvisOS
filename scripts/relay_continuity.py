@@ -3772,6 +3772,14 @@ def roadmap_lock(root: Path, wait: float = 0.0) -> Lock | None:
     return lock
 
 
+def _human_answer_author(author: object) -> bool:
+    name = str(author or "")
+    if name.startswith("relay-"):
+        return False
+    session = re.fullmatch(r"(\S+) pid \d+", name)
+    return session is None or session.group(1) not in devctx.AGENT_NAMES
+
+
 def _ledger_human_after(repo: Path, paused_at: str | None) -> bool | None:
     """Human ledger input after the pause; None means the ledger could not be read."""
     if not paused_at:
@@ -3793,7 +3801,7 @@ def _ledger_human_after(repo: Path, paused_at: str | None) -> bool | None:
                 if (str(entry.get("author") or "").startswith("maintainer (") and
                         text.startswith("Maintainer answer to question ")):
                     return True
-                if any(ref in answerable_ids for ref in re.findall(
+                if _human_answer_author(entry.get("author")) and any(ref in answerable_ids for ref in re.findall(
                         r"(?<![A-Za-z0-9])L\d{14}-[0-9a-f]{4}(?![A-Za-z0-9])", text)):
                     return True
         if kind in ("blocker", "question"):

@@ -22,7 +22,7 @@ ledger does not.
 In scope:
 - `maintainer_or_hostops_after` in `scripts/relay_continuity.py` also returns true for a ledger `decision` newer than
   the pause whose text names the id (`L` + 14 digits + `-` + 4 hex) of an existing ledger entry of kind `blocker` or
-  `question` recorded before that decision.
+  `question` recorded before that decision, if the decision is not authored by an agent session or relay automation.
 - `_roadmap_step`: a `coordinator_blocked` pause with no `hostops_wait` and no `job_wait` resumes when the ledger part of
   that check (directive, maintainer answer, answering decision) is true after `paused_at`. A host receipt alone does not
   resume it (receipts already resume through `HOSTOPS-WAIT`). Resuming journals `roadmap_answer_resumed`.
@@ -43,6 +43,7 @@ Out of scope (binding non-goals):
 - An unreadable ledger (`OSError`) never resumes.
 - A decision naming an unknown id, an id of another kind (e.g. a `note` or `claim`), or recorded before the pause never
   wakes.
+- An id-naming answering decision authored by an agent session or relay automation never wakes.
 - A `coordinator_blocked` pause waiting on host operations or jobs keeps exactly its current behaviour.
 
 ## Acceptance criteria
@@ -50,7 +51,8 @@ Out of scope (binding non-goals):
 1. A `coordinator_blocked` roadmap without waits stays paused across steps until a decision naming a recorded blocker id
    is appended after `paused_at`; the next step leaves the pause and submits the next cycle.
 2. The same holds for a maintainer directive and for a `Maintainer answer to question` decision.
-3. A decision naming an unknown id or a non-blocker/question id, or dated before the pause, does not resume it.
+3. A decision naming an unknown id or a non-blocker/question id, dated before the pause, or authored by an agent
+   session or relay automation does not resume it.
 4. A new host receipt alone does not resume a `coordinator_blocked` roadmap without waits.
 5. `maintainer_or_hostops_after` returns true for the answering decision, so a `no_progress` roadmap wakes too.
 6. Existing relay continuity and Slack question tests pass unchanged.
