@@ -67,6 +67,8 @@ MAX_CLOCK_SKEW = timedelta(minutes=5)
 MAX_EVAL_ARCHIVE_BYTES = 32 << 20
 MAX_EVAL_EXTRACTED_BYTES = 256 << 20
 MAX_EVAL_ARCHIVE_MEMBERS = 20000
+_BENCH_OUTPUT_MAX = 1 << 20
+_BENCH_LOG_MAX = 64 << 20
 OUTCOMES = ("ok", "failed", "refused", "cancelled", "interrupted", "timeout")
 BENCH_IGNORED_COMPONENTS = frozenset({".venv", "node_modules", "dist", ".vite", ".pytest_cache", ".ruff_cache", ".mypy_cache"})
 
@@ -810,11 +812,16 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
     proc = None
     cancelled = False
     expired = False
+    oversized = False
+    output_max = _BENCH_OUTPUT_MAX if json_stdout else _BENCH_LOG_MAX
     try:
         with tempfile.TemporaryFile() as out:
             proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
                                     env=_host_env(), cwd=root / sub)
             while proc.poll() is None:
+                if os.fstat(out.fileno()).st_size > output_max:
+                    oversized = True
+                    break
                 if deadline is not None and time.monotonic() >= deadline:
                     expired = True
                     break
@@ -822,8 +829,12 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
                     cancelled = True
                     break
                 time.sleep(min(1, max(0, deadline - time.monotonic())) if deadline is not None else 1)
-            out.seek(0)
-            output = out.read()
+            oversized = oversized or os.fstat(out.fileno()).st_size > output_max
+            output = b""
+            if not oversized:
+                out.seek(0)
+                output = out.read(output_max + 1)
+                oversized = len(output) > output_max
     finally:
         try:
             if proc is not None and proc.poll() is None:
@@ -835,9 +846,13 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
         finally:
             if close_scope:
                 _close_eval_scope(scope)
-            elif cancelled:
+            elif cancelled or oversized:
                 subprocess.run(["systemctl", "--user", "stop", f"{scope}.scope"], check=False,
                                capture_output=True, timeout=60, env=_host_env())
+    if oversized:
+        raise Failed("benchmark output exceeded its size limit",
+                     {"bench": bench_name, "worktree": worktree, "limits": limits,
+                      "wall_s": round(time.monotonic() - started, 2)})
     if expired or (deadline is not None and time.monotonic() >= deadline):
         raise Failed("local evaluation exceeded its time limit", {})
     detail = {"bench": bench_name, "worktree": worktree, "sandbox_head": reported, "limits": limits,
@@ -852,7 +867,7 @@ def _run_benchmark(ctx: Context, bench_name: str, bench: dict[str, Any], root: P
         raise Failed(f"benchmark exited {proc.returncode}", detail)
     if json_stdout:
         try:
-            if len(output) > 1 << 20:
+            if len(output) > _BENCH_OUTPUT_MAX:
                 raise ValueError("oversized output")
             detail["result"] = json.loads(output)
         except (ValueError, UnicodeError):

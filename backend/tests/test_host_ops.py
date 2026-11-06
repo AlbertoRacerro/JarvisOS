@@ -866,6 +866,94 @@ def test_bench_result_receipt_keeps_hash_and_limits(host, monkeypatch):
     assert receipt["detail"]["limits"]["timeout_s"] == 900
 
 
+def test_bench_oversized_output_kills_child_and_stops_scope(host, monkeypatch):
+    paths, _, _ = host
+    ctx = h.Context(paths, h.load_policy(paths)[0], {"id": "a" * 32}, lambda *_a, **_k: None,
+                    lambda *_a: 200, h.now_utc, lambda: False, [])
+    root = paths.home / "checkout"
+    (root / "backend").mkdir(parents=True)
+    seen = {}
+
+    class Child:
+        returncode = None
+
+        def __init__(self, argv, **kw):
+            kw["stdout"].write(b"x" * (h._BENCH_OUTPUT_MAX + 1))
+            kw["stdout"].flush()
+            seen["child"] = self
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            seen["killed_while_running"] = self.returncode is None
+            self.returncode = -9
+
+        def wait(self, **_):
+            return self.returncode
+
+    def stop(argv, **_):
+        seen["stop"] = argv
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(h.subprocess, "Popen", Child)
+    monkeypatch.setattr(h.subprocess, "run", stop)
+    monkeypatch.setattr(h.time, "sleep", lambda _: pytest.fail("oversized child was allowed to run"))
+    with pytest.raises(h.Failed, match="benchmark output exceeded its size limit") as error:
+        h._run_benchmark(ctx, "sample", {"argv": ["python", "bench.py"]}, root, "backend", None,
+                         SHA, "x", json_stdout=True)
+    assert seen["killed_while_running"]
+    assert seen["stop"] == ["systemctl", "--user", "stop", "hostops-bench-aaaaaaaaaaaa.scope"]
+    assert error.value.detail["bench"] == "sample"
+    assert "output_tail" not in error.value.detail
+    assert "output_sha256" not in error.value.detail
+
+
+def test_bench_json_stdout_within_limit_succeeds(host, monkeypatch):
+    paths, _, _ = host
+    ctx = h.Context(paths, h.load_policy(paths)[0], {"id": "a" * 32}, lambda *_a, **_k: None,
+                    lambda *_a: 200, h.now_utc, lambda: False, [])
+    root = paths.home / "checkout"
+    (root / "backend").mkdir(parents=True)
+
+    class Child:
+        returncode = 0
+
+        def __init__(self, argv, **kw):
+            kw["stdout"].write(b'{"score": 1}')
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(h.subprocess, "Popen", Child)
+    result = h._run_benchmark(ctx, "sample", {"argv": ["python", "bench.py"]}, root, "backend",
+                              None, SHA, "x", json_stdout=True)
+    assert result["result"] == {"score": 1}
+    assert result["returncode"] == 0
+
+
+def test_bench_plain_log_over_json_cap_keeps_tail(host, monkeypatch):
+    paths, _, _ = host
+    ctx = h.Context(paths, h.load_policy(paths)[0], {"id": "a" * 32}, lambda *_a, **_k: None,
+                    lambda *_a: 200, h.now_utc, lambda: False, [])
+    root = paths.home / "checkout"
+    (root / "backend").mkdir(parents=True)
+
+    class Child:
+        returncode = 0
+
+        def __init__(self, argv, **kw):
+            kw["stdout"].write(b"log line\n" * (h._BENCH_OUTPUT_MAX // 9 + 1) + b"done")
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(h.subprocess, "Popen", Child)
+    result = h._run_benchmark(ctx, "sample", {"argv": ["python", "bench.py"]}, root, "backend",
+                              None, SHA, "x")
+    assert result["output_tail"].endswith("done")
+
+
 def test_eval_checkout_extracts_only_safe_sha_archive(tmp_path, monkeypatch):
     content = archive([("repo", tarfile.DIRTYPE), ("repo/backend/pointing_eval.py", tarfile.REGTYPE)])
     fake_archive_download(tmp_path, monkeypatch, content)
