@@ -327,6 +327,7 @@ class RevalidationRead(BaseModel):
     known_fail_requirement_ids: list[str]
     recomputation_required: list[str]
     selected_validation_set_digest: str
+    applicability_set_digest: str
     diagnostics: list[str]
 
 

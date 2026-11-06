@@ -1456,6 +1456,7 @@ def revalidation_status_from_connection(
         known_fail_requirement_ids=sorted(set(known_fail)),
         recomputation_required=sorted(set(recompute)),
         selected_validation_set_digest=selected_digest,
+        applicability_set_digest=applicability_digest,
         diagnostics=sorted(set(diagnostics)),
     )
 
