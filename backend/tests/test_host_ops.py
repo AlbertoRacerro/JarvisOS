@@ -1393,11 +1393,15 @@ def semantic_policy(paths, **changes):
     return setting
 
 
-def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False, replies_override=None):
+def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False, replies_override=None,
+                  row_override=None):
     paths, ex, calls = host
     case = json.loads((SCRIPT.parents[1] / "eval/local/semantic_judgment/cases.json").read_text())["cases"][0]
     row = {"name": case["id"], "prompt": "secret semantic prompt " * 6, "category": case["category"],
            "answer": case["answer"]}
+    if row_override:
+        row.update(row_override)
+        case = {**case, "id": row["name"]}
     monkeypatch.setattr(h, "_eval_reachable", lambda *_: None)
     def checkout(_sha, root, _remaining):
         (root / "backend").mkdir()
@@ -1593,8 +1597,9 @@ def test_semantic_real_loopback_and_grader_stdout(host, monkeypatch):
                                         str(_write_semantic_replies(paths, replies))],
                                        check=True, capture_output=True, text=True).stdout)
         assert receipt["detail"]["categories"] == expected["categories"]
-        for row in receipt["detail"]["rows"]:
-            grade = expected["cases"][row["name"]]
+        for index, row in enumerate(receipt["detail"]["rows"]):
+            assert row["case"] == f"case-{index + 1:02d}"
+            grade = expected["cases"][entries[index]["name"]]
             assert row["score"] == grade["score"]
             assert row["attempts"][0]["score"] == grade["attempts"][0]["score"]
             assert {key: row["attempts"][0][key] for key in ("verdict", "options", "missing", "parse_error")} == {
@@ -1636,7 +1641,7 @@ def test_semantic_eval_grades_and_restores_without_text(host, monkeypatch):
     assert grade_kwargs["json_stdout"] is True
     detail = receipt["detail"]
     result = detail["rows"][0]
-    assert result["name"] == case["id"] and result["score"] == 1
+    assert result["case"] == "case-01" and result["score"] == 1
     assert result["attempts_scored"] == 2 and result["disagreement"] is True
     assert result["majority"]["verdict"] == case["answer"]["verdict"]
     assert [item["completion_tokens"] for item in result["attempts"]] == [10, 10, 10]
@@ -2034,6 +2039,52 @@ def test_semantic_readiness_uses_token_and_counts_errors_and_restarts(host, monk
     assert receipt["detail"]["restarts"] == 2
 
 
+def test_semantic_without_unit_waits_for_model(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths, server_unit=None)
+    events, _ = fake_semantic(host, monkeypatch)
+    original_http = h._semantic_http
+    seen = {"readiness": 0}
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/models"):
+            seen["readiness"] += 1
+            assert kwargs["token"] == "semantic-private-token"
+            if seen["readiness"] == 1:
+                raise h.Failed("local HTTP returned status 503", {})
+            if seen["readiness"] == 2:
+                return {"data": [{"id": "other-model"}]}
+        return original_http(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    monkeypatch.setattr(h.time, "sleep", lambda _: None)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "ok", receipt["error"]
+    assert seen["readiness"] == 3
+    assert receipt["detail"]["errors"] == 2
+    assert events == ["default_stop", "ready", "model", "model", "model", "default_start", "grade"]
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "not_needed"}
+
+
+def test_semantic_without_unit_never_ready_restores_without_prompt(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths, server_unit=None, timeout_s=1)
+    events, _ = fake_semantic(host, monkeypatch)
+    original_http = h._semantic_http
+    original_sleep = time.sleep
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/models"):
+            events.append("ready")
+            return {"data": [{"id": "other-model"}]}
+        return original_http(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    monkeypatch.setattr(h.time, "sleep", lambda _: original_sleep(1.05))
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert "model" not in events
+    assert events[0:2] == ["default_stop", "ready"]
+    assert events[-1] == "default_start"
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "not_needed"}
+
+
 def test_semantic_empty_models_response_never_sends_prompt(host, monkeypatch):
     paths, _, _ = host
     semantic_policy(paths, timeout_s=1)
@@ -2099,7 +2150,7 @@ def test_semantic_tied_attempts_have_no_majority(host, monkeypatch):
     _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
     assert receipt["outcome"] == "ok", receipt["error"]
     row = receipt["detail"]["rows"][0]
-    assert row["name"] == case["id"]
+    assert row["case"] == "case-01"
     assert row["attempts_scored"] == 1
     assert row["majority"] == {"verdict": None, "options": None, "missing": None, "score": 0}
     assert row["score"] == receipt["detail"]["categories"][case["category"]]["score"] == 0
@@ -2239,6 +2290,25 @@ def test_semantic_refuses_prompt_as_name(host, monkeypatch):
     _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
     assert receipt["outcome"] == "refused"
     assert receipt["detail"] == {}
+
+
+def test_semantic_receipt_omits_exporter_name_and_prompt_slice(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    prompt = "A" * 100
+    fake_semantic(host, monkeypatch, row_override={"name": prompt[:80], "prompt": prompt})
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "ok", receipt["error"]
+    assert receipt["detail"]["rows"][0]["case"] == "case-01"
+    encoded = json.dumps(receipt, ensure_ascii=False)
+    assert all(prompt[index:index + 32] not in encoded for index in range(len(prompt) - 31))
+
+
+def test_semantic_result_check_refuses_prompt_slice():
+    prompt = "A" * 100
+    with pytest.raises(h.Failed, match="semantic evaluation result is invalid"):
+        h._semantic_check_result({"case": prompt[:32]}, "secret-token", [{"prompt": prompt}], {},
+                                 {"default": "not_needed", "server_unit": "not_needed"})
 
 
 @pytest.mark.parametrize("grade_argv", [

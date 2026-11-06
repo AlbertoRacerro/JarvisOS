@@ -1428,6 +1428,18 @@ def _semantic_grade(value: Any, prompts: list[dict[str, Any]], attempts: int) ->
     return cases, categories
 
 
+def _semantic_check_result(detail: dict[str, Any], token: str, prompts: list[dict[str, Any]],
+                           replies: dict[str, list[str]], restore: dict[str, str]) -> None:
+    encoded = json.dumps(detail, ensure_ascii=False)
+    windows = {encoded[index:index + 32] for index in range(len(encoded) - 31)}
+    if (token in encoded or any(row["prompt"] in encoded for row in prompts)
+            or any(row["prompt"][index:index + 32] in windows
+                   for row in prompts for index in range(len(row["prompt"]) - 31))
+            or any(len(text) >= 32 and text in encoded
+                   for texts in replies.values() for text in texts)):
+        raise Failed("semantic evaluation result is invalid", {"restore": restore})
+
+
 def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[str, Any]:
     bench, _ = _semantic_settings(ctx, name, setting)
     sha = ctx.request.get("sha")
@@ -1510,21 +1522,21 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                     initial = _unit_state(ctx, unit, timeout=min(30, remaining())).get("NRestarts", "0")
                     initial_restarts = int(initial) if initial.isdecimal() else None
                     _semantic_unit(ctx, "start", unit, remaining)
-                    while True:
+                while True:
+                    if ctx.cancelled():
+                        raise Cancelled({})
+                    try:
+                        models = _semantic_http(opener, setting["base_url"] + "/models", remaining, token=token)
+                        if (not isinstance(models, dict) or not isinstance(models.get("data"), list)
+                                or not any(isinstance(model, dict) and model.get("id") == setting["model"]
+                                           for model in models["data"])):
+                            raise Failed("local model is not ready", {})
+                        break
+                    except Failed:
+                        readiness_errors = min(readiness_errors + 1, 1_000_000)
                         if ctx.cancelled():
-                            raise Cancelled({})
-                        try:
-                            models = _semantic_http(opener, setting["base_url"] + "/models", remaining, token=token)
-                            if (not isinstance(models, dict) or not isinstance(models.get("data"), list)
-                                    or not any(isinstance(model, dict) and model.get("id") == setting["model"]
-                                               for model in models["data"])):
-                                raise Failed("local model is not ready", {})
-                            break
-                        except Failed:
-                            readiness_errors = min(readiness_errors + 1, 1_000_000)
-                            if ctx.cancelled():
-                                raise Cancelled({}) from None
-                            time.sleep(min(1, remaining()))
+                            raise Cancelled({}) from None
+                        time.sleep(min(1, remaining()))
                 sampler = threading.Thread(target=_semantic_memory, args=(stop_sample, peaks), daemon=True)
                 sampler.start()
                 sampler_started = True
@@ -1652,7 +1664,7 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
             rows = []
             total_tokens = 0
             total_seconds = 0.0
-            for row in prompts:
+            for index, row in enumerate(prompts, 1):
                 grades = cases[row["name"]]
                 attempts = []
                 for grade, measure in zip(grades["attempts"], measurements[row["name"]], strict=True):
@@ -1660,7 +1672,7 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                                      **measure})
                     total_tokens += measure["completion_tokens"]
                     total_seconds += measure["seconds"]
-                rows.append({"name": row["name"], "category": row["category"], "attempts": attempts,
+                rows.append({"case": f"case-{index:02d}", "category": row["category"], "attempts": attempts,
                              "majority": grades["majority"], "disagreement": grades["disagreement"],
                              "attempts_scored": grades["attempts_scored"], "score": grades["score"]})
             detail = {"model": setting["model"], "head": sha, "rows": rows, "categories": categories,
@@ -1668,11 +1680,7 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                       "tokens_per_second": round(total_tokens / total_seconds, 2) if total_seconds else None,
                       "peak_vram_mib": peaks["vram_mib"], "peak_ram_bytes": peaks["ram_bytes"],
                       "errors": readiness_errors, "restarts": restarts, "restore": restore}
-            encoded = json.dumps(detail, ensure_ascii=False)
-            if (token in encoded or any(row["prompt"] in encoded for row in prompts)
-                    or any(len(text) >= 32 and text in encoded
-                           for texts in replies.values() for text in texts)):
-                raise Failed("semantic evaluation result is invalid", {"restore": restore})
+            _semantic_check_result(detail, token, prompts, replies, restore)
             return detail
 
 
