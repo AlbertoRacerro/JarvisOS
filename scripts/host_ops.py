@@ -1434,16 +1434,28 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
             try:
                 if stop_default:
                     status = _semantic_http(opener, backend_url, remaining)
-                    if type(status.get("runtime_reachable")) is not bool:
+                    def valid_default_status(value: Any) -> bool:
+                        return (isinstance(value, dict)
+                                and type(value.get("runtime_reachable")) is bool
+                                and ("spawned_by_jarvis" not in value
+                                     or type(value["spawned_by_jarvis"]) is bool)
+                                and (value.get("pid") is None or type(value["pid"]) is int))
+                    if not valid_default_status(status):
                         raise Failed("default runtime status is invalid", {})
-                    if status["runtime_reachable"]:
+                    if status.get("reason_code") == "LLAMACPP_RECOVERING":
+                        raise Refused("default runtime is recovering")
+                    if (status["runtime_reachable"] or status.get("spawned_by_jarvis") is True
+                            or status.get("pid") is not None
+                            or status.get("reason_code") == "LLAMACPP_LOADING"):
                         default_stopped = True
                         stopped = _semantic_http(opener, backend_url + "/stop", remaining, data=b"{}")
-                        if type(stopped.get("runtime_reachable")) is not bool:
+                        if not isinstance(stopped, dict) or type(stopped.get("runtime_reachable")) is not bool:
                             stopped = _semantic_http(opener, backend_url, remaining)
-                        if stopped.get("runtime_reachable") is not False:
-                            if stopped.get("runtime_reachable") is True:
-                                default_stopped = False
+                        if not valid_default_status(stopped):
+                            raise Failed("default runtime status is invalid", {})
+                        if (stopped["runtime_reachable"] or stopped.get("spawned_by_jarvis") is True
+                                or stopped.get("pid") is not None
+                                or stopped.get("reason_code") in ("LLAMACPP_LOADING", "LLAMACPP_RECOVERING")):
                             raise Failed("default runtime stop was not confirmed", {})
                 if unit:
                     unit_started = True
@@ -1549,6 +1561,8 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
             if "failed" in restore.values():
                 raise Failed("semantic evaluation restore failed", {"restore": restore}) from None
             if error is not None:
+                if isinstance(error, Refused):
+                    raise Refused(str(error)) from None
                 if isinstance(error, Failed):
                     raise Failed(str(error), {"restore": restore}) from None
                 if isinstance(error, Cancelled):

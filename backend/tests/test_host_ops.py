@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import http.server
 import importlib.util
 import io
 import json
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -1262,6 +1264,151 @@ def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False, rep
     return events, case
 
 
+def test_semantic_real_loopback_and_grader_stdout(host, monkeypatch):
+    paths, ex, _ = host
+    evaluator = SCRIPT.parents[1] / "eval/local/semantic_judgment"
+    grader_spec = importlib.util.spec_from_file_location("semantic_e2e_grader", evaluator / "semantic_eval.py")
+    grader = importlib.util.module_from_spec(grader_spec)
+    assert grader_spec and grader_spec.loader
+    grader_spec.loader.exec_module(grader)
+    cases = grader.load_cases()
+    entries = grader.export_entries(cases)
+    answers = {entry["prompt"]: entry["answer"] for entry in entries}
+    replies = {entry["name"]: [json.dumps(entry["answer"]) + " private-reply-marker"]
+               for entry in entries}
+    events = []
+    state = {"default": True, "unit": False, "seen": {}}
+
+    class Backend(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def respond(self):
+            body = json.dumps({"runtime_reachable": state["default"],
+                               "spawned_by_jarvis": state["default"],
+                               "pid": 123 if state["default"] else None}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            assert self.path == "/local-ai/runtime/llama-cpp"
+            self.respond()
+
+        def do_POST(self):
+            assert self.path in ("/local-ai/runtime/llama-cpp/stop", "/local-ai/runtime/llama-cpp/start")
+            self.rfile.read(int(self.headers["Content-Length"]))
+            state["default"] = self.path.endswith("/start")
+            events.append("default_start" if state["default"] else "default_stop")
+            self.respond()
+
+    class Model(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_GET(self):
+            assert self.path == "/v1/models" and state["unit"] and not state["default"]
+            assert self.headers["Authorization"] == "Bearer semantic-private-token"
+            self.send_response(200)
+            self.end_headers()
+
+        def do_POST(self):
+            assert self.path == "/v1/chat/completions" and state["unit"] and not state["default"]
+            assert self.headers["Authorization"] == "Bearer semantic-private-token"
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            prompt = body["messages"][0]["content"]
+            assert prompt in answers
+            state["seen"][prompt] = state["seen"].get(prompt, 0) + 1
+            reply = json.dumps(answers[prompt]) + " private-reply-marker"
+            payload = json.dumps({"choices": [{"message": {"content": reply}}],
+                                  "usage": {"completion_tokens": 7}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    backend = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Backend)
+    model = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model)
+    threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in (backend, model)]
+    for thread in threads:
+        thread.start()
+    try:
+        semantic_policy(paths, backend_port=backend.server_port,
+                        base_url=f"http://127.0.0.1:{model.server_port}/v1",
+                        attempts=1, temperature=0)
+        monkeypatch.setattr(h, "_eval_reachable", lambda *_: None)
+        def checkout(_sha, root, _remaining):
+            target = root / "backend"
+            target.mkdir()
+            files = {}
+            for name in ("semantic_eval.py", "cases.json"):
+                data = (evaluator / name).read_bytes()
+                (target / name).write_bytes(data)
+                files[Path("backend") / name] = (len(data), h.hashlib.sha256(data).hexdigest())
+            return files, {Path("backend")}
+        monkeypatch.setattr(h, "_eval_checkout", checkout)
+        real_popen = subprocess.Popen
+        def popen(argv, **kwargs):
+            if argv[0] == "systemd-run":
+                command = argv[argv.index("--") + 1:]
+                assert command[:3] == ["timeout", "-k", "15"]
+                command = command[4:]
+                assert command[1:4] == ["env", "-C", str(kwargs["cwd"])]
+                script_args = command[5:] if command[4] == "PYTHONDONTWRITEBYTECODE=1" else command[4:]
+                assert script_args[:2] == ["python", "semantic_eval.py"]
+                events.append("grade" if "--grade" in script_args else "prompt")
+                return real_popen([sys.executable, *script_args[1:]], **kwargs)
+            return real_popen(argv, **kwargs)
+        monkeypatch.setattr(h.subprocess, "Popen", popen)
+        real_run = subprocess.run
+        def run(argv, **kwargs):
+            if argv[:3] == ["systemctl", "--user", "stop"] and argv[3].endswith(".scope"):
+                return subprocess.CompletedProcess(argv, 0, b"", b"")
+            if argv[:3] == ["systemctl", "--user", "show"] and argv[3].endswith(".scope"):
+                return subprocess.CompletedProcess(argv, 0, "ActiveState=inactive\nLoadState=not-found\n", "")
+            return real_run(argv, **kwargs)
+        monkeypatch.setattr(h.subprocess, "run", run)
+        def unit_run(argv, **kwargs):
+            if argv[2] in ("start", "stop"):
+                state["unit"] = argv[2] == "start"
+                events.append("unit_start" if state["unit"] else "unit_stop")
+            return subprocess.CompletedProcess(argv, 0,
+                                               f"ActiveState={'active' if state['unit'] else 'inactive'}\n", "")
+        ex.run = unit_run
+        _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+        assert receipt["outcome"] == "ok", receipt["error"]
+        assert events[0:3] == ["prompt", "default_stop", "unit_start"]
+        assert events[-3:] == ["unit_stop", "default_start", "grade"]
+        assert len(state["seen"]) == len(entries) and all(count == 1 for count in state["seen"].values())
+        expected = json.loads(real_run([sys.executable, str(evaluator / "semantic_eval.py"), "--grade",
+                                        str(_write_semantic_replies(paths, replies))],
+                                       check=True, capture_output=True, text=True).stdout)
+        assert receipt["detail"]["categories"] == expected["categories"]
+        for row in receipt["detail"]["rows"]:
+            grade = expected["cases"][row["name"]]
+            assert row["score"] == grade["score"]
+            assert row["attempts"][0]["score"] == grade["attempts"][0]["score"]
+            assert {key: row["attempts"][0][key] for key in ("verdict", "options", "missing", "parse_error")} == {
+                key: grade["attempts"][0][key] for key in ("verdict", "options", "missing", "parse_error")}
+        encoded = json.dumps(receipt)
+        assert "private-reply-marker" not in encoded
+        assert "semantic-private-token" not in encoded
+        assert all(entry["prompt"] not in encoded for entry in entries)
+    finally:
+        for server in (backend, model):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=5)
+
+
+def _write_semantic_replies(paths, replies):
+    path = paths.home / "expected-semantic-replies.json"
+    path.write_text(json.dumps(replies))
+    return path
+
+
 def test_semantic_eval_grades_and_restores_without_text(host, monkeypatch):
     paths, _, calls = host
     semantic_policy(paths)
@@ -1368,8 +1515,84 @@ def test_semantic_refuses_reachable_default_after_stop(host, monkeypatch):
     monkeypatch.setattr(h, "_semantic_http", http)
     _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
     assert receipt["outcome"] == "failed"
-    assert events == ["default_stop"]
-    assert receipt["detail"]["restore"]["default"] == "not_needed"
+    assert events == ["default_stop", "default_start"]
+    assert receipt["detail"]["restore"]["default"] == "ok"
+
+
+@pytest.mark.parametrize("occupied", [
+    {"spawned_by_jarvis": True, "pid": 123, "reason_code": "LLAMACPP_LOADING"},
+    {"spawned_by_jarvis": True},
+    {"pid": 123},
+    {"reason_code": "LLAMACPP_LOADING"},
+])
+def test_semantic_unreachable_occupied_default_is_stopped_and_restored(host, monkeypatch, occupied):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._semantic_http
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/local-ai/runtime/llama-cpp"):
+            if "default_start" in events:
+                return {"runtime_reachable": True}
+            return {"runtime_reachable": False, **occupied}
+        return original(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "ok", receipt["error"]
+    assert events.index("default_stop") < events.index("unit_start")
+    assert events[-2:] == ["default_start", "grade"]
+
+
+def test_semantic_recovering_default_is_refused_before_stop(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._semantic_http
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/local-ai/runtime/llama-cpp"):
+            return {"runtime_reachable": False, "spawned_by_jarvis": True,
+                    "pid": None, "reason_code": "LLAMACPP_RECOVERING"}
+        return original(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "refused"
+    assert receipt["error"] == "default runtime is recovering"
+    assert events == []
+
+
+def test_semantic_stop_with_managed_process_still_present_restores(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._semantic_http
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/stop"):
+            events.append("default_stop")
+            return {"runtime_reachable": False, "spawned_by_jarvis": True, "pid": 123}
+        return original(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert receipt["error"] == "default runtime stop was not confirmed"
+    assert events == ["default_stop", "default_start"]
+    assert receipt["detail"]["restore"]["default"] == "ok"
+
+
+@pytest.mark.parametrize("field,value", [("spawned_by_jarvis", 1), ("pid", True), ("pid", "123")])
+def test_semantic_invalid_default_status_types_fail_closed(host, monkeypatch, field, value):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._semantic_http
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/local-ai/runtime/llama-cpp"):
+            return {"runtime_reachable": False, field: value}
+        return original(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert receipt["error"] == "default runtime status is invalid"
+    assert events == []
 
 
 def test_semantic_already_unreachable_default_is_not_stopped_or_started(host, monkeypatch):
