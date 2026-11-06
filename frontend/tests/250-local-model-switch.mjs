@@ -1,0 +1,15 @@
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+const panel = readFileSync(new URL('../src/components/coding/LocalModelPanel.tsx', import.meta.url), 'utf8');
+const api = readFileSync(new URL('../src/api/llamaRuntime.ts', import.meta.url), 'utf8');
+for (const text of ['Registered models', 'entry.qualification.replace', 'models.active_id === entry.id', 'Active', 'requires host start', 'Restore default', 'Activate', 'Not installed']) assert.ok(panel.includes(text), text);
+assert.match(panel, /entry.runtime === "strata" \? <span> · requires host start<\/span> :/);
+assert.match(panel, /window.confirm\(id \? `Activate/);
+assert.match(panel, /actionLock.current \|\| loading \|\| pending/);
+assert.match(panel, /setPending\(id \? "activate" : "restore default"\)/);
+assert.match(panel, /models\?\.registry_present/);
+assert.match(panel, /Promise.all\(\[readLlamaStatus\(\), readLocalModels\(\)\]\)/);
+assert.doesNotMatch(panel, /useEffect[^\n]*activateLocalModel/);
+assert.match(api, /encodeURIComponent\(id\)/);
+assert.match(api, /modelRequest\("\/restore-default", "POST"\)/);
+console.log('250 local model switch checks passed');

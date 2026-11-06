@@ -298,6 +298,9 @@ def _llamacpp_route_availability(route: str, model_id: str) -> AIConversationRou
     from app.modules.local_ai.runtime.llama_cpp import get_llama_cpp_runtime_owner
 
     status = get_llama_cpp_runtime_owner().status()
+    if getattr(get_llama_cpp_runtime_owner(), "non_default_active", False):
+        status = {**status, "model_loaded": False, "reason_code": "LLAMACPP_DEFAULT_NOT_LOADED",
+                  "message": "Default local model is not loaded."}
     return AIConversationRouteAvailability(
         configured=bool(status.get("configured")),
         runtime_reachable=bool(status.get("runtime_reachable")),

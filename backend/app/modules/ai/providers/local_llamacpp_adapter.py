@@ -46,6 +46,8 @@ class LocalLlamaCppAdapter:
         return url.rstrip("/")
 
     def health(self) -> AIProviderHealth:
+        if getattr(get_llama_cpp_runtime_owner(), "non_default_active", False):
+            return AIProviderHealth.unavailable
         try:
             response = self._client_factory().get(f"{self._base_url().removesuffix('/v1')}/health", timeout=1.5)
             return AIProviderHealth.healthy if response.is_success else AIProviderHealth.unavailable
@@ -63,6 +65,15 @@ class LocalLlamaCppAdapter:
         )]
 
     def complete(self, request: AIRequest) -> AIResponse:
+        if getattr(get_llama_cpp_runtime_owner(), "non_default_active", False):
+            model_id = llama_cpp_runtime_config().model_id
+            return AIResponse(
+                provider_id=self.provider_id, model_id=model_id, request_id=request.request_id,
+                correlation_id=request.correlation_id, finish_reason="error", safety_status="allowed",
+                usage=AIUsage(provider_id=self.provider_id, model_id=model_id),
+                error=AIProviderError(code=AIProviderErrorCode.provider_unavailable,
+                                      message="Default local model is not loaded.", retryable=True),
+            )
         base_url = self._base_url()
         model_id = request.model_preference or llama_cpp_runtime_config().model_id
         # Same precedence as the Ollama route: the assembled prompt carries the Jarvis envelope.
