@@ -1,6 +1,7 @@
 # 253 — Simulation results and requirement verification
 
-Status: planned (contract reviewed by the coordinator; moves to `ready` after Q1 execution)
+Status: ready (Q1 execution complete; final host receipt `L20261106232818-a475` verified the default model was
+restored. The batch Slack line remains a later slice subject to maintainer question `L20261106172945-c054`.)
 Depends on: 248
 
 ## Goal
@@ -13,8 +14,9 @@ Slack line of the batch notification is split out because the product has no Sla
 ## Authority
 
 Maintainer directive `L20261105222120-78af` item 5 and answer `L20261106093156-1712` approve the binding contract in
-[248](248-design-value-path.md). Slice A implementation starts after Q1 execution, and only after this spec is reviewed
-and ready and its hard dependency is satisfied. A planned spec does not authorize implementation.
+[248](248-design-value-path.md). Q1 execution is complete and the final host receipt verified that the default model
+was restored. This spec is reviewed and ready; implementation still requires its hard dependency to be satisfied. The
+batch Slack line remains a later slice subject to maintainer question `L20261106172945-c054`.
 
 ## Why
 
@@ -49,11 +51,13 @@ Exceptions remain visible and actionable, without silently overwriting a maintai
 
 - `backend/app/core/schema.py` owns `simulation_runs` with `status`, `input_payload`, `parameter_payload` and
   `output_payload`. `backend/app/modules/runner/service.py` `run_runner_job` validates supported outputs, then writes
-  `succeeded` and the payload; `_validate_calc_v0_output` is one specific output validator. A general persisted
-  “validated results” status is not present on `simulation_runs`: success alone is not proof that every output is
-  eligible. Identify each supported completion path and its explicit validation evidence before attaching ingestion;
-  unsupported, failed and unvalidated paths must not silently ingest. The eligible initial output contract is a gap to
-  settle during review, not an assertion that all successful runs are validated.
+  `succeeded` and the payload; `_validate_calc_v0_output` is the explicit output validator on both the ordinary
+  `calc_v0` runner completion path and the Studio calculation completion path. It requires named outputs with finite
+  numeric values and non-empty units. A general persisted “validated results” status is not present on
+  `simulation_runs`: success alone is not proof that every output is eligible. For this slice, only outputs from those
+  completion paths that pass this validator are candidates for ingestion; unsupported, failed, unvalidated and other
+  successful runs must not silently ingest. Ingestion still applies its own scalar, conditions and exception checks,
+  so passing this runner validator does not make every output eligible.
 - `backend/app/core/project_knowledge_schema.py` owns `simulation_run_scalar_results`, uniquely keyed by run and output,
   with value, unit, payload digest and extractor identity/version. `backend/app/modules/project_knowledge/service.py`
   `_extract_scalar_from_run_payload` and `admit_scalar_result` rederive numeric values and verify the digest; the
