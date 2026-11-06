@@ -2,7 +2,8 @@
 
 Status: ready (Q1 execution complete; final host receipt `L20261106232818-a475` verified the default model was
 restored. The batch Slack line remains a later slice subject to maintainer question `L20261106172945-c054`.)
-Depends on: 248
+Depends on: none (the approved [248](248-design-value-path.md) contract binds through Authority; 248 is an umbrella
+that stays `planned` until its slices land, so it is not a hard implementation dependency)
 
 ## Goal
 
@@ -15,8 +16,8 @@ Slack line of the batch notification is split out because the product has no Sla
 
 Maintainer directive `L20261105222120-78af` item 5 and answer `L20261106093156-1712` approve the binding contract in
 [248](248-design-value-path.md). Q1 execution is complete and the final host receipt verified that the default model
-was restored. This spec is reviewed and ready; implementation still requires its hard dependency to be satisfied. The
-batch Slack line remains a later slice subject to maintainer question `L20261106172945-c054`.
+was restored. This spec is reviewed and ready; it has no unmerged hard dependency. The batch Slack line remains a later slice
+subject to maintainer question `L20261106172945-c054`.
 
 ## Why
 
