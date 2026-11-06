@@ -195,7 +195,7 @@ def grade_replies(cases: list[dict], replies: dict[str, str | list[str]]) -> dic
         counts = Counter(keys)
         top = max(counts.values())
         leaders = [key for key, count in counts.items() if count == top]
-        consolidated = attempts[keys.index(leaders[0])] if len(leaders) == 1 else None
+        consolidated = attempts[keys.index(leaders[0])] if len(leaders) == 1 and top > len(attempts) / 2 else None
         majority = ({key: consolidated[key] for key in ("verdict", "options", "missing", "score")}
                     if consolidated else {"verdict": None, "options": None, "missing": None, "score": 0})
         per_case[case["id"]] = {

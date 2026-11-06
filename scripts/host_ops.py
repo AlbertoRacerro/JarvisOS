@@ -1367,7 +1367,8 @@ def _semantic_grade(value: Any, prompts: list[dict[str, Any]], attempts: int) ->
         keys = [key(item) for item in case["attempts"]]
         top = max(keys.count(item) for item in keys)
         leaders = {item for item in keys if keys.count(item) == top}
-        first = case["attempts"][keys.index(next(iter(leaders)))] if len(leaders) == 1 else None
+        first = (case["attempts"][keys.index(next(iter(leaders)))]
+                 if len(leaders) == 1 and top > attempts / 2 else None)
         expected = ({k: first[k] for k in ("verdict", "options", "missing", "score")}
                     if first else {"verdict": None, "options": None, "missing": None, "score": 0})
         if (case["majority"] != expected
@@ -1428,22 +1429,26 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
             sampler_started = False
             readiness_errors = 0
             restarts = 0
-            initial_restarts = 0
+            initial_restarts: int | None = None
             error: BaseException | None = None
             try:
                 if stop_default:
-                    default_stopped = True
-                    stopped = _semantic_http(opener, backend_url + "/stop", remaining, data=b"{}")
-                    if type(stopped.get("runtime_reachable")) is not bool:
-                        stopped = _semantic_http(opener, backend_url, remaining)
-                    if stopped.get("runtime_reachable") is not False:
-                        if stopped.get("runtime_reachable") is True:
-                            default_stopped = False
-                        raise Failed("default runtime stop was not confirmed", {})
+                    status = _semantic_http(opener, backend_url, remaining)
+                    if type(status.get("runtime_reachable")) is not bool:
+                        raise Failed("default runtime status is invalid", {})
+                    if status["runtime_reachable"]:
+                        default_stopped = True
+                        stopped = _semantic_http(opener, backend_url + "/stop", remaining, data=b"{}")
+                        if type(stopped.get("runtime_reachable")) is not bool:
+                            stopped = _semantic_http(opener, backend_url, remaining)
+                        if stopped.get("runtime_reachable") is not False:
+                            if stopped.get("runtime_reachable") is True:
+                                default_stopped = False
+                            raise Failed("default runtime stop was not confirmed", {})
                 if unit:
                     unit_started = True
                     initial = _unit_state(ctx, unit, timeout=min(30, remaining())).get("NRestarts", "0")
-                    initial_restarts = min(int(initial), 1_000_000) if initial.isdecimal() else 0
+                    initial_restarts = int(initial) if initial.isdecimal() else None
                     _semantic_unit(ctx, "start", unit, remaining)
                     while True:
                         if ctx.cancelled():
@@ -1517,7 +1522,7 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                 if unit_started:
                     try:
                         current = _unit_state(ctx, unit, timeout=min(30, restore_remaining())).get("NRestarts", "0")
-                        if current.isdecimal():
+                        if initial_restarts is not None and current.isdecimal():
                             restarts = min(max(int(current) - initial_restarts, 0), 1_000_000)
                     except Exception:  # noqa: BLE001 - still stop the unit and restore the default
                         restarts = 0

@@ -1208,6 +1208,7 @@ def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False, rep
     answer = json.dumps(case["answer"])
     replies = replies_override or [answer, json.dumps({**case["answer"], "verdict": "no_issue"}), answer]
     def bench(_ctx, _name, bench, root, sub, result, *_args, **_kwargs):
+        calls.append((bench, _kwargs))
         if "--emit-prompts" in bench["argv"]:
             (root / sub / "prompts.json").write_text(json.dumps([row]))
             return {"result": [row]}
@@ -1262,13 +1263,22 @@ def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False, rep
 
 
 def test_semantic_eval_grades_and_restores_without_text(host, monkeypatch):
-    paths, _, _ = host
+    paths, _, calls = host
     semantic_policy(paths)
     events, case = fake_semantic(host, monkeypatch)
     _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
     assert receipt["outcome"] == "ok", receipt["error"]
     assert events == ["default_stop", "unit_start", "ready", "model", "model", "model",
                       "unit_stop", "default_start", "grade"]
+    benchmark_calls = [(bench, kwargs) for bench, kwargs in calls if isinstance(bench, dict)]
+    assert len(benchmark_calls) == 2
+    prompt_bench, prompt_kwargs = benchmark_calls[0]
+    grade_bench, grade_kwargs = benchmark_calls[1]
+    assert prompt_bench["argv"] == ["python", "semantic_eval.py", "--emit-prompts", "prompts.json"]
+    assert prompt_kwargs["close_scope"] is True
+    assert grade_bench["argv"] == ["python", "semantic_eval.py", "--grade", "semantic-replies.json"]
+    assert grade_kwargs["close_scope"] is True
+    assert grade_kwargs["json_stdout"] is True
     detail = receipt["detail"]
     result = detail["rows"][0]
     assert result["name"] == case["id"] and result["score"] == 1
@@ -1330,7 +1340,7 @@ def test_semantic_restore_waits_for_loading_default(host, monkeypatch):
     semantic_policy(paths)
     events, _ = fake_semantic(host, monkeypatch)
     original = h._semantic_http
-    statuses = iter([False, True])
+    statuses = iter([True, False, True])
     def http(opener, url, remaining, **kwargs):
         if url.endswith("/start"):
             events.append("default_start")
@@ -1359,6 +1369,55 @@ def test_semantic_refuses_reachable_default_after_stop(host, monkeypatch):
     _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
     assert receipt["outcome"] == "failed"
     assert events == ["default_stop"]
+    assert receipt["detail"]["restore"]["default"] == "not_needed"
+
+
+def test_semantic_already_unreachable_default_is_not_stopped_or_started(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._semantic_http
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/local-ai/runtime/llama-cpp"):
+            return {"runtime_reachable": False}
+        return original(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "ok", receipt["error"]
+    assert "default_stop" not in events and "default_start" not in events
+    assert receipt["detail"]["restore"]["default"] == "not_needed"
+
+
+def test_semantic_failed_stop_request_still_restores_default(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._semantic_http
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/stop"):
+            events.append("default_stop")
+            raise OSError("connection reset")
+        return original(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert events == ["default_stop", "default_start"]
+    assert receipt["detail"]["restore"]["default"] == "ok"
+
+
+def test_semantic_invalid_initial_default_status_fails_without_restore(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._semantic_http
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/local-ai/runtime/llama-cpp"):
+            return {"runtime_reachable": None}
+        return original(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert events == []
     assert receipt["detail"]["restore"]["default"] == "not_needed"
 
 
@@ -1506,6 +1565,44 @@ def test_semantic_readiness_uses_token_and_counts_errors_and_restarts(host, monk
     assert receipt["outcome"] == "ok", receipt["error"]
     assert receipt["detail"]["errors"] == 1
     assert receipt["detail"]["restarts"] == 2
+
+
+@pytest.mark.parametrize("initial,current,expected", [
+    ("1000001", "1000003", 2), ("2", "1000005", 1_000_000),
+    ("5", "3", 0), ("invalid", "7", 0),
+])
+def test_semantic_restarts_uses_raw_initial_count(host, monkeypatch, initial, current, expected):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._unit_state
+    def state(ctx, unit, *, timeout=30):
+        result = original(ctx, unit, timeout=timeout)
+        result["NRestarts"] = current if "unit_start" in events else initial
+        return result
+    monkeypatch.setattr(h, "_unit_state", state)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "ok", receipt["error"]
+    assert receipt["detail"]["restarts"] == expected
+
+
+@pytest.mark.parametrize("replies,expected_score", [
+    (["A", "A", "B", "C"], 0), (["A", "A", "A", "B"], 1),
+])
+def test_semantic_four_attempts_require_strict_majority(host, monkeypatch, replies, expected_score):
+    paths, _, _ = host
+    semantic_policy(paths, attempts=4)
+    case = json.loads((SCRIPT.parents[1] / "eval/local/semantic_judgment/cases.json").read_text())["cases"][0]
+    other = [v for v in ("no_issue", "invalid_assumption", "cannot_conclude", "contradiction")
+             if v != case["answer"]["verdict"]]
+    verdicts = {"A": case["answer"]["verdict"], "B": other[0], "C": other[1]}
+    encoded = [json.dumps({**case["answer"], "verdict": verdicts[item]}) for item in replies]
+    fake_semantic(host, monkeypatch, replies_override=encoded)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "ok", receipt["error"]
+    row = receipt["detail"]["rows"][0]
+    assert row["majority"]["verdict"] == (verdicts["A"] if expected_score else None)
+    assert row["majority"]["score"] == row["score"] == expected_score
 
 
 def test_semantic_tied_attempts_have_no_majority(host, monkeypatch):

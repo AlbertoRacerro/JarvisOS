@@ -216,6 +216,21 @@ def test_grade_cli_consolidates_attempts_and_ties(tmp_path):
     assert tied["score"] == 0
 
 
+@pytest.mark.parametrize("labels,expected_score", [
+    (["A", "A", "B", "C"], 0), (["A", "A", "A", "B"], 1),
+])
+def test_four_attempts_require_strict_majority(labels, expected_score):
+    case = CASES[0]
+    other = [v for v in semantic_eval.VERDICTS if v != case["answer"]["verdict"]]
+    verdicts = {"A": case["answer"]["verdict"], "B": other[0], "C": other[1]}
+    replies = [reply(case, verdict=verdicts[label]) for label in labels]
+    result = semantic_eval.grade_replies([case], {case["id"]: replies})
+    row = result["cases"][case["id"]]
+    assert row["majority"]["verdict"] == (verdicts["A"] if expected_score else None)
+    assert row["majority"]["score"] == row["score"] == expected_score
+    assert result["categories"][case["category"]]["score"] == expected_score
+
+
 def test_control_majority_missing_options_scores_zero():
     case = next(case for case in CASES if case["category"] == "control")
     malformed = json.dumps({"verdict": case["answer"]["verdict"], "missing": []})
