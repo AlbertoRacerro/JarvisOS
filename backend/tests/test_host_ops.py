@@ -429,6 +429,40 @@ def test_local_eval_token_stays_on_host_and_receipt_is_scores_only(host, monkeyp
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
 
 
+def test_local_eval_real_loopback_content_length(host, monkeypatch):
+    paths, _, _ = host
+    prompts = [{"name": "case_one", "prompt": "test prompt", "correct": ["good"], "plausible": []}]
+
+    class Model(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            assert self.path == "/v1/chat/completions"
+            assert self.headers["Authorization"] == "Bearer test-local-model-credential"
+            request_body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert request_body["messages"] == [{"role": "user", "content": "test prompt"}]
+            body = json.dumps({"choices": [{"message": {"content": "[[point:good]]"}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        local_eval_policy(paths, base_url=f"http://127.0.0.1:{server.server_port}/v1")
+        fake_prompt_phase(host, monkeypatch, prompts)
+        _, receipt = request(host, "local_eval.run", {"bench": "local-eval"}, sha=SHA)
+        assert receipt["outcome"] == "ok", receipt["error"]
+        assert receipt["detail"]["tally"]["correct"] == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 @pytest.mark.parametrize("change,expected", [("modified", "refused"), ("new", "refused"),
                                               ("cache", "refused")])
 def test_local_eval_checkout_integrity_after_prompt_run(host, monkeypatch, change, expected):
@@ -774,6 +808,29 @@ def test_local_eval_chunked_header_cannot_extend_body_deadline():
         h._eval_response_body(Response(), remaining)
     assert stopped.is_set()
     assert time.monotonic() - started < 0.8
+
+
+def test_eval_response_body_stops_after_content_length_closes_socket():
+    class Socket:
+        closed = False
+
+        def settimeout(self, _):
+            if self.closed:
+                raise OSError(9, "Bad file descriptor")
+
+    sock = Socket()
+
+    class Response:
+        fp = SimpleNamespace(raw=SimpleNamespace(_sock=sock))
+
+        def read1(self, _):
+            sock.closed = True
+            return b'{"ok": true}'
+
+        def isclosed(self):
+            return sock.closed
+
+    assert h._eval_response_body(Response(), lambda: 1) == b'{"ok": true}'
 
 
 def test_bench_result_scrubs_nested_strings():

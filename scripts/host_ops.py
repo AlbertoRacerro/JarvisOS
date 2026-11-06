@@ -906,8 +906,8 @@ def _eval_response_body(response: Any, remaining: Callable[[], float]) -> bytes:
     timer.start()
     try:
         while len(body) < 1 << 20:
-            sock.settimeout(remaining())
             try:
+                sock.settimeout(remaining())
                 chunk = response.read1(min(64 << 10, (1 << 20) - len(body)))
             except (OSError, ValueError, http.client.HTTPException):
                 if expired.is_set():
@@ -917,6 +917,9 @@ def _eval_response_body(response: Any, remaining: Callable[[], float]) -> bytes:
             if not chunk:
                 break
             body.extend(chunk)
+            if getattr(response, "isclosed", lambda: False)():
+                remaining()
+                break
     finally:
         timer.cancel()
     return bytes(body)
