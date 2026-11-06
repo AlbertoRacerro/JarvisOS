@@ -212,6 +212,8 @@ def test_grade_cli_consolidates_attempts_and_ties(tmp_path):
     tied = semantic_eval.grade_replies([case], {case["id"]: [correct, wrong]})["cases"][case["id"]]
     assert tied["disagreement"] is True
     assert tied["attempts_scored"] == 1
+    assert tied["majority"] == {"verdict": None, "options": None, "missing": None, "score": 0}
+    assert tied["score"] == 0
 
 
 def test_control_majority_missing_options_scores_zero():

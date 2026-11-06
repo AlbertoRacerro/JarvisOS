@@ -1279,18 +1279,25 @@ def _semantic_http(opener: Any, url: str, deadline: Callable[[], float], *,
         raise Failed("local HTTP response is invalid", {}) from None
 
 
-def _semantic_unit(ctx: Context, action: str, unit: str, remaining: Callable[[], float]) -> None:
+def _semantic_unit(ctx: Context, action: str, unit: str, remaining: Callable[[], float],
+                   *, check_cancel: bool = True) -> None:
+    if check_cancel and ctx.cancelled():
+        raise Cancelled({})
     proc = _systemctl(ctx, action, unit, timeout=min(60, remaining()))
     want = "active" if action == "start" else "inactive"
     if proc.returncode != 0:
         raise Failed(f"candidate server {action} failed", {})
     while True:
+        if check_cancel and ctx.cancelled():
+            raise Cancelled({})
         remaining()
         state = _unit_state(ctx, unit, timeout=min(30, remaining())).get("ActiveState")
         if state == want or (action == "stop" and state == "failed"):
             return
         if state == "failed":
             raise Failed("candidate server start failed", {})
+        if check_cancel and ctx.cancelled():
+            raise Cancelled({})
         time.sleep(min(1, remaining()))
 
 
@@ -1358,9 +1365,12 @@ def _semantic_grade(value: Any, prompts: list[dict[str, Any]], attempts: int) ->
             return (item["verdict"], tuple(item["options"]) if item["options"] is not None else None,
                     tuple(item["missing"]) if item["missing"] is not None else None)
         keys = [key(item) for item in case["attempts"]]
-        majority_key = max(dict.fromkeys(keys), key=keys.count)
-        first = case["attempts"][keys.index(majority_key)]
-        if (case["majority"] != {k: first[k] for k in ("verdict", "options", "missing", "score")}
+        top = max(keys.count(item) for item in keys)
+        leaders = {item for item in keys if keys.count(item) == top}
+        first = case["attempts"][keys.index(next(iter(leaders)))] if len(leaders) == 1 else None
+        expected = ({k: first[k] for k in ("verdict", "options", "missing", "score")}
+                    if first else {"verdict": None, "options": None, "missing": None, "score": 0})
+        if (case["majority"] != expected
                 or case["disagreement"] != (len(set(keys)) > 1)):
             raise Failed("semantic grader majority is inconsistent", {})
     for category in categories:
@@ -1415,6 +1425,10 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
             peaks: dict[str, int | None] = {"ram_bytes": None, "vram_mib": None}
             stop_sample = threading.Event()
             sampler: threading.Thread | None = None
+            sampler_started = False
+            readiness_errors = 0
+            restarts = 0
+            initial_restarts = 0
             error: BaseException | None = None
             try:
                 if stop_default:
@@ -1428,15 +1442,23 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                         raise Failed("default runtime stop was not confirmed", {})
                 if unit:
                     unit_started = True
+                    initial = _unit_state(ctx, unit, timeout=min(30, remaining())).get("NRestarts", "0")
+                    initial_restarts = min(int(initial), 1_000_000) if initial.isdecimal() else 0
                     _semantic_unit(ctx, "start", unit, remaining)
                     while True:
+                        if ctx.cancelled():
+                            raise Cancelled({})
                         try:
-                            _semantic_http(opener, setting["base_url"] + "/models", remaining)
+                            _semantic_http(opener, setting["base_url"] + "/models", remaining, token=token)
                             break
                         except Failed:
+                            readiness_errors = min(readiness_errors + 1, 1_000_000)
+                            if ctx.cancelled():
+                                raise Cancelled({}) from None
                             time.sleep(min(1, remaining()))
                 sampler = threading.Thread(target=_semantic_memory, args=(stop_sample, peaks), daemon=True)
                 sampler.start()
+                sampler_started = True
                 for row in prompts:
                     for attempt in range(setting["attempts"]):
                         remaining()
@@ -1486,11 +1508,21 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                         raise Failed("semantic restore exceeded its time limit", {})
                     return left
                 stop_sample.set()
-                if sampler is not None:
-                    sampler.join(timeout=6)
+                if sampler_started and sampler is not None:
+                    try:
+                        sampler.join(timeout=6)
+                    except Exception:  # noqa: BLE001 - still stop the unit and restore the default
+                        if error is None:
+                            error = Failed("semantic memory sampler cleanup failed", {})
                 if unit_started:
                     try:
-                        _semantic_unit(ctx, "stop", unit, restore_remaining)
+                        current = _unit_state(ctx, unit, timeout=min(30, restore_remaining())).get("NRestarts", "0")
+                        if current.isdecimal():
+                            restarts = min(max(int(current) - initial_restarts, 0), 1_000_000)
+                    except Exception:  # noqa: BLE001 - still stop the unit and restore the default
+                        restarts = 0
+                    try:
+                        _semantic_unit(ctx, "stop", unit, restore_remaining, check_cancel=False)
                         restore["server_unit"] = "ok"
                     except Exception:  # noqa: BLE001 - continue the default restore after a unit failure
                         restore["server_unit"] = "failed"
@@ -1516,7 +1548,7 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                     raise Failed(str(error), {"restore": restore}) from None
                 if isinstance(error, Cancelled):
                     raise Cancelled({"restore": restore}) from None
-                raise error
+                raise Failed("semantic evaluation failed", {"restore": restore}) from None
             reply_file = "semantic-replies.json"
             if (root / sub / reply_file).exists() or Path(sub, reply_file) in files:
                 raise Refused("semantic replies path is occupied")
@@ -1560,7 +1592,7 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                       "completion_tokens": total_tokens,
                       "tokens_per_second": round(total_tokens / total_seconds, 2) if total_seconds else None,
                       "peak_vram_mib": peaks["vram_mib"], "peak_ram_bytes": peaks["ram_bytes"],
-                      "errors": [], "restore": restore}
+                      "errors": readiness_errors, "restarts": restarts, "restore": restore}
             encoded = json.dumps(detail, ensure_ascii=False)
             if token in encoded or any(len(text) >= 32 and text in encoded
                                        for texts in replies.values() for text in texts):

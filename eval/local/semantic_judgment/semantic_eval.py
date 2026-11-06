@@ -193,14 +193,17 @@ def grade_replies(cases: list[dict], replies: dict[str, str | list[str]]) -> dic
                  tuple(item["missing"]) if item["missing"] is not None else None)
                 for item in attempts]
         counts = Counter(keys)
-        majority = max(counts, key=lambda key: counts[key])
-        consolidated = attempts[keys.index(majority)]
+        top = max(counts.values())
+        leaders = [key for key, count in counts.items() if count == top]
+        consolidated = attempts[keys.index(leaders[0])] if len(leaders) == 1 else None
+        majority = ({key: consolidated[key] for key in ("verdict", "options", "missing", "score")}
+                    if consolidated else {"verdict": None, "options": None, "missing": None, "score": 0})
         per_case[case["id"]] = {
             "attempts": attempts,
-            "majority": {key: consolidated[key] for key in ("verdict", "options", "missing", "score")},
+            "majority": majority,
             "disagreement": len(counts) > 1,
             "attempts_scored": sum(item["score"] for item in attempts),
-            "score": consolidated["score"],
+            "score": majority["score"],
         }
     per_category: dict[str, dict[str, int]] = {}
     for case in cases:

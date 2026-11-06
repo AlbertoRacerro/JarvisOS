@@ -1278,6 +1278,7 @@ def test_semantic_eval_grades_and_restores_without_text(host, monkeypatch):
     assert all(item["reasoning_present"] for item in result["attempts"])
     assert detail["categories"][case["category"]] == {"score": 1, "count": 1}
     assert detail["peak_ram_bytes"] == 100 and detail["peak_vram_mib"] == 200
+    assert detail["errors"] == 0 and detail["restarts"] == 0
     encoded = json.dumps(receipt)
     assert "secret semantic prompt" not in encoded
     assert "semantic-private-token" not in encoded
@@ -1437,6 +1438,116 @@ def test_semantic_restores_after_candidate_start_failure(host, monkeypatch):
     assert receipt["outcome"] == "failed"
     assert events == ["default_stop", "unit_start_failed", "unit_stop", "default_start"]
     assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
+
+
+def test_semantic_sampler_start_failure_still_stops_and_restores(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    class UnstartedSampler:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("sampler start failed")
+
+        def join(self, **kwargs):
+            pytest.fail("unstarted sampler was joined")
+
+    monkeypatch.setattr(h.threading, "Thread", UnstartedSampler)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert events == ["default_stop", "unit_start", "ready", "unit_stop", "default_start"]
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
+
+
+def test_semantic_sampler_join_failure_still_stops_and_restores(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    class BrokenJoin:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def join(self, **kwargs):
+            raise RuntimeError("join failed")
+
+    monkeypatch.setattr(h.threading, "Thread", BrokenJoin)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert events[-2:] == ["unit_stop", "default_start"]
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
+
+
+def test_semantic_readiness_uses_token_and_counts_errors_and_restarts(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    fake_semantic(host, monkeypatch)
+    original_http = h._semantic_http
+    original_state = h._unit_state
+    seen = {"readiness": 0}
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/models"):
+            assert kwargs["token"] == "semantic-private-token"
+            seen["readiness"] += 1
+            if seen["readiness"] == 1:
+                raise h.Failed("temporary readiness error", {})
+        return original_http(opener, url, remaining, **kwargs)
+    def state(ctx, unit, *, timeout=30):
+        result = original_state(ctx, unit, timeout=timeout)
+        result["NRestarts"] = "3" if seen["readiness"] else "1"
+        return result
+    monkeypatch.setattr(h, "_semantic_http", http)
+    monkeypatch.setattr(h, "_unit_state", state)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "ok", receipt["error"]
+    assert receipt["detail"]["errors"] == 1
+    assert receipt["detail"]["restarts"] == 2
+
+
+def test_semantic_tied_attempts_have_no_majority(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths, attempts=2)
+    _, case = fake_semantic(host, monkeypatch)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "ok", receipt["error"]
+    row = receipt["detail"]["rows"][0]
+    assert row["name"] == case["id"]
+    assert row["attempts_scored"] == 1
+    assert row["majority"] == {"verdict": None, "options": None, "missing": None, "score": 0}
+    assert row["score"] == receipt["detail"]["categories"][case["category"]]["score"] == 0
+
+
+def test_semantic_cancels_during_readiness_and_restores(host, monkeypatch):
+    paths, ex, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original_http = h._semantic_http
+    req = h.make_request("local_eval.run", {"bench": "semantic"}, SHA, "test", ex.now())
+    h.submit(paths, req)
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/models"):
+            (paths.requests / f"{req['id']}.cancel").write_bytes(b"")
+            raise h.Failed("temporary readiness error", {})
+        return original_http(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    ex.step()
+    receipt, why = h.load_receipt(paths, req["id"])
+    assert receipt, why
+    assert receipt["outcome"] == "cancelled"
+    assert events[-2:] == ["unit_stop", "default_start"]
+
+
+def test_semantic_unit_wait_checks_cancellation():
+    cancelled = iter([False, False, True])
+    ctx = SimpleNamespace(cancelled=lambda: next(cancelled),
+                          run=lambda *args, **kwargs: subprocess.CompletedProcess(
+                              args, 0, "ActiveState=activating\n", ""))
+    with pytest.raises(h.Cancelled):
+        h._semantic_unit(ctx, "start", "candidate.service", lambda: 10)
 
 
 def test_semantic_grader_failure_keeps_replies_out_of_receipt(host, monkeypatch):
