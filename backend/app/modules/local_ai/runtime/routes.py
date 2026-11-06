@@ -1,8 +1,25 @@
 from fastapi import APIRouter, HTTPException
 
 from app.modules.local_ai.runtime.llama_cpp import get_llama_cpp_runtime_owner
+from app.modules.local_ai.runtime.model_registry import activate_model, list_models, restore_default
 
 router = APIRouter(prefix="/local-ai/runtime/llama-cpp", tags=["local-ai-runtime"])
+models_router = APIRouter(prefix="/local-ai/models", tags=["local-ai-runtime"])
+
+
+@models_router.get("")
+def read_models() -> dict[str, object]:
+    return list_models()
+
+
+@models_router.post("/restore-default")
+def restore_model() -> dict[str, object]:
+    return restore_default()
+
+
+@models_router.post("/{model_id}/activate")
+def activate_registered_model(model_id: str) -> dict[str, object]:
+    return activate_model(model_id)
 
 
 @router.get("")
