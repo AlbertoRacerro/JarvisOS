@@ -971,6 +971,7 @@ def _eval_response_body(response: Any, remaining: Callable[[], float]) -> bytes:
 _POINT_RE = re.compile(r"\[\[\s*point\s*:\s*([\w.:-]+)\s*(?:\|([^\]]*))?\]\]", re.IGNORECASE)
 _EVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,79}\Z")
 SEMANTIC_RESTORE_S = 300
+SEMANTIC_REPLIES_MAX_BYTES = 32 * 1024 * 1024
 
 
 def _eval_prompts(value: Any) -> list[dict[str, Any]]:
@@ -1265,7 +1266,7 @@ def _semantic_prompts(value: Any) -> list[dict[str, Any]]:
         if not isinstance(name, str) or not _EVAL_ID_RE.fullmatch(name) or name in names:
             raise Refused("semantic prompt name is invalid")
         names.add(name)
-        if not isinstance(prompt, str) or not 1 <= len(prompt) <= 16000 or "\x00" in prompt:
+        if not isinstance(prompt, str) or not 100 <= len(prompt) <= 16000 or "\x00" in prompt:
             raise Refused("semantic prompt text is invalid")
         if category not in ("validity_domain", "contradiction", "insufficient_data", "control"):
             raise Refused("semantic prompt category is invalid")
@@ -1311,7 +1312,7 @@ def _semantic_http(opener: Any, url: str, deadline: Callable[[], float], *,
                 raise Failed("local HTTP returned an invalid status", {})
             if status != 200:
                 raise Failed(f"local HTTP returned status {status}", {})
-            if data is None and not url.endswith("/local-ai/runtime/llama-cpp"):
+            if data is None and not url.endswith(("/local-ai/runtime/llama-cpp", "/models")):
                 return {}
             raw = _eval_response_body(response, deadline)
             return json.loads(raw) if raw else {}
@@ -1468,6 +1469,7 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
             unit_started = False
             restore = {"default": "not_needed", "server_unit": "not_needed"}
             replies: dict[str, list[str]] = {row["name"]: [] for row in prompts}
+            replies_bytes = 0
             measurements: dict[str, list[dict[str, Any]]] = {row["name"]: [] for row in prompts}
             peaks: dict[str, int | None] = {"ram_bytes": None, "vram_mib": None}
             stop_sample = threading.Event()
@@ -1512,7 +1514,11 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                         if ctx.cancelled():
                             raise Cancelled({})
                         try:
-                            _semantic_http(opener, setting["base_url"] + "/models", remaining, token=token)
+                            models = _semantic_http(opener, setting["base_url"] + "/models", remaining, token=token)
+                            if (not isinstance(models, dict) or not isinstance(models.get("data"), list)
+                                    or not any(isinstance(model, dict) and model.get("id") == setting["model"]
+                                               for model in models["data"])):
+                                raise Failed("local model is not ready", {})
                             break
                         except Failed:
                             readiness_errors = min(readiness_errors + 1, 1_000_000)
@@ -1557,6 +1563,9 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                         except (KeyError, IndexError, TypeError, ValueError):
                             raise Failed("local model response is invalid", {}) from None
                         replies[row["name"]].append(reply)
+                        replies_bytes += len(reply.encode("utf-8"))
+                        if replies_bytes > SEMANTIC_REPLIES_MAX_BYTES:
+                            raise Failed("local model replies exceeded their size limit", {})
                         measurements[row["name"]].append({"completion_tokens": tokens,
                                                            "reasoning_present": reasoning,
                                                            "seconds": round(time.monotonic() - started, 2)})
@@ -1660,8 +1669,9 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                       "peak_vram_mib": peaks["vram_mib"], "peak_ram_bytes": peaks["ram_bytes"],
                       "errors": readiness_errors, "restarts": restarts, "restore": restore}
             encoded = json.dumps(detail, ensure_ascii=False)
-            if token in encoded or any(len(text) >= 32 and text in encoded
-                                       for texts in replies.values() for text in texts):
+            if (token in encoded or any(row["prompt"] in encoded for row in prompts)
+                    or any(len(text) >= 32 and text in encoded
+                           for texts in replies.values() for text in texts)):
                 raise Failed("semantic evaluation result is invalid", {"restore": restore})
             return detail
 

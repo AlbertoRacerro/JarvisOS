@@ -1396,7 +1396,7 @@ def semantic_policy(paths, **changes):
 def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False, replies_override=None):
     paths, ex, calls = host
     case = json.loads((SCRIPT.parents[1] / "eval/local/semantic_judgment/cases.json").read_text())["cases"][0]
-    row = {"name": case["id"], "prompt": "secret semantic prompt", "category": case["category"],
+    row = {"name": case["id"], "prompt": "secret semantic prompt " * 6, "category": case["category"],
            "answer": case["answer"]}
     monkeypatch.setattr(h, "_eval_reachable", lambda *_: None)
     def checkout(_sha, root, _remaining):
@@ -1447,7 +1447,8 @@ def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False, rep
             return {"runtime_reachable": default["reachable"]}
         if url.endswith("/models"):
             events.append("ready")
-            return {}
+            model = json.loads(paths.policy.read_text())["ops"]["local_eval.run"]["evaluations"]["semantic"]["model"]
+            return {"data": [{"id": model}]}
         events.append("model")
         if failure == "error":
             raise h.Failed("local model failed")
@@ -1514,8 +1515,11 @@ def test_semantic_real_loopback_and_grader_stdout(host, monkeypatch):
         def do_GET(self):
             assert self.path == "/v1/models" and state["unit"] and not state["default"]
             assert self.headers["Authorization"] == "Bearer semantic-private-token"
+            body = json.dumps({"data": [{"id": "candidate"}]}).encode()
             self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
+            self.wfile.write(body)
 
         def do_POST(self):
             assert self.path == "/v1/chat/completions" and state["unit"] and not state["default"]
@@ -1644,6 +1648,22 @@ def test_semantic_eval_grades_and_restores_without_text(host, monkeypatch):
     assert "secret semantic prompt" not in encoded
     assert "semantic-private-token" not in encoded
     assert json.dumps(case["answer"]) not in encoded
+
+
+def test_semantic_reply_total_limit_restores_without_text(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    case = json.loads((SCRIPT.parents[1] / "eval/local/semantic_judgment/cases.json").read_text())["cases"][0]
+    reply = json.dumps(case["answer"])
+    events, _ = fake_semantic(host, monkeypatch, replies_override=[reply] * 3)
+    monkeypatch.setattr(h, "SEMANTIC_REPLIES_MAX_BYTES", len(reply.encode("utf-8")) * 2 - 1)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert receipt["error"] == "local model replies exceeded their size limit"
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
+    assert events.count("model") == 2
+    assert "grade" not in events
+    assert reply not in json.dumps(receipt)
 
 
 @pytest.mark.parametrize("failure,outcome", [
@@ -2014,6 +2034,26 @@ def test_semantic_readiness_uses_token_and_counts_errors_and_restarts(host, monk
     assert receipt["detail"]["restarts"] == 2
 
 
+def test_semantic_empty_models_response_never_sends_prompt(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths, timeout_s=1)
+    events, _ = fake_semantic(host, monkeypatch)
+    original_http = h._semantic_http
+    original_sleep = time.sleep
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/models"):
+            events.append("ready")
+            return {}
+        return original_http(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    monkeypatch.setattr(h.time, "sleep", lambda _: original_sleep(1.05))
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert "model" not in events
+    assert events[-2:] == ["unit_stop", "default_start"]
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
+
+
 @pytest.mark.parametrize("initial,current,expected", [
     ("1000001", "1000003", 2), ("2", "1000005", 1_000_000),
     ("5", "3", 0), ("invalid", "7", 0),
@@ -2178,6 +2218,22 @@ def test_semantic_refuses_bad_prompt_rows(host, monkeypatch, change):
         result = original(*args, **kwargs)
         if "--emit-prompts" in args[2]["argv"]:
             result["result"][0].update(change)
+        return result
+    monkeypatch.setattr(h, "_run_benchmark", bench)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "refused"
+    assert receipt["detail"] == {}
+
+
+def test_semantic_refuses_prompt_as_name(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    fake_semantic(host, monkeypatch)
+    original = h._run_benchmark
+    def bench(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if "--emit-prompts" in args[2]["argv"]:
+            result["result"][0].update(name="short_prompt", prompt="short_prompt")
         return result
     monkeypatch.setattr(h, "_run_benchmark", bench)
     _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
