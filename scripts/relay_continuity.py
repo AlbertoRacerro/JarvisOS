@@ -3772,19 +3772,51 @@ def roadmap_lock(root: Path, wait: float = 0.0) -> Lock | None:
     return lock
 
 
-def maintainer_or_hostops_after(repo: Path, paused_at: str | None) -> bool:
-    """Durable human input or a verified completed host operation wakes a stalled roadmap."""
+def _human_answer_author(author: object) -> bool:
+    name = str(author or "")
+    if name.startswith("relay-"):
+        return False
+    session = re.fullmatch(r"(\S+) pid \d+", name)
+    return session is None or session.group(1) not in devctx.AGENT_NAMES
+
+
+def _ledger_human_after(repo: Path, paused_at: str | None) -> bool | None:
+    """Human ledger input after the pause; None means the ledger could not be read."""
     if not paused_at:
         return False
     try:
         entries = devctx.read_ledger(devctx.default_env(repo))
-        if any(str(e.get("ts") or "") > paused_at and
-               (e.get("kind") == "directive" and
-                (str(e.get("author") or "").startswith("maintainer") or isinstance(e.get("directive"), dict)) or
-                (e.get("kind") == "decision" and str(e.get("author") or "").startswith("maintainer (")
-                 and str(e.get("text") or "").startswith("Maintainer answer to question ")))
-               for e in entries):
-            return True
+    except OSError:
+        return None
+    answerable_ids: set[str] = set()
+    for entry in entries:
+        kind = entry.get("kind")
+        if str(entry.get("ts") or "") > paused_at:
+            if (kind == "directive" and
+                    (str(entry.get("author") or "").startswith("maintainer") or
+                     isinstance(entry.get("directive"), dict))):
+                return True
+            if kind == "decision":
+                text = str(entry.get("text") or "")
+                if (str(entry.get("author") or "").startswith("maintainer (") and
+                        text.startswith("Maintainer answer to question ")):
+                    return True
+                if _human_answer_author(entry.get("author")) and any(ref in answerable_ids for ref in re.findall(
+                        r"(?<![A-Za-z0-9])L\d{14}-[0-9a-f]{4}(?![A-Za-z0-9])", text)):
+                    return True
+        if kind in ("blocker", "question"):
+            answerable_ids.add(str(entry.get("id") or ""))
+    return False
+
+
+def maintainer_or_hostops_after(repo: Path, paused_at: str | None) -> bool:
+    """Durable human input or a verified completed host operation wakes a stalled roadmap."""
+    ledger_wake = _ledger_human_after(repo, paused_at)
+    if ledger_wake is not False:
+        return ledger_wake is True
+    if not paused_at:
+        return False
+    try:
         paths = host_ops.Paths(Path.home())
         for path in paths.receipts.iterdir():
             if not host_ops.REQUEST_NAME_RE.fullmatch(path.name):
@@ -3858,6 +3890,11 @@ def _roadmap_step(root: Path, repo: Path, *, fingerprint: Callable[[], str | Non
             write_json_atomic(roadmap_path(root), road)
             missions_journal(root, {"event": "roadmap_jobs_resumed", "at": iso(now()), "ids": jobs,
                                     "uncertain": uncertain})
+        elif (road["paused"] == "coordinator_blocked" and not waits and not jobs and
+              _ledger_human_after(repo, road.get("paused_at"))):
+            road.update(paused=None, paused_at=None)
+            write_json_atomic(roadmap_path(root), road)
+            missions_journal(root, {"event": "roadmap_answer_resumed", "at": iso(now())})
         elif road["paused"] == "no_progress":
             human_wake = maintainer_or_hostops_after(repo, road.get("paused_at"))
             heads = fingerprint()

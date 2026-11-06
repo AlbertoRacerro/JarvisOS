@@ -329,6 +329,150 @@ def test_roadmap_step_wakes_for_new_directive_or_receipt(space, monkeypatch):
     assert step().startswith("roadmap:submitted:")
 
 
+@pytest.mark.parametrize("answer", ["blocker", "question", "directive", "maintainer_answer"])
+def test_coordinator_blocked_wakes_for_recorded_answer(space, monkeypatch, answer):
+    root, repo = space
+    paused = rc.iso(NOW)
+    rc.write_json_atomic(rc.roadmap_path(root), {"enabled": True, "paused": "coordinator_blocked",
+                                                "paused_at": paused, "authority": "L20261105160000-abcd",
+                                                "cycle": 1})
+    monkeypatch.setattr(rc, "roadmap_pr_ids", lambda _repo: [])
+    env = rc.devctx.default_env(repo)
+
+    def record(kind, text, when, **fields):
+        entry = rc.devctx.make_entry(env, kind, text, **fields)
+        entry["ts"] = rc.iso(when)
+        rc.devctx.append_entry(env, entry)
+        return entry
+
+    def step():
+        return rc.roadmap_step(root, repo, fingerprint=lambda: "same",
+                               submit=lambda _authority, _tasks, mid: ({"id": mid}, None), now=lambda: NOW)
+
+    assert step() == "roadmap:paused:coordinator_blocked"
+    if answer in ("blocker", "question"):
+        target = record(answer, "Need a host answer", NOW - timedelta(minutes=1))
+        assert step() == "roadmap:paused:coordinator_blocked"
+        record("decision", f"Host install done, answering host request {target['id']}",
+               NOW + timedelta(minutes=1), author="unknown")
+    elif answer == "directive":
+        record("directive", "Proceed", NOW + timedelta(minutes=1), author="maintainer")
+    else:
+        record("decision", "Maintainer answer to question L20261105155900-abcd (via Slack): proceed",
+               NOW + timedelta(minutes=1), author="maintainer (Slack)")
+    assert step().startswith("roadmap:submitted:")
+    assert rc.load_roadmap(root)["paused"] is None
+    events = [json.loads(line)["event"] for line in (root / "missions" / "journal.jsonl").read_text().splitlines()]
+    assert events.count("roadmap_answer_resumed") == 1
+
+
+@pytest.mark.parametrize("invalid", ["unknown", "note", "claim", "before_pause", "later_target",
+                                      "codex pid 123", "claude pid 9", "relay-continuity pid 2"])
+def test_answering_decision_requires_earlier_blocker_or_question_after_pause(space, monkeypatch, invalid):
+    root, repo = space
+    paths = rc.host_ops.Paths
+    monkeypatch.setattr(rc.host_ops, "Paths", lambda _home: paths(root))
+    paused = rc.iso(NOW)
+    rc.write_json_atomic(rc.roadmap_path(root), {"enabled": True, "paused": "coordinator_blocked",
+                                                "paused_at": paused, "authority": "L20261105160000-abcd"})
+    env = rc.devctx.default_env(repo)
+
+    def record(kind, text, when, **fields):
+        entry = rc.devctx.make_entry(env, kind, text, **fields)
+        entry["ts"] = rc.iso(when)
+        rc.devctx.append_entry(env, entry)
+        return entry
+
+    if invalid == "unknown":
+        target_id = "L20261105155900-abcd"
+    elif invalid == "later_target":
+        target = rc.devctx.make_entry(env, "blocker", "Need answer")
+        target["ts"] = rc.iso(NOW + timedelta(minutes=2))
+        target_id = target["id"]
+    else:
+        target_id = record("blocker" if invalid == "before_pause" or " pid " in invalid else invalid,
+                           "Need answer", NOW - timedelta(minutes=1))["id"]
+    record("decision", f"Answering {target_id}",
+           NOW - timedelta(seconds=1) if invalid == "before_pause" else NOW + timedelta(minutes=1),
+           author=invalid if " pid " in invalid else "unknown")
+    if invalid == "later_target":
+        rc.devctx.append_entry(env, target)
+    assert not rc.maintainer_or_hostops_after(repo, paused)
+    assert rc.roadmap_step(root, repo, fingerprint=lambda: "same",
+                           submit=lambda *_: pytest.fail("must stay paused"), now=lambda: NOW) == (
+                               "roadmap:paused:coordinator_blocked")
+
+
+def test_answering_decision_wakes_no_progress_but_receipt_does_not_wake_coordinator(space, monkeypatch):
+    root, repo = space
+    paused = rc.iso(NOW)
+    road = {"enabled": True, "paused": "coordinator_blocked", "paused_at": paused,
+            "authority": "L20261105160000-abcd"}
+    rc.write_json_atomic(rc.roadmap_path(root), road)
+    paths = rc.host_ops.Paths
+    monkeypatch.setattr(rc.host_ops, "Paths", lambda _home: paths(root))
+    receipts = paths(root).receipts
+    receipts.mkdir(parents=True)
+    (receipts / ("a" * 32 + ".json")).write_text("{}")
+    monkeypatch.setattr(rc.host_ops, "load_receipt", lambda _paths, _id: (
+        {"outcome": "ok", "finished_at": rc.iso(NOW + timedelta(minutes=1))}, ""))
+    assert rc.maintainer_or_hostops_after(repo, paused)
+    assert rc.roadmap_step(root, repo, fingerprint=lambda: "same",
+                           submit=lambda *_: pytest.fail("receipt must not submit"), now=lambda: NOW) == (
+                               "roadmap:paused:coordinator_blocked")
+    env = rc.devctx.default_env(repo)
+    blocker = rc.devctx.make_entry(env, "blocker", "Need answer")
+    blocker["ts"] = rc.iso(NOW - timedelta(minutes=1))
+    rc.devctx.append_entry(env, blocker)
+    decision = rc.devctx.make_entry(env, "decision", f"Answering {blocker['id']}", author="unknown")
+    decision["ts"] = rc.iso(NOW + timedelta(minutes=1))
+    rc.devctx.append_entry(env, decision)
+    monkeypatch.setattr(rc.host_ops, "Paths", lambda _home: paths(root / "empty"))
+    assert rc.maintainer_or_hostops_after(repo, paused)
+    road.update(paused="no_progress", no_progress=3, wake_at=rc.iso(NOW + timedelta(days=1)),
+                fingerprint="same", job_states={}, pr_ids=[])
+    rc.write_json_atomic(rc.roadmap_path(root), road)
+    monkeypatch.setattr(rc, "roadmap_job_states", lambda _root: {})
+    monkeypatch.setattr(rc, "roadmap_job_ids", lambda _root: [])
+    monkeypatch.setattr(rc, "roadmap_pr_ids", lambda _repo: [])
+    assert rc.roadmap_step(root, repo, fingerprint=lambda: "same",
+                           submit=lambda _authority, _tasks, mid: ({"id": mid}, None),
+                           now=lambda: NOW).startswith("roadmap:submitted:")
+
+
+@pytest.mark.parametrize("wait", ["hostops_wait", "job_wait"])
+def test_coordinator_with_wait_ignores_new_ledger_answer(space, monkeypatch, wait):
+    root, repo = space
+    paused = rc.iso(NOW)
+    wait_id = "a" * 32 if wait == "hostops_wait" else "j-20261105T160000Z-aaaaaa"
+    rc.write_json_atomic(rc.roadmap_path(root), {"enabled": True, "paused": "coordinator_blocked",
+                                                "paused_at": paused, wait: [wait_id]})
+    env = rc.devctx.default_env(repo)
+    directive = rc.devctx.make_entry(env, "directive", "Proceed", author="maintainer")
+    directive["ts"] = rc.iso(NOW + timedelta(minutes=1))
+    rc.devctx.append_entry(env, directive)
+    monkeypatch.setattr(rc.host_ops, "load_receipt", lambda _paths, _id: (None, ""))
+    assert rc.roadmap_step(root, repo, fingerprint=lambda: "same",
+                           submit=lambda *_: pytest.fail("wait must stay paused"), now=lambda: NOW) == (
+                               "roadmap:paused:coordinator_blocked")
+
+
+def test_unreadable_ledger_does_not_wake_coordinator(space, monkeypatch):
+    root, repo = space
+    paused = rc.iso(NOW)
+    rc.write_json_atomic(rc.roadmap_path(root), {"enabled": True, "paused": "coordinator_blocked",
+                                                "paused_at": paused})
+
+    def unreadable(_env):
+        raise OSError("unreadable ledger")
+
+    monkeypatch.setattr(rc.devctx, "read_ledger", unreadable)
+    assert not rc.maintainer_or_hostops_after(repo, paused)
+    assert rc.roadmap_step(root, repo, fingerprint=lambda: "same",
+                           submit=lambda *_: pytest.fail("must stay paused"), now=lambda: NOW) == (
+                               "roadmap:paused:coordinator_blocked")
+
+
 def test_config_and_client_reject_unsafe_transport(tmp_path: Path):
     config_file = tmp_path / "slack_bot.json"
     config_file.write_text(json.dumps(CONFIG))
