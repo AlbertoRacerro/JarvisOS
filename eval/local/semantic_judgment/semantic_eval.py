@@ -189,12 +189,12 @@ def grade_replies(cases: list[dict], replies: dict[str, str | list[str]]) -> dic
         if not isinstance(raw, list) or not raw or any(not isinstance(item, str) for item in raw):
             raise ValueError("replies must be strings or nonempty lists of strings")
         attempts = [grade(case, item) for item in raw]
-        keys = [(item["verdict"], tuple(item["options"] or ()), tuple(item["missing"] or ()))
+        keys = [(item["verdict"], tuple(item["options"]) if item["options"] is not None else None,
+                 tuple(item["missing"]) if item["missing"] is not None else None)
                 for item in attempts]
         counts = Counter(keys)
         majority = max(counts, key=lambda key: counts[key])
-        consolidated = grade(case, json.dumps({"verdict": majority[0],
-                                                "options": majority[1], "missing": majority[2]}))
+        consolidated = attempts[keys.index(majority)]
         per_case[case["id"]] = {
             "attempts": attempts,
             "majority": {key: consolidated[key] for key in ("verdict", "options", "missing", "score")},

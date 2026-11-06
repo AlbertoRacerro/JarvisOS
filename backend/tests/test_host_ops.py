@@ -1187,7 +1187,7 @@ def semantic_policy(paths, **changes):
     return setting
 
 
-def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False):
+def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False, replies_override=None):
     paths, ex, calls = host
     case = json.loads((SCRIPT.parents[1] / "eval/local/semantic_judgment/cases.json").read_text())["cases"][0]
     row = {"name": case["id"], "prompt": "secret semantic prompt", "category": case["category"],
@@ -1206,7 +1206,7 @@ def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False):
     grader_spec.loader.exec_module(grader)
     events = []
     answer = json.dumps(case["answer"])
-    replies = [answer, json.dumps({**case["answer"], "verdict": "no_issue"}), answer]
+    replies = replies_override or [answer, json.dumps({**case["answer"], "verdict": "no_issue"}), answer]
     def bench(_ctx, _name, bench, root, sub, result, *_args, **_kwargs):
         if "--emit-prompts" in bench["argv"]:
             (root / sub / "prompts.json").write_text(json.dumps([row]))
@@ -1224,15 +1224,20 @@ def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False):
             events.append(f"unit_{argv[2]}")
         return subprocess.CompletedProcess(argv, 0, f"ActiveState={'active' if state['active'] else 'inactive'}\n", "")
     ex.run = run
+    default = {"reachable": True}
     def http(_opener, url, _remaining, *, data=None, token=None):
         if url.endswith("/stop"):
             events.append("default_stop")
-            return {}
+            default["reachable"] = False
+            return {"runtime_reachable": False}
         if url.endswith("/start"):
             events.append("default_start")
             if restore_failure:
                 raise h.Failed("restore failed")
-            return {}
+            default["reachable"] = True
+            return {"runtime_reachable": True}
+        if url.endswith("/local-ai/runtime/llama-cpp"):
+            return {"runtime_reachable": default["reachable"]}
         if url.endswith("/models"):
             events.append("ready")
             return {}
@@ -1300,6 +1305,121 @@ def test_semantic_failed_restore_is_failed(host, monkeypatch):
     assert receipt["outcome"] == "failed"
     assert "restore" in receipt["error"]
     assert receipt["detail"]["restore"]["default"] == "failed"
+
+
+def test_semantic_start_200_without_runtime_fails_restore(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._semantic_http
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/start"):
+            events.append("default_start")
+            return {"runtime_reachable": False, "reason_code": "LLAMACPP_FILE_MISSING"}
+        return original(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert receipt["detail"]["restore"]["default"] == "failed"
+    assert events[-1] == "default_start"
+
+
+def test_semantic_restore_waits_for_loading_default(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._semantic_http
+    statuses = iter([False, True])
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/start"):
+            events.append("default_start")
+            return {"runtime_reachable": False, "reason_code": "LLAMACPP_LOADING"}
+        if url.endswith("/local-ai/runtime/llama-cpp"):
+            return {"runtime_reachable": next(statuses)}
+        return original(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "ok", receipt["error"]
+    assert receipt["detail"]["restore"]["default"] == "ok"
+    assert events[-2:] == ["default_start", "grade"]
+
+
+def test_semantic_refuses_reachable_default_after_stop(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._semantic_http
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/stop"):
+            events.append("default_stop")
+            return {"runtime_reachable": True}
+        return original(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert events == ["default_stop"]
+    assert receipt["detail"]["restore"]["default"] == "not_needed"
+
+
+def test_semantic_restore_has_own_budget_after_timeout(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths, timeout_s=1)
+    events, _ = fake_semantic(host, monkeypatch, failure="timeout")
+    original = h._semantic_http
+    remaining_at_restore = []
+    def http(opener, url, remaining, **kwargs):
+        if url.endswith("/chat/completions"):
+            h.time.sleep(1.05)
+        if url.endswith("/start"):
+            remaining_at_restore.append(remaining())
+        return original(opener, url, remaining, **kwargs)
+    monkeypatch.setattr(h, "_semantic_http", http)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert events[-2:] == ["unit_stop", "default_start"]
+    assert remaining_at_restore[0] > h.SEMANTIC_RESTORE_S - 10
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
+
+
+def test_semantic_unit_failed_during_stop_still_restores_default(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._unit_state
+    def state(ctx, unit, *, timeout=30):
+        if "unit_stop" in events:
+            return {"ActiveState": "failed"}
+        return original(ctx, unit, timeout=timeout)
+    monkeypatch.setattr(h, "_unit_state", state)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "ok", receipt["error"]
+    assert events[-3:] == ["unit_stop", "default_start", "grade"]
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
+
+
+def test_semantic_unit_failed_during_start_fails_immediately(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths)
+    events, _ = fake_semantic(host, monkeypatch)
+    original = h._unit_state
+    def state(ctx, unit, *, timeout=30):
+        if "unit_start" in events and "unit_stop" not in events:
+            return {"ActiveState": "failed"}
+        return original(ctx, unit, timeout=timeout)
+    monkeypatch.setattr(h, "_unit_state", state)
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "failed"
+    assert events == ["default_stop", "unit_start", "unit_stop", "default_start"]
+    assert receipt["detail"]["restore"] == {"default": "ok", "server_unit": "ok"}
+
+
+def test_semantic_short_reply_does_not_trigger_leak_check(host, monkeypatch):
+    paths, _, _ = host
+    semantic_policy(paths, model="no_issue", attempts=1, temperature=0)
+    fake_semantic(host, monkeypatch, replies_override=["no_issue"])
+    _, receipt = request(host, "local_eval.run", {"bench": "semantic"}, sha=SHA)
+    assert receipt["outcome"] == "ok", receipt["error"]
+    assert receipt["detail"]["rows"][0]["score"] == 0
 
 
 def test_semantic_restores_after_candidate_start_failure(host, monkeypatch):

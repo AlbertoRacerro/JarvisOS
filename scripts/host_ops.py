@@ -432,9 +432,9 @@ def _systemctl(ctx: Context, *argv: str, timeout: float = 60) -> subprocess.Comp
     return ctx.run(["systemctl", "--user", *argv], timeout=timeout)
 
 
-def _unit_state(ctx: Context, unit: str) -> dict[str, str]:
+def _unit_state(ctx: Context, unit: str, *, timeout: float = 30) -> dict[str, str]:
     props = "ActiveState,SubState,UnitFileState,MainPID,NRestarts,ExecMainStatus,ActiveEnterTimestamp"
-    out = _systemctl(ctx, "show", unit, "-p", props, timeout=30).stdout
+    out = _systemctl(ctx, "show", unit, "-p", props, timeout=timeout).stdout
     return {k: v for k, _, v in (line.partition("=") for line in str(out).splitlines()) if k}
 
 
@@ -924,6 +924,7 @@ def _eval_response_body(response: Any, remaining: Callable[[], float]) -> bytes:
 
 _POINT_RE = re.compile(r"\[\[\s*point\s*:\s*([\w.:-]+)\s*(?:\|([^\]]*))?\]\]", re.IGNORECASE)
 _EVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,79}\Z")
+SEMANTIC_RESTORE_S = 300
 
 
 def _eval_prompts(value: Any) -> list[dict[str, Any]]:
@@ -1264,7 +1265,7 @@ def _semantic_http(opener: Any, url: str, deadline: Callable[[], float], *,
                 raise Failed("local HTTP returned an invalid status", {})
             if status != 200:
                 raise Failed(f"local HTTP returned status {status}", {})
-            if data is None and not url.endswith("/chat/completions"):
+            if data is None and not url.endswith("/local-ai/runtime/llama-cpp"):
                 return {}
             raw = _eval_response_body(response, deadline)
             return json.loads(raw) if raw else {}
@@ -1283,7 +1284,13 @@ def _semantic_unit(ctx: Context, action: str, unit: str, remaining: Callable[[],
     want = "active" if action == "start" else "inactive"
     if proc.returncode != 0:
         raise Failed(f"candidate server {action} failed", {})
-    while _unit_state(ctx, unit).get("ActiveState") != want:
+    while True:
+        remaining()
+        state = _unit_state(ctx, unit, timeout=min(30, remaining())).get("ActiveState")
+        if state == want or (action == "stop" and state == "failed"):
+            return
+        if state == "failed":
+            raise Failed("candidate server start failed", {})
         time.sleep(min(1, remaining()))
 
 
@@ -1347,6 +1354,15 @@ def _semantic_grade(value: Any, prompts: list[dict[str, Any]], attempts: int) ->
                 or case["attempts_scored"] != sum(item["score"] for item in case["attempts"])
                 or type(case["score"]) is not int or case["score"] != case["majority"]["score"]):
             raise Failed("semantic grader case is invalid", {})
+        def key(item: dict[str, Any]) -> tuple[Any, ...]:
+            return (item["verdict"], tuple(item["options"]) if item["options"] is not None else None,
+                    tuple(item["missing"]) if item["missing"] is not None else None)
+        keys = [key(item) for item in case["attempts"]]
+        majority_key = max(dict.fromkeys(keys), key=keys.count)
+        first = case["attempts"][keys.index(majority_key)]
+        if (case["majority"] != {k: first[k] for k in ("verdict", "options", "missing", "score")}
+                or case["disagreement"] != (len(set(keys)) > 1)):
+            raise Failed("semantic grader majority is inconsistent", {})
     for category in categories:
         total = sum(cases[row["name"]]["score"] for row in prompts if row["category"] == category)
         if categories[category]["score"] != total:
@@ -1403,7 +1419,13 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
             try:
                 if stop_default:
                     default_stopped = True
-                    _semantic_http(opener, backend_url + "/stop", remaining, data=b"{}")
+                    stopped = _semantic_http(opener, backend_url + "/stop", remaining, data=b"{}")
+                    if type(stopped.get("runtime_reachable")) is not bool:
+                        stopped = _semantic_http(opener, backend_url, remaining)
+                    if stopped.get("runtime_reachable") is not False:
+                        if stopped.get("runtime_reachable") is True:
+                            default_stopped = False
+                        raise Failed("default runtime stop was not confirmed", {})
                 if unit:
                     unit_started = True
                     _semantic_unit(ctx, "start", unit, remaining)
@@ -1457,19 +1479,33 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
             except Exception as exc:  # noqa: BLE001 - restore must run after every operation failure
                 error = exc
             finally:
+                restore_deadline = time.monotonic() + SEMANTIC_RESTORE_S
+                def restore_remaining() -> float:
+                    left = restore_deadline - time.monotonic()
+                    if left <= 0:
+                        raise Failed("semantic restore exceeded its time limit", {})
+                    return left
                 stop_sample.set()
                 if sampler is not None:
                     sampler.join(timeout=6)
                 if unit_started:
                     try:
-                        _semantic_unit(ctx, "stop", unit, lambda: max(1.0, deadline - time.monotonic()))
+                        _semantic_unit(ctx, "stop", unit, restore_remaining)
                         restore["server_unit"] = "ok"
                     except Exception:  # noqa: BLE001 - continue the default restore after a unit failure
                         restore["server_unit"] = "failed"
                 if default_stopped:
                     try:
-                        _semantic_http(opener, backend_url + "/start", lambda: max(1.0, deadline - time.monotonic()),
-                                       data=b"{}")
+                        started = _semantic_http(opener, backend_url + "/start", restore_remaining, data=b"{}")
+                        if started.get("reason_code") in ("LLAMACPP_NOT_CONFIGURED", "LLAMACPP_FILE_MISSING",
+                                                          "LLAMACPP_UNSUPPORTED_WINDOWS_WSL_TOPOLOGY",
+                                                          "LLAMACPP_NON_LOOPBACK_ENDPOINT"):
+                            raise Failed("default runtime cannot start", {})
+                        while True:
+                            status = _semantic_http(opener, backend_url, restore_remaining)
+                            if status.get("runtime_reachable") is True:
+                                break
+                            time.sleep(min(1, restore_remaining()))
                         restore["default"] = "ok"
                     except Exception:  # noqa: BLE001 - report failed restore without leaking response text
                         restore["default"] = "failed"
@@ -1526,7 +1562,8 @@ def _op_semantic_eval(ctx: Context, name: str, setting: dict[str, Any]) -> dict[
                       "peak_vram_mib": peaks["vram_mib"], "peak_ram_bytes": peaks["ram_bytes"],
                       "errors": [], "restore": restore}
             encoded = json.dumps(detail, ensure_ascii=False)
-            if token in encoded or any(text and text in encoded for texts in replies.values() for text in texts):
+            if token in encoded or any(len(text) >= 32 and text in encoded
+                                       for texts in replies.values() for text in texts):
                 raise Failed("semantic evaluation result is invalid", {"restore": restore})
             return detail
 

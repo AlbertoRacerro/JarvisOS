@@ -212,3 +212,16 @@ def test_grade_cli_consolidates_attempts_and_ties(tmp_path):
     tied = semantic_eval.grade_replies([case], {case["id"]: [correct, wrong]})["cases"][case["id"]]
     assert tied["disagreement"] is True
     assert tied["attempts_scored"] == 1
+
+
+def test_control_majority_missing_options_scores_zero():
+    case = next(case for case in CASES if case["category"] == "control")
+    malformed = json.dumps({"verdict": case["answer"]["verdict"], "missing": []})
+    correct = reply(case)
+    result = semantic_eval.grade_replies([case], {case["id"]: [malformed, correct, malformed]})
+    row = result["cases"][case["id"]]
+    assert [item["score"] for item in row["attempts"]] == [0, 1, 0]
+    assert row["majority"] == {"verdict": case["answer"]["verdict"],
+                               "options": None, "missing": [], "score": 0}
+    assert row["score"] == result["categories"]["control"]["score"] == 0
+    assert row["attempts_scored"] == 1 and row["disagreement"] is True
