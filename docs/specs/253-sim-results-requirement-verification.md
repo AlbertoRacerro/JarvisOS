@@ -1,7 +1,8 @@
 # 253 — Simulation results and requirement verification
 
-Status: ready (Q1 execution complete; final host receipt `L20261106232818-a475` verified the default model was
-restored. The batch Slack line remains a later slice subject to maintainer question `L20261106172945-c054`.)
+Status: in_review (Q1 execution complete; final host receipt `L20261106232818-a475` verified the default model was
+restored. Maintainer decision `L20261107061221-8052` answered question `L20261106172945-c054` with option 1: the host
+supervisor sends the per-batch Slack line in a later slice; Jarvis opens no new egress.)
 Depends on: none (the approved [248](248-design-value-path.md) contract binds through Authority; 248 is an umbrella
 that stays `planned` until its slices land, so it is not a hard implementation dependency)
 
@@ -16,8 +17,9 @@ Slack line of the batch notification is split out because the product has no Sla
 
 Maintainer directive `L20261105222120-78af` item 5 and answer `L20261106093156-1712` approve the binding contract in
 [248](248-design-value-path.md). Q1 execution is complete and the final host receipt verified that the default model
-was restored. This spec is reviewed and ready; it has no unmerged hard dependency. The batch Slack line remains a later slice
-subject to maintainer question `L20261106172945-c054`.
+was restored. This spec is reviewed and ready; it has no unmerged hard dependency. Maintainer decision
+`L20261107061221-8052` resolved question `L20261106172945-c054` with option 1 (supervisor sends the per-batch Slack
+line in a later slice).
 
 ## Why
 
@@ -180,10 +182,9 @@ the live data root or port 8000.
 
 ## Open questions for the maintainer
 
-1. How does the one Slack line per batch reach the maintainer? Recommended: the host relay, which already owns the
-   maintainer's Slack channel, posts one line per new batch notification read from the product, with a link and no
-   values; the product gains no egress. Alternative: a product-owned Slack sender (new egress, high risk, after Q5).
-   Only the delivery slice waits for this answer.
+1. Resolved (`L20261107061221-8052`, option 1): the host supervisor, which already owns the maintainer's Slack channel,
+   posts one line per new batch notification read from the product, with a link and no values; Jarvis shows the
+   notification in the app and opens no new internet egress. Only the supervisor delivery slice remains separate.
 
 ## Definition of done
 

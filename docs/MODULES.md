@@ -9,7 +9,7 @@ nested modules listed separately, rounded to the nearest 100.
 | Path | Status | Purpose | Entrypoints | LOC |
 | --- | --- | --- | --- | ---: |
 | `backend/app/api` | live | System routes: health check, system info and storage initialization. | `/health`, `/system/info`, `/system/initialize` | 100 |
-| `backend/app/core` | live | Configuration, data-root paths, the SQLite database with additive schema (one `*_schema.py` per owner), the project-pack loader, bootstrap, errors and static serving of the built frontend. | `database.py`, `schema.py`, `packs.py`, `paths.py`, `config.py` | 3600 |
+| `backend/app/core` | live | Configuration, data-root paths, the SQLite database with additive schema (one `*_schema.py` per owner), the project-pack loader, bootstrap, errors and static serving of the built frontend. | `database.py`, `schema.py`, `packs.py`, `paths.py`, `config.py` | 3700 |
 | `backend/app/modules/agents` | live | Hermes agent responder: isolated local agent process, session pool, governed broker and MCP bridge. Agent output is advisory. base.py and registry.py are unused scaffolding. | `/agents/hermes`, `hermes/supervisor.py` | 1900 |
 | `backend/app/modules/ai` | live | The AI execution spine: task runner, provider routing and gateway, budget and token guard, sensitivity labels and egress control, context packs, retrieval index, thread records and the ai_jobs ledger. | `/ai/settings`, `/ai/sensitivity`, `/ai/context`, `execution.py` | 30400 |
 | `backend/app/modules/bio_models` | live | Revisioned biological parameter sets, version-pinned growth model forms with their presentation cards, and the cylindrical Beer-Lambert light kernel. | `/workspaces/{id}/bio-models` | 1400 |
@@ -28,7 +28,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `backend/app/modules/photobioreactor` | live | Generic photobioreactor engineering models: culture kinetics, light, axial oxygen, airlift and centrifugal-pump shear, and the evaluator over them. | `pbr_core.py`, `pbr_evaluator.py` | 1500 |
 | `backend/app/modules/process_kernel` | live | Semantic unit registry (Pint) and the error type shared by the calculation stack. | `units.py`, `canonical.py` | 300 |
 | `backend/app/modules/process_stack` | live | Process engineering on selected upstream owners (CoolProp, fluids/ht, SUNDIALS, DWSIM): process drafts and editor, steady-state and dynamic engines, culture and PBR units, results views. | `/workspaces/{id}/process`, `draft.py`, `dynamic_engine.py` | 16700 |
-| `backend/app/modules/project_knowledge` | live | Project basis: working revisions, drafts, validation, approvals and reconciliation of requirements, parameters and decisions. Live; to be rethought. | `/project-knowledge`, `service.py` | 2900 |
+| `backend/app/modules/project_knowledge` | live | Project basis: working revisions, drafts, validation, approvals and reconciliation of requirements, parameters and decisions. Live; to be rethought. | `/project-knowledge`, `service.py` | 4300 |
 | `backend/app/modules/project_search` | live | Read-only search over project records. | `/workspaces/{id}/project-search` | 400 |
 | `backend/app/modules/relay_gateway` | live | Governed runs of sandboxed coding agents (Relay) and AI threads, under the same egress rules as other AI calls. | `/ai/relay`, `/ai/threads`, `sandbox.py` | 1700 |
 | `backend/app/modules/runner` | live | Bounded local Python runner: model implementations, runner jobs, simulation runs, logs and artifacts. Not a hostile-code sandbox. | `/workspaces/{id}/runner-jobs`, `/workspaces/{id}/simulation-runs`, `local_python.py` | 4400 |
@@ -39,11 +39,11 @@ nested modules listed separately, rounded to the nearest 100.
 | `backend/app/modules/workspace_actions` | live | Typed, governed assistant actions over Process and BLUECAD owners, with apply and undo. | `/workspaces/{id}/actions`, `service.py` | 2400 |
 | `backend/app/modules/workspaces` | live | Workspaces (create, archive, restore, rename), design versions and design components; seeds the default workspace. | `/workspaces`, `/workspaces/{id}/design-versions`, `service.py` | 1800 |
 | `backend/app/schemas` | backlog-candidate | One shared dataclass (ServiceStatus) with no consumer in the app; delete it or give it a purpose. | `common.py` | <100 |
-| `backend/tests` | live | Backend test suite (pytest): offline, fake providers, isolated data root, a fake project pack. | `conftest.py`, `scripts/test_backend_sharded.sh` | 97300 |
+| `backend/tests` | live | Backend test suite (pytest): offline, fake providers, isolated data root, a fake project pack. | `conftest.py`, `scripts/test_backend_sharded.sh` | 98000 |
 | `configs` | live | Declarative configuration: AI provider catalog, cloud escalation and egress policy, architecture-enforcement rules, BLUECAD tool registry, relay gateway. | `ai_providers.yaml`, `ai_egress_policy.json`, `architecture_enforcement.json` | <100 |
-| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 3700 |
+| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 4000 |
 | `eval` | in-development | Local-model re-evaluation: classification and intake quality, latency, llama.cpp qualification and the second-brain retrieval benchmark. Everything here is marked to improve. | `local/README.md`, `local/llamacpp_qualification.py` | 1000 |
-| `frontend/src/api` | live | Typed API client wrappers per backend area, plus the generated contract types (generated/). | `client.ts`, `generated/` | 4400 |
+| `frontend/src/api` | live | Typed API client wrappers per backend area, plus the generated contract types (generated/). | `client.ts`, `generated/` | 4500 |
 | `frontend/src/app` | live | Routing table and router hook, navigation history, selection, and the owner and target registries Bubu uses to find controls. | `routes.ts`, `useAppRouter.ts`, `designTargets.ts` | 700 |
 | `frontend/src/components` | live | Shared and top-level components (layout, workspace bootstrap, 3D viewer, error boundary); feature components live in the subdirectories. | `Layout.tsx`, `WorkspaceBootstrap.tsx` | 800 |
 | `frontend/src/components/ai` | live | Jarvis chat sidecar: message rendering, workspace action cards, math text and proposal presentation. | `useJarvisSidecar.tsx`, `JarvisSidecar.css` | 2200 |
@@ -56,7 +56,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `frontend/src/components/engineering` | live | Engineering properties panel, Jarvis engineering actions and previous-run loading. | `EngineeringProperties.tsx` | 1100 |
 | `frontend/src/components/engineering-data` | live | State logic for the Engineering Data page. | `engineeringDataState.ts` | 100 |
 | `frontend/src/components/environment` | live | Environment profile UI: site form, import wizard, generators, profile chart and table, provenance. | `ImportWizard.tsx`, `ProfileList.tsx` | 700 |
-| `frontend/src/components/fusion` | live | Operator surfaces shared across workspaces: workspace header, settings surface, project archive, knowledge and search panels. | `FinalWorkspaceHeader.tsx`, `FinalSettingsSurface.tsx` | 700 |
+| `frontend/src/components/fusion` | live | Operator surfaces shared across workspaces: workspace header, settings surface, project archive, knowledge and search panels. | `FinalWorkspaceHeader.tsx`, `FinalSettingsSurface.tsx` | 800 |
 | `frontend/src/components/process` | live | Process workspace panels: PBR model picker, inspector and results, biology model library, reactor kinetics, dynamic runs and proposals. | `PbrInspector.tsx`, `ReactorKinetics.tsx`, `BiologyModelLibrary.tsx` | 3400 |
 | `frontend/src/components/review` | live | State logic for the Review stage. | `reviewState.ts` | 200 |
 | `frontend/src/components/runs` | live | State logic for the Runs workbench. | `state.ts` | <100 |
@@ -67,7 +67,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `frontend/src/pages` | live | Page-level screens: Design project, Studio, Runs, Coding, Settings, Literature, Model dossier, Engineering Data, Development roadmap, AI threads, and the CFD panels. | `DesignProject.tsx`, `Studio.tsx`, `CodingWorkbench.tsx` | 6400 |
 | `frontend/src/stages` | live | Stage containers for the Design workspace (process, studies, model, review), the environment panel and the process draft editor. | `registry.ts`, `ProcessStage.tsx`, `ModelStage.tsx` | 6500 |
 | `frontend/src/styles` | live | Design tokens and style sheets for the shell and each surface. | `tokens.css`, `global.css`, `lumen.css` | 5300 |
-| `frontend/tests` | live | Static frontend tests (node .mjs) run by `npm run build`; they assert literal strings and source patterns. | `package.json (scripts.build)` | 6100 |
+| `frontend/tests` | live | Static frontend tests (node .mjs) run by `npm run build`; they assert literal strings and source patterns. | `package.json (scripts.build)` | 6200 |
 | `schemas` | live | JSON schemas for BLUECAD specs, results and tool registry, and Jarvis records. | `bluecad_geometry_spec_v0_1.schema.json` | <100 |
 | `scripts` | live | Repository tooling: CI gates, spec-status check, frontend contract codegen, module-table generator, launcher, supervisor (Relay continuity, jobs, observer, host ops), worker routing, Copilot CLI delegation and control-room recovery (devctx). | `relay_continuity.py`, `devctx.py`, `worker_routing.py`, `copilot_worker.py`, `jarvisos_launcher.py`, `check_spec_status.py` | 16700 |
 | `scripts/benchmarks` | in-development | Solver benchmarks against real OpenFOAM, DWSIM and process libraries; today scripts that record evidence, to be turned into pinned regression tests. | `README.md` | 2400 |

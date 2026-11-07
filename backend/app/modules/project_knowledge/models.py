@@ -303,6 +303,7 @@ class ValidationRequest(BaseModel):
     applicability_set_digest: str
     source_run_id: str | None = None
     source_output_name: str | None = None
+    required_conditions: dict[str, str | int | float | bool] | None = None
     expected_predecessor_validation_id: str | None = None
 
 
@@ -315,7 +316,116 @@ class ValidationRead(BaseModel):
     source_run_id: str | None
     source_scalar_id: str | None
     supersedes_validation_id: str | None
+    unvalidated_source: bool = False
+    unvalidated_value_ids: list[str] = Field(default_factory=list)
     created_at: str
+
+
+class SimulationResultCheckRead(BaseModel):
+    id: str
+    value_id: str
+    check_name: str
+    outcome: Literal["passed", "failed"]
+    reason_code: str
+    created_at: str
+
+
+class SimulationResultResolutionRead(BaseModel):
+    id: str
+    value_id: str
+    action: Literal["correct", "confirm"]
+    reason: str
+    actor: str
+    original_value: str
+    original_unit: str
+    original_conditions: dict[str, object]
+    corrected_value: str | None = None
+    corrected_unit: str | None = None
+    corrected_conditions: dict[str, object] | None = None
+    created_at: str
+
+
+class SimulationResultValueRead(BaseModel):
+    id: str
+    batch_id: str
+    run_id: str
+    workspace_id: str
+    output_name: str
+    source_payload_digest: str
+    extractor_id: str
+    extractor_version: str
+    quantity: str | None
+    value: str
+    unit: str
+    conditions: dict[str, object]
+    status: Literal["passed", "exception", "corrected", "confirmed"]
+    admitted_scalar_id: str | None
+    unvalidated_source: bool = False
+    target_href: str
+    checks: list[SimulationResultCheckRead]
+    resolution: SimulationResultResolutionRead | None = None
+    created_at: str
+
+
+class SimulationResultBatchRead(BaseModel):
+    id: str
+    workspace_id: str
+    run_id: str
+    source_payload_digest: str
+    extractor_version: str
+    notification_state: Literal["none", "pending", "read"]
+    exception_count: int
+    unvalidated_input_value_ids: list[str] = Field(default_factory=list)
+    values: list[SimulationResultValueRead]
+    created_at: str
+
+
+class SimulationResultNotificationTarget(BaseModel):
+    value_id: str
+    output_name: str
+    status: Literal["exception", "confirmed"]
+    failed_check_codes: list[str]
+    target_href: str
+
+
+class SimulationResultNotificationRead(BaseModel):
+    batch_id: str
+    workspace_id: str
+    run_id: str
+    notification_state: Literal["pending", "read"]
+    exception_count: int
+    message: str
+    targets: list[SimulationResultNotificationTarget]
+    created_at: str
+
+
+class SimulationResultResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str
+    action: Literal["correct", "confirm"]
+    reason: str = Field(min_length=1, max_length=500)
+    corrected_value: str | None = Field(default=None, max_length=200)
+    corrected_unit: str | None = Field(default=None, max_length=100)
+    corrected_quantity: str | None = Field(default=None, max_length=200)
+    corrected_conditions: dict[str, str | int | float | bool] | None = None
+
+    @model_validator(mode="after")
+    def validate_action_fields(self) -> "SimulationResultResolveRequest":
+        if not self.reason.strip():
+            raise ValueError("Resolution reason must be non-empty.")
+        if self.action == "correct":
+            if self.corrected_value is None or not self.corrected_value.strip():
+                raise ValueError("Correcting an exception requires corrected_value.")
+        else:
+            if (
+                self.corrected_value is not None
+                or self.corrected_unit is not None
+                or self.corrected_quantity is not None
+                or self.corrected_conditions is not None
+            ):
+                raise ValueError("Confirming an exception cannot supply corrected fields.")
+        return self
 
 
 class RevalidationRead(BaseModel):
@@ -327,6 +437,7 @@ class RevalidationRead(BaseModel):
     known_fail_requirement_ids: list[str]
     recomputation_required: list[str]
     selected_validation_set_digest: str
+    applicability_set_digest: str
     diagnostics: list[str]
 
 
