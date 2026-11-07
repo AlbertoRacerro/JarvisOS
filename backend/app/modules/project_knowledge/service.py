@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 from decimal import Decimal, InvalidOperation
+from typing import Literal, cast
 from uuid import uuid4
 
 from app.core.database import open_sqlite_connection
@@ -951,6 +952,8 @@ def _append_validation(
     source_payload_digest: str | None,
     observed: dict[str, object] | None,
     expected: dict[str, object] | None,
+    unvalidated_source: bool = False,
+    unvalidated_value_ids: list[str] | None = None,
 ) -> ValidationRead:
     slot_values = (
         payload.working_revision_id,
@@ -1019,6 +1022,8 @@ def _append_validation(
         source_run_id=source_run_id,
         source_scalar_id=source_scalar_id,
         supersedes_validation_id=predecessor_id,
+        unvalidated_source=unvalidated_source,
+        unvalidated_value_ids=list(unvalidated_value_ids or []),
         created_at=now,
     )
 
@@ -1162,7 +1167,46 @@ def evaluate_requirement(payload: ValidationRequest) -> ValidationRead:
                 connection.commit()
                 return result
             scalar = candidates[0]
+            result_val_row = connection.execute(
+                """
+                SELECT id, value_text, unit, status, conditions_json
+                FROM simulation_result_values
+                WHERE admitted_scalar_id = ?
+                LIMIT 1
+                """,
+                (scalar["id"],),
+            ).fetchone()
+            unvalidated_ids: list[str] = []
+            stated_conditions: dict[str, object] = {}
+            effective_value_text = str(scalar["value_text"])
+            effective_unit_text = str(scalar["unit"])
+            if result_val_row is not None:
+                effective_value_text = str(result_val_row["value_text"])
+                effective_unit_text = str(result_val_row["unit"])
+                raw_conds = json.loads(str(result_val_row["conditions_json"] or "{}"))
+                if isinstance(raw_conds, dict):
+                    internal_unv = raw_conds.pop("_unvalidated_input_value_ids", [])
+                    if isinstance(internal_unv, list):
+                        unvalidated_ids.extend(str(item) for item in internal_unv if item)
+                    stated_conditions = raw_conds
+                if str(result_val_row["status"]) in {"exception", "confirmed"}:
+                    val_id = str(result_val_row["id"])
+                    if val_id not in unvalidated_ids:
+                        unvalidated_ids.insert(0, val_id)
+            unvalidated_source = bool(unvalidated_ids)
+
+            conditions_mismatch = False
+            if payload.required_conditions is not None:
+                if not stated_conditions:
+                    conditions_mismatch = True
+                else:
+                    for req_k, req_v in payload.required_conditions.items():
+                        if req_k not in stated_conditions or str(stated_conditions[req_k]).strip() != str(req_v).strip():
+                            conditions_mismatch = True
+                            break
+
             actual_payload_digest = hashlib.sha256((scalar["output_payload"] or "").encode("utf-8")).hexdigest()
+            observed: dict[str, object] | None
             if actual_payload_digest != scalar["source_payload_digest"]:
                 reason = "stale_target"
                 outcome = "not_evaluable"
@@ -1177,13 +1221,21 @@ def evaluate_requirement(payload: ValidationRequest) -> ValidationRead:
                 reason = "wrong_working_revision"
                 outcome = "not_evaluable"
                 observed = None
-            elif str(scalar["unit"]).strip() != str(expected_unit or "").strip():
+            elif conditions_mismatch:
+                reason = "outside_stated_conditions"
+                outcome = "not_evaluable"
+                observed = {
+                    "value": effective_value_text,
+                    "unit": effective_unit_text,
+                    "stated_conditions": stated_conditions,
+                }
+            elif effective_unit_text.strip() != str(expected_unit or "").strip():
                 reason = "unit_mismatch"
                 outcome = "not_evaluable"
-                observed = {"value": scalar["value_text"], "unit": scalar["unit"]}
+                observed = {"value": effective_value_text, "unit": effective_unit_text}
             else:
                 try:
-                    observed_value = Decimal(str(scalar["value_text"]))
+                    observed_value = Decimal(effective_value_text)
                 except InvalidOperation:
                     observed_value = Decimal("NaN")
                 if not observed_value.is_finite():
@@ -1193,7 +1245,13 @@ def evaluate_requirement(payload: ValidationRequest) -> ValidationRead:
                     passed = _comparison(str(operator), observed_value, expected)
                     reason = "comparison_true" if passed else "comparison_false"
                     outcome = "pass" if passed else "fail"
-                observed = {"value": str(scalar["value_text"]), "unit": scalar["unit"]}
+                observed = {"value": effective_value_text, "unit": effective_unit_text}
+            if observed is not None and unvalidated_source:
+                observed["unvalidated_source"] = True
+                observed["unvalidated_value_ids"] = unvalidated_ids
+            expected_dict: dict[str, object] = {"operator": operator, "value": str(expected), "unit": expected_unit or ""}
+            if payload.required_conditions is not None:
+                expected_dict["required_conditions"] = dict(payload.required_conditions)
             result = _append_validation(
                 connection,
                 payload=payload,
@@ -1204,7 +1262,9 @@ def evaluate_requirement(payload: ValidationRequest) -> ValidationRead:
                 source_scalar_id=str(scalar["id"]),
                 source_payload_digest=str(scalar["source_payload_digest"]),
                 observed=observed,
-                expected={"operator": operator, "value": str(expected), "unit": expected_unit or ""},
+                expected=expected_dict,
+                unvalidated_source=unvalidated_source,
+                unvalidated_value_ids=unvalidated_ids,
             )
             connection.commit()
             return result
@@ -1298,7 +1358,12 @@ def _applicable_required_requirements(
                 include = version_rows[0]["effect"] == "include"
         if include:
             applicable.append(str(requirement["id"]))
-    return sorted(applicable), _digest(relation_basis), diagnostics
+    sorted_applicable = sorted(applicable)
+    return (
+        sorted_applicable,
+        _digest({"applicable": sorted_applicable, "relations": relation_basis}),
+        diagnostics,
+    )
 
 
 def _current_validations(
@@ -1364,9 +1429,11 @@ def _validation_row_admissible(
         return row["outcome"] in {"not_evaluable", "recomputation_required", "no_material_effect"}
     source = connection.execute(
         """
-        SELECT r.project_knowledge_revision_id, r.output_payload, s.source_payload_digest
+        SELECT r.project_knowledge_revision_id, r.output_payload, s.source_payload_digest,
+               s.value_text, s.unit, rv.value_text AS rv_value_text, rv.unit AS rv_unit
         FROM simulation_runs r
         JOIN simulation_run_scalar_results s ON s.run_id = r.id AND s.id = ?
+        LEFT JOIN simulation_result_values rv ON rv.admitted_scalar_id = s.id
         WHERE r.id = ? AND r.workspace_id = ?
         """,
         (row["source_scalar_id"], row["source_run_id"], workspace_id),
@@ -1376,6 +1443,16 @@ def _validation_row_admissible(
     actual_digest = hashlib.sha256((source["output_payload"] or "").encode("utf-8")).hexdigest()
     if actual_digest != str(row["source_payload_digest"]) or actual_digest != str(source["source_payload_digest"]):
         return False
+    if row["observed_json"]:
+        try:
+            obs = json.loads(str(row["observed_json"]))
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if isinstance(obs, dict) and "value" in obs and "unit" in obs:
+            current_val = str(source["rv_value_text"] if source["rv_value_text"] is not None else source["value_text"])
+            current_unit = str(source["rv_unit"] if source["rv_unit"] is not None else source["unit"])
+            if str(obs["value"]) != current_val or str(obs["unit"]) != current_unit:
+                return False
     return _run_binding_matches_revision(
         connection,
         workspace_id=workspace_id,
@@ -1456,6 +1533,7 @@ def revalidation_status_from_connection(
         known_fail_requirement_ids=sorted(set(known_fail)),
         recomputation_required=sorted(set(recompute)),
         selected_validation_set_digest=selected_digest,
+        applicability_set_digest=applicability_digest,
         diagnostics=sorted(set(diagnostics)),
     )
 
@@ -1463,6 +1541,60 @@ def revalidation_status_from_connection(
 def revalidation_status(workspace_id: str, working_revision_id: str) -> RevalidationRead:
     with open_sqlite_connection() as connection:
         return revalidation_status_from_connection(connection, workspace_id, working_revision_id)
+
+
+def list_validations(workspace_id: str, working_revision_id: str) -> list[ValidationRead]:
+    with open_sqlite_connection() as connection:
+        _require_workspace(connection, workspace_id)
+        revision = connection.execute(
+            "SELECT id FROM project_knowledge_revisions WHERE id = ? AND workspace_id = ?",
+            (working_revision_id, workspace_id),
+        ).fetchone()
+        if revision is None:
+            raise ProjectKnowledgeError("working_revision_missing", "Working revision was not found in workspace.")
+        current, _diag = _current_validations(connection, working_revision_id)
+        items: list[ValidationRead] = []
+        for row in current:
+            obs = json.loads(str(row["observed_json"])) if row["observed_json"] else None
+            unv_source = bool(obs.get("unvalidated_source")) if isinstance(obs, dict) else False
+            unv_ids_raw = obs.get("unvalidated_value_ids") if isinstance(obs, dict) else None
+            unv_ids = [str(x) for x in unv_ids_raw] if isinstance(unv_ids_raw, list) else []
+            if not unv_source and row["source_scalar_id"]:
+                rv = connection.execute(
+                    "SELECT id, status, conditions_json FROM simulation_result_values WHERE admitted_scalar_id = ? LIMIT 1",
+                    (row["source_scalar_id"],),
+                ).fetchone()
+                if rv is not None:
+                    raw_c = json.loads(str(rv["conditions_json"] or "{}"))
+                    if isinstance(raw_c, dict):
+                        internal = raw_c.get("_unvalidated_input_value_ids")
+                        if isinstance(internal, list):
+                            unv_ids.extend(str(x) for x in internal if x)
+                    if str(rv["status"]) in {"exception", "confirmed"}:
+                        vid = str(rv["id"])
+                        if vid not in unv_ids:
+                            unv_ids.insert(0, vid)
+                    unv_source = bool(unv_ids)
+            outcome_val = cast(
+                Literal["pass", "fail", "not_evaluable", "no_material_effect", "recomputation_required"],
+                str(row["outcome"]),
+            )
+            items.append(
+                ValidationRead(
+                    id=str(row["id"]),
+                    working_revision_id=str(row["working_revision_id"]),
+                    requirement_id=str(row["requirement_id"]),
+                    outcome=outcome_val,
+                    reason_code=str(row["reason_code"]),
+                    source_run_id=row["source_run_id"],
+                    source_scalar_id=row["source_scalar_id"],
+                    supersedes_validation_id=row["supersedes_validation_id"],
+                    unvalidated_source=unv_source,
+                    unvalidated_value_ids=unv_ids,
+                    created_at=str(row["created_at"]),
+                )
+            )
+        return items
 
 
 def _snapshot_owner_manifest(connection: sqlite3.Connection, workspace_id: str) -> list[dict[str, object]]:

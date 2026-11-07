@@ -32,6 +32,7 @@ optional pack, not by this repository.
 | `llama_runtime_panel_walk.mjs` | Coding → Runtime local model status, confirmed stop and failure using intercepted controls (fresh temporary data root) | `node e2e/llama_runtime_panel_walk.mjs <evidence-dir>` |
 | `coding_supervisor_walk.mjs` | Coding → Runtime supervisor controls (pause, resume, graceful restart) and open maintainer question answers | `node e2e/coding_supervisor_walk.mjs <evidence-dir>` |
 | `provider_quota_walk.mjs` | Coding → Runtime provider usage columns, quota rings, Claude windows, and failed-refresh retention | `node e2e/provider_quota_walk.mjs <evidence-dir>` |
+| `sim_results_requirement_verification_walk.mjs` | Spec 253 simulation result ingestion, red-dot exceptions, single batch notification, resolution (correct + confirm), requirement verdicts and unvalidated markers | `node e2e/sim_results_requirement_verification_walk.mjs <evidence-dir>` |
 
 Prerequisites: `(cd frontend && VITE_API_BASE_URL= npm run build)`, a backend virtualenv
 (`JARVISOS_PROOF_PYTHON`, default `backend/.venv/bin/python`), and Playwright

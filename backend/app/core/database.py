@@ -66,6 +66,7 @@ from app.core.project_knowledge_schema import (
     PROJECT_KNOWLEDGE_MIGRATION_RECORD,
     PROJECT_KNOWLEDGE_MIGRATION_STATEMENTS,
     PROJECT_KNOWLEDGE_SCHEMA_STATEMENTS,
+    SIM_RESULT_INGESTION_MIGRATION_RECORD,
 )
 from app.core.relay_gateway_schema import (
     RELAY_GATEWAY_INDEX_STATEMENTS,
@@ -316,6 +317,10 @@ def is_database_initialized() -> bool:
         "project_knowledge_approval_requests",
         "requirement_applicability",
         "simulation_run_scalar_results",
+        "simulation_result_batches",
+        "simulation_result_values",
+        "simulation_result_checks",
+        "simulation_result_resolutions",
         "project_knowledge_validation",
         "project_knowledge_reconciled_snapshots",
         "project_knowledge_reconciliation_requests",
@@ -415,6 +420,7 @@ def _record_schema_migrations(connection: sqlite3.Connection) -> None:
         AI_THREAD_SCHEMA_MIGRATION_RECORD,
         PARAMETER_LIFECYCLE_MIGRATION_RECORD,
         PROJECT_KNOWLEDGE_MIGRATION_RECORD,
+        SIM_RESULT_INGESTION_MIGRATION_RECORD,
         LITERATURE_SCHEMA_MIGRATION_RECORD,
         DEVELOPMENT_SCHEMA_MIGRATION_RECORD,
         BRAINSTORM_SCHEMA_MIGRATION_RECORD,

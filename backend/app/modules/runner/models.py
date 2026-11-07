@@ -115,6 +115,8 @@ class SimulationRunDetail(BaseModel):
     notes: str | None = None
     stale: bool = False
     superseded: bool = False
+    unvalidated_source: bool = False
+    unvalidated_input_value_ids: list[str] = Field(default_factory=list)
 
 
 class RunnerJobCreateResponse(BaseModel):
