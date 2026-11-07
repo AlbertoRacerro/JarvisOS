@@ -1169,7 +1169,7 @@ def evaluate_requirement(payload: ValidationRequest) -> ValidationRead:
             scalar = candidates[0]
             result_val_row = connection.execute(
                 """
-                SELECT id, status, conditions_json
+                SELECT id, value_text, unit, status, conditions_json
                 FROM simulation_result_values
                 WHERE admitted_scalar_id = ?
                 LIMIT 1
@@ -1178,7 +1178,11 @@ def evaluate_requirement(payload: ValidationRequest) -> ValidationRead:
             ).fetchone()
             unvalidated_ids: list[str] = []
             stated_conditions: dict[str, object] = {}
+            effective_value_text = str(scalar["value_text"])
+            effective_unit_text = str(scalar["unit"])
             if result_val_row is not None:
+                effective_value_text = str(result_val_row["value_text"])
+                effective_unit_text = str(result_val_row["unit"])
                 raw_conds = json.loads(str(result_val_row["conditions_json"] or "{}"))
                 if isinstance(raw_conds, dict):
                     internal_unv = raw_conds.pop("_unvalidated_input_value_ids", [])
@@ -1202,6 +1206,7 @@ def evaluate_requirement(payload: ValidationRequest) -> ValidationRead:
                             break
 
             actual_payload_digest = hashlib.sha256((scalar["output_payload"] or "").encode("utf-8")).hexdigest()
+            observed: dict[str, object] | None
             if actual_payload_digest != scalar["source_payload_digest"]:
                 reason = "stale_target"
                 outcome = "not_evaluable"
@@ -1220,17 +1225,17 @@ def evaluate_requirement(payload: ValidationRequest) -> ValidationRead:
                 reason = "outside_stated_conditions"
                 outcome = "not_evaluable"
                 observed = {
-                    "value": str(scalar["value_text"]),
-                    "unit": scalar["unit"],
+                    "value": effective_value_text,
+                    "unit": effective_unit_text,
                     "stated_conditions": stated_conditions,
                 }
-            elif str(scalar["unit"]).strip() != str(expected_unit or "").strip():
+            elif effective_unit_text.strip() != str(expected_unit or "").strip():
                 reason = "unit_mismatch"
                 outcome = "not_evaluable"
-                observed = {"value": scalar["value_text"], "unit": scalar["unit"]}
+                observed = {"value": effective_value_text, "unit": effective_unit_text}
             else:
                 try:
-                    observed_value = Decimal(str(scalar["value_text"]))
+                    observed_value = Decimal(effective_value_text)
                 except InvalidOperation:
                     observed_value = Decimal("NaN")
                 if not observed_value.is_finite():
@@ -1240,7 +1245,7 @@ def evaluate_requirement(payload: ValidationRequest) -> ValidationRead:
                     passed = _comparison(str(operator), observed_value, expected)
                     reason = "comparison_true" if passed else "comparison_false"
                     outcome = "pass" if passed else "fail"
-                observed = {"value": str(scalar["value_text"]), "unit": scalar["unit"]}
+                observed = {"value": effective_value_text, "unit": effective_unit_text}
             if observed is not None and unvalidated_source:
                 observed["unvalidated_source"] = True
                 observed["unvalidated_value_ids"] = unvalidated_ids
@@ -1425,9 +1430,10 @@ def _validation_row_admissible(
     source = connection.execute(
         """
         SELECT r.project_knowledge_revision_id, r.output_payload, s.source_payload_digest,
-               s.value_text, s.unit
+               s.value_text, s.unit, rv.value_text AS rv_value_text, rv.unit AS rv_unit
         FROM simulation_runs r
         JOIN simulation_run_scalar_results s ON s.run_id = r.id AND s.id = ?
+        LEFT JOIN simulation_result_values rv ON rv.admitted_scalar_id = s.id
         WHERE r.id = ? AND r.workspace_id = ?
         """,
         (row["source_scalar_id"], row["source_run_id"], workspace_id),
@@ -1443,7 +1449,9 @@ def _validation_row_admissible(
         except (TypeError, json.JSONDecodeError):
             return False
         if isinstance(obs, dict) and "value" in obs and "unit" in obs:
-            if str(obs["value"]) != str(source["value_text"]) or str(obs["unit"]) != str(source["unit"]):
+            current_val = str(source["rv_value_text"] if source["rv_value_text"] is not None else source["value_text"])
+            current_unit = str(source["rv_unit"] if source["rv_unit"] is not None else source["unit"])
+            if str(obs["value"]) != current_val or str(obs["unit"]) != current_unit:
                 return False
     return _run_binding_matches_revision(
         connection,

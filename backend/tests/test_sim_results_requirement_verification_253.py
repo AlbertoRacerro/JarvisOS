@@ -596,3 +596,67 @@ def test_253_ac7_revalidation_returns_computed_applicability_digest_and_changes_
     assert "req-ac7" in after.mandatory_requirement_ids
     assert after.applicability_set_digest != before.applicability_set_digest
     assert after.applicability_set_digest != after.selected_validation_set_digest
+
+
+def test_253_missing_conditions_and_source_scalar_preservation_on_correction(client: TestClient) -> None:
+    _seed_basis_bounds_and_decisions()
+    script = r"""
+import json
+with open('result.json', 'w', encoding='utf-8') as f:
+    json.dump({
+        'outputs': {
+            'mass_flow': {'value': 45.0, 'unit': 'kg/s', 'quantity': 'mass_flow'},
+            'heat_flux': {'value': 25.0, 'unit': 'MW/m^2', 'quantity': 'heat_flux', 'conditions': {'regime': 'nominal'}}
+        }
+    }, f)
+""".strip()
+    body = _create_calc_run(client, script, input_set={"inlet_temp": {"value": 300, "unit": "K"}})
+    run_id = body["simulation_run"]["id"]
+
+    batch = list_simulation_result_batches("main")[0]
+    by_name = {v.output_name: v for v in batch.values}
+
+    # Output without stated conditions must fail plausible_range with missing_conditions (never fabricated from run inputs)
+    assert by_name["mass_flow"].status == "exception"
+    assert by_name["mass_flow"].conditions == {}
+    mf_failed = {c.check_name: c.reason_code for c in by_name["mass_flow"].checks if c.outcome == "failed"}
+    assert mf_failed["plausible_range"] == "missing_conditions"
+
+    # Correcting heat_flux preserves the extracted source row in simulation_run_scalar_results
+    resolve_simulation_result_exception(
+        by_name["heat_flux"].id,
+        SimulationResultResolveRequest(
+            workspace_id="main",
+            action="correct",
+            reason="Calibrated heat flux.",
+            corrected_value="7.5",
+            corrected_unit="MW/m^2",
+        ),
+    )
+    with open_sqlite_connection() as connection:
+        scalar_row = connection.execute(
+            "SELECT value_text, unit FROM simulation_run_scalar_results WHERE run_id = ? AND output_name = 'heat_flux'",
+            (run_id,),
+        ).fetchone()
+        assert scalar_row is not None
+        assert scalar_row["value_text"] == "25.0"
+        assert scalar_row["unit"] == "MW/m^2"
+
+        # Unverified synthetic succeeded run without runner_job/run_artifacts is rejected by ingest_validated_calc_v0_run
+        mv_id = connection.execute("SELECT model_version_id FROM simulation_runs WHERE id = ?", (run_id,)).fetchone()[
+            "model_version_id"
+        ]
+        connection.execute(
+            """
+            INSERT INTO simulation_runs (
+                id, workspace_id, model_version_id, run_label, status, output_payload, created_at
+            ) VALUES (
+                'unverified-succeeded-run', 'main', ?, 'Unverified', 'succeeded',
+                '{"outputs":{"mass_flow":{"value":50.0,"unit":"kg/s","conditions":{"regime":"nominal"}}}}',
+                '2026-11-06T04:00:00+00:00'
+            )
+            """,
+            (mv_id,),
+        )
+        connection.commit()
+    assert ingest_validated_calc_v0_run("main", "unverified-succeeded-run") is None

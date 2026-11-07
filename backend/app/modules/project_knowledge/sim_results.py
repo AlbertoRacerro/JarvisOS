@@ -49,7 +49,7 @@ def _target_href(workspace_id: str, run_id: str, value_id: str) -> str:
     return f"/memory/project-basis?workspaceId={workspace_id}&runId={run_id}&valueId={value_id}"
 
 
-def _extract_conditions(output_item: dict[str, object], input_payload: str | None) -> dict[str, object]:
+def _extract_conditions(output_item: dict[str, object]) -> dict[str, object]:
     raw_conditions = output_item.get("conditions")
     if isinstance(raw_conditions, dict) and raw_conditions:
         cleaned: dict[str, object] = {}
@@ -60,25 +60,6 @@ def _extract_conditions(output_item: dict[str, object], input_payload: str | Non
                 cleaned[key.strip()] = val
         if cleaned:
             return cleaned
-    if input_payload:
-        try:
-            decoded_inputs = json.loads(input_payload)
-        except (TypeError, json.JSONDecodeError):
-            decoded_inputs = None
-        if isinstance(decoded_inputs, dict) and decoded_inputs:
-            derived: dict[str, object] = {}
-            for key, item in sorted(decoded_inputs.items()):
-                if not isinstance(key, str) or not key.strip():
-                    continue
-                if isinstance(item, dict) and "value" in item:
-                    val = item["value"]
-                    unit = str(item.get("unit") or "").strip()
-                    if isinstance(val, int | float) and not isinstance(val, bool) and isfinite(float(val)):
-                        derived[key.strip()] = f"{val} {unit}".strip() if unit else val
-                elif isinstance(item, int | float | str) and not isinstance(item, bool):
-                    derived[key.strip()] = item
-            if derived:
-                return derived
     return {}
 
 
@@ -381,17 +362,25 @@ def _unvalidated_input_value_ids_for_run(
                 ).fetchall()
                 for vr in v_rows:
                     flagged_ids.add(str(vr["id"]))
-        v_by_name = connection.execute(
-            """
-            SELECT v.id FROM simulation_result_values v
-            JOIN simulation_result_batches b ON b.id = v.batch_id
-            WHERE b.workspace_id = ? AND (v.output_name = ? OR v.quantity = ?)
-              AND v.status IN ('exception', 'confirmed')
-            """,
-            (workspace_id, str(name), str(name)),
-        ).fetchall()
-        for vr in v_by_name:
-            flagged_ids.add(str(vr["id"]))
+        raw_val = item.get("value")
+        raw_unit = item.get("unit")
+        if raw_val is not None and not isinstance(raw_val, bool) and isinstance(raw_unit, str) and raw_unit.strip():
+            try:
+                norm_val = format(Decimal(str(raw_val)), "f")
+            except InvalidOperation:
+                norm_val = str(raw_val).strip()
+            v_by_name = connection.execute(
+                """
+                SELECT v.id FROM simulation_result_values v
+                JOIN simulation_result_batches b ON b.id = v.batch_id
+                WHERE b.workspace_id = ? AND (v.output_name = ? OR v.quantity = ?)
+                  AND v.value_text = ? AND v.unit = ?
+                  AND v.status IN ('exception', 'confirmed')
+                """,
+                (workspace_id, str(name), str(name), norm_val, raw_unit.strip()),
+            ).fetchall()
+            for vr in v_by_name:
+                flagged_ids.add(str(vr["id"]))
     return sorted(flagged_ids)
 
 
@@ -438,6 +427,26 @@ def ingest_validated_calc_v0_run(
                 connection.commit()
                 return batch_read
 
+            has_succeeded_job = connection.execute(
+                """
+                SELECT id FROM runner_jobs
+                WHERE simulation_run_id = ? AND workspace_id = ? AND status = 'succeeded'
+                LIMIT 1
+                """,
+                (run_id, workspace_id),
+            ).fetchone()
+            has_calc_artifact = connection.execute(
+                """
+                SELECT id FROM run_artifacts
+                WHERE simulation_run_id = ? AND workspace_id = ? AND role = 'calc_result_json'
+                LIMIT 1
+                """,
+                (run_id, workspace_id),
+            ).fetchone()
+            if has_succeeded_job is None or has_calc_artifact is None:
+                connection.rollback()
+                return None
+
             try:
                 decoded_payload = json.loads(output_payload)
             except (TypeError, json.JSONDecodeError):
@@ -450,6 +459,25 @@ def ingest_validated_calc_v0_run(
             if not isinstance(raw_outputs, dict) or not raw_outputs:
                 connection.rollback()
                 return None
+            for out_name, out_item in raw_outputs.items():
+                if not isinstance(out_name, str) or not out_name.strip() or not isinstance(out_item, dict):
+                    connection.rollback()
+                    return None
+                raw_val = out_item.get("value")
+                if isinstance(raw_val, bool):
+                    connection.rollback()
+                    return None
+                try:
+                    num_val = float(raw_val)  # type: ignore[arg-type]
+                except (OverflowError, TypeError, ValueError):
+                    connection.rollback()
+                    return None
+                if not isfinite(num_val):
+                    connection.rollback()
+                    return None
+                if not isinstance(out_item.get("unit"), str) or not str(out_item.get("unit")).strip():
+                    connection.rollback()
+                    return None
             if validated_outputs is not None and set(validated_outputs.keys()) != set(raw_outputs.keys()):
                 connection.rollback()
                 return None
@@ -480,7 +508,7 @@ def ingest_validated_calc_v0_run(
                 val_text, val_unit = _extract_scalar_from_run_payload(outputs_canonical, output_name)
                 raw_qty = raw_item.get("quantity")
                 qty = str(raw_qty).strip() if isinstance(raw_qty, str) and raw_qty.strip() else output_name.strip()
-                conds = _extract_conditions(raw_item, input_payload)
+                conds = _extract_conditions(raw_item)
                 if upstream_flagged:
                     conds = {**conds, "_unvalidated_input_value_ids": upstream_flagged}
                 extracted_items.append((output_name, raw_item, val_text, val_unit, qty, conds))
@@ -884,15 +912,6 @@ def resolve_simulation_result_exception(
                     """,
                     (corr_value, corr_unit, corr_conds_json, new_status, value_id),
                 )
-                if row["admitted_scalar_id"]:
-                    connection.execute(
-                        """
-                        UPDATE simulation_run_scalar_results
-                        SET value_text = ?, unit = ?
-                        WHERE id = ? AND run_id = ?
-                        """,
-                        (corr_value, corr_unit, row["admitted_scalar_id"], run_id),
-                    )
 
             if payload.action == "confirm":
                 connection.execute(

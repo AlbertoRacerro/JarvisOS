@@ -309,7 +309,7 @@ export default function ProjectKnowledgePanel({ workspaceId, readOnly = false, o
             const failedChecks = val.checks.filter((c) => c.outcome === "failed");
             return <li key={val.id} data-value-id={val.id} data-value-status={val.status} data-selected-value={isSelected ? "true" : undefined}>
               <div>
-                {val.status === "exception" && <span className="red-dot-indicator" aria-label="Exception red dot" style={{ color: "#d93025", marginRight: "6px" }}>●</span>}
+                {(val.status === "exception" || val.status === "confirmed") && <span className="red-dot-indicator" aria-label="Exception red dot" style={{ color: "#d93025", marginRight: "6px" }}>●</span>}
                 <strong>{val.output_name}</strong>: {val.value} {val.unit} <em>({val.status})</em>
                 {val.unvalidated_source && <span className="unvalidated-value-marker"> · Unvalidated value</span>}
               </div>
