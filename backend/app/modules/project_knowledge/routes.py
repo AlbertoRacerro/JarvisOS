@@ -19,6 +19,10 @@ from app.modules.project_knowledge.models import (
     RevisionStateCommand,
     ScalarAdmissionRequest,
     ScalarResultRead,
+    SimulationResultBatchRead,
+    SimulationResultNotificationRead,
+    SimulationResultResolveRequest,
+    SimulationResultValueRead,
     SnapshotRead,
     ValidationRead,
     ValidationRequest,
@@ -35,10 +39,17 @@ from app.modules.project_knowledge.service import (
     get_revision,
     get_snapshot,
     list_revisions,
+    list_validations,
     preview_impact,
     reconcile,
     revalidation_status,
     update_draft,
+)
+from app.modules.project_knowledge.sim_results import (
+    ingest_validated_calc_v0_run,
+    list_simulation_result_batches,
+    list_simulation_result_notifications,
+    resolve_simulation_result_exception,
 )
 
 router = APIRouter(prefix="/project-knowledge", tags=["project-knowledge"])
@@ -71,6 +82,8 @@ def _http_error(exc: Exception) -> HTTPException:
         "owner_not_found",
         "parameter_not_found",
         "scalar_run_missing",
+        "result_batch_not_found",
+        "result_value_not_found",
     }
     status_code = 409 if code in conflict_codes else 404 if code in missing_codes else 400
     if isinstance(exc, sqlite3.IntegrityError):
@@ -178,6 +191,14 @@ def revalidation_endpoint(workspace_id: str, revision_id: str) -> RevalidationRe
         raise _http_error(exc) from exc
 
 
+@router.get("/workspaces/{workspace_id}/revisions/{revision_id}/validations", response_model=list[ValidationRead])
+def list_validations_endpoint(workspace_id: str, revision_id: str) -> list[ValidationRead]:
+    try:
+        return list_validations(workspace_id, revision_id)
+    except _DOMAIN_ERRORS as exc:
+        raise _http_error(exc) from exc
+
+
 @router.post("/reconcile", response_model=ReconcileRead)
 def reconcile_endpoint(payload: ReconcileRequest) -> ReconcileRead:
     try:
@@ -190,5 +211,43 @@ def reconcile_endpoint(payload: ReconcileRequest) -> ReconcileRead:
 def snapshot_endpoint(workspace_id: str, snapshot_id: str) -> SnapshotRead:
     try:
         return get_snapshot(workspace_id, snapshot_id)
+    except _DOMAIN_ERRORS as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/workspaces/{workspace_id}/result-batches", response_model=list[SimulationResultBatchRead])
+def list_result_batches_endpoint(workspace_id: str) -> list[SimulationResultBatchRead]:
+    try:
+        return list_simulation_result_batches(workspace_id)
+    except _DOMAIN_ERRORS as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/workspaces/{workspace_id}/runs/{run_id}/ingest-results", response_model=SimulationResultBatchRead)
+def ingest_run_results_endpoint(workspace_id: str, run_id: str) -> SimulationResultBatchRead:
+    try:
+        batch = ingest_validated_calc_v0_run(workspace_id, run_id)
+        if batch is None:
+            raise ProjectKnowledgeError(
+                "run_not_eligible_for_ingestion",
+                "Simulation run is not an eligible succeeded calc_v0 or studio_calc_v1 run.",
+            )
+        return batch
+    except _DOMAIN_ERRORS as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/workspaces/{workspace_id}/result-notifications", response_model=list[SimulationResultNotificationRead])
+def list_result_notifications_endpoint(workspace_id: str) -> list[SimulationResultNotificationRead]:
+    try:
+        return list_simulation_result_notifications(workspace_id)
+    except _DOMAIN_ERRORS as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/result-values/{value_id}/resolve", response_model=SimulationResultValueRead)
+def resolve_result_exception_endpoint(value_id: str, payload: SimulationResultResolveRequest) -> SimulationResultValueRead:
+    try:
+        return resolve_simulation_result_exception(value_id, payload)
     except _DOMAIN_ERRORS as exc:
         raise _http_error(exc) from exc

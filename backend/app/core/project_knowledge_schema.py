@@ -124,7 +124,7 @@ PROJECT_KNOWLEDGE_SCHEMA_STATEMENTS = (
         value_text TEXT NOT NULL,
         unit TEXT NOT NULL,
         conditions_json TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('passed', 'exception')),
+        status TEXT NOT NULL CHECK (status IN ('passed', 'exception', 'corrected', 'confirmed')),
         admitted_scalar_id TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (batch_id) REFERENCES simulation_result_batches(id),
@@ -142,6 +142,23 @@ PROJECT_KNOWLEDGE_SCHEMA_STATEMENTS = (
         created_at TEXT NOT NULL,
         FOREIGN KEY (value_id) REFERENCES simulation_result_values(id),
         UNIQUE(value_id, check_name)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS simulation_result_resolutions (
+        id TEXT PRIMARY KEY,
+        value_id TEXT NOT NULL UNIQUE,
+        action TEXT NOT NULL CHECK (action IN ('correct', 'confirm')),
+        reason TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        original_value_text TEXT NOT NULL,
+        original_unit TEXT NOT NULL,
+        original_conditions_json TEXT NOT NULL,
+        corrected_value_text TEXT,
+        corrected_unit TEXT,
+        corrected_conditions_json TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (value_id) REFERENCES simulation_result_values(id)
     )
     """,
     """

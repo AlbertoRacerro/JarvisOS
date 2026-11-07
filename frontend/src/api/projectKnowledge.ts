@@ -87,6 +87,120 @@ export type ProjectKnowledgeReconcile = {
   failure_code?: string | null;
 };
 
+export type SimulationResultCheckRead = {
+  id: string;
+  value_id: string;
+  check_name: string;
+  outcome: "passed" | "failed";
+  reason_code: string;
+  created_at: string;
+};
+
+export type SimulationResultResolutionRead = {
+  id: string;
+  value_id: string;
+  action: "correct" | "confirm";
+  reason: string;
+  actor: string;
+  original_value: string;
+  original_unit: string;
+  original_conditions: Record<string, unknown>;
+  corrected_value: string | null;
+  corrected_unit: string | null;
+  corrected_conditions: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type SimulationResultValueRead = {
+  id: string;
+  batch_id: string;
+  run_id: string;
+  workspace_id: string;
+  output_name: string;
+  source_payload_digest: string;
+  extractor_id: string;
+  extractor_version: string;
+  quantity: string | null;
+  value: string;
+  unit: string;
+  conditions: Record<string, unknown>;
+  status: "passed" | "exception" | "corrected" | "confirmed";
+  admitted_scalar_id: string | null;
+  unvalidated_source: boolean;
+  target_href: string;
+  checks: SimulationResultCheckRead[];
+  resolution: SimulationResultResolutionRead | null;
+  created_at: string;
+};
+
+export type SimulationResultBatchRead = {
+  id: string;
+  workspace_id: string;
+  run_id: string;
+  source_payload_digest: string;
+  extractor_version: string;
+  notification_state: "none" | "pending" | "read";
+  exception_count: number;
+  unvalidated_input_value_ids: string[];
+  values: SimulationResultValueRead[];
+  created_at: string;
+};
+
+export type SimulationResultNotificationTarget = {
+  value_id: string;
+  output_name: string;
+  status: "exception" | "confirmed";
+  failed_check_codes: string[];
+  target_href: string;
+};
+
+export type SimulationResultNotificationRead = {
+  batch_id: string;
+  workspace_id: string;
+  run_id: string;
+  notification_state: "pending" | "read";
+  exception_count: number;
+  message: string;
+  targets: SimulationResultNotificationTarget[];
+  created_at: string;
+};
+
+export type SimulationResultResolveRequest = {
+  workspace_id: string;
+  action: "correct" | "confirm";
+  reason: string;
+  corrected_value?: string | null;
+  corrected_unit?: string | null;
+  corrected_conditions?: Record<string, string | number | boolean> | null;
+};
+
+export type ProjectKnowledgeValidationRead = {
+  id: string;
+  working_revision_id: string;
+  requirement_id: string;
+  outcome: "pass" | "fail" | "not_evaluable" | "no_material_effect" | "recomputation_required";
+  reason_code: string;
+  source_run_id: string | null;
+  source_scalar_id: string | null;
+  supersedes_validation_id: string | null;
+  unvalidated_source: boolean;
+  unvalidated_value_ids: string[];
+  created_at: string;
+};
+
+export type ProjectKnowledgeValidationRequest = {
+  workspace_id: string;
+  working_revision_id: string;
+  requirement_id: string;
+  expected_requirement_updated_at: string;
+  validated_basis_digest: string;
+  applicability_set_digest: string;
+  source_run_id?: string | null;
+  source_output_name?: string | null;
+  required_conditions?: Record<string, string | number | boolean> | null;
+  expected_predecessor_validation_id?: string | null;
+};
+
 type ApiErrorBody = { detail?: { code?: string; message?: string } | string };
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -163,4 +277,34 @@ export function reconcileProjectKnowledge(payload: {
   policy_identity?: string | null;
 }): Promise<ProjectKnowledgeReconcile> {
   return requestJson<ProjectKnowledgeReconcile>("/project-knowledge/reconcile", jsonInit("POST", payload));
+}
+
+export function listSimulationResultBatches(workspaceId: string): Promise<SimulationResultBatchRead[]> {
+  return requestJson<SimulationResultBatchRead[]>(`/project-knowledge/workspaces/${workspaceId}/result-batches`);
+}
+
+export function listSimulationResultNotifications(workspaceId: string): Promise<SimulationResultNotificationRead[]> {
+  return requestJson<SimulationResultNotificationRead[]>(`/project-knowledge/workspaces/${workspaceId}/result-notifications`);
+}
+
+export function resolveSimulationResultException(
+  valueId: string,
+  payload: SimulationResultResolveRequest
+): Promise<SimulationResultValueRead> {
+  return requestJson<SimulationResultValueRead>(`/project-knowledge/result-values/${valueId}/resolve`, jsonInit("POST", payload));
+}
+
+export function listProjectKnowledgeValidations(
+  workspaceId: string,
+  revisionId: string
+): Promise<ProjectKnowledgeValidationRead[]> {
+  return requestJson<ProjectKnowledgeValidationRead[]>(
+    `/project-knowledge/workspaces/${workspaceId}/revisions/${revisionId}/validations`
+  );
+}
+
+export function evaluateProjectKnowledgeRequirement(
+  payload: ProjectKnowledgeValidationRequest
+): Promise<ProjectKnowledgeValidationRead> {
+  return requestJson<ProjectKnowledgeValidationRead>("/project-knowledge/validation", jsonInit("POST", payload));
 }

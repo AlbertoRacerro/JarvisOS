@@ -12,6 +12,7 @@ from app.core.paths import build_paths
 from app.modules.events.service import log_event, utc_now
 from app.modules.memory.models import CalcParameterProposalCreate
 from app.modules.memory.service import create_calc_parameter_proposals
+from app.modules.project_knowledge.sim_results import ingest_validated_calc_v0_run
 from app.modules.runner.input_contracts import (
     build_binding_preview,
     canonicalize_input_contract,
@@ -554,6 +555,9 @@ def run_runner_job(runner_job_id: str) -> RunnerJobRunResponse:
             },
         )
         connection.commit()
+
+    if implementation_kind in {CALC_V0_IMPLEMENTATION_KIND, STUDIO_CALC_IMPLEMENTATION_KIND}:
+        ingest_validated_calc_v0_run(workspace_id, simulation_run_id)
 
     return RunnerJobRunResponse(
         runner_job=get_runner_job(runner_job_id),
