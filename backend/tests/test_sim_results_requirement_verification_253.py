@@ -551,3 +551,48 @@ with open('result.json', 'w', encoding='utf-8') as f:
     assert flagged_val_id in batch2["unvalidated_input_value_ids"]
     assert batch2["values"][0]["unvalidated_source"] is True
 
+    # Verify cross-workspace revision access is rejected on /validations
+    rev_id, _ = _create_working_revision(workspace_id="main", key="rev-ws-isolation")
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            "INSERT INTO workspaces (id, name, slug, created_at, updated_at) VALUES ('other-ws', 'Other', 'other-ws', '2026-11-06T00:00:00+00:00', '2026-11-06T00:00:00+00:00')"
+        )
+        connection.commit()
+    cross_res = client.get(f"/project-knowledge/workspaces/other-ws/revisions/{rev_id}/validations")
+    assert cross_res.status_code == 404
+    assert cross_res.json()["detail"]["code"] == "working_revision_missing"
+
+
+def test_253_ac7_revalidation_returns_computed_applicability_digest_and_changes_with_set(client: TestClient) -> None:
+    assert client is not None
+    rev_id, _ = _create_working_revision(workspace_id="main", key="rev-ac7")
+    before = revalidation_status("main", rev_id)
+    assert before.applicability_set_digest
+    assert before.applicability_set_digest != before.selected_validation_set_digest
+
+    now = "2026-11-06T03:00:00+00:00"
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO requirements (
+                id, workspace_id, statement, status, schema_version, created_at, updated_at,
+                basis_kind, reconciliation_gate
+            ) VALUES ('req-ac7', 'main', 'AC7 criterion', 'active', 1, ?, ?, 'acceptance_criterion', 'required')
+            """,
+            (now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO requirement_applicability (
+                id, workspace_id, requirement_id, target_kind, target_id, effect,
+                lifecycle_state, created_at, updated_at
+            ) VALUES ('app-ac7', 'main', 'req-ac7', 'workspace', 'main', 'include', 'active', ?, ?)
+            """,
+            (now, now),
+        )
+        connection.commit()
+
+    after = revalidation_status("main", rev_id)
+    assert "req-ac7" in after.mandatory_requirement_ids
+    assert after.applicability_set_digest != before.applicability_set_digest
+    assert after.applicability_set_digest != after.selected_validation_set_digest

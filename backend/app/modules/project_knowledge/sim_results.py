@@ -11,6 +11,7 @@ from uuid import uuid4
 from app.core.database import open_sqlite_connection
 from app.modules.events.service import utc_now
 from app.modules.flowsheet.freshness import (
+    FreshnessError,
     PreparedFreshnessInvalidation,
     persist_freshness_invalidation,
     prepare_freshness_invalidation,
@@ -1021,6 +1022,12 @@ def _invalidate_dependent_evidence(
     ).fetchall()
     for pr in param_rows:
         superseded_param_id = str(pr["id"])
+        already_invalidated = connection.execute(
+            "SELECT id FROM freshness_invalidations WHERE workspace_id = ? AND superseded_parameter_id = ?",
+            (workspace_id, superseded_param_id),
+        ).fetchone()
+        if already_invalidated is not None:
+            continue
         try:
             prepared: PreparedFreshnessInvalidation = prepare_freshness_invalidation(
                 connection,
@@ -1029,6 +1036,8 @@ def _invalidate_dependent_evidence(
                 replacement_parameter_id=superseded_param_id,
                 created_at=now,
             )
-            persist_freshness_invalidation(connection, prepared)
-        except Exception:
-            pass
+        except FreshnessError as exc:
+            if exc.code == "parameter_replacement_not_found":
+                continue
+            raise ProjectKnowledgeError(exc.code, exc.message) from exc
+        persist_freshness_invalidation(connection, prepared)

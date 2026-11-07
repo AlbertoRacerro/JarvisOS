@@ -1353,7 +1353,12 @@ def _applicable_required_requirements(
                 include = version_rows[0]["effect"] == "include"
         if include:
             applicable.append(str(requirement["id"]))
-    return sorted(applicable), _digest(relation_basis), diagnostics
+    sorted_applicable = sorted(applicable)
+    return (
+        sorted_applicable,
+        _digest({"applicable": sorted_applicable, "relations": relation_basis}),
+        diagnostics,
+    )
 
 
 def _current_validations(
@@ -1533,6 +1538,12 @@ def revalidation_status(workspace_id: str, working_revision_id: str) -> Revalida
 def list_validations(workspace_id: str, working_revision_id: str) -> list[ValidationRead]:
     with open_sqlite_connection() as connection:
         _require_workspace(connection, workspace_id)
+        revision = connection.execute(
+            "SELECT id FROM project_knowledge_revisions WHERE id = ? AND workspace_id = ?",
+            (working_revision_id, workspace_id),
+        ).fetchone()
+        if revision is None:
+            raise ProjectKnowledgeError("working_revision_missing", "Working revision was not found in workspace.")
         current, _diag = _current_validations(connection, working_revision_id)
         items: list[ValidationRead] = []
         for row in current:

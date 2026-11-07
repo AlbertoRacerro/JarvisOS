@@ -9,7 +9,7 @@ nested modules listed separately, rounded to the nearest 100.
 | Path | Status | Purpose | Entrypoints | LOC |
 | --- | --- | --- | --- | ---: |
 | `backend/app/api` | live | System routes: health check, system info and storage initialization. | `/health`, `/system/info`, `/system/initialize` | 100 |
-| `backend/app/core` | live | Configuration, data-root paths, the SQLite database with additive schema (one `*_schema.py` per owner), the project-pack loader, bootstrap, errors and static serving of the built frontend. | `database.py`, `schema.py`, `packs.py`, `paths.py`, `config.py` | 3600 |
+| `backend/app/core` | live | Configuration, data-root paths, the SQLite database with additive schema (one `*_schema.py` per owner), the project-pack loader, bootstrap, errors and static serving of the built frontend. | `database.py`, `schema.py`, `packs.py`, `paths.py`, `config.py` | 3700 |
 | `backend/app/modules/agents` | live | Hermes agent responder: isolated local agent process, session pool, governed broker and MCP bridge. Agent output is advisory. base.py and registry.py are unused scaffolding. | `/agents/hermes`, `hermes/supervisor.py` | 1900 |
 | `backend/app/modules/ai` | live | The AI execution spine: task runner, provider routing and gateway, budget and token guard, sensitivity labels and egress control, context packs, retrieval index, thread records and the ai_jobs ledger. | `/ai/settings`, `/ai/sensitivity`, `/ai/context`, `execution.py` | 30400 |
 | `backend/app/modules/bio_models` | live | Revisioned biological parameter sets, version-pinned growth model forms with their presentation cards, and the cylindrical Beer-Lambert light kernel. | `/workspaces/{id}/bio-models` | 1400 |
