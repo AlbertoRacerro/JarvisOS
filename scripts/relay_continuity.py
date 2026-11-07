@@ -169,6 +169,7 @@ class ToolCall:
     parent: str | None = None
     detached: bool = False
     ended_abnormally: bool = False  # killed/failed/stopped task, or an error tool result
+    exit_status: int | None = None  # a native command's recorded exit status; non-zero is a finished effect, not a failure
     command_detached: bool = False  # the command itself detaches (`&`, nohup, tmux, a daemon): no event proves it ended
     probe: dict[str, Any] = field(default_factory=dict, repr=False)  # raw inputs for the deterministic probes; never persisted
 
@@ -1179,8 +1180,11 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
                     exit_match = re.match(rf"(?:{truncation})?Command exited with code (-?\d+)\.\n", output) if isinstance(output, str) else None
                     if exit_match is None:
                         call.done = False
-                    elif int(exit_match[1]) != 0:
-                        call.ended_abnormally = True
+                    else:
+                        # A non-zero exit (a search with no match, a failing test run, a retried push) ended:
+                        # it is a finished effect, like an error tool result on the other coordinator paths.
+                        # External effects are reconciled from observable state, never from this status.
+                        call.exit_status = int(exit_match[1])
             elif step["state"] in ("ERROR", "CANCELLED"):
                 call.done, call.ended_abnormally = True, True
         elif typ == "result":
