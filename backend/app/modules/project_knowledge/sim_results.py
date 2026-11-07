@@ -224,13 +224,25 @@ def _evaluate_value_checks(
     has_contradiction = False
     contradiction_reason = "no_contradiction"
 
+    def _same_numeric_or_text(left: object, right: object) -> bool:
+        left_s = str(left or "").strip()
+        right_s = str(right or "").strip()
+        try:
+            left_d = Decimal(left_s)
+            right_d = Decimal(right_s)
+            if left_d.is_finite() and right_d.is_finite():
+                return left_d == right_d
+        except InvalidOperation:
+            pass
+        return left_s == right_s
+
     if cleaned_quantity and conditions:
         for peer in peer_items:
             peer_name = str(peer.get("output_name") or "")
             if not peer_name or peer_name >= output_name:
                 continue
             if peer.get("quantity") == cleaned_quantity and peer.get("conditions_json") == conditions_canonical:
-                if peer.get("value_text") == value_text and peer.get("unit") == cleaned_unit:
+                if _same_numeric_or_text(peer.get("value_text"), value_text) and peer.get("unit") == cleaned_unit:
                     has_duplicate = True
                 else:
                     has_contradiction = True
@@ -249,7 +261,7 @@ def _evaluate_value_checks(
             (workspace_id, cleaned_quantity, conditions_canonical, value_id, value_id),
         ).fetchall()
         for row in existing_rows:
-            if str(row["value_text"]) == value_text and str(row["unit"]) == cleaned_unit:
+            if _same_numeric_or_text(row["value_text"], value_text) and str(row["unit"]) == cleaned_unit:
                 has_duplicate = True
             else:
                 has_contradiction = True
@@ -270,11 +282,7 @@ def _evaluate_value_checks(
         # without bounds, plausible_range checks the bounds while contradiction checks fixed/accepted point values
         if bp["value_min"] is not None and bp["value_max"] is not None and str(bp["value_status"]) not in {"fixed", "accepted"}:
             continue
-        try:
-            bp_val = format(Decimal(str(bp["value"])), "f")
-        except InvalidOperation:
-            bp_val = str(bp["value"]).strip()
-        if str(bp["unit"]).strip() == cleaned_unit and bp_val != value_text:
+        if str(bp["unit"]).strip() == cleaned_unit and not _same_numeric_or_text(bp["value"], value_text):
             has_contradiction = True
             contradiction_reason = "basis_parameter_contradiction"
 
@@ -294,8 +302,8 @@ def _evaluate_value_checks(
             if prefix in text:
                 rhs = text.split(prefix, 1)[1].split()[0].strip(",;.")
                 try:
-                    rhs_val = format(Decimal(rhs), "f")
-                    if rhs_val != value_text:
+                    rhs_dec = Decimal(rhs)
+                    if rhs_dec.is_finite() and not _same_numeric_or_text(rhs_dec, value_text):
                         has_contradiction = True
                         contradiction_reason = "basis_decision_contradiction"
                 except InvalidOperation:
@@ -364,7 +372,14 @@ def _unvalidated_input_value_ids_for_run(
                     flagged_ids.add(str(vr["id"]))
         raw_val = item.get("value")
         raw_unit = item.get("unit")
-        if raw_val is not None and not isinstance(raw_val, bool) and isinstance(raw_unit, str) and raw_unit.strip():
+        if (
+            not (isinstance(ref_value_id, str) and ref_value_id.strip())
+            and not (isinstance(param_id, str) and param_id.strip())
+            and raw_val is not None
+            and not isinstance(raw_val, bool)
+            and isinstance(raw_unit, str)
+            and raw_unit.strip()
+        ):
             input_dec: Decimal | None = None
             try:
                 dec = Decimal(str(raw_val).strip())
@@ -374,26 +389,35 @@ def _unvalidated_input_value_ids_for_run(
                 input_dec = None
             v_by_name = connection.execute(
                 """
-                SELECT v.id, v.value_text FROM simulation_result_values v
+                SELECT v.id, v.value_text, v.status FROM simulation_result_values v
                 JOIN simulation_result_batches b ON b.id = v.batch_id
                 WHERE b.workspace_id = ? AND (v.output_name = ? OR v.quantity = ?)
                   AND v.unit = ?
-                  AND v.status IN ('exception', 'confirmed')
                 """,
                 (workspace_id, str(name), str(name), raw_unit.strip()),
             ).fetchall()
+            has_validated_match = False
+            matching_flagged_ids: list[str] = []
             for vr in v_by_name:
                 cand_text = str(vr["value_text"]).strip()
+                matched = False
                 if input_dec is not None:
                     try:
                         cand_dec = Decimal(cand_text)
                         if cand_dec.is_finite() and cand_dec == input_dec:
-                            flagged_ids.add(str(vr["id"]))
-                            continue
+                            matched = True
                     except InvalidOperation:
                         pass
-                if cand_text == str(raw_val).strip():
-                    flagged_ids.add(str(vr["id"]))
+                if not matched and cand_text == str(raw_val).strip():
+                    matched = True
+                if matched:
+                    if str(vr["status"]) in {"passing", "corrected"}:
+                        has_validated_match = True
+                    elif str(vr["status"]) in {"exception", "confirmed"}:
+                        matching_flagged_ids.append(str(vr["id"]))
+            if not has_validated_match:
+                for fid in matching_flagged_ids:
+                    flagged_ids.add(fid)
     return sorted(flagged_ids)
 
 
