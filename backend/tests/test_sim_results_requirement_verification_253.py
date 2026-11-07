@@ -660,3 +660,23 @@ with open('result.json', 'w', encoding='utf-8') as f:
         )
         connection.commit()
     assert ingest_validated_calc_v0_run("main", "unverified-succeeded-run") is None
+
+    # Downstream run consuming flagged mass_flow (45.0 kg/s) passed as integer 45 preserves unvalidated provenance
+    downstream_script = r"""
+import json
+with open('result.json', 'w', encoding='utf-8') as f:
+    json.dump({
+        'outputs': {
+            'coolant_pressure': {'value': 12.0, 'unit': 'MPa', 'quantity': 'coolant_pressure', 'conditions': {'regime': 'nominal'}}
+        }
+    }, f)
+""".strip()
+    downstream_body = _create_calc_run(
+        client,
+        downstream_script,
+        input_set={"mass_flow": {"value": 45, "unit": "kg/s"}},
+    )
+    downstream_run_id = downstream_body["simulation_run"]["id"]
+    downstream_batch = next(b for b in list_simulation_result_batches("main") if b.run_id == downstream_run_id)
+    assert downstream_batch.values[0].unvalidated_source is True
+    assert by_name["mass_flow"].id in downstream_batch.unvalidated_input_value_ids

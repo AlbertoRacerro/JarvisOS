@@ -365,22 +365,35 @@ def _unvalidated_input_value_ids_for_run(
         raw_val = item.get("value")
         raw_unit = item.get("unit")
         if raw_val is not None and not isinstance(raw_val, bool) and isinstance(raw_unit, str) and raw_unit.strip():
+            input_dec: Decimal | None = None
             try:
-                norm_val = format(Decimal(str(raw_val)), "f")
+                dec = Decimal(str(raw_val).strip())
+                if dec.is_finite():
+                    input_dec = dec
             except InvalidOperation:
-                norm_val = str(raw_val).strip()
+                input_dec = None
             v_by_name = connection.execute(
                 """
-                SELECT v.id FROM simulation_result_values v
+                SELECT v.id, v.value_text FROM simulation_result_values v
                 JOIN simulation_result_batches b ON b.id = v.batch_id
                 WHERE b.workspace_id = ? AND (v.output_name = ? OR v.quantity = ?)
-                  AND v.value_text = ? AND v.unit = ?
+                  AND v.unit = ?
                   AND v.status IN ('exception', 'confirmed')
                 """,
-                (workspace_id, str(name), str(name), norm_val, raw_unit.strip()),
+                (workspace_id, str(name), str(name), raw_unit.strip()),
             ).fetchall()
             for vr in v_by_name:
-                flagged_ids.add(str(vr["id"]))
+                cand_text = str(vr["value_text"]).strip()
+                if input_dec is not None:
+                    try:
+                        cand_dec = Decimal(cand_text)
+                        if cand_dec.is_finite() and cand_dec == input_dec:
+                            flagged_ids.add(str(vr["id"]))
+                            continue
+                    except InvalidOperation:
+                        pass
+                if cand_text == str(raw_val).strip():
+                    flagged_ids.add(str(vr["id"]))
     return sorted(flagged_ids)
 
 
