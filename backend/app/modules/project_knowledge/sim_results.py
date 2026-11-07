@@ -544,7 +544,32 @@ def ingest_validated_calc_v0_run(
                     return None
                 val_text, val_unit = _extract_scalar_from_run_payload(outputs_canonical, output_name)
                 raw_qty = raw_item.get("quantity")
-                qty = str(raw_qty).strip() if isinstance(raw_qty, str) and raw_qty.strip() else output_name.strip()
+                qty: str | None = str(raw_qty).strip() if isinstance(raw_qty, str) and raw_qty.strip() else None
+                if qty is None:
+                    basis_qty_row = connection.execute(
+                        """
+                        SELECT name FROM parameters
+                        WHERE workspace_id = ? AND name = ?
+                          AND status = 'accepted' AND lifecycle_state = 'active'
+                        LIMIT 1
+                        """,
+                        (workspace_id, output_name.strip()),
+                    ).fetchone()
+                    if basis_qty_row is not None:
+                        qty = str(basis_qty_row["name"]).strip()
+                    else:
+                        req_qty_row = connection.execute(
+                            """
+                            SELECT criterion_output_name FROM requirements
+                            WHERE workspace_id = ? AND status = 'active'
+                              AND basis_kind = 'acceptance_criterion'
+                              AND criterion_output_name = ?
+                            LIMIT 1
+                            """,
+                            (workspace_id, output_name.strip()),
+                        ).fetchone()
+                        if req_qty_row is not None:
+                            qty = str(req_qty_row["criterion_output_name"]).strip()
                 conds = _extract_conditions(raw_item)
                 if upstream_flagged:
                     conds = {**conds, "_unvalidated_input_value_ids": upstream_flagged}
@@ -874,7 +899,7 @@ def resolve_simulation_result_exception(
             output_name = str(row["output_name"])
             source_payload = str(row["output_payload"] or "")
             source_digest = str(row["source_payload_digest"])
-            qty = str(row["quantity"] or output_name)
+            qty: str | None = str(row["quantity"]).strip() if row["quantity"] is not None and str(row["quantity"]).strip() else None
 
             if payload.action == "confirm":
                 new_status = "confirmed"

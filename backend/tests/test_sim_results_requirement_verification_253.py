@@ -707,3 +707,21 @@ with open('result.json', 'w', encoding='utf-8') as f:
     assert independent_batch.values[0].unvalidated_source is False
     assert independent_batch.unvalidated_input_value_ids == []
 
+    # Output without explicit quantity metadata and without any matching Project Basis parameter or requirement
+    # must fail quantity_and_unit_consistency with missing_quantity_metadata (never fabricate a pass from output_name).
+    missing_qty_script = r"""
+import json
+with open('result.json', 'w', encoding='utf-8') as f:
+    json.dump({
+        'outputs': {
+            'unmapped_metric': {'value': 3.5, 'unit': 'm', 'conditions': {'regime': 'nominal'}, 'min': 1.0, 'max': 10.0}
+        }
+    }, f)
+""".strip()
+    missing_qty_body = _create_calc_run(client, missing_qty_script)
+    missing_qty_run_id = missing_qty_body["simulation_run"]["id"]
+    missing_qty_batch = next(b for b in list_simulation_result_batches("main") if b.run_id == missing_qty_run_id)
+    assert missing_qty_batch.values[0].status == "exception"
+    assert missing_qty_batch.values[0].quantity is None
+    mq_failed = {c.check_name: c.reason_code for c in missing_qty_batch.values[0].checks if c.outcome == "failed"}
+    assert mq_failed["quantity_and_unit_consistency"] == "missing_quantity_metadata"
