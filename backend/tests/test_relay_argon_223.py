@@ -449,9 +449,70 @@ def test_native_cli_truncation_keeps_its_real_executor_exit_status(tmp_path, exi
         "Here is a preview with the middle of the output truncated:\n"
         f"Command exited with code {exit_code}.\n\nCommand output:\ndiff omitted\n")
     report = rc.classify_turn(write_native(tmp_path, events))
-    assert report.calls[0].done
-    assert report.calls[0].ended_abnormally is bool(exit_code)
-    assert (report.outcome == "success") is (exit_code == 0)
+    assert report.calls[0].done and not report.calls[0].pending
+    assert report.calls[0].exit_status == exit_code
+    assert report.outcome == "success"
+
+
+def _turn_with_commands(commands: list[tuple[str, str]]) -> list[dict]:
+    """A native turn shaped like 20261107-095109-fc3bba: many finished foreground commands, some exiting non-zero."""
+    events = [{"event": "init", "conversation_id": "native-test", "init": {"model": ra.MODEL}}]
+    for index, (command, output) in enumerate(commands, start=2):
+        for state in ("ACTIVE", "DONE"):
+            events.append({"event": "step_update", "step_update": {
+                "step_index": index, "state": state, "conversation_id": "native-test", "step_type": "tool",
+                "tool_name": "run_command", "tool_info": {"parameters": {"CommandLine": command}, "output": output}}})
+    events.append({"event": "result", "result": {"conversation_id": "native-test", "status": "SUCCESS",
+                                                 "response": 'RELAY_STATUS: {"status":"propose_done"}'}})
+    return events
+
+
+FC3BBA_COMMANDS = [
+    ("python3 scripts/devctx.py recover", "Command exited with code 0.\n"),
+    ("python3 scripts/devctx.py search no-such-term", "Command exited with code 1.\n"),
+    ("python -m pytest -q backend/tests/test_x.py", "Command exited with code 1.\n\nCommand output:\n1 failed\n"),
+    ("python -m pytest -q backend/tests/test_x.py", "Command exited with code 0.\n"),
+    ("node e2e/walk.mjs /tmp/evidence", "Command exited with code 1.\n"),
+    ("node e2e/walk.mjs /tmp/evidence", "Command exited with code 0.\n"),
+    ("git push origin HEAD", "Command exited with code 1.\n\nCommand output:\nrejected\n"),
+    ("git push origin HEAD", "Command exited with code 0.\n"),
+    ("python3 scripts/devctx.py note proof done", "Command exited with code 0.\n"),
+]
+
+
+def test_finished_nonzero_commands_do_not_fail_a_successful_native_turn(tmp_path):
+    report = rc.classify_turn(write_native(tmp_path, _turn_with_commands(FC3BBA_COMMANDS)))
+    assert report.outcome == "success" and report.terminal
+    assert not report.in_flight
+    assert sorted(c.exit_status for c in report.calls) == [0, 0, 0, 0, 0, 1, 1, 1, 1]
+    # The failed push is still a recorded external effect for the next turn's prompt.
+    assert [c.label for c in report.effects if c.label == "git push"] == ["git push", "git push"]
+
+
+def test_successful_turn_with_nonzero_commands_resets_consecutive_failures(tmp_path):
+    env = Env(tmp_path)
+    turn = write_native(env.repo / ".agent-relay", _turn_with_commands(FC3BBA_COMMANDS))
+    sup = env.supervisor()
+    sup.state["head_session"] = turn.parent.parent.name
+    sup.state["counters"].update({"consecutive_failures": 2, "transient_streak": 1, "crash_retries": 1})
+    report = rc.classify_turn(turn)
+    assert report.outcome == "success"
+    assert sup._decide(report, None) == "idle"
+    assert sup.state["counters"]["consecutive_failures"] == 0 and sup.state["hold"] is None
+
+
+def test_truly_pending_native_command_still_settles_unknown(tmp_path):
+    commands = FC3BBA_COMMANDS + [("gh pr merge 60", "Command running with ID: xyz\n")]
+    report = rc.classify_turn(write_native(tmp_path, _turn_with_commands(commands)))
+    assert report.outcome == "unknown" and not report.terminal
+    assert [c.label for c in report.in_flight] == ["gh pr merge"]
+
+
+def test_failed_native_terminal_result_still_fails_with_nonzero_commands(tmp_path):
+    events = _turn_with_commands(FC3BBA_COMMANDS)
+    events[-1]["result"].update({"status": "ERROR", "response": "", "error": "Internal server error"})
+    report = rc.classify_turn(write_native(tmp_path, events, meta={"exit_code": 1}))
+    assert report.terminal and report.outcome not in ("success", "unknown")
 
 
 @pytest.mark.parametrize("output", [
