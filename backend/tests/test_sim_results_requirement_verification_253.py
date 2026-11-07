@@ -680,3 +680,30 @@ with open('result.json', 'w', encoding='utf-8') as f:
     downstream_batch = next(b for b in list_simulation_result_batches("main") if b.run_id == downstream_run_id)
     assert downstream_batch.values[0].unvalidated_source is True
     assert by_name["mass_flow"].id in downstream_batch.unvalidated_input_value_ids
+
+    # Once a validated (passed) value with the same numeric value and unit exists,
+    # a subsequent independent literal input is not falsely marked as consuming the flagged exception.
+    valid_mf_script = r"""
+import json
+with open('result.json', 'w', encoding='utf-8') as f:
+    json.dump({
+        'outputs': {
+            'mass_flow': {'value': 45, 'unit': 'kg/s', 'quantity': 'mass_flow', 'conditions': {'regime': 'nominal'}}
+        }
+    }, f)
+""".strip()
+    valid_mf_body = _create_calc_run(client, valid_mf_script)
+    valid_mf_run_id = valid_mf_body["simulation_run"]["id"]
+    valid_mf_batch = next(b for b in list_simulation_result_batches("main") if b.run_id == valid_mf_run_id)
+    assert valid_mf_batch.values[0].status == "passed"
+
+    independent_body = _create_calc_run(
+        client,
+        downstream_script,
+        input_set={"mass_flow": {"value": 45.0, "unit": "kg/s"}},
+    )
+    independent_run_id = independent_body["simulation_run"]["id"]
+    independent_batch = next(b for b in list_simulation_result_batches("main") if b.run_id == independent_run_id)
+    assert independent_batch.values[0].unvalidated_source is False
+    assert independent_batch.unvalidated_input_value_ids == []
+

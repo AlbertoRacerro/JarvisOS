@@ -411,7 +411,7 @@ def _unvalidated_input_value_ids_for_run(
                 if not matched and cand_text == str(raw_val).strip():
                     matched = True
                 if matched:
-                    if str(vr["status"]) in {"passing", "corrected"}:
+                    if str(vr["status"]) in {"passed", "corrected"}:
                         has_validated_match = True
                     elif str(vr["status"]) in {"exception", "confirmed"}:
                         matching_flagged_ids.append(str(vr["id"]))
