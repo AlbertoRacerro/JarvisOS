@@ -880,8 +880,8 @@ def resolve_simulation_result_exception(
             ).fetchone()
             if row is None:
                 raise ProjectKnowledgeError("result_value_not_found", "Simulation result value was not found in workspace.")
-            if str(row["status"]) == "passed":
-                raise ProjectKnowledgeError("result_value_not_exception", "Passing values never require confirmation or correction.")
+            if str(row["status"]) != "exception":
+                raise ProjectKnowledgeError("result_value_not_exception", "Only unresolved exceptions can be corrected or confirmed.")
 
             existing_res = connection.execute(
                 "SELECT * FROM simulation_result_resolutions WHERE value_id = ?",
@@ -899,7 +899,36 @@ def resolve_simulation_result_exception(
             output_name = str(row["output_name"])
             source_payload = str(row["output_payload"] or "")
             source_digest = str(row["source_payload_digest"])
-            qty: str | None = str(row["quantity"]).strip() if row["quantity"] is not None and str(row["quantity"]).strip() else None
+            qty: str | None = (
+                payload.corrected_quantity.strip()
+                if payload.corrected_quantity is not None and payload.corrected_quantity.strip()
+                else (str(row["quantity"]).strip() if row["quantity"] is not None and str(row["quantity"]).strip() else None)
+            )
+            if qty is None and payload.action == "correct":
+                basis_qty_row = connection.execute(
+                    """
+                    SELECT name FROM parameters
+                    WHERE workspace_id = ? AND name = ?
+                      AND status = 'accepted' AND lifecycle_state = 'active'
+                    LIMIT 1
+                    """,
+                    (payload.workspace_id, output_name.strip()),
+                ).fetchone()
+                if basis_qty_row is not None:
+                    qty = str(basis_qty_row["name"]).strip()
+                else:
+                    req_qty_row = connection.execute(
+                        """
+                        SELECT criterion_output_name FROM requirements
+                        WHERE workspace_id = ? AND status = 'active'
+                          AND basis_kind = 'acceptance_criterion'
+                          AND criterion_output_name = ?
+                        LIMIT 1
+                        """,
+                        (payload.workspace_id, output_name.strip()),
+                    ).fetchone()
+                    if req_qty_row is not None:
+                        qty = str(req_qty_row["criterion_output_name"]).strip()
 
             if payload.action == "confirm":
                 new_status = "confirmed"
@@ -969,10 +998,10 @@ def resolve_simulation_result_exception(
                 connection.execute(
                     """
                     UPDATE simulation_result_values
-                    SET value_text = ?, unit = ?, conditions_json = ?, status = ?
+                    SET quantity = ?, value_text = ?, unit = ?, conditions_json = ?, status = ?
                     WHERE id = ?
                     """,
-                    (corr_value, corr_unit, corr_conds_json, new_status, value_id),
+                    (qty, corr_value, corr_unit, corr_conds_json, new_status, value_id),
                 )
 
             if payload.action == "confirm":

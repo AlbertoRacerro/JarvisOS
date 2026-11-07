@@ -546,6 +546,11 @@ with open('result.json', 'w', encoding='utf-8') as f:
         },
     )
     run2_id = body2["simulation_run"]["id"]
+    assert body2["simulation_run"]["unvalidated_source"] is True
+    assert flagged_val_id in body2["simulation_run"]["unvalidated_input_value_ids"]
+    run2_detail = client.get(f"/workspaces/main/simulation-runs/{run2_id}").json()
+    assert run2_detail["unvalidated_source"] is True
+    assert flagged_val_id in run2_detail["unvalidated_input_value_ids"]
     batches_after = client.get("/project-knowledge/workspaces/main/result-batches").json()
     batch2 = next(b for b in batches_after if b["run_id"] == run2_id)
     assert flagged_val_id in batch2["unvalidated_input_value_ids"]
@@ -725,3 +730,31 @@ with open('result.json', 'w', encoding='utf-8') as f:
     assert missing_qty_batch.values[0].quantity is None
     mq_failed = {c.check_name: c.reason_code for c in missing_qty_batch.values[0].checks if c.outcome == "failed"}
     assert mq_failed["quantity_and_unit_consistency"] == "missing_quantity_metadata"
+
+    # Correcting the missing-quantity exception by supplying corrected_quantity transitions it to corrected
+    resolved_mq = resolve_simulation_result_exception(
+        missing_qty_batch.values[0].id,
+        SimulationResultResolveRequest(
+            workspace_id="main",
+            action="correct",
+            reason="Assigned quantity metadata.",
+            corrected_value="3.5",
+            corrected_unit="m",
+            corrected_quantity="unmapped_metric",
+        ),
+    )
+    assert resolved_mq.status == "corrected"
+    assert resolved_mq.quantity == "unmapped_metric"
+    assert all(c.outcome == "passed" for c in resolved_mq.checks)
+
+    # Once resolved (corrected or confirmed), a second resolution attempt is rejected so the recorded decision is preserved
+    with pytest.raises(ProjectKnowledgeError) as exc_again:
+        resolve_simulation_result_exception(
+            missing_qty_batch.values[0].id,
+            SimulationResultResolveRequest(
+                workspace_id="main",
+                action="confirm",
+                reason="Cannot overwrite prior resolution.",
+            ),
+        )
+    assert exc_again.value.code == "result_value_not_exception"

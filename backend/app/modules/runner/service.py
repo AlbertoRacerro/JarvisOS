@@ -12,7 +12,10 @@ from app.core.paths import build_paths
 from app.modules.events.service import log_event, utc_now
 from app.modules.memory.models import CalcParameterProposalCreate
 from app.modules.memory.service import create_calc_parameter_proposals
-from app.modules.project_knowledge.sim_results import ingest_validated_calc_v0_run
+from app.modules.project_knowledge.sim_results import (
+    _unvalidated_input_value_ids_for_run,
+    ingest_validated_calc_v0_run,
+)
 from app.modules.runner.input_contracts import (
     build_binding_preview,
     canonicalize_input_contract,
@@ -711,6 +714,9 @@ def get_simulation_run_detail(workspace_id: str, simulation_run_id: str) -> Simu
             ).fetchone()
             stale = False
             superseded = False
+            unvalidated_inputs = _unvalidated_input_value_ids_for_run(
+                connection, workspace_id, row["input_payload"]
+            )
             if version is not None and version["implementation_kind"] in STUDIO_IMPLEMENTATION_KINDS:
                 try:
                     require_linked_parameters_usable(
@@ -728,7 +734,13 @@ def get_simulation_run_detail(workspace_id: str, simulation_run_id: str) -> Simu
                 ).fetchone() is not None
     if row is None:
         raise RunnerSafetyError("runner_simulation_run_not_found", "Simulation run not found.")
-    return SimulationRunDetail(**dict(row), stale=stale, superseded=superseded)
+    return SimulationRunDetail(
+        **dict(row),
+        stale=stale,
+        superseded=superseded,
+        unvalidated_source=bool(unvalidated_inputs),
+        unvalidated_input_value_ids=unvalidated_inputs,
+    )
 
 
 def list_run_logs(workspace_id: str, simulation_run_id: str) -> list[RunLogRead]:

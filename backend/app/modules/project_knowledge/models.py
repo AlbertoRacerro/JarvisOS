@@ -407,6 +407,7 @@ class SimulationResultResolveRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
     corrected_value: str | None = Field(default=None, max_length=200)
     corrected_unit: str | None = Field(default=None, max_length=100)
+    corrected_quantity: str | None = Field(default=None, max_length=200)
     corrected_conditions: dict[str, str | int | float | bool] | None = None
 
     @model_validator(mode="after")
@@ -420,6 +421,7 @@ class SimulationResultResolveRequest(BaseModel):
             if (
                 self.corrected_value is not None
                 or self.corrected_unit is not None
+                or self.corrected_quantity is not None
                 or self.corrected_conditions is not None
             ):
                 raise ValueError("Confirming an exception cannot supply corrected fields.")
