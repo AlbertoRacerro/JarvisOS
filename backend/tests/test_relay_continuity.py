@@ -119,6 +119,9 @@ class FakeRelay(rc.RelayAdapter):
     def limits(self) -> dict[str, Any] | None:
         return self.readings() if callable(self.readings) else self.readings
 
+    def argon_limits(self, agent: str = "argon") -> dict[str, Any] | None:
+        return None  # offline: no native reading unless a test sets one (never the host's agy)
+
     def start(self, agent: str, parent: str, task: str, turns: int) -> FakeProc:
         if not self.script:
             raise AssertionError("unexpected Relay invocation")
@@ -136,8 +139,12 @@ class FakeRelay(rc.RelayAdapter):
         if callable(events):  # a reply that depends on the task (a diagnostic answers its own nonce)
             events = events(task)
         sid = f"20261018-{len(self.launches):06d}-{'b' * 6}"
-        write_turn(self.sessions_dir() / sid, events, agent=agent, prompt=relay_prompt(task),
-                   status=reported[0] if reported else "propose_done")
+        turn = write_turn(self.sessions_dir() / sid, events, agent=agent, prompt=relay_prompt(task),
+                          status=reported[0] if reported else "propose_done")
+        if agent in rc.NATIVE_AGENTS:  # the native runner's own evidence beside its stream
+            (turn / "native-result.json").write_text(json.dumps({
+                "schema": "argon-coordinator.v1", "agent": agent, "launched": True, "exit_code": 0, "quota": [],
+                "reason": None, "model": rc.relay_argon.model_for(agent, {})}))
         return rc.RunResult(sid, 0, True)
 
 
@@ -358,6 +365,9 @@ def test_choose_does_not_treat_unproven_headroom_as_low(tmp_path: Path, kind: st
     elif kind == "unusable":
         readings["claude"] = reading("claude", 86, T0 - timedelta(hours=1), T0)
     env = Env(tmp_path, readings=readings)
+    # spec 255: an unproven reading is still tried, but ranks after an agent with proven room
+    assert env.supervisor()._choose("claude") == "codex"
+    env.relay.readings = {k: v for k, v in readings.items() if k != "codex"}
     assert env.supervisor()._choose("claude") == "claude"
 
 
@@ -2100,7 +2110,8 @@ def test_mission_advances_each_task_only_on_success_and_completes(tmp_path: Path
 
 def test_mission_quota_fails_over_to_codex_with_task_context_and_continues(tmp_path: Path) -> None:
     env = Env(tmp_path, [("claude", SUCCESS), ("claude", QUOTA), ("codex", CODEX_SUCCESS), ("codex", CODEX_SUCCESS)])
-    env.relay.readings = room(env, "codex")
+    # spec 255: an agent without a reading ranks after one with proven room, so both have one here
+    env.relay.readings = lambda: {**room(env, "claude")(), **room(env, "codex")()}
     mission = mission_def("first task", "second task", "third task")
     start_mission(env, mission)
     result, sup = run_mission(env, mission)
