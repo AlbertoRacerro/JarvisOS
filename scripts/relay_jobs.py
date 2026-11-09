@@ -40,6 +40,7 @@ MAX_RUNNING = 4
 MAX_WALL_HOURS = 24.0
 STOP_GRACE = 30.0  # seconds a job gets to exit on SIGTERM before SIGKILL
 POLL = 2.0
+LOST_GRACE = timedelta(minutes=15)
 LABEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.:/+-]{0,79}")
 
 
@@ -227,6 +228,25 @@ def effective_status(job: dict[str, Any], proc_root: Path = Path("/proc")) -> st
     return "lost"
 
 
+def parse_iso(ts: str | None) -> datetime | None:
+    if not ts or not isinstance(ts, str):
+        return None
+    try:
+        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        try:
+            return datetime.fromisoformat(ts).astimezone(UTC)
+        except ValueError:
+            return None
+
+
+def _is_stale_unknown(job: dict[str, Any], now: datetime) -> bool:
+    if effective_status(job) != "unknown":
+        return False
+    deadline = parse_iso(job.get("deadline"))
+    return deadline is not None and (now - deadline > LOST_GRACE)
+
+
 def live_roots(root: Path | None = None, proc_root: Path = Path("/proc")) -> set[int]:
     """Reaper exemptions are verified local process IDs, never stored namespace IDs."""
     roots = set()
@@ -323,7 +343,8 @@ def start(argv: list[str], *, label: str, authority: str, cwd: Path, wall_hours:
         # `starting` record counts as active, so the slot stays reserved until its wrapper is up.
         fcntl.flock(admission, fcntl.LOCK_EX)
         previous = all_jobs(root)
-        running = [j for j in previous if effective_status(j) in ACTIVE + UNRESOLVED]
+        running = [j for j in previous if effective_status(j) in ACTIVE + UNRESOLVED
+                   and not _is_stale_unknown(j, created)]
         duplicate = next((j for j in sorted(previous, key=lambda j: j not in running) if j.get("argv") == argv and j.get("cwd") == str(cwd)
                           and j.get("inputs") == digests and j.get("git") == job["git"]), None)
         if duplicate is not None and (duplicate in running or not retry_reason or not retry_reason.strip()):

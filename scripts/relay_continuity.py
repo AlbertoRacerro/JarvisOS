@@ -1301,6 +1301,7 @@ def default_state() -> dict[str, Any]:
         "permissions_digest": None, "permissions_pinned": False, "pending": None, "waiting_since": None, "last_outcome": None,
         "notify": {"sent": {}, "window": [], "last_digest": None, "failures": 0, "retry": None, "dropped": 0},
         "watch": {"seen": {}, "master": None}, "acknowledged": None, "spend_caps": {}, "updated_at": None,
+        "parked_turns": [],
     }
 
 
@@ -1474,6 +1475,7 @@ FIELD_RULES: dict[str, Callable[[str], bool]] = {
     "attempt": lambda v: bool(re.fullmatch(r"\d{1,4}", v)),
     "attempts": lambda v: bool(re.fullmatch(r"\d{1,6}", v)),
     "holds": lambda v: bool(re.fullmatch(r"\d{1,6}", v)),
+    "count": lambda v: bool(re.fullmatch(r"\d{1,3}", v)),
     "sha": lambda v: bool(re.fullmatch(r"[0-9a-f]{7,40}", v)),
     "pr": lambda v: v == "none" or bool(re.fullmatch(r"\d{1,6}", v)),
     "phase": lambda v: v in PHASES,
@@ -2133,6 +2135,9 @@ VERDICTS = ("completed", "running", "not_started", "unresolved", "insufficient_p
 SETTLED = ("completed", "not_started")
 VERDICT_TEXT = {"completed": "COMPLETED: it took effect; do not repeat it",
                 "not_started": "NOT STARTED: it did not take effect; perform it only if still required after recover"}
+PARKED_TEXT = ("UNRESOLVED (parked): it may have taken effect; never repeat it, "
+               "verify its effect from Git, GitHub, host receipts or the ledger, "
+               "and park only the work that depends on it")
 PERMISSION_RE = re.compile(r"(?i)permission denied|could not read username|authentication failed|gh auth login|"
                            r"not logged in|requires authentication|resource not accessible|HTTP 40[13]\b")
 PUSH_FLAGS = {"-u", "--set-upstream", "-q", "--quiet", "-v", "--verbose", "--no-verify", "--porcelain", "--atomic",
@@ -2820,6 +2825,22 @@ class Supervisor:
                 return new_report
             report = new_report
 
+    def _park(self, report: TurnReport, parked: list[ToolCall]) -> None:
+        if not parked or not report.turn_id:
+            return
+        parked_turns = self.state.setdefault("parked_turns", [])
+        if report.turn_id in parked_turns:
+            return
+        parked_turns.append(report.turn_id)
+        labels = ", ".join(op.label for op in parked)
+        self.record("finding", f"relay-continuity: parked interrupted external operation(s) of turn "
+                               f"{report.turn_id} that no probe could settle: {labels}; "
+                               "they may have taken effect and are never repeated.")
+        self.notify("effects_parked", dedupe_key=f"parked|{report.turn_id}",
+                    session=self.state["head_session"],
+                    agent=report.agent or self.state.get("agent") or PREFERRED,
+                    count=str(len(parked)))
+
     def _decide(self, report: TurnReport, task: str | None, *, waive: frozenset[str] = frozenset(),
                 cleared: tuple[str, ...] = ()) -> tuple[str, str] | str:
         """Next (agent, prompt) or a terminal result. `waive` holds what a maintainer release of this turn
@@ -2830,8 +2851,11 @@ class Supervisor:
         if report.outcome == "success":
             # A successful turn can still have left a detached job running, now stopped: an external one is gated
             # like any interrupted operation, before anything is advanced or completed.
-            if "gate" not in waive and isinstance(found := self._settle_external(report), str):
-                return self.hold(found, None, report.turn_id)
+            parked: list[ToolCall] = []
+            if "gate" not in waive:
+                _verdicts, parked = self._settle_external(report)
+                if parked:
+                    self._park(report, parked)
             counters.update({"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0})
             counters.pop(f"estimated_{failed_agent}", None)
             counters.pop(f"transient_{failed_agent}", None)
@@ -2855,33 +2879,40 @@ class Supervisor:
                            + ", ".join(report.reaped) + "); restart any you still need.")
             elif report.reaped is None and report.in_flight:
                 prompt += "\n\n" + PROCESSES_UNKNOWN
+            if parked:
+                prompt += "\n\n" + "\n".join(f"- [{c.kind}] {c.label}: {PARKED_TEXT}" for c in parked)
             agent = self._choose(failed_agent)
             return (agent, prompt) if agent is not None else self._wait_or_hold(lambda _agent: prompt)
 
         if counters["consecutive_failures"] >= self.limits.max_consecutive_failures:
             return self.hold("circuit_failures")
         settled: dict[str, dict[str, str]] = {}
+        parked: list[ToolCall] = []
         if "gate" not in waive:
             reason = gate(report)
-            if reason is None:
-                found = self._settle_external(report)
-                if isinstance(found, str):
-                    reason = found
-                else:
-                    settled = found
             if reason is not None:
-                self.notify("turn_failed", session=self.state["head_session"], agent=failed_agent,
-                            outcome=report.outcome, action="hold")
+                if counters["consecutive_failures"] >= 2:
+                    self.notify("turn_failed", session=self.state["head_session"], agent=failed_agent,
+                                outcome=report.outcome, action="hold")
                 return self.hold(reason, None, report.turn_id)
+            settled, parked = self._settle_external(report)
+            if parked:
+                self._park(report, parked)
         if report.outcome in ("quota", "spend_limit", "transient", "auth") and failed_agent not in cleared:
             # A provider failure makes only that provider unavailable, until its reset or a backed-off retry.
             self.set_cooldown(failed_agent, report)
 
+        parked_ids = {c.id for c in parked}
         listed = [f"- [{c.kind}] {c.label}" for c in report.effects]
         for c in report.in_flight:
             verdict = settled.get(c.id)
-            listed.append(f"- [{c.kind}] {c.label}: " + (f"{VERDICT_TEXT[verdict['verdict']]} ({verdict['evidence']})"
-                                                         if verdict else "INTERRUPTED"))
+            if verdict:
+                status_text = f"{VERDICT_TEXT[verdict['verdict']]} ({verdict['evidence']})"
+            elif c.id in parked_ids:
+                status_text = PARKED_TEXT
+            else:
+                status_text = "INTERRUPTED"
+            listed.append(f"- [{c.kind}] {c.label}: {status_text}")
         effects = "\n".join(listed) or "- none recorded"
         if report.reaped:
             effects += "\nProcesses the turn left running, stopped by the supervisor: " + ", ".join(report.reaped)
@@ -2899,15 +2930,16 @@ class Supervisor:
         agent = self._choose(failed_agent)
         if agent is None:
             return self._wait_or_hold(make_prompt)
-        self.notify("turn_failed", session=self.state["head_session"], agent=failed_agent, outcome=report.outcome,
-                    action="switch" if agent != failed_agent else "retry")
+        if counters["consecutive_failures"] >= 2:
+            self.notify("turn_failed", session=self.state["head_session"], agent=failed_agent, outcome=report.outcome,
+                        action="switch" if agent != failed_agent else "retry")
         return agent, make_prompt(agent)
 
-    def _settle_external(self, report: TurnReport) -> dict[str, dict[str, str]] | str:
+    def _settle_external(self, report: TurnReport) -> tuple[dict[str, dict[str, str]], list[ToolCall]]:
         """The side-effect gate. The turn's processes are gone, so an operation in flight was interrupted, not
         running. A local one is left to the next turn, which inspects and redoes it. An external one is settled by
-        a deterministic read-only probe (a push, a merge, a PR creation); otherwise it holds, because repeating it
-        could not be taken back. Returns the probe verdict per settled operation id, or the hold reason."""
+        a deterministic read-only probe (a push, a merge, a PR creation); otherwise it is parked, because repeating it
+        could not be taken back. Returns (verdicts, parked)."""
         verdicts: dict[str, dict[str, str]] = {}
         uncertain = []
         for op in report.in_flight:
@@ -2931,13 +2963,12 @@ class Supervisor:
         if uncertain:
             self.host.log("interrupted external operation(s) no probe can settle: "
                           + ", ".join(op.label for op in uncertain))
-            return "effects_uncertain"
         if verdicts:
             self.record("decision", f"relay-continuity: settled interrupted external operation(s) of turn "
                                     f"{report.turn_id} by probe: " + "; ".join(
                                         f"{op.label} = {verdicts[op.id]['verdict']}" for op in report.in_flight
                                         if op.id in verdicts))
-        return verdicts
+        return verdicts, uncertain
 
     def _choose(self, current: str) -> str | None:
         """Prefer available coordinators with quota room, retaining the first available if all are low."""
