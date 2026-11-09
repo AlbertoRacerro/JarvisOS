@@ -659,3 +659,79 @@ def test_preflight_unreadable_quota_is_a_network_cause(tmp_path):
     turn = write_native(tmp_path, [], meta={"launched": False, "exit_code": None, "reason": "quota_unreadable"})
     report = rc.classify_turn(turn)
     assert (report.outcome, report.harness_cause) == ("transient", "provider_network")
+
+
+# --- resuming the interrupted agy conversation (maintainer directive L20261109091909-a4bb) ----------------------
+
+CID = "5b934b69-1847-40af-93ec-eefda93178a5"
+
+
+def test_conversation_of_reads_the_init_event(tmp_path):
+    events = stream()
+    events[0]["conversation_id"] = CID
+    assert ra.conversation_of(write_native(tmp_path, events)) == CID
+    events[0]["conversation_id"] = "../../etc"
+    other = tmp_path / "other"
+    other.mkdir()
+    assert ra.conversation_of(write_native(other, events)) is None
+
+
+def test_new_session_records_a_valid_resume_and_tells_the_model(tmp_path):
+    _, turn = ra.new_session(tmp_path, "Task", resume=CID)
+    assert json.loads((turn / "resume.json").read_text()) == {"conversation": CID}
+    assert "## Resumed" in (turn / "prompt.md").read_text()
+    _, fresh = ra.new_session(tmp_path, "Task", resume="not-a-uuid")
+    assert not (fresh / "resume.json").exists() and "## Resumed" not in (fresh / "prompt.md").read_text()
+
+
+@pytest.mark.parametrize(("size", "used", "compacted", "why"), [
+    (None, False, None, "missing"),
+    (1024, True, None, None),
+    (ra.RESUME_COMPACT_BYTES + 1, True, True, None),
+    (ra.RESUME_MAX_BYTES + 1, False, None, "too_large"),
+])
+def test_prepare_resume_uses_compacts_or_skips_by_size(tmp_path, monkeypatch, size, used, compacted, why):
+    store = tmp_path / "store"
+    store.mkdir()
+    if size is not None:
+        with (store / f"{CID}.db").open("wb") as handle:
+            handle.truncate(size)
+    _, turn = ra.new_session(tmp_path, "Task", resume=CID)
+    calls = []
+    monkeypatch.setattr(ra.subprocess, "run", lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0))
+    meta: dict = {}
+    got = ra.prepare_resume("agy", ra.MODEL, tmp_path, turn, meta, store=store)
+    assert got == (CID if used else None)
+    assert meta["resume"]["used"] is used and meta["resume"].get("why") == why
+    assert meta["resume"].get("compacted") == compacted
+    assert bool(calls) is bool(compacted) and (not calls or ["-p", "/compact"] == calls[0][1:3])
+
+
+def test_retry_after_an_unsuccessful_native_turn_resumes_its_conversation(tmp_path):
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    events = stream("pwd")[:2]
+    events[0]["conversation_id"] = CID
+    turn = write_native(env.repo / ".agent-relay", events, meta={"exit_code": 3})
+    report = rc.classify_turn(turn)
+    report.agent = "argon"
+    sessions = env.repo / ".agent-relay/sessions"
+    session_id, _, turn_name = report.turn_id.partition("/")
+    assert (sessions / session_id / "turns" / turn_name).is_dir()
+    seen = {}
+
+    class Relay:
+        def sessions_dir(self):
+            return sessions
+
+        def start(self, agent, parent, task, turns, resume=None):
+            seen.update(agent=agent, resume=resume)
+            raise OSError("stop here")
+
+    sup.host.relay = Relay()
+    sup.state["permissions_digest"] = sup.host.permissions_digest()
+    sup._launch("argon", "[relay-continuity attempt {nonce}]\ntask", report)
+    assert seen == {"agent": "argon", "resume": CID}
+    report.outcome = "success"
+    sup._launch("argon", "[relay-continuity attempt {nonce}]\ntask", report)
+    assert seen["resume"] is None  # a new task after success starts a fresh conversation

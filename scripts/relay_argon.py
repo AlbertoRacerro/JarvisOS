@@ -11,6 +11,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -44,9 +45,33 @@ TURN_TIMEOUT = 3600
 
 AGY_ERROR_PREFIX = "AGY_ERROR: "
 
+# Resuming an interrupted agy conversation (maintainer directive L20261109091909-a4bb): the CLI keeps the whole
+# conversation locally (full tool results, scratch artifacts) and `--conversation <id>` resumes it in print mode
+# (verified live 2026-11-09: same id, memory kept, step indices continue, a missing id starts a new one).
+# A large conversation is compacted first (`/compact`, verified live: memory kept); a huge one is not resumed.
+CONVERSATION_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+RESUME_COMPACT_BYTES = 6 * 2**20  # about one and a half long implementation turns of conversation store
+RESUME_MAX_BYTES = 48 * 2**20
+COMPACT_TIMEOUT = 600
+
 
 class Refused(Exception):
     pass
+
+
+def conversation_of(turn: Path) -> str | None:
+    """The agy conversation id a retained turn ran in (its stream's init event), or None."""
+    try:
+        with (turn / "output.jsonl").open(encoding="utf-8", errors="replace") as handle:
+            first = json.loads(handle.readline() or "null")
+    except (OSError, json.JSONDecodeError):
+        return None
+    cid = first.get("conversation_id") if isinstance(first, dict) and first.get("event") == "init" else None
+    return cid if isinstance(cid, str) and CONVERSATION_RE.fullmatch(cid) else None
+
+
+def conversation_store(home: Path | None = None) -> Path:
+    return (home or Path.home()) / ".local/share/jarvisos-sandbox/state/agy-home/antigravity-cli/conversations"
 
 
 def native_error(stderr: str) -> dict[str, Any] | None:
@@ -162,10 +187,16 @@ def require_room(reading: list[dict[str, Any]]) -> None:
         raise Refused("quota_exhausted")
 
 
-def new_session(repo: Path, task: str, agent: str = "argon") -> tuple[str, Path]:
+def new_session(repo: Path, task: str, agent: str = "argon", resume: str | None = None) -> tuple[str, Path]:
     sid = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
     turn = repo / ".agent-relay/sessions" / sid / "turns/turn-001"
     turn.mkdir(parents=True)
+    if resume is not None and CONVERSATION_RE.fullmatch(resume):
+        (turn / "resume.json").write_text(json.dumps({"conversation": resume}) + "\n", encoding="utf-8")
+        task = ("## Resumed\nThis continues your previous conversation on this work, which was interrupted (the "
+                "turn time limit, a network or provider error, or a failed attempt). Your earlier context and "
+                "scratch files are still available. First check what is already done (git status, git log, the PR, "
+                "your scratch notes), keep what is good, then finish the work.\n\n" + task)
     rules = ('# Native subscription coordinator\n\n## Rules\n'
              'Execute only the maintainer-authorized task below within the existing sandbox and repository invariants. '
              'A model response never proves delivery; retain real evidence for the independent mission check. '
@@ -185,6 +216,41 @@ def new_session(repo: Path, task: str, agent: str = "argon") -> tuple[str, Path]
     (turn / "prompt.md").write_text(rules + task + "\n", encoding="utf-8")
     (turn / "state.json").write_text(json.dumps({"agent_key": agent, "status": "continue"}) + "\n")
     return sid, turn
+
+
+def prepare_resume(binary: str, model: str, repo: Path, turn: Path, metadata: dict[str, Any],
+                   store: Path | None = None) -> str | None:
+    """The conversation to resume for this turn, compacted first when large; None starts a new conversation.
+    Every choice is recorded in metadata["resume"]."""
+    try:
+        wanted = json.loads((turn / "resume.json").read_text(encoding="utf-8")).get("conversation")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+    if not isinstance(wanted, str) or not CONVERSATION_RE.fullmatch(wanted):
+        return None
+    record: dict[str, Any] = {"conversation": wanted, "used": False}
+    metadata["resume"] = record
+    try:
+        size = ((store or conversation_store()) / f"{wanted}.db").stat().st_size
+    except OSError:
+        record["why"] = "missing"
+        return None
+    record["bytes"] = size
+    if size > RESUME_MAX_BYTES:
+        record["why"] = "too_large"
+        return None
+    if size > RESUME_COMPACT_BYTES:
+        try:
+            with (turn / "compact.jsonl").open("w") as out, (turn / "compact-stderr.log").open("w") as err:
+                done = subprocess.run([binary, "-p", "/compact", "--model", model, "--conversation", wanted,
+                                       "--output-format", "stream-json", "--sandbox", "--print-timeout",
+                                       f"{COMPACT_TIMEOUT}s"], cwd=repo, stdout=out, stderr=err,
+                                      stdin=subprocess.DEVNULL, timeout=COMPACT_TIMEOUT + 30, check=False)
+            record["compacted"] = done.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            record["compacted"] = False
+    record["used"] = True
+    return wanted
 
 
 def run(repo: Path, session: str, agent: str = "argon") -> int:
@@ -210,8 +276,9 @@ def run(repo: Path, session: str, agent: str = "argon") -> int:
         metadata["quota"] = read_quota(binary, agent=agent)
         require_room(metadata["quota"])
         prompt = (turn / "prompt.md").read_text(encoding="utf-8")
+        resume = prepare_resume(binary, model, repo, turn, metadata)
         argv = [binary, "-p", prompt, "--model", model, "--output-format", "stream-json", "--mode", "accept-edits", "--dangerously-skip-permissions",
-                "--sandbox", "--print-timeout", f"{TURN_TIMEOUT}s"]
+                "--sandbox", "--print-timeout", f"{TURN_TIMEOUT}s", *(["--conversation", resume] if resume else [])]
         metadata["model"] = model
         metadata["launched"] = True
         with (turn / "output.jsonl").open("w") as out, (turn / "stderr.log").open("w") as err:

@@ -210,9 +210,14 @@ def quota_preflight(agy: str, alias: str, env: dict[str, str]) -> list[dict[str,
     return target
 
 
-def run_argv(agy: str, task: str, model: str, timeout: int) -> list[str]:
+def run_argv(agy: str, task: str, model: str, timeout: int, resume: str | None = None) -> list[str]:
     argv = [agy, "-p", task, "--model", model, "--output-format", "json", "--mode", "accept-edits", "--sandbox",
             "--print-timeout", f"{timeout}s"]
+    if resume is not None:
+        # Retry the same model in its own interrupted conversation (full context and scratch artifacts).
+        if not relay_argon.CONVERSATION_RE.fullmatch(resume):
+            raise Refused("invalid_conversation_id")
+        argv += ["--conversation", resume]
     if any(flag in argv[3:] for flag in FORBIDDEN_FLAGS):
         raise Refused("forbidden_flag")
     return argv
@@ -278,7 +283,7 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     except relay_argon.Refused as error:
         raise Refused(str(error)) from error
     result["quota"] = quota_preflight(agy, alias, env)
-    argv = run_argv(agy, task, model, args.timeout)
+    argv = run_argv(agy, task, model, args.timeout, getattr(args, "resume_conversation", None))
     result["argv"] = [f"<task-file:{args.task_file} {digest}>" if item == task else item for item in argv]
     before = git_fingerprint(git_dir, common)
     status, reason = "succeeded", None
@@ -313,8 +318,11 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     if reason != "git_metadata_modified":  # never run git over planted config or hooks
         diff = collect_diff(worktree, result["start_head"])
         (evidence / "diff.patch").write_text(diff, encoding="utf-8")
+    document = json_document(stdout)
+    cid = document.get("conversation_id") if isinstance(document, dict) else None
     result.update(status=status, reason=reason, failure_class=failure_class(status, reason, stderr),
-                  diff_bytes=len(diff.encode("utf-8")))
+                  diff_bytes=len(diff.encode("utf-8")),
+                  conversation_id=cid if isinstance(cid, str) and relay_argon.CONVERSATION_RE.fullmatch(cid) else None)
 
 
 def failure_class(status: str, reason: str | None, stderr: str) -> str | None:
@@ -345,6 +353,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                                       "from the salvaged diff, and only a repeat escalates (salvaging again)"}
         print(f"failure_class: {result['failure_class']} ({advice[result['failure_class']]}); "
               f"diff_bytes: {result.get('diff_bytes', 0)}")
+        if result.get("conversation_id") and result["failure_class"] != "policy":
+            print(f"retry in the same conversation: --resume-conversation {result['conversation_id']}")
     return {"succeeded": 0, "refused": 2}.get(result["status"], 1)
 
 
@@ -358,6 +368,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     run.add_argument("--evidence-dir")
     run.add_argument("--coordinator-fallback", action="store_true")
+    run.add_argument("--resume-conversation", help="retry in this earlier run's agy conversation (its result's "
+                                                   "conversation_id) instead of a new one")
     run.set_defaults(func=cmd_run)
     return parser
 

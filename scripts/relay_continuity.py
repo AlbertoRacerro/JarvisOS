@@ -1893,7 +1893,8 @@ class RelayAdapter:
         self._argon_reading[agent] = (time.monotonic(), result)
         return result
 
-    def start(self, agent: str, parent: str | None, task: str, turns: int) -> subprocess.Popen:
+    def start(self, agent: str, parent: str | None, task: str, turns: int,
+              resume: str | None = None) -> subprocess.Popen:
         # A mission's first task has no parent: Relay opens a new session for it.
         lease = None
         env = {**os.environ, **self.env} if self.env else dict(os.environ)
@@ -1908,7 +1909,7 @@ class RelayAdapter:
                 raise
             env["JARVISOS_ARGON_LEASE_FD"] = str(lease.fileno())
             try:
-                session, _ = relay_argon.new_session(self.repo, task, agent)
+                session, _ = relay_argon.new_session(self.repo, task, agent, resume=resume)
             except OSError:
                 lease.close()
                 raise
@@ -3040,6 +3041,16 @@ class Supervisor:
         parent = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
                   or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
                   else self.state["head_session"])
+        # A native agent retried after its own unsuccessful turn resumes that agy conversation (its full context and
+        # scratch artifacts, which the retained stream does not carry); a new task or another agent starts fresh.
+        resume = None
+        if agent in NATIVE_AGENTS and previous is not None and previous.agent == agent \
+                and previous.outcome != "success" and previous.turn_id:
+            try:
+                session_id, _, turn_name = previous.turn_id.partition("/")  # "<session>/<turn>"
+                resume = relay_argon.conversation_of(self.host.relay.sessions_dir() / session_id / "turns" / turn_name)
+            except Exception:  # noqa: BLE001 - resuming is an optimisation; the turn launches fresh without it
+                resume = None
         pending = {"nonce": nonce, "agent": agent, "parent": parent, "started_at": iso(now),
                    "pid": None, "pid_start": None, "fingerprint": self.host.fingerprint(), "attempt": self.attempts}
         if (rec := self.state.get("mission")) is not None and self.mission is not None:
@@ -3058,9 +3069,10 @@ class Supervisor:
         self.state["acknowledged"] = None  # the reviewed turn is now behind the chain
         self.state["agent"] = agent
         self.save()
-        self.store.journal({"event": "launch", **{k: v for k, v in pending.items() if k != "fingerprint"}})
+        self.store.journal({"event": "launch", **{k: v for k, v in pending.items() if k != "fingerprint"},
+                            **({"resume": resume} if resume else {})})
         try:
-            proc = self.host.relay.start(agent, parent, text, self.turns)
+            proc = self.host.relay.start(agent, parent, text, self.turns, **({"resume": resume} if resume else {}))
         except OSError:
             # Relay could not be executed at all: nothing started, so the attempt settles as not started.
             self.state["pending"] = None
