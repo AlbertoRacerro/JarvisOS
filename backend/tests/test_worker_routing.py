@@ -670,3 +670,176 @@ def test_review_of_prefers_another_family_but_never_blocks() -> None:
     fallback = wr.decide("medium", "high", gemini_only, review_of="gemini")
     assert fallback["status"] == "ok" and fallback["worker"] in ("flash-high", "argon-high")
     assert wr.build_parser().parse_args(["pick", "--difficulty", "low", "--risk", "low", "--review-of", "claude"]).review_of == "claude"
+
+
+# ---------------------------------------------------------------------------
+# Spec 256: worker outcomes, escalation, measured adequacy and report
+
+
+def test_spec_256_criterion_1_record_validation_and_append(tmp_path: Path) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    entry = wr.record(task="255-review", kind="review", worker="flash-medium", tier=2,
+                      ci_first_pass="pass", findings="0,1,0,0", rework_rounds=1,
+                      escalated=False, salvage="salvaged", failure="none", coordinator_tokens=120,
+                      record_file=rf)
+    assert rf.is_file()
+    lines = [json.loads(line) for line in rf.read_text(encoding="utf-8").strip().splitlines()]
+    assert len(lines) == 1 and lines[0] == entry
+    assert lines[0]["task"] == "255-review"
+    assert lines[0]["kind"] == "review"
+    assert lines[0]["worker"] == "flash-medium"
+    assert lines[0]["model"] == "gemini-3.8-flash-medium"
+    assert lines[0]["tier"] == 2
+    assert lines[0]["ci_first_pass"] == "pass"
+    assert lines[0]["findings"] == {"P0": 0, "P1": 1, "P2": 0, "P3": 0}
+    assert lines[0]["rework_rounds"] == 1
+    assert lines[0]["escalated"] is False
+    assert lines[0]["salvage"] == "salvaged"
+    assert lines[0]["failure"] == "none"
+    assert lines[0]["coordinator_tokens"] == 120
+
+    assert wr.main(["record", "--task", "256-fix", "--kind", "fix", "--worker", "terra",
+                    "--record-file", str(rf)]) == 0
+    lines = [json.loads(line) for line in rf.read_text(encoding="utf-8").strip().splitlines()]
+    assert len(lines) == 2
+    assert lines[1]["worker"] == "terra"
+    assert lines[1]["model"] == "gpt-6.1-terra"
+
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="magic", worker="flash", record_file=rf)
+    assert wr.main(["record", "--task", "t1", "--kind", "magic", "--worker", "flash", "--record-file", str(rf)]) != 0
+
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="docs", worker="flash", failure="quantum", record_file=rf)
+    assert wr.main(["record", "--task", "t1", "--kind", "docs", "--worker", "flash", "--failure", "quantum", "--record-file", str(rf)]) != 0
+
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="docs", worker="flash", salvage="maybe", record_file=rf)
+    assert wr.main(["record", "--task", "t1", "--kind", "docs", "--worker", "flash", "--salvage", "maybe", "--record-file", str(rf)]) != 0
+
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="docs", worker="flash", salvage="restarted", reason=None, record_file=rf)
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="docs", worker="flash", salvage="restarted", reason="   ", record_file=rf)
+    assert wr.main(["record", "--task", "t1", "--kind", "docs", "--worker", "flash", "--salvage", "restarted", "--record-file", str(rf)]) != 0
+
+    res = wr.record(task="t1", kind="docs", worker="flash", salvage="restarted", reason="wrong approach", record_file=rf)
+    assert res["salvage"] == "restarted" and res["reason"] == "wrong approach"
+
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="docs", worker="unknown-bot", record_file=rf)
+    assert wr.main(["record", "--task", "t1", "--kind", "docs", "--worker", "unknown-bot", "--record-file", str(rf)]) != 0
+
+
+def test_spec_256_criterion_2_model_failure_escalates_away_from_gemini(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    wr.record(task="task-A", kind="feature", worker="flash-high", failure="model", record_file=rf)
+
+    outcomes = wr.load_records(rf)
+    decision = wr.decide("high", "high", pools(), task="task-A", outcomes=outcomes)
+    assert decision["status"] == "ok"
+    assert wr.family(next(m for m in wr.MODELS if m.key == decision["worker"])) != "gemini"
+    for entry in [decision, *decision["alternatives"]]:
+        assert wr.family(next(m for m in wr.MODELS if m.key == entry["worker"])) != "gemini"
+    assert next(s for s in decision["skipped"] if s["worker"] == "flash-high")["skipped"] == "escalated_from_family"
+
+    gemini_only = pools(codex=pool("codex", 0.0), claude=pool("claude", 0.0), copilot=pool("copilot", 0.0))
+    wait_decision = wr.decide("high", "high", gemini_only, task="task-A", outcomes=outcomes)
+    assert wait_decision["status"] == "no_worker"
+    assert wait_decision["reason"] == "wait_for_escalation_pool"
+
+    monkeypatch.setattr(wr, "read_pools", lambda: gemini_only)
+    nothing = ["--quota-file", str(tmp_path / "none.json"), "--record-file", str(rf)]
+    assert wr.main(["pick", "--difficulty", "high", "--risk", "high", "--task", "task-A", "--json", *nothing]) == wr.NO_WORKER_EXIT
+    cli_data = json.loads(capsys.readouterr().out)
+    assert cli_data["status"] == "no_worker" and cli_data["reason"] == "wait_for_escalation_pool"
+
+    assert wr.main(["pick", "--difficulty", "high", "--risk", "high", "--task", "task-A", *nothing]) == wr.NO_WORKER_EXIT
+    out_text = capsys.readouterr().out
+    assert "no_worker (wait_for_escalation_pool)" in out_text
+
+
+def test_spec_256_criterion_3_harness_failure_leaves_pick_unchanged(tmp_path: Path) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    wr.record(task="task-B", kind="feature", worker="flash-high", failure="harness", record_file=rf)
+
+    outcomes = wr.load_records(rf)
+    baseline = wr.decide("high", "high", pools())
+    with_task = wr.decide("high", "high", pools(), task="task-B", outcomes=outcomes)
+    assert baseline["worker"] == with_task["worker"]
+    assert [a["worker"] for a in baseline["alternatives"]] == [a["worker"] for a in with_task["alternatives"]]
+    assert [s["worker"] for s in baseline["skipped"]] == [s["worker"] for s in with_task["skipped"]]
+
+
+def test_spec_256_criterion_4_measured_inadequate_at_five_records(tmp_path: Path) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    for i in range(3):
+        wr.record(task=f"terra-{i}", kind="feature", worker="terra", ci_first_pass="pass",
+                  findings="0,0,0,0", rework_rounds=0, record_file=rf)
+
+    for i in range(2):
+        wr.record(task=f"flash-pass-{i}", kind="feature", worker="flash-medium", ci_first_pass="pass",
+                  findings="0,1,0,0", rework_rounds=2, record_file=rf)
+    for i in range(2):
+        wr.record(task=f"flash-fail-{i}", kind="feature", worker="flash-medium", ci_first_pass="fail",
+                  findings="0,1,0,0", rework_rounds=2, record_file=rf)
+
+    outcomes_4 = wr.load_records(rf)
+    decision_4 = wr.decide("medium", "low", pools(), kind="feature", outcomes=outcomes_4)
+    assert decision_4["worker"] == "flash-medium"
+    assert not any(s["worker"] == "flash-medium" for s in decision_4["skipped"])
+
+    wr.record(task="flash-fail-3", kind="feature", worker="flash-medium", ci_first_pass="fail",
+              findings="0,1,0,0", rework_rounds=2, record_file=rf)
+
+    outcomes_5 = wr.load_records(rf)
+    decision_5 = wr.decide("medium", "low", pools(), kind="feature", outcomes=outcomes_5)
+    assert decision_5["worker"] == "terra"
+    skipped_fm = next(s for s in decision_5["skipped"] if s["worker"] == "flash-medium")
+    assert skipped_fm["skipped"] == "measured_inadequate"
+
+
+def test_spec_256_criterion_5_report_in_italian(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    now = datetime(2026, 11, 9, 12, 0, tzinfo=UTC)
+
+    wr.record(task="t1", kind="feature", worker="flash-medium", ci_first_pass="pass",
+              findings="0,0,0,0", rework_rounds=0, escalated=False, coordinator_tokens=150,
+              record_file=rf, now=now - timedelta(days=1))
+    wr.record(task="t2", kind="fix", worker="flash-high", ci_first_pass="fail",
+              findings="0,1,0,0", rework_rounds=2, escalated=True, coordinator_tokens=300,
+              record_file=rf, now=now - timedelta(days=2))
+    wr.record(task="t3", kind="tests", worker="terra", ci_first_pass="pass",
+              findings="0,0,0,0", rework_rounds=1, escalated=False,
+              record_file=rf, now=now - timedelta(days=3))
+
+    text = wr.report(days=7, record_file=rf, now=now)
+    assert "gemini-3.8-flash-medium" in text
+    assert "gemini-3.8-flash-high" in text
+    assert "gpt-6.1-terra" in text
+    assert "compiti" in text
+    assert "prima prova" in text
+    assert "rilievi" in text
+    assert "rilavorazioni" in text
+    assert "escalation" in text
+    assert "Risparmio netto: 1 compiti Claude e GPT evitati (1 compiti Gemini non escalati), meno 150 token coordinatore registrati." in text
+
+    assert wr.main(["report", "--days", "7", "--record-file", str(rf)]) == 0
+    cli_out = capsys.readouterr().out
+    assert "Risparmio netto:" in cli_out
+    assert "token coordinatore" in cli_out
+
+
+def test_spec_256_review_records_without_a_first_pass_never_judge_a_model(tmp_path: Path) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    for i in range(6):
+        wr.record(task=f"r{i}", kind="review", worker="flash-high", rework_rounds=3, record_file=rf)
+        wr.record(task=f"t{i}", kind="review", worker="terra", rework_rounds=0, record_file=rf)
+    decision = wr.decide("medium", "high", pools(), kind="review", outcomes=wr.load_records(rf))
+    assert decision["worker"] == "flash-high"  # n/a first pass: no evidence for or against
+    wr.record(task="broken", kind="review", worker="flash-high", record_file=rf)
+    with rf.open("a", encoding="utf-8") as handle:
+        handle.write('{"model": "x", "at": "2099-01-01T00:00:00Z", "rework_rounds": "lots"}\nnot json\n')
+    assert "Risparmio netto" in wr.report(record_file=rf, now=datetime(2099, 1, 2, tzinfo=UTC))
