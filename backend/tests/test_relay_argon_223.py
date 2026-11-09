@@ -584,3 +584,23 @@ def test_native_read_file_is_read_only_without_reclassifying_unknown_tools(tmp_p
     other = tmp_path / "other"
     other.mkdir()
     assert rc.classify_turn(write_native(other, events)).calls[0].kind == "external"
+
+
+@pytest.mark.parametrize(("agent", "model"), [("flash", "gemini-3.8-flash-high"), ("agy_sonnet", "claude-sonnet-5-5-high")])
+def test_new_native_coordinators_settle_a_successful_turn_on_their_own_models(tmp_path, agent, model):
+    events = stream()
+    events[0]["init"]["model"] = model
+    turn = write_native(tmp_path, events, meta={"model": model, "agent": agent})
+    (turn / "state.json").write_text(json.dumps({"agent_key": agent}))
+    report = rc.classify_turn(turn)
+    assert report.outcome == "success" and report.agent == agent
+    events[0]["init"]["model"] = ra.MODEL  # another family's model is not this agent's evidence
+    (turn / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    assert rc.classify_turn(turn).outcome != "success"
+
+
+def test_native_rules_text_asks_for_foreground_tests_and_an_early_separate_push(tmp_path):
+    _, turn = ra.new_session(tmp_path, "task", "flash")
+    rules = (turn / "prompt.md").read_text()
+    assert "foreground with their own timeout" in rules and "push as a separate short command early" in rules
+    assert json.loads((turn / "state.json").read_text())["agent_key"] == "flash"
