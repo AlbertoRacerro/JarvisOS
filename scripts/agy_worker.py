@@ -309,15 +309,41 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     else:
         (evidence / "transcript.txt").write_text(stdout, encoding="utf-8")
     (evidence / "stderr.txt").write_text(stderr, encoding="utf-8")
+    diff = ""
     if reason != "git_metadata_modified":  # never run git over planted config or hooks
-        (evidence / "diff.patch").write_text(collect_diff(worktree, result["start_head"]), encoding="utf-8")
-    result.update(status=status, reason=reason)
+        diff = collect_diff(worktree, result["start_head"])
+        (evidence / "diff.patch").write_text(diff, encoding="utf-8")
+    result.update(status=status, reason=reason, failure_class=failure_class(status, reason, stderr),
+                  diff_bytes=len(diff.encode("utf-8")))
+
+
+def failure_class(status: str, reason: str | None, stderr: str) -> str | None:
+    """Why a worker run did not succeed, so the coordinator never mistakes the harness for the model.
+    harness / provider_quota: retry the same model (after the reset for quota); this is no capability verdict.
+    policy: the run touched git metadata. model_or_unknown: judge the delivered diff before escalating."""
+    if status == "succeeded":
+        return None
+    if reason == "git_metadata_modified":
+        return "policy"
+    if status == "timeout" or (reason or "").startswith("spawn_failed"):
+        return "harness"
+    cause = relay_argon.harness_cause(relay_argon.native_error(stderr))
+    if cause is not None:
+        return "provider_quota" if cause[0] == "quota" else "harness"
+    return "model_or_unknown"
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     path, result = execute(args)
     print(f"result: {path}")
     print(f"status: {result['status']}" + (f" ({result['reason']})" if result["reason"] else ""))
+    if result.get("failure_class"):
+        advice = {"harness": "retry the same model; not a capability verdict",
+                  "provider_quota": "retry the same model after its reset; not a capability verdict",
+                  "policy": "the run touched git metadata",
+                  "model_or_unknown": "judge the delivered diff before escalating; salvage it if usable"}
+        print(f"failure_class: {result['failure_class']} ({advice[result['failure_class']]}); "
+              f"diff_bytes: {result.get('diff_bytes', 0)}")
     return {"succeeded": 0, "refused": 2}.get(result["status"], 1)
 
 

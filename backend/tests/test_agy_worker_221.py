@@ -290,3 +290,20 @@ def test_prepare_login_links_gemini_and_refuses_missing_or_conflicting_home(env:
     (env.tmp / ".gemini").rmdir()
     assert env.run()["status"] == "succeeded"
     assert (env.tmp / ".gemini").is_symlink() and (env.tmp / ".gemini").resolve() == target.resolve()
+
+
+# --- maintainer directive L20261109090114-5e79: a worker's harness failure is never a capability verdict -------
+
+@pytest.mark.parametrize(("status", "reason", "stderr", "expected"), [
+    ("succeeded", None, "", None),
+    ("timeout", "exceeded 930s", "", "harness"),
+    ("failed", "spawn_failed: no such file", "", "harness"),
+    ("failed", "exit_code_3", 'AGY_ERROR: {"status": "DEADLINE_EXCEEDED", "reason": "print_timeout", '
+                              '"short_error": "print timeout after 30m0s"}', "harness"),
+    ("failed", "exit_code_3", 'AGY_ERROR: {"status": "RESOURCE_EXHAUSTED", "error_code": 429}', "provider_quota"),
+    ("failed", "exit_code_3", 'AGY_ERROR: {"status": "UNAUTHENTICATED", "error_code": 401}', "harness"),
+    ("failed", "exit_code_1", "plain failure", "model_or_unknown"),
+    ("failed", "git_metadata_modified", "", "policy"),
+])
+def test_failure_class_separates_harness_from_model(status, reason, stderr, expected):
+    assert worker.failure_class(status, reason, stderr) == expected

@@ -193,6 +193,9 @@ class TurnReport:
     relay_status: str | None = None
     no_evidence: bool = False  # the turn left no output of its own: nothing shows what it did
     turn_id: str | None = None  # "<session>/<turn>" of the classified turn
+    # Set when the runner's own evidence shows the turn ended for a harness or provider reason (time limit, quota,
+    # auth blip, network). It is never a verdict on the model's capability; capability is judged on delivered work.
+    harness_cause: str | None = None
     spend_cap: bool = False  # the provider message named a spend/credit cap (even if it also printed a reset)
     reaped: list[str] | None = None  # processes the turn left running, stopped at its end; None: not launched here
 
@@ -1151,7 +1154,11 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
                     kind = "external" if kind == "unknown" else kind
                     probe = {"command": params["CommandLine"]}
                 else:
-                    local = {"write_to_file", "replace_file_content", "multi_replace_file_content", "notebook_edit"}
+                    # The stream reports `edit_file`, `write_file` and `read_file` for the file tools whatever their
+                    # advertised names are (all retained turns, 2026-11); an edit is a local write, never external.
+                    # manage_task controls the CLI's own background tasks on this workstation (status, kill).
+                    local = {"write_to_file", "replace_file_content", "multi_replace_file_content", "notebook_edit",
+                             "edit_file", "write_file", "manage_task"}
                     read = {"view_file", "read_file", "list_dir", "find_by_name", "grep_search", "sed_file", "search_web",
                             "read_url_content", "command_status", "wait", "wait_5_seconds"}
                     kind, label, probe = ("local_write" if name in local else "read_only" if name in read else "external"), name, {}
@@ -1199,9 +1206,27 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
     report.calls = list(calls.values())
     if events and not initialized:
         report.bad_lines += 1
-    if not initialized or report.bad_lines or len(results) != 1 or not meta \
-            or any(c.pending or c.ended_abnormally for c in calls.values()):
+    # The runner's structured error (stderr), when present, names a harness or provider cause. It is applied only
+    # to turns that did not succeed, and never touches the effects: interrupted operations stay in flight and are
+    # still gated and reconciled from observable state.
+    try:
+        native = relay_argon.native_error((turn_dir / "stderr.log").read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        native = None
+    cause = relay_argon.harness_cause(native) or (("unknown", "turn_time_limit") if reason == "timeout" else None)
+
+    def harness(report: TurnReport) -> TurnReport:
+        if cause is not None and report.outcome != "success":
+            report.outcome, report.harness_cause = cause
+            report.detail += f"; runner: {cause[1]}"
         return report
+
+    # A failed tool call that cannot act beyond this workstation (a missing file, an edit that did not apply, a
+    # finished-task kill) is the normal back-and-forth of a turn: it is finished and does not hide the outcome.
+    # A failed or cancelled external call stays strict: what it did is not known.
+    if not initialized or report.bad_lines or len(results) != 1 or not meta \
+            or any(c.pending or (c.ended_abnormally and external(c)) for c in calls.values()):
+        return harness(report)
     terminal = results[0]
     report.terminal = True
     if terminal.get("denied_actions"):
@@ -1216,6 +1241,7 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
         if report.outcome == "success":
             report.outcome = "unknown"
         settle_limit(report, str(text or ""), ref or now_utc(), None)
+        harness(report)
     return report
 
 
@@ -3076,10 +3102,13 @@ class Supervisor:
         # Counted once per launched attempt. Provider failures are bounded by their cooldowns instead.
         counters = self.state["counters"]
         # Only an unbroken run of crash/unknown turns counts: any other outcome ends the streak.
+        # A turn cut by our own time limit still counts here: this is the loop guard (eight unbroken one-hour cuts
+        # is a real problem), not a capability verdict; `harness_cause` in the journal keeps the two apart.
         counters["consecutive_failures"] = (counters["consecutive_failures"] + 1
                                             if report.outcome in ("crash", "unknown") else 0)
         self.store.journal({"event": "settle", "nonce": pending["nonce"], "session": session_id,
-                            "outcome": report.outcome, "agent": report.agent, "reaped": report.reaped,
+                            "outcome": report.outcome, "harness_cause": report.harness_cause,
+                            "agent": report.agent, "reaped": report.reaped,
                             "effects": [c.label for c in report.effects], "in_flight": [c.label for c in report.in_flight]})
         # Keep the launched intent durable until mission progress is saved. If this process dies while
         # checking a successful task, restart adopts the turn instead of launching that task again.

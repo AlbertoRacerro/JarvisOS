@@ -38,11 +38,53 @@ def model_for(agent: str, env: Mapping[str, str]) -> str:
 
 
 QUOTA_TIMEOUT = 45
-TURN_TIMEOUT = 1800
+# Our own turn budget, not a model limit. 30 minutes cut most long implementation turns mid-way (most of
+# the agy turns that ended unsettled on 2026-11-07); one hour keeps the deadline handling with room for real work.
+TURN_TIMEOUT = 3600
+
+AGY_ERROR_PREFIX = "AGY_ERROR: "
 
 
 class Refused(Exception):
     pass
+
+
+def native_error(stderr: str) -> dict[str, Any] | None:
+    """The CLI's own structured error line (`AGY_ERROR: {...}`), the last one if several; None when absent.
+    Model prose never reaches stderr, so this is runner evidence, not a claim by the model."""
+    found = None
+    for line in stderr.splitlines():
+        if line.startswith(AGY_ERROR_PREFIX):
+            try:
+                item = json.loads(line[len(AGY_ERROR_PREFIX):])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                found = item
+    return found
+
+
+def harness_cause(error: dict[str, Any] | None) -> tuple[str, str] | None:
+    """(outcome, cause) for a native error that is the harness or the provider, never a capability verdict.
+    outcome uses the continuity vocabulary: quota (provider limit, cool down), transient (back off, retry),
+    unknown (retry the same agent after reconciling effects). None: no such evidence."""
+    if not error:
+        return None
+    status = str(error.get("status") or "")
+    reason = str(error.get("reason") or "")
+    code = error.get("error_code")
+    text = str(error.get("short_error") or "")
+    if status == "RESOURCE_EXHAUSTED" or code == 429:
+        return "quota", "provider_quota"
+    if reason == "print_timeout" or (status == "DEADLINE_EXCEEDED" and "print timeout" in text):
+        return "unknown", "turn_time_limit"
+    if status == "UNAUTHENTICATED" or code == 401:
+        # The login was proven by the preflight quota read moments before; a mid-turn 401 is a token blip.
+        return "transient", "provider_auth_blip"
+    if status in ("UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED") or (isinstance(code, int) and 500 <= code <= 599) \
+            or "request failed" in text:
+        return "transient", "provider_network"
+    return None
 
 
 def sandbox() -> bool:
@@ -131,7 +173,15 @@ def new_session(repo: Path, task: str, agent: str = "argon") -> tuple[str, Path]
              'RELAY_STATUS: {"status":"propose_done"}. Use status continue for a durable checkpoint, '
              'or blocked only for a real maintainer gate. Do not finish while a command you started is still running: '
              'use command_status until the executor reports its real exit status. '
-             'Do not invent execution evidence.\n\n## Task\n\n')
+             'Do not invent execution evidence.\n\n'
+             '## Working in this harness\n'
+             f'- Your turn has a hard limit of {TURN_TIMEOUT // 60} minutes. Plan for it: after each finished unit of '
+             'work, commit and push it as its own short command, well before the limit, then continue.\n'
+             '- Run tests, builds and walks in the foreground with an explicit timeout, for example '
+             '`timeout 900 <command>`. Do not start them as background tasks and then wait for them.\n'
+             '- File tools need absolute paths.\n'
+             '- A tool call or command that fails is normal: read the error, adjust and continue. '
+             'It is not a reason to stop or to report the task blocked.\n\n## Task\n\n')
     (turn / "prompt.md").write_text(rules + task + "\n", encoding="utf-8")
     (turn / "state.json").write_text(json.dumps({"agent_key": agent, "status": "continue"}) + "\n")
     return sid, turn
