@@ -119,6 +119,9 @@ class FakeRelay(rc.RelayAdapter):
     def limits(self) -> dict[str, Any] | None:
         return self.readings() if callable(self.readings) else self.readings
 
+    def argon_limits(self, agent: str = "argon") -> dict[str, Any] | None:
+        return None  # offline: no native reading unless a test sets one (never the host's agy)
+
     def start(self, agent: str, parent: str, task: str, turns: int) -> FakeProc:
         if not self.script:
             raise AssertionError("unexpected Relay invocation")
@@ -358,6 +361,9 @@ def test_choose_does_not_treat_unproven_headroom_as_low(tmp_path: Path, kind: st
     elif kind == "unusable":
         readings["claude"] = reading("claude", 86, T0 - timedelta(hours=1), T0)
     env = Env(tmp_path, readings=readings)
+    # spec 255: an unproven reading is still tried, but ranks after an agent with proven room
+    assert env.supervisor()._choose("claude") == "codex"
+    env.relay.readings = {k: v for k, v in readings.items() if k != "codex"}
     assert env.supervisor()._choose("claude") == "claude"
 
 

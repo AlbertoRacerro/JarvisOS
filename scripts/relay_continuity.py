@@ -1852,7 +1852,12 @@ class RelayAdapter:
                 return None
             env = {**os.environ, **(self.env or {})}
             relay_argon.model_for(agent, env)
-            reading = relay_argon.read_quota(binary, env, agent=agent)
+            # Every native agent is ranked on each choice: they share one `agy /quota` document for 30 s.
+            doc = getattr(self, "_argon_doc", None)
+            if doc is None or time.monotonic() - doc[0] >= 30:
+                doc = (time.monotonic(), relay_argon.quota_document(binary, env))
+                self._argon_doc = doc
+            reading = relay_argon.read_quota(binary, env, agent=agent, document=doc[1])
             result = {"windows": [{"used_percent": 100 * (1 - b["remaining_fraction"]),
                                    "resets_at": b.get("reset_time"), "disabled": b.get("disabled", False)}
                                   for b in reading]}

@@ -110,10 +110,10 @@ def buckets(node: Any, depth: int = 0) -> list[dict[str, Any]]:
         b for key, value in node.items() if key != "buckets" for b in buckets(value, depth + 1)]
 
 
-def read_quota(binary: str, env: dict[str, str] | None = None, *, agent: str = "argon") -> list[dict[str, Any]]:
+def quota_document(binary: str, env: dict[str, str] | None = None) -> dict[str, Any]:
+    """One no-model-turn `agy /quota` document; every native agent selects its own buckets from it."""
     if not sandbox():
         raise Refused("not_sandbox")
-    model_for(agent, os.environ if env is None else env)
     prepare_login()
     subscription_settings()
     try:
@@ -124,6 +124,13 @@ def read_quota(binary: str, env: dict[str, str] | None = None, *, agent: str = "
         raise Refused("quota_unreadable") from exc
     if proc.returncode != 0 or not isinstance(data, dict) or data.get("status") != "SUCCESS":
         raise Refused("quota_unreadable")
+    return data
+
+
+def read_quota(binary: str, env: dict[str, str] | None = None, *, agent: str = "argon",
+               document: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    model_for(agent, os.environ if env is None else env)
+    data = quota_document(binary, env) if document is None else document
     required = NATIVE[agent][3]
     found = [b for b in buckets(data) if b.get("id") in required]
     if len(found) != len(required) or {b.get("id") for b in found} != required:
