@@ -20,46 +20,25 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-# Native coordinators run at high effort by default: coordination is design, review and integration (spec 255,
-# effort by task). Each agent has its own allowlist, env override and required quota buckets.
-MODEL = "gemini-4-argon-high"
+MODEL = "gemini-4-argon-low"
 MODELS = frozenset(f"gemini-4-argon-{level}" for level in ("low", "medium", "high"))
-GEMINI_BUCKETS = frozenset(("gemini-5h", "gemini-weekly"))
-REQUIRED_BUCKETS = GEMINI_BUCKETS | {"gemini-argon-wtu-weekly"}
-OPUS_MODEL = "claude-opus-5-5-high"
+REQUIRED_BUCKETS = frozenset(("gemini-5h", "gemini-weekly", "gemini-argon-wtu-weekly"))
+OPUS_MODEL = "claude-opus-5-5-medium"
 OPUS_MODELS = frozenset(f"claude-opus-5-5-{level}" for level in ("low", "medium", "high"))
 OPUS_BUCKETS = frozenset(("3p-5h", "3p-weekly"))
-FLASH_MODEL = "gemini-3.8-flash-high"
-FLASH_MODELS = frozenset(f"gemini-3.8-flash-{level}" for level in ("medium", "high"))
-SONNET_MODEL = "claude-sonnet-5-5-high"
-SONNET_MODELS = frozenset(f"claude-sonnet-5-5-{level}" for level in ("low", "medium", "high"))
-NATIVE = {  # agent: (env override, default model, allowlist, required buckets)
-    "argon": ("JARVISOS_AGY_ARGON_MODEL", MODEL, MODELS, REQUIRED_BUCKETS),
-    "agy_opus": ("JARVISOS_AGY_OPUS_MODEL", OPUS_MODEL, OPUS_MODELS, OPUS_BUCKETS),
-    "flash": ("JARVISOS_AGY_FLASH_COORDINATOR_MODEL", FLASH_MODEL, FLASH_MODELS, GEMINI_BUCKETS),
-    "agy_sonnet": ("JARVISOS_AGY_SONNET_MODEL", SONNET_MODEL, SONNET_MODELS, OPUS_BUCKETS),
-}
-
-
-def models_for(agent: str) -> frozenset[str]:
-    if agent not in NATIVE:
-        raise Refused("agent_not_allowed")
-    return NATIVE[agent][2]
 
 
 def model_for(agent: str, env: Mapping[str, str]) -> str:
-    if agent not in NATIVE:
+    if agent not in ("argon", "agy_opus"):
         raise Refused("agent_not_allowed")
-    variable, default, allowed, _ = NATIVE[agent]
-    model = env.get(variable, default)
-    if model not in allowed:
+    model = env.get("JARVISOS_AGY_OPUS_MODEL", OPUS_MODEL) if agent == "agy_opus" else env.get("JARVISOS_AGY_ARGON_MODEL", MODEL)
+    if model not in (OPUS_MODELS if agent == "agy_opus" else MODELS):
         raise Refused("model_not_allowed")
     return model
 
 
 QUOTA_TIMEOUT = 45
-# agy supports an hour per print turn; the deadline handling below is unchanged (spec 255).
-TURN_TIMEOUT = 3600
+TURN_TIMEOUT = 1800
 
 
 class Refused(Exception):
@@ -110,10 +89,10 @@ def buckets(node: Any, depth: int = 0) -> list[dict[str, Any]]:
         b for key, value in node.items() if key != "buckets" for b in buckets(value, depth + 1)]
 
 
-def quota_document(binary: str, env: dict[str, str] | None = None) -> dict[str, Any]:
-    """One no-model-turn `agy /quota` document; every native agent selects its own buckets from it."""
+def read_quota(binary: str, env: dict[str, str] | None = None, *, agent: str = "argon") -> list[dict[str, Any]]:
     if not sandbox():
         raise Refused("not_sandbox")
+    model_for(agent, os.environ if env is None else env)
     prepare_login()
     subscription_settings()
     try:
@@ -124,14 +103,7 @@ def quota_document(binary: str, env: dict[str, str] | None = None) -> dict[str, 
         raise Refused("quota_unreadable") from exc
     if proc.returncode != 0 or not isinstance(data, dict) or data.get("status") != "SUCCESS":
         raise Refused("quota_unreadable")
-    return data
-
-
-def read_quota(binary: str, env: dict[str, str] | None = None, *, agent: str = "argon",
-               document: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    model_for(agent, os.environ if env is None else env)
-    data = quota_document(binary, env) if document is None else document
-    required = NATIVE[agent][3]
+    required = OPUS_BUCKETS if agent == "agy_opus" else REQUIRED_BUCKETS
     found = [b for b in buckets(data) if b.get("id") in required]
     if len(found) != len(required) or {b.get("id") for b in found} != required:
         raise Refused("quota_bucket_missing")
@@ -159,8 +131,6 @@ def new_session(repo: Path, task: str, agent: str = "argon") -> tuple[str, Path]
              'RELAY_STATUS: {"status":"propose_done"}. Use status continue for a durable checkpoint, '
              'or blocked only for a real maintainer gate. Do not finish while a command you started is still running: '
              'use command_status until the executor reports its real exit status. '
-             'Run long test suites in the foreground with their own timeout, never chained with a commit. Commit and '
-             'push as a separate short command early, well before the turn deadline. '
              'Do not invent execution evidence.\n\n## Task\n\n')
     (turn / "prompt.md").write_text(rules + task + "\n", encoding="utf-8")
     (turn / "state.json").write_text(json.dumps({"agent_key": agent, "status": "continue"}) + "\n")
@@ -242,7 +212,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--session", required=True)
-    parser.add_argument("--agent", choices=tuple(NATIVE), default="argon")
+    parser.add_argument("--agent", choices=("argon", "agy_opus"), default="argon")
     args = parser.parse_args()
     if not all(c in "0123456789-abcdef" for c in args.session) or len(args.session) != 22:
         raise SystemExit("invalid native session id")

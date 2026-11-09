@@ -139,53 +139,17 @@ def test_quota_rejects_nonzero_or_error_even_with_buckets(monkeypatch):
         ra.read_quota("agy")
 
 
-def test_choice_follows_quota_expiring_unused_and_keeps_the_current_agent_on_ties(tmp_path, monkeypatch):
+def test_last_resort_returns_to_primary_as_soon_as_it_recovers(tmp_path, monkeypatch):
     env = Env(tmp_path)
     sup = rc.Supervisor(env.store, env.host)
     allowed = {"argon"}
-    scores = {"argon": 0.01, "codex": 0.01, "claude": 0.01, "flash": 0.01}
     monkeypatch.setattr(sup, "available", lambda agent: agent in allowed)
-    monkeypatch.setattr(sup, "low_headroom", lambda agent: False)
-    monkeypatch.setattr(sup, "expiry_score", lambda agent: scores[agent])
     assert sup._choose("claude") == "argon"
     allowed.add("codex")
-    assert sup._choose("argon") == "argon"  # a tie keeps the current agent
+    assert sup._choose("argon") == "argon"
     allowed.add("claude")
-    assert sup._choose("codex") == "claude"  # a Codex fallback hands back on a tie
-    scores["claude"] = 0.4 / 6  # 40% free resetting in 6 h beats 70% resetting in 6 days
-    scores["codex"] = 0.7 / 144
-    assert sup._choose("codex") == "claude"
-    allowed.add("flash")
-    scores["flash"] = 0.9 / 3
-    assert sup._choose("claude") == "flash"
-
-
-def test_claude_codex_and_argon_out_still_coordinate_with_flash_or_3p(tmp_path, monkeypatch):
-    env = Env(tmp_path)
-    sup = rc.Supervisor(env.store, env.host)
-    out = {"windows": [{"used_percent": 100, "resets_at": rc.iso(T0 + timedelta(days=3))}]}
-    room = {"windows": [{"used_percent": 10, "resets_at": rc.iso(T0 + timedelta(days=3))}]}
-    native = {"argon": out, "flash": room, "agy_sonnet": room, "agy_opus": room}
-    monkeypatch.setattr(env.relay, "argon_limits", lambda agent: native[agent])
-    env.relay.readings = {name: {"status": "ok", "as_of": rc.iso(T0), "windows": [
-        {"used_percent": 100, "resets_at": rc.iso(T0 + timedelta(days=3))}]} for name in ("claude", "codex")}
-    assert sup._choose("claude") == "flash"
-    native["flash"] = out
-    assert sup._choose("flash") in ("agy_sonnet", "agy_opus")
-    native["agy_sonnet"] = native["agy_opus"] = out
-    assert sup._choose("agy_opus") is None  # only when every pool is out
-
-
-def test_window_resetting_within_a_day_may_be_spent_down(tmp_path, monkeypatch):
-    env = Env(tmp_path)
-    sup = rc.Supervisor(env.store, env.host)
-    reading = {"windows": [{"used_percent": 98, "resets_at": rc.iso(T0 + timedelta(hours=20))}]}
-    monkeypatch.setattr(env.relay, "argon_limits", lambda agent: reading)
-    assert not sup.low_headroom("flash")
-    reading["windows"][0]["resets_at"] = rc.iso(T0 + timedelta(days=5))
-    assert sup.low_headroom("flash")
-    reading["windows"][0]["used_percent"] = 94
-    assert not sup.low_headroom("flash")
+    assert sup._choose("argon") == "argon"
+    assert sup._choose("codex") == "claude"  # recover from fallback
 
 
 def test_native_exhaustion_preserves_exact_reset(tmp_path, monkeypatch):
@@ -352,16 +316,12 @@ def test_preferred_and_fallback_order(tmp_path, monkeypatch):
     env = Env(tmp_path)
     sup = rc.Supervisor(env.store, env.host)
     available = {"agy_opus", "codex"}
-    scores = {"agy_opus": 0.02, "codex": 0.01, "argon": 0.01}
     monkeypatch.setattr(sup, "available", lambda agent: agent in available)
-    monkeypatch.setattr(sup, "expiry_score", lambda agent: scores[agent])
-    monkeypatch.setattr(sup, "low_headroom", lambda agent: False)
     assert sup._choose("codex") == "agy_opus"
     available.remove("agy_opus")
     assert sup._choose("agy_opus") == "codex"
     available.add("argon")
-    assert sup._choose("codex") == "argon"  # a tie hands a Codex fallback back to the preferred order
-    assert sup._choose("argon") == "argon"  # a tie keeps a preferred current agent
+    assert sup._choose("codex") == "argon"
 
 
 @pytest.mark.parametrize("change", ["missing", "duplicate", "disabled", "exhausted", "boolean", "nan"])
@@ -387,23 +347,17 @@ def test_native_family_identity_rejects_unverified_agents_and_models():
         ra.model_for("agy_opus", {"JARVISOS_AGY_OPUS_MODEL": ra.MODEL})
     with pytest.raises(ra.Refused, match="model_not_allowed"):
         ra.model_for("argon", {"JARVISOS_AGY_ARGON_MODEL": ra.OPUS_MODEL})
-    assert ra.model_for("agy_opus", {}) == "claude-opus-5-5-high"  # spec 255: coordinators run at high effort
-    assert ra.model_for("flash", {}) == "gemini-3.8-flash-high" and ra.model_for("agy_sonnet", {}) == "claude-sonnet-5-5-high"
-    with pytest.raises(ra.Refused, match="model_not_allowed"):
-        ra.model_for("flash", {"JARVISOS_AGY_FLASH_COORDINATOR_MODEL": "gemini-3.8-flash-low"})
-    assert ra.TURN_TIMEOUT == 3600
+    assert ra.model_for("agy_opus", {}) == "claude-opus-5-5-medium"
 
 
 def test_adapter_keeps_native_quota_caches_separate_by_subscription_family(tmp_path, monkeypatch):
     calls = []
-    documents = []
     monkeypatch.setattr(rc.shutil, "which", lambda _: "agy")
 
-    def read_quota(binary, env, *, agent, document=None):
-        calls.append((agent, document))
+    def read_quota(binary, env, *, agent):
+        calls.append(agent)
         return [{"remaining_fraction": 0.4 if agent == "agy_opus" else 0.8}]
 
-    monkeypatch.setattr(ra, "quota_document", lambda binary, env: documents.append(1) or {"doc": len(documents)})
     monkeypatch.setattr(ra, "read_quota", read_quota)
     adapter = rc.RelayAdapter(tmp_path, env={"JARVISOS_MISSION_PROFILE": "1"})
     opus = adapter.argon_limits("agy_opus")
@@ -411,8 +365,7 @@ def test_adapter_keeps_native_quota_caches_separate_by_subscription_family(tmp_p
     assert opus["windows"][0]["used_percent"] == pytest.approx(60)
     assert argon["windows"][0]["used_percent"] == pytest.approx(20)
     assert adapter.argon_limits("agy_opus") == opus
-    # spec 255: one agy /quota document serves every native agent; each selects its own buckets
-    assert documents == [1] and calls == [("agy_opus", {"doc": 1}), ("argon", {"doc": 1})]
+    assert calls == ["agy_opus", "argon"]
 
 
 def test_native_opus_runner_preflights_and_launches_the_same_model_family(tmp_path, monkeypatch):
@@ -465,7 +418,7 @@ def test_completed_missions_rotate_preference_without_a_new_state_store(tmp_path
 
     for mission in missions:
         assert rc.serve_step(root, factory, conflicts=lambda: [], now=lambda: T0) == f"ran:{mission['id']}:idle"
-    assert seen == ["claude", "argon", "flash", "agy_sonnet"]  # the seed rotates over every preferred agent
+    assert seen == ["claude", "argon", "agy_opus", "claude"]
 
 
 def test_resume_preserves_the_selected_native_coordinator(tmp_path):
@@ -587,40 +540,3 @@ def test_native_read_file_is_read_only_without_reclassifying_unknown_tools(tmp_p
     other = tmp_path / "other"
     other.mkdir()
     assert rc.classify_turn(write_native(other, events)).calls[0].kind == "external"
-
-
-@pytest.mark.parametrize(("agent", "model"), [("flash", "gemini-3.8-flash-high"), ("agy_sonnet", "claude-sonnet-5-5-high")])
-def test_new_native_coordinators_settle_a_successful_turn_on_their_own_models(tmp_path, agent, model):
-    events = stream()
-    events[0]["init"]["model"] = model
-    turn = write_native(tmp_path, events, meta={"model": model, "agent": agent})
-    (turn / "state.json").write_text(json.dumps({"agent_key": agent}))
-    report = rc.classify_turn(turn)
-    assert report.outcome == "success" and report.agent == agent
-    events[0]["init"]["model"] = ra.MODEL  # another family's model is not this agent's evidence
-    (turn / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
-    assert rc.classify_turn(turn).outcome != "success"
-
-
-def test_native_rules_text_asks_for_foreground_tests_and_an_early_separate_push(tmp_path):
-    _, turn = ra.new_session(tmp_path, "task", "flash")
-    rules = (turn / "prompt.md").read_text()
-    assert "foreground with their own timeout" in rules and "push as a separate short command early" in rules
-    assert json.loads((turn / "state.json").read_text())["agent_key"] == "flash"
-
-
-def test_mission_tick_with_claude_codex_and_argon_out_launches_flash_and_settles(tmp_path, monkeypatch):
-    from test_relay_continuity import reading, run_mission, start_mission
-    events = stream()
-    events[0]["init"]["model"] = ra.model_for("flash", {})
-    env = Env(tmp_path, [("flash", events)])
-    out = {"windows": [{"used_percent": 100, "resets_at": rc.iso(T0 + timedelta(days=3))}]}
-    room = {"windows": [{"used_percent": 10, "resets_at": rc.iso(T0 + timedelta(days=3))}]}
-    native = {"argon": out, "flash": room, "agy_sonnet": out, "agy_opus": out}
-    monkeypatch.setattr(env.relay, "argon_limits", lambda agent: native[agent])
-    env.relay.readings = {a: reading(a, 100, T0 + timedelta(days=3), T0) for a in ("claude", "codex")}
-    mission = mission_def("one task")
-    start_mission(env, mission)
-    result, sup = run_mission(env, mission)
-    assert [launch["agent"] for launch in env.relay.launches] == ["flash"]
-    assert result == "idle" and sup.state["mission"]["done"][0]["agent"] == "flash"

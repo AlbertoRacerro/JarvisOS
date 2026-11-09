@@ -44,13 +44,13 @@ and delegates to the worker it returns: the cheapest adequate one whose subscrip
 means the coordinator does the work or waits. The router only reads quota; it launches nothing and grants no authority.
 The coordinator reviews the worker's diff in proportion to risk before adopting it, and runs the checks itself.
 
-Routing rules (ADR-062): no model-identity bias, since a model's allowed work comes from measured results and the gates (CI,
-spec proofs, browser walk, independent review, risk rules) are the quality guarantee for every model; never idle while
-any pool can work, so a quota pause happens only when every pool is below its reserve; use it or lose it, so pools are
-ranked by the quota that would expire unused, and a window resetting within about 24 hours may be spent to zero;
-effort follows the task (low for mechanical, medium for normal implementation, high for design, review and high-risk
-work) in every model family. An independent review prefers another family (`pick --review-of FAMILY`) but never
-blocks on it: a different model or effort of the same family, or agy Sonnet or Opus, reviews instead.
+Worker routing rules (ADR-062): Gemini first for workers at every tier, with effort from difficulty times risk (Flash
+low, medium or high; Argon medium or high when its own bucket has room). Claude and GPT workers are used only when the
+gemini pool is below its reserve, when the measured record says Flash is not adequate for that kind of task, or as the
+escalation after a Flash attempt on the same task failed its checks; never loop cheap attempts, and waiting is an
+acceptable outcome. There is no model-identity bias: the gates (CI, spec proofs, browser walk, the coordinator's review,
+risk rules) are the quality guarantee for every model. An independent review prefers another family (`pick --review-of
+FAMILY`) but never blocks on it. Coordinators are not changed by these rules.
 
 A coordinator owns ordinary reversible technical decisions: method, touch set, refactors, tests, docs, planning
 compression, technical merge. It does not own branch protection, rulesets, required checks, credentials, spending or
