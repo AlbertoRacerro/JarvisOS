@@ -21,7 +21,8 @@ SPEC.loader.exec_module(worker)
 
 GOOD_QUOTA = {"command": {"data": {"groups": [{"buckets": [
     {"id": "gemini-5h", "remaining_fraction": 0.8}, {"id": "gemini-weekly", "remaining_fraction": 0.5},
-    {"id": "argon-5h", "remaining_fraction": 0.4}, {"id": "3p-5h", "remaining_fraction": 0.0}]}]}}}
+    {"id": "gemini-argon-wtu-weekly", "remaining_fraction": 0.4}, {"id": "3p-5h", "remaining_fraction": 0.6},
+    {"id": "3p-weekly", "remaining_fraction": 0.3}]}]}}}
 
 FAKE = """#!{python}
 import json, os, sys
@@ -169,19 +170,41 @@ def test_dirty_worktree(env: Env) -> None:
     refused(env.run(), "worktree_dirty")
 
 
-@pytest.mark.parametrize("model", ["3p-claude-opus", "claude-sonnet", "gpt-5", "gemini-9-unknown", "3pthing"])
+@pytest.mark.parametrize("model", ["3p-claude-opus", "claude-sonnet", "claude-sonnet-5-5-low", "gpt-5", "gemini-9-unknown", "3pthing",
+                                   "gemini-4-argon-max"])
 def test_disallowed_model(env: Env, model: str) -> None:
     refused(env.run(model=model), "model_not_allowed")
     assert not env.invoked()
 
 
-def test_argon_needs_fallback(env: Env) -> None:
-    refused(env.run(model="argon"), "argon_requires_coordinator_fallback")
-    assert not env.invoked()
-    result = env.run(model="argon", fallback=True)
+def test_argon_is_a_normal_worker(env: Env) -> None:
+    result = env.run(model="argon")
     assert result["status"] == "succeeded"
     assert json.loads(env.log.read_text())["argv"][3] == worker.ARGON_MODEL
-    assert {b["id"] for b in result["quota"]} == {"argon-5h"}
+    assert {b["id"] for b in result["quota"]} == {"gemini-5h", "gemini-weekly", "gemini-argon-wtu-weekly"}
+    assert worker.resolve_model("argon", True) == ("argon", worker.ARGON_MODEL)  # old launch lines still work
+
+
+@pytest.mark.parametrize(("alias", "model_id", "pool"), [
+    ("flash-medium", "gemini-3.8-flash-medium", {"gemini-5h", "gemini-weekly"}),
+    ("flash-high", "gemini-3.8-flash-high", {"gemini-5h", "gemini-weekly"}),
+    ("argon-high", "gemini-4-argon-high", {"gemini-5h", "gemini-weekly", "gemini-argon-wtu-weekly"}),
+    ("agy-sonnet", "claude-sonnet-5-5-high", {"3p-5h", "3p-weekly"}),
+    ("agy-opus", "claude-opus-5-5-high", {"3p-5h", "3p-weekly"}),
+])
+def test_effort_and_3p_aliases(env: Env, alias: str, model_id: str, pool: set[str]) -> None:
+    result = env.run(model=alias)
+    assert result["status"] == "succeeded" and result["alias"] == alias
+    assert json.loads(env.log.read_text())["argv"][3] == model_id
+    assert {b["id"] for b in result["quota"]} == pool
+
+
+def test_argon_own_bucket_exhausted(env: Env) -> None:
+    quota = json.loads(json.dumps(GOOD_QUOTA))
+    quota["command"]["data"]["groups"][0]["buckets"][2]["remaining_fraction"] = 0
+    env.set(quota_out=json.dumps(quota))
+    refused(env.run(model="argon-high"), "quota_exhausted")
+    assert env.run(model="flash-high")["status"] == "succeeded"
 
 
 def test_model_id_env_override(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,7 +227,7 @@ def test_quota_refusals(env: Env) -> None:
     refused(env.run(), "quota_exhausted")
     env.set(quota_out=json.dumps({"buckets": [{"id": "gemini-5h", "remaining_fraction": 0.5, "disabled": True}]}))
     refused(env.run(), "quota_exhausted")
-    env.set(quota_out=json.dumps({"buckets": [{"id": "argon-5h", "remaining_fraction": 0.5}]}))
+    env.set(quota_out=json.dumps({"buckets": [{"id": "gemini-5h", "remaining_fraction": 0.5}]}))
     refused(env.run(), "quota_bucket_missing")
     assert not env.invoked()
 

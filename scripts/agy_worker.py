@@ -37,6 +37,14 @@ SANDBOX_HOSTNAME = "jarvis-sandbox"
 # Confirmed by the signed-in sandbox's model list and the 2026-10-27 Flash proof.
 FLASH_MODEL = "gemini-3.8-flash-low"
 ARGON_MODEL = "gemini-4-argon-low"
+# Spec 255: effort follows the task tier, so every family has an alias per effort the router may pick. The two base
+# aliases keep their env overrides; the others are fixed ids. agy Sonnet and Opus run on the 3p buckets.
+FIXED_MODELS = {"flash-medium": "gemini-3.8-flash-medium", "flash-high": "gemini-3.8-flash-high",
+                "argon-medium": "gemini-4-argon-medium", "argon-high": "gemini-4-argon-high",
+                "agy-sonnet": "claude-sonnet-5-5-high", "agy-opus": "claude-opus-5-5-high"}
+GEMINI_BUCKETS = ("gemini-5h", "gemini-weekly")
+FAMILY_BUCKETS = {"flash": GEMINI_BUCKETS, "argon": (*GEMINI_BUCKETS, "gemini-argon-wtu-weekly"),
+                  "agy": ("3p-5h", "3p-weekly")}
 DEFAULT_TIMEOUT = 1800
 MAX_TIMEOUT = 6 * 3600
 QUOTA_TIMEOUT = 60
@@ -70,20 +78,16 @@ def iso(moment: datetime) -> str:
 
 def model_ids() -> dict[str, str]:
     return {"flash": os.environ.get("JARVISOS_AGY_FLASH_MODEL", FLASH_MODEL),
-            "argon": os.environ.get("JARVISOS_AGY_ARGON_MODEL", ARGON_MODEL)}
+            "argon": os.environ.get("JARVISOS_AGY_ARGON_MODEL", ARGON_MODEL), **FIXED_MODELS}
 
 
-def resolve_model(requested: str, coordinator_fallback: bool) -> tuple[str, str]:
-    """(alias, model id) for an allowlisted model, else a typed refusal. Nothing outside the list reaches agy."""
+def resolve_model(requested: str, coordinator_fallback: bool = False) -> tuple[str, str]:
+    """(alias, model id) for an allowlisted model, else a typed refusal. Nothing outside the list reaches agy.
+    `coordinator_fallback` is accepted for old launch lines; spec 255 made Argon a normal worker."""
     ids = model_ids()
-    lowered = requested.lower()
-    if lowered.startswith("3p") or "claude" in lowered or "gpt" in lowered:
-        raise Refused("model_not_allowed", requested)
     alias = next((a for a, mid in ids.items() if requested in (a, mid)), None)
     if alias is None:
         raise Refused("model_not_allowed", requested)
-    if alias == "argon" and not coordinator_fallback:
-        raise Refused("argon_requires_coordinator_fallback", requested)
     return alias, ids[alias]
 
 
@@ -182,8 +186,8 @@ def buckets(node: Any, depth: int = 0) -> list[dict[str, Any]]:
     return found + [b for key, value in node.items() if key != "buckets" for b in buckets(value, depth + 1)]
 
 
-def target_prefix(alias: str) -> str:
-    return "gemini-" if alias == "flash" else "argon-"
+def target_buckets(alias: str) -> tuple[str, ...]:
+    return FAMILY_BUCKETS[alias.split("-")[0]]
 
 
 def quota_preflight(agy: str, alias: str, env: dict[str, str]) -> list[dict[str, Any]]:
@@ -199,14 +203,14 @@ def quota_preflight(agy: str, alias: str, env: dict[str, str]) -> list[dict[str,
         raise Refused("not_signed_in", output.strip()[:300])
     if reading is None:
         raise Refused("quota_unreadable", output.strip()[:300])
-    prefix = target_prefix(alias)
-    target = [b for b in buckets(reading) if str(b.get("id", "")).startswith(prefix)]
-    if not target:
-        raise Refused("quota_bucket_missing", f"no bucket id starting {prefix!r}")
+    wanted = target_buckets(alias)
+    target = [b for b in buckets(reading) if b.get("id") in wanted]
     for bucket in target:
         fraction = bucket.get("remaining_fraction")
         if bucket.get("disabled") is True or not isinstance(fraction, int | float) or fraction <= 0:
             raise Refused("quota_exhausted", str(bucket.get("id")))
+    if {b.get("id") for b in target} != set(wanted):
+        raise Refused("quota_bucket_missing", "missing " + ", ".join(sorted(set(wanted) - {b.get("id") for b in target})))
     return target
 
 
