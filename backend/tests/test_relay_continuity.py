@@ -139,8 +139,12 @@ class FakeRelay(rc.RelayAdapter):
         if callable(events):  # a reply that depends on the task (a diagnostic answers its own nonce)
             events = events(task)
         sid = f"20261018-{len(self.launches):06d}-{'b' * 6}"
-        write_turn(self.sessions_dir() / sid, events, agent=agent, prompt=relay_prompt(task),
-                   status=reported[0] if reported else "propose_done")
+        turn = write_turn(self.sessions_dir() / sid, events, agent=agent, prompt=relay_prompt(task),
+                          status=reported[0] if reported else "propose_done")
+        if agent in rc.NATIVE_AGENTS:  # the native runner's own evidence beside its stream
+            (turn / "native-result.json").write_text(json.dumps({
+                "schema": "argon-coordinator.v1", "agent": agent, "launched": True, "exit_code": 0, "quota": [],
+                "reason": None, "model": rc.relay_argon.model_for(agent, {})}))
         return rc.RunResult(sid, 0, True)
 
 

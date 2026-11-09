@@ -207,9 +207,10 @@ def quota_preflight(agy: str, alias: str, env: dict[str, str]) -> list[dict[str,
     target = [b for b in buckets(reading) if b.get("id") in wanted]
     for bucket in target:
         fraction = bucket.get("remaining_fraction")
-        if bucket.get("disabled") is True or not isinstance(fraction, int | float) or fraction <= 0:
+        if bucket.get("disabled") is True or isinstance(fraction, bool) or not isinstance(fraction, int | float) \
+                or fraction <= 0:
             raise Refused("quota_exhausted", str(bucket.get("id")))
-    if {b.get("id") for b in target} != set(wanted):
+    if len(target) != len(wanted) or {b.get("id") for b in target} != set(wanted):
         raise Refused("quota_bucket_missing", "missing " + ", ".join(sorted(set(wanted) - {b.get("id") for b in target})))
     return target
 

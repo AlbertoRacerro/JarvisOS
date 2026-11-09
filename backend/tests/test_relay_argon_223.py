@@ -607,3 +607,20 @@ def test_native_rules_text_asks_for_foreground_tests_and_an_early_separate_push(
     rules = (turn / "prompt.md").read_text()
     assert "foreground with their own timeout" in rules and "push as a separate short command early" in rules
     assert json.loads((turn / "state.json").read_text())["agent_key"] == "flash"
+
+
+def test_mission_tick_with_claude_codex_and_argon_out_launches_flash_and_settles(tmp_path, monkeypatch):
+    from test_relay_continuity import reading, run_mission, start_mission
+    events = stream()
+    events[0]["init"]["model"] = ra.model_for("flash", {})
+    env = Env(tmp_path, [("flash", events)])
+    out = {"windows": [{"used_percent": 100, "resets_at": rc.iso(T0 + timedelta(days=3))}]}
+    room = {"windows": [{"used_percent": 10, "resets_at": rc.iso(T0 + timedelta(days=3))}]}
+    native = {"argon": out, "flash": room, "agy_sonnet": out, "agy_opus": out}
+    monkeypatch.setattr(env.relay, "argon_limits", lambda agent: native[agent])
+    env.relay.readings = {a: reading(a, 100, T0 + timedelta(days=3), T0) for a in ("claude", "codex")}
+    mission = mission_def("one task")
+    start_mission(env, mission)
+    result, sup = run_mission(env, mission)
+    assert [launch["agent"] for launch in env.relay.launches] == ["flash"]
+    assert result == "idle" and sup.state["mission"]["done"][0]["agent"] == "flash"
