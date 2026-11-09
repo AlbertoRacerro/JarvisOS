@@ -338,10 +338,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"result: {path}")
     print(f"status: {result['status']}" + (f" ({result['reason']})" if result["reason"] else ""))
     if result.get("failure_class"):
-        advice = {"harness": "retry the same model; not a capability verdict",
+        advice = {"harness": "retry the same model, never another provider for this; not a capability verdict",
                   "provider_quota": "retry the same model after its reset; not a capability verdict",
                   "policy": "the run touched git metadata",
-                  "model_or_unknown": "judge the delivered diff before escalating; salvage it if usable"}
+                  "model_or_unknown": "judge the delivered diff; a one-off slip gets one more try on the same model "
+                                      "from the salvaged diff, and only a repeat escalates (salvaging again)"}
         print(f"failure_class: {result['failure_class']} ({advice[result['failure_class']]}); "
               f"diff_bytes: {result.get('diff_bytes', 0)}")
     return {"succeeded": 0, "refused": 2}.get(result["status"], 1)

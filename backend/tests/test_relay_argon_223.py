@@ -624,3 +624,38 @@ def test_agy_prompt_carries_the_harness_rules_and_the_hour_budget(tmp_path):
     _, turn = ra.new_session(tmp_path, "Task")
     prompt = (turn / "prompt.md").read_text()
     assert "hard limit of 60 minutes" in prompt and "timeout 900" in prompt and "absolute paths" in prompt
+
+
+def network_blip_turn(env: Env) -> rc.TurnReport:
+    turn = write_native(env.repo / ".agent-relay", stream("pwd")[:2], meta={"exit_code": 3})
+    (turn / "stderr.log").write_text(agy_error(status="UNKNOWN", short_error="request failed: Post https://x"))
+    report = rc.classify_turn(turn)
+    report.agent = "argon"
+    return report
+
+
+def test_network_blip_retries_the_same_agent_instead_of_switching(tmp_path):
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    sup.state.update(head_session="20261027-075000-112233", agent="argon")
+    report = network_blip_turn(env)
+    assert report.harness_cause == "provider_network"
+    decided = sup._decide(report, "task")
+    assert isinstance(decided, tuple) and decided[0] == "argon"
+    assert "argon" not in sup.state["cooldowns"]  # no cooldown: nothing pushes the work to another provider
+    assert sup.state["counters"]["transient_argon"] == 1
+
+
+def test_a_run_of_network_blips_falls_back_to_the_normal_cooldown(tmp_path):
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    sup.state.update(head_session="20261027-075000-112233", agent="argon")
+    sup.state["counters"]["transient_argon"] = sup.limits.same_agent_retries
+    sup._decide(network_blip_turn(env), "task")
+    assert sup.state["cooldowns"]["argon"]["reason"] == "transient"
+
+
+def test_preflight_unreadable_quota_is_a_network_cause(tmp_path):
+    turn = write_native(tmp_path, [], meta={"launched": False, "exit_code": None, "reason": "quota_unreadable"})
+    report = rc.classify_turn(turn)
+    assert (report.outcome, report.harness_cause) == ("transient", "provider_network")

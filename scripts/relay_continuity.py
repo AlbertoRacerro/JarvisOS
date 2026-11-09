@@ -119,6 +119,9 @@ LEGACY_MARKERS = ("jarvis-control/autopilot/run.sh", "jarvis-control/autopilot/w
                   "jarvis-control/autopilot/resume-after-reset.sh", "jarvis-control/autopilot/drain-guard.sh")
 
 
+SAME_AGENT_CAUSES = frozenset(("provider_network", "provider_auth_blip"))
+
+
 @dataclass
 class Limits:
     """Bounds that make every loop finite. Provider failures are bounded by their cooldowns and `max_wait`;
@@ -126,6 +129,7 @@ class Limits:
     max_consecutive_failures: int = 8
     transient_base: float = 60.0
     transient_cap: float = 1_800.0
+    same_agent_retries: int = 3  # network/auth blips retried on the same agent before the normal cooldown applies
     recheck: timedelta = timedelta(minutes=30)
     recheck_cap: timedelta = timedelta(hours=4)  # estimated cooldowns double per repeated failure up to this
     max_wait: timedelta = timedelta(days=8)
@@ -1104,6 +1108,8 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
         report.outcome = "quota" if reason == "quota_exhausted" else (
             "auth" if reason in ("login_state_missing", "login_path_conflict", "agy_missing", "not_sandbox") else "transient")
         report.detail = f"native preflight refused: {reason}"
+        if report.outcome == "transient":
+            report.harness_cause = "provider_network"  # e.g. the quota read could not reach the provider
         if report.outcome == "quota":
             resets = [parse_ts(b.get("reset_time")) for b in meta.get("quota", [])
                       if isinstance(b, dict) and (b.get("disabled") or b.get("remaining_fraction") == 0)]
@@ -2858,11 +2864,20 @@ class Supervisor:
                 self.notify("turn_failed", session=self.state["head_session"], agent=failed_agent,
                             outcome=report.outcome, action="hold")
                 return self.hold(reason, None, report.turn_id)
-        if report.outcome in ("quota", "spend_limit", "transient", "auth") and failed_agent not in cleared:
+        # A network or auth blip is infrastructure, not the model: retry the SAME agent after a short backoff instead
+        # of switching to another provider (maintainer directive L20261109091909-a4bb). Only a bounded run of them
+        # (a real outage) falls through to the normal cooldown, which may switch.
+        retry_same = (report.outcome == "transient" and report.harness_cause in SAME_AGENT_CAUSES
+                      and failed_agent not in cleared
+                      and counters.get(f"transient_{failed_agent}", 0) < self.limits.same_agent_retries)
+        if retry_same:
+            strikes = counters.get(f"transient_{failed_agent}", 0)
+            counters[f"transient_{failed_agent}"] = strikes + 1
+        elif report.outcome in ("quota", "spend_limit", "transient", "auth") and failed_agent not in cleared:
             # A provider failure makes only that provider unavailable, until its reset or a backed-off retry.
             self.set_cooldown(failed_agent, report)
 
-        listed = [f"- [{c.kind}] {c.label}" for c in report.effects]
+        listed =[f"- [{c.kind}] {c.label}" for c in report.effects]
         for c in report.in_flight:
             verdict = settled.get(c.id)
             listed.append(f"- [{c.kind}] {c.label}: " + (f"{VERDICT_TEXT[verdict['verdict']]} ({verdict['evidence']})"
@@ -2881,6 +2896,13 @@ class Supervisor:
             return RECOVERY_PROMPT.format(nonce="{nonce}", prev_agent=failed_agent, outcome=report.outcome,
                                           agent=chosen, effects=effects, processes=processes)
 
+        if retry_same:
+            backoff = min(self.limits.transient_base * 2 ** strikes, self.limits.transient_cap)
+            self.host.log(f"{failed_agent} {report.harness_cause}; retrying the same agent in {int(backoff)}s")
+            self.save()
+            if self._sleep(backoff):
+                return "signal" if self.signalled else "stopped"
+            return failed_agent, make_prompt(failed_agent)
         agent = self._choose(failed_agent)
         if agent is None:
             return self._wait_or_hold(make_prompt)
