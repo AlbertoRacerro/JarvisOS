@@ -75,7 +75,7 @@ Out of scope (binding non-goals):
    (`gh pr comment`) whose effect cannot be read.
 3. The same uncertain operation on a turn reporting success also continues instead of holding.
 4. A single failed turn sends no `turn_failed` Slack line; a second consecutive one does.
-5. No Slack template contains "scrivi a Claude in chat".
+5. No `relay_continuity.EVENTS` template contains "scrivi a Claude in chat" (`relay_observe` incident lines, which report a stopped owner the maintainer must restart, are unchanged).
 6. `relay_jobs start` admits a job when four `unknown` records are past their deadline by more than 15 minutes, and
    still refuses when they are within it or `running`.
 7. Existing relay continuity and relay jobs tests pass, updated only where they asserted the old hold or wording.
