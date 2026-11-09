@@ -1,6 +1,6 @@
 # 257 — Pre-run coherence check and degrees-of-freedom report (248 slice C)
 
-Status: planned (draft for review; not ready)
+Status: ready (coordinator-accepted after review; see "Review outcome")
 Depends on: none (the approved [248](248-design-value-path.md) contract binds through Authority; slice A landed as
 [253](253-sim-results-requirement-verification.md))
 
@@ -18,82 +18,95 @@ Risk: medium (feature code with tests, no migration expected, no egress).
 ## Authority
 
 Maintainer answer `L20261106093156-1712` approves the binding contract in [248](248-design-value-path.md), with the slice
-order A, then B and C. Slice A is merged (253). This spec is a draft written as readiness work. It becomes `ready` only
-after its own review, as 248 requires.
+order A, then B and C. Slice A is merged (253). The coordinator reviewed this draft against the code and accepted it
+with the changes recorded under "Review outcome" (`docs/PROCESS.md` section 3, rule 1).
 
 ## Why
 
-Today the solver refuses an out-of-domain correlation only during the run (`EvaluationRefusal("outside_validity_domain")`
-in `process_stack/correlations.py` and `properties.py`), after compute time is spent. Missing inputs are found only as
-generic `UNIT_PARAM_MISSING` blockers, with no link to values that Jarvis already holds. Point 9 also makes the
+Today the PBR unit's loop hydraulics find an out-of-domain input only during the run: CoolProp refuses water properties
+outside its EOS range, the pipe correlation answers `transitional_regime`, and a pinned CFD reduced model refuses or warns
+outside its fitted range (`pbr_unit.hydraulics`), after the periodic solve has been set up. Missing inputs are found only
+as generic `UNIT_PARAM_MISSING` blockers, with no link to values that Jarvis already holds. Point 9 also makes the
 missing-inputs judgment structural, so a model never decides what is missing.
+
+## Review outcome (coordinator acceptance, 2026-11-09)
+
+The draft's anchors were checked against the code before acceptance:
+
+- `validate_document` (the DWSIM draft path) does not call `correlations.py`; the correlation and property refusals are
+  reached in a draft run only through the `PhotobioreactorT1` unit's `pbr_unit.hydraulics`. Scope 1 is bound to that path.
+- The proposed coherence rules are already Pre-Run blockers: typed-kinetics parameter domains (`KINETICS_PARAMETER_DOMAIN`),
+  reactor mode and temperature-profile coherence (`KINETICS_MODE_UNSUPPORTED`, `KINETICS_TEMPERATURE_PROFILE_UNSUPPORTED`)
+  and energy-stream requirements. No property package declares an operating range today. The coherence table is
+  therefore dropped (absorbed); adding one would be new infrastructure with no case to check.
+- Open question 1 is settled by "do not change runtime behaviour": the pre-check uses the runtime's own severity. A
+  runtime refusal becomes a `blocker`; a runtime soft result (`transitional_regime`, a pinned CFD model out
+  of its range) becomes a `warning`. Open question 2 lapses with the coherence table.
 
 ## Scope
 
-1. **Validity-domain pre-check.** Each correlation and property method that already raises `outside_validity_domain`
-   declares its domain as data: the input quantity, its bounds and the reason code it raises today. The run's pre-run
-   findings evaluate these domains against the inputs known before the solve, such as feed conditions, unit parameters
-   and declared operating ranges. Each violation gives one finding with severity `blocker` and the same reason code the
-   runtime refusal uses. A domain that depends on a solved value, for example Reynolds number from a computed velocity,
-   gives a `not_checkable_before_run` info finding instead. The check never guesses that value.
-2. **Coherence rules.** A small, closed, versioned rule table covers pairs that are mutually inconsistent: an ideal-gas
-   or ideal-solution package with a declared operating point outside its stated range; typed kinetics whose declared
-   temperature range excludes the reactor temperature; an isothermal approximation on a unit with a declared energy
-   stream. Each rule has an id, a version and a test. Rules outside the table are out of scope; there is no
-   model-proposed rule.
-3. **Degrees-of-freedom report.** For each unit and feed stream, the required specifications come from the existing
-   `UNIT_REGISTRY`/`STREAM_SPECS` (`draft_models.py`), so this adds no new registry. Each specification is `set`, `unset`
-   or `available`. An `available` specification is unset in the draft but has a design value on the 248 path for the
-   same quantity and conditions, and the report shows the value's validation state (passing or red dot). The report
-   counts specifications, not equations; that is enough for the units the registry supports today. It is read-only:
-   it never writes a value into the draft or into a Project Basis parameter (contract point 10).
-4. **Surfaces.** The findings join `validate_document`'s existing Pre-Run findings with `source: "jarvis"`. The DOF
-   report is a read-only API on the draft and a panel in the existing draft editor's Pre-Run view.
+1. **PBR hydraulics domain pre-check.** `pbr_validation.pbr_findings` gains the hydraulics domains that are knowable
+   before the solve, computed with the same functions and constants the runtime uses (no copied bounds):
+   - water properties at `temperature_mean` and 1 atm through the CoolProp property evaluator; a refusal gives a
+     `blocker` `PBR_HYDRAULICS_OUTSIDE_DOMAIN` with the runtime backend code (`coolprop_eos_range` and so on);
+   - for an unpinned loop, the Reynolds number from `liquid_velocity`, `tube_inner_diameter` and those properties; the
+     transitional band gives a `warning` with code `transitional_regime`, matching the runtime's soft result;
+   - for a pinned CFD reduced model, the model's own range check (`reduced_model.evaluate` with the pin's `out_of_range`
+     policy). The runtime reports a refused or warned evaluation as a caveat and still runs, so both give a `warning`
+     `PBR_HYDRAULICS_CFD_OUT_OF_RANGE` listing the violations; an unavailable model is left to the runtime.
+   The check runs only when every input it needs is set; a missing input is already reported by `UNIT_PARAM_MISSING`.
+2. **Degrees-of-freedom report.** For each unit and feed stream, the required specifications come from the existing
+   `UNIT_REGISTRY`/`STREAM_SPECS` and `spec.params_for(mode)` (`draft_models.py`), so this adds no new registry. Each
+   specification is `set`, `unset` or `available`. An `available` specification is unset in the draft but has a design
+   value on the 248 path for the same quantity, unit and conditions in the project-knowledge records added by 253
+   (`simulation_result_values` with their checks), and the report shows the value's validation state (passing or red
+   dot). Conditions that do not match give no `available` entry (contract point 7). The report counts specifications,
+   not equations. It is read-only: it never writes a value into the draft or into a Project Basis parameter (point 10).
+3. **Surfaces.** The new findings appear through `validate_document`'s existing Pre-Run findings. The DOF report is a
+   read-only API on the draft and a panel in the existing draft editor's Pre-Run view.
 
 ## Non-goals
 
+- A coherence rule table (absorbed by existing Pre-Run blockers, see Review outcome).
+- Moving correlation bounds into a shared table; the pre-check calls the runtime functions instead.
 - Equation-level DOF analysis (IDAES/Pyomo); 248 lists that as a read-only pilot.
 - Checks inside DWSIM, or replacing DWSIM's own Validate.
 - Auto-filling an `available` value into the draft; the user applies it with the existing parameter edit.
-- Slices B and D–H, Slack delivery, provider calls, new dependencies or egress.
-- Changing runtime refusals. The pre-check adds early findings, and the runtime still refuses on its own.
+- Slices B and D–H, Slack delivery, provider calls, new dependencies, migrations or egress.
+- Changing runtime refusals or soft results.
 
 ## Design notes (anchors found)
 
-- `backend/app/modules/process_stack/draft.py` `validate_document` is the single source of Pre-Run blockers
-  (`draft.py:1776` gates the run on them). The new checks are called from it, so the run gate needs no change.
-- `correlations.py` raises `outside_validity_domain` at three sites and `properties.py` (CoolProp EOS limits) at three.
-  The domain table moves those bounds into data that both the runtime and the pre-check read, so the two cannot drift.
-- Design values with validation state come from the project-knowledge persistence added by 253. The lookup matches
-  quantity, unit and conditions under the same applicability rule that requirement verification uses, and its result
-  is `not_evaluable` when the conditions do not match (point 7).
+- `backend/app/modules/process_stack/draft.py` `validate_document` is the single source of Pre-Run blockers and already
+  extends them with `pbr_validation.pbr_findings`, so the run gate needs no change.
+- `pbr_unit.hydraulics` is the runtime reference: CoolProp water at `temperature_mean`, `PipePressureDropEvaluator`
+  (`transitional_regime` returned as a soft result), `_cfd_hydraulics` with the pin's `out_of_range` policy.
+- Design values with validation state come from the project-knowledge persistence added by 253
+  (`backend/app/core/project_knowledge_schema.py`, `backend/app/modules/project_knowledge/sim_results.py`).
+- A draft stores no link to Project Basis parameters or result values, so the match is explicit and never guessed: the
+  latest result value in the draft's workspace whose `quantity` is the qualified name `<object tag>.<specification key>`,
+  whose unit is one the specification's quantity kind offers, and whose conditions are empty. Anything else is `unset`.
+  The validation state is `red_dot` when the value's status is `exception` or it was computed from unvalidated inputs.
+- The required-specification list is extracted from `validate_document` into one helper that both use.
 
 ## Acceptance criteria
 
-1. Moving each runtime bound into the shared domain table leaves runtime behaviour unchanged: the existing correlation
-   and property tests pass unmodified.
-2. A draft whose known inputs violate a domain gets a Pre-Run `blocker` finding with the runtime reason code, and the run
-   is refused before any solve starts. A domain that depends on solved values gives `not_checkable_before_run`, never a
-   blocker.
-3. Each coherence rule has a positive and a negative test and reports its rule id and version in the finding.
+1. Runtime behaviour is unchanged: the existing `pbr_unit`, correlation and property tests pass unmodified.
+2. A PBR draft whose `temperature_mean` is outside the water EOS range gets a Pre-Run `blocker` with the runtime backend
+   code, and the run is refused before any solve starts. A draft in the transitional Reynolds band gets a `warning`
+   `transitional_regime` and can still run. A pinned CFD model out of range gives a `warning`.
+3. A draft with an unset hydraulics input gets no hydraulics domain finding, only the existing `UNIT_PARAM_MISSING`.
 4. The DOF report lists every required specification of every unit and feed as `set`, `unset` or `available`. An
    `available` entry names the design value, its source and its validation state. A red-dot value is shown as such and
    is never presented as validated.
 5. No call writes to the draft, the Project Basis or the design values.
-6. Browser walk: from `/`, open a draft with an out-of-domain feed, see the Pre-Run blocker, open the DOF panel and see
-   one `available` and one `unset` entry.
+6. Browser walk: from `/`, open a draft with an out-of-domain PBR input, see the Pre-Run blocker, open the DOF panel and
+   see one `available` and one `unset` entry.
 
 ## Tests
 
-Focused backend tests for the domain table, coherence rules and DOF report; a frontend `.mjs` test for the panel
-labels; the e2e walk above.
-
-## Open questions for the review
-
-- Should a violated domain be a `blocker` or a `warning` that the user can run past with the result marked? The 248
-  contract says to flag before the run starts; this draft proposes `blocker`, which matches the runtime refusal.
-- Do the first coherence rules match the maintainer's real cases, or should the Q1 benchmark's validity-domain cases
-  (251) choose them?
+Focused backend tests for the hydraulics pre-check and the DOF report; a frontend `.mjs` test for the panel labels; the
+e2e walk above.
 
 ## Definition of done
 
