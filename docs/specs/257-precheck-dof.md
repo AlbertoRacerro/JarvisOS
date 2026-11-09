@@ -82,7 +82,12 @@ The draft's anchors were checked against the code before acceptance:
 - `pbr_unit.hydraulics` is the runtime reference: CoolProp water at `temperature_mean`, `PipePressureDropEvaluator`
   (`transitional_regime` returned as a soft result), `_cfd_hydraulics` with the pin's `out_of_range` policy.
 - Design values with validation state come from the project-knowledge persistence added by 253
-  (`backend/app/core/project_knowledge_schema.py`, `backend/app/modules/project_knowledge/service.py`).
+  (`backend/app/core/project_knowledge_schema.py`, `backend/app/modules/project_knowledge/sim_results.py`).
+- A draft stores no link to Project Basis parameters or result values, so the match is explicit and never guessed: the
+  latest result value in the draft's workspace whose `quantity` is the qualified name `<object tag>.<specification key>`,
+  whose unit is one the specification's quantity kind offers, and whose conditions are empty. Anything else is `unset`.
+  The validation state is `red_dot` when the value's status is `exception` or it was computed from unvalidated inputs.
+- The required-specification list is extracted from `validate_document` into one helper that both use.
 
 ## Acceptance criteria
 
