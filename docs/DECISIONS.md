@@ -749,28 +749,25 @@ behaviour of existing products, mixed DPI or multiple monitors, other themes and
 latency, and cases 02, 11, 24, 34, 35 and 38. The audit gives the reason each of those cases cannot be
 produced on the current product.
 
-## ADR-062: Never idle while any pool can work
+## ADR-062: Gemini first for workers
 
-Status: Accepted (2026-11-09, coordinator, under maintainer directive `L20261109084309-afcd`; implemented by spec 255).
-It supersedes the spec 221 rule that kept Argon a worker only under `--coordinator-fallback`, the fixed
-claude-first coordinator order and the Flash-low-only worker entry.
+Status: Accepted (2026-11-09, coordinator, under maintainer directive `L20261109084653-6274`, which superseded
+`L20261109084309-afcd`; implemented by spec 255, whose coordinator part was reverted). It supersedes the spec 221 rule
+that kept Argon a worker only under `--coordinator-fallback` for workers, and the Flash-low-only worker entry.
+Coordinators are unchanged.
 
-Context: the supervisor sat paused about two days with Claude, Codex and Argon's own bucket exhausted while about 90%
-of the general Gemini quota was unused. Flash was confined to tier 1 by assumption, not evidence.
+Context: Claude and Codex end the week at 100% and then cannot orchestrate, while about 90% of the Gemini quota is
+unused. Tier 2 and 3 worker tasks went straight to Sonnet or Terra on a prior belief about Flash's quality, not evidence.
 
 Decision:
 
 - Capability is per model and effort, from measured results. Until measured, Gemini 3.8 Flash and Gemini 4 Argon at
-  high effort take tier 3 and at medium tier 2. A model loses a tier only on evidence.
-- Coordinators: Claude, Codex, Argon, a Flash coordinator, and agy Sonnet and Opus on the third-party buckets. Workers:
-  every family at every effort the router lists. Selection ranks pools by the quota that would expire unused (binding
-  window's free fraction per hour to its reset). The reserve is 5%, and 0 for a window resetting within 24 hours. The
-  gemini family goes first among equally adequate workers.
-- Effort follows difficulty times risk, the same rule for every family.
-- Independent review prefers another family but never blocks on it.
-- agy turns get 3600 s. Long tests run in the foreground with their own timeout, and commit and push run as a separate
-  short step early in the turn.
+  high effort take tier 3 worker tasks and at medium tier 2. A model loses a tier only on evidence.
+- Workers: the gemini family first at every tier, effort following difficulty times risk. Claude and GPT workers only
+  when the gemini pool is below its reserve, when the measured record says Flash is inadequate for that task kind, or
+  as escalation after a Flash attempt failed its checks (one Flash attempt per task, `L20261109085335-06cf`). The
+  router's reserve is 5%, and 0 for a window that resets within 24 hours.
+- An independent review prefers another family but never blocks on it.
 
-Consequences: quality rests on the gates (CI, spec proofs, browser walk, independent review, risk rules), which apply
-unchanged to every model. A later slice records per-turn agent, model, effort, CI first pass, findings, rework and
-merge, and recomputes capability from those numbers.
+Consequences: quality rests on the gates, which apply unchanged to every model. A later slice records per worker task
+the model, effort, tier, CI first pass, findings, rework and escalation, and recomputes capability from those numbers.
