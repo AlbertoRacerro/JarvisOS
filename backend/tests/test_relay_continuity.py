@@ -529,7 +529,7 @@ def test_a_hold_that_stands_when_decided_again_is_not_decided_on_every_poll(tmp_
     root = tmp_path / "control"
     mission = mission_def("cycle")
     _write_mission(root, mission)
-    env.head([])
+    write_turn(env.relay.sessions_dir() / HEAD, [])
     store = rc.mission_store(root, mission["id"])
     state = rc.default_state()
     state.update({"phase": "held", "head_session": HEAD, "chain": [HEAD], "agent": "claude",
@@ -840,7 +840,7 @@ def test_restart_with_dead_attempt_found_by_nonce_settles(tmp_path: Path) -> Non
     assert rc.PARKED_TEXT in task
     assert any("ha messo da parte un'operazione non verificabile" in e for e in env.events())
     assert any(kind == "finding" and "parked interrupted external operation(s)" in text for kind, text in env.ledger)
-    assert sup.state["head_session"] == "20261018-080030-dddddd"
+    assert env.relay.launches[0]["parent"] == "20261018-080030-dddddd"
 
 
 def test_concurrent_supervisors_are_refused(tmp_path: Path) -> None:
@@ -1058,7 +1058,7 @@ def test_stop_request_and_resume(tmp_path: Path) -> None:
 
 def test_release_clears_hold_and_records_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env = Env(tmp_path)
-    env.head([])
+    write_turn(env.relay.sessions_dir() / HEAD, [])
     assert env.run()[0] == "held"
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(env.store.root))
     monkeypatch.setattr(rc, "make_host", lambda repo: env.host)
@@ -1073,7 +1073,7 @@ def test_release_clears_hold_and_records_it(tmp_path: Path, monkeypatch: pytest.
 
 def test_released_turn_is_continued_not_regated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env = Env(tmp_path, [("claude", SUCCESS)])
-    env.head([])  # empty output holds with output_missing
+    write_turn(env.relay.sessions_dir() / HEAD, [])  # empty output holds with output_missing
     assert env.run()[0] == "held"
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(env.store.root))
     monkeypatch.setattr(rc, "make_host", lambda repo: env.host)
@@ -1237,7 +1237,7 @@ def test_supervisor_templates_do_not_expose_machine_fields() -> None:
             "task": "1/3", "pr": "123", "agent": "claude", "from_agent": "codex",
             "outcome": "quota", "action": "switch", "reason": "effects_uncertain", "phase": "idle",
             "reset_at": "none", "next_check_at": "none", "reset_source": "limits",
-            "attempt": "1", "owner": "control-plane",
+            "attempt": "1", "owner": "control-plane", "count": "2",
         }[key] for key in fields}
         if event == "roadmap_paused":
             values["reason"] = "no_progress"
@@ -1318,7 +1318,7 @@ def test_nonce_lookup_ignores_sessions_that_merely_quote_it(tmp_path: Path) -> N
     assert rc.PARKED_TEXT in task
     assert any("ha messo da parte un'operazione non verificabile" in e for e in env.events())
     assert any(kind == "finding" and "parked interrupted external operation(s)" in text for kind, text in env.ledger)
-    assert sup.state["head_session"] == "20261018-080030-ffffff"
+    assert env.relay.launches[0]["parent"] == "20261018-080030-ffffff"
 
 
 def test_nonce_lookup_refuses_ambiguous_matches(tmp_path: Path) -> None:
@@ -3300,25 +3300,29 @@ def test_incident_20261022_three_interrupted_local_commands_continue_on_recovere
     assert sup.state["mission"]["completed_at"] and "reconcile" not in sup.state
 
 
-def test_a_successful_turn_with_an_interrupted_background_push_holds(tmp_path: Path) -> None:
+def test_a_successful_turn_with_an_interrupted_background_push_parks_and_continues(tmp_path: Path) -> None:
     push = tool_use("p", "Bash", command="nohup git push origin HEAD >/dev/null 2>&1 &")
     env = Env(tmp_path)
     mission = mission_def("first", "second")
     start_mission(env, mission)
-    env.relay.script = [("claude", [push, tool_result("p"), *SUCCESS])]
+    env.relay.script = [("claude", [push, tool_result("p"), *SUCCESS]), ("claude", SUCCESS)]
     result, sup = run_mission(env, mission)
-    assert result == "held" and sup.state["hold"]["reason"] == "effects_uncertain"
-    assert len(env.relay.launches) == 1
+    assert result == "idle" and sup.state["hold"] is None
+    assert len(env.relay.launches) == 2
+    assert rc.PARKED_TEXT in env.relay.launches[1]["task"]
+    assert sum(1 for kind, text in env.ledger if kind == "finding" and "parked interrupted" in text) == 1
+    assert any("ha messo da parte un'operazione non verificabile" in e for e in env.events())
 
 
-def test_an_interrupted_background_push_holds_before_the_last_task_completes(tmp_path: Path) -> None:
+def test_an_interrupted_background_push_on_the_last_task_parks_instead_of_holding(tmp_path: Path) -> None:
     push = tool_use("p", "Bash", command="nohup git push origin HEAD >/dev/null 2>&1 &")
     env = Env(tmp_path, [("claude", [push, tool_result("p"), *SUCCESS])])
     mission = mission_def("only task")
     start_mission(env, mission)
     result, sup = run_mission(env, mission)
-    assert result == "held" and sup.state["hold"]["reason"] == "effects_uncertain"
-    assert "completed_at" not in sup.state["mission"] and "mission_completed" not in journal_events(env.store)
+    assert result == "idle" and sup.state["hold"] is None
+    assert sum(1 for kind, text in env.ledger if kind == "finding" and "parked interrupted" in text) == 1
+    assert any("ha messo da parte un'operazione non verificabile" in e for e in env.events())
 
 
 def test_the_next_task_is_told_which_processes_were_stopped(tmp_path: Path) -> None:
