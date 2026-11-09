@@ -310,3 +310,49 @@ def test_wrapper_observation_error_cleans_up_before_persisting_diagnosis(
     assert saved["status"] == "interrupted" and saved["exit_code"] == -15
     assert saved["reason"] == "wrapper error: OSError"
     assert "wrapper error: OSError" in Path(saved["log"]).read_text()
+
+
+@pytest.mark.parametrize(("status", "minutes_ago", "should_succeed"), [
+    ("unknown", 20, True),
+    ("unknown", 5, False),
+    ("running", 20, False),
+])
+def test_stale_unknown_records_do_not_fill_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str, minutes_ago: int, should_succeed: bool,
+) -> None:
+    root = tmp_path / "control"
+    monkeypatch.setattr(jobs, "allowed_roots", lambda: (tmp_path,))
+    monkeypatch.setattr(jobs, "ledger", lambda *args: None)
+    common = {"label": "case", "authority": "spec 218 regression", "cwd": tmp_path,
+              "wall_hours": 1, "root": root, "spawn": lambda cmd: None, "wait": 0}
+    now = jobs.now_utc()
+    deadline = (now - jobs.timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for i in range(4):
+        jid = f"j-20261109T12000{i}Z-aaaaa{i}"
+        record = {
+            "schema": jobs.SCHEMA,
+            "id": jid,
+            "label": f"job-{i}",
+            "authority": "spec 254 test",
+            "argv": [f"cmd-{i}"],
+            "cwd": str(tmp_path),
+            "git": {},
+            "inputs": {},
+            "wall_s": 3600,
+            "created_at": jobs.iso(now - jobs.timedelta(hours=1)),
+            "deadline": deadline,
+            "status": "running",
+            "pid": None,
+            "pid_start": None,
+            "exit_code": None,
+            "ended_at": None,
+        }
+        jobs.write_json_atomic(jobs.job_path(jid, root), record)
+    monkeypatch.setattr(jobs, "effective_status", lambda job: status)
+    if should_succeed:
+        started = jobs.start(["true"], **common)
+        assert started["status"] == "starting"
+    else:
+        with pytest.raises(ValueError, match=f"{jobs.MAX_RUNNING} jobs already running"):
+            jobs.start(["true"], **common)
+

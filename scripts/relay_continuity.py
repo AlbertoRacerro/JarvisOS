@@ -1301,6 +1301,7 @@ def default_state() -> dict[str, Any]:
         "permissions_digest": None, "permissions_pinned": False, "pending": None, "waiting_since": None, "last_outcome": None,
         "notify": {"sent": {}, "window": [], "last_digest": None, "failures": 0, "retry": None, "dropped": 0},
         "watch": {"seen": {}, "master": None}, "acknowledged": None, "spend_caps": {}, "updated_at": None,
+        "parked_turns": [],
     }
 
 
@@ -1474,6 +1475,7 @@ FIELD_RULES: dict[str, Callable[[str], bool]] = {
     "attempt": lambda v: bool(re.fullmatch(r"\d{1,4}", v)),
     "attempts": lambda v: bool(re.fullmatch(r"\d{1,6}", v)),
     "holds": lambda v: bool(re.fullmatch(r"\d{1,6}", v)),
+    "count": lambda v: bool(re.fullmatch(r"\d{1,3}", v)),
     "sha": lambda v: bool(re.fullmatch(r"[0-9a-f]{7,40}", v)),
     "pr": lambda v: v == "none" or bool(re.fullmatch(r"\d{1,6}", v)),
     "phase": lambda v: v in PHASES,
@@ -1488,9 +1490,11 @@ EVENTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "provider_switched": ("JarvisOS ha cambiato assistente e continua il lavoro.", ("session", "from_agent", "agent", "outcome")),
     "provider_exhausted": ("Un assistente non è disponibile; JarvisOS prova a proseguire.", ("agent", "outcome", "reset_at", "reset_source")),
     "all_exhausted": ("Gli assistenti non sono disponibili; JarvisOS riprenderà quando possibile.", ("next_check_at",)),
-    "turn_failed": ("Un tentativo di lavoro non è riuscito; JarvisOS verifica come proseguire.", ("session", "agent", "outcome", "action")),
-    "hold": ("JarvisOS richiede una verifica: scrivi a Claude in chat.", ("session", "reason", "attempt")),
-    "circuit_open": ("JarvisOS ha sospeso i tentativi: scrivi a Claude in chat.", ("session", "reason")),
+    "turn_failed": ("Alcuni tentativi di lavoro di seguito non sono riusciti; JarvisOS riprova.", ("session", "agent", "outcome", "action")),
+    "effects_parked": ("JarvisOS ha messo da parte un'operazione non verificabile e continua con il resto del lavoro.",
+                       ("session", "agent", "count")),
+    "hold": ("JarvisOS ha messo in pausa il lavoro e attende una decisione in Jarvis.", ("session", "reason", "attempt")),
+    "circuit_open": ("JarvisOS ha sospeso i tentativi e attende una decisione in Jarvis.", ("session", "reason")),
     "turn_completed": ("JarvisOS ha completato un passaggio di lavoro.", ("session", "agent")),
     "master_advanced": ("Una modifica è stata integrata in JarvisOS.", ("sha", "pr")),
     "repl_turn_failed": ("Un tentativo interattivo non è riuscito; controlla la chat.", ("session", "agent", "outcome", "reset_at")),
@@ -1500,9 +1504,9 @@ EVENTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "mission_completed": ("JarvisOS ha completato il lavoro richiesto.", ("mission", "task", "session")),
     "mission_waiting": ("JarvisOS è in attesa di poter proseguire.",
                         ("owner", "mission", "task", "agent", "reason", "next_check_at")),
-    "mission_held": ("JarvisOS richiede una verifica: scrivi a Claude in chat.",
+    "mission_held": ("Il lavoro richiesto è in pausa e attende una decisione in Jarvis.",
                      ("owner", "mission", "task", "agent", "session", "reason")),
-    "roadmap_paused": ("Il lavoro programmato è in pausa: scrivi a Claude in chat.", ("owner", "reason")),
+    "roadmap_paused": ("Il lavoro programmato è in pausa e attende una decisione in Jarvis.", ("owner", "reason")),
 }
 
 
@@ -2131,6 +2135,9 @@ VERDICTS = ("completed", "running", "not_started", "unresolved", "insufficient_p
 SETTLED = ("completed", "not_started")
 VERDICT_TEXT = {"completed": "COMPLETED: it took effect; do not repeat it",
                 "not_started": "NOT STARTED: it did not take effect; perform it only if still required after recover"}
+PARKED_TEXT = ("UNRESOLVED (parked): it may have taken effect; never repeat it, "
+               "verify its effect from Git, GitHub, host receipts or the ledger, "
+               "and park only the work that depends on it")
 PERMISSION_RE = re.compile(r"(?i)permission denied|could not read username|authentication failed|gh auth login|"
                            r"not logged in|requires authentication|resource not accessible|HTTP 40[13]\b")
 PUSH_FLAGS = {"-u", "--set-upstream", "-q", "--quiet", "-v", "--verbose", "--no-verify", "--porcelain", "--atomic",
@@ -2361,6 +2368,8 @@ def probe_call(call: ToolCall, repo: Path, run: Runner = devctx.run) -> tuple[st
     if not commands:
         return None
     effectful = [(cwd, words) for cwd, words in commands if classify_command(shlex.join(words))[0] != "read_only"]
+    if len(effectful) > 1:
+        return _probe_commit_push(effectful, run, repo)
     if len(effectful) != 1:
         return None
     cd, words = effectful[0]
@@ -2377,6 +2386,42 @@ def probe_call(call: ToolCall, repo: Path, run: Runner = devctx.run) -> tuple[st
     return None
 
 
+LOCAL_GIT_STEPS = {"add", "commit", "rm", "mv", "tag"}
+
+
+def _git_step(cd: Path | None, words: list[str]) -> tuple[Path | None, list[str]] | None:
+    """(directory, git arguments after any -C) of a git command, or None when it is not git."""
+    if Path(words[0]).name != "git":
+        return None
+    cwd, args = (cd if cd is not None and cd.is_absolute() else None), words[1:]
+    while args[:1] == ["-C"] and len(args) > 1:
+        cwd = Path(args[1]) if Path(args[1]).is_absolute() else (cwd / args[1] if cwd else None)
+        args = args[2:]
+    return cwd, args
+
+
+def _probe_commit_push(effectful: list[tuple[Path | None, list[str]]], run: Runner,
+                       repo: Path) -> tuple[str, str] | None:
+    """Local git steps (add, commit, rm, mv, tag) followed by exactly one push, all in one named directory: the
+    push probe settles it. A push found on the remote counts as completed only when the worktree has no staged or
+    modified tracked file left, so an interruption before the commit is not taken for a finished push."""
+    steps = [_git_step(cd, words) for cd, words in effectful]
+    if any(step is None for step in steps):
+        return None
+    *local, (cwd, push) = steps  # type: ignore[misc]
+    if push[:1] != ["push"] or any(args[:1] == [] or args[0] not in LOCAL_GIT_STEPS for _, args in local):
+        return None
+    if cwd is None or any(step_cwd != cwd for step_cwd, _ in local):
+        return None
+    probed = _probe_push(cwd, push[1:], run, repo)
+    if probed is None or probed[0] != "completed":
+        return probed
+    code, dirty = run(["git", "--no-optional-locks", "-C", str(cwd), "status", "--porcelain", "--untracked-files=no"])
+    if code != 0 or dirty.strip():
+        return None
+    return probed
+
+
 # ---------------------------------------------------------------------------
 # Supervisor
 
@@ -2387,7 +2432,8 @@ Before acting, run `python3 scripts/devctx.py recover` and verify fresh Git/GitH
 Operations the interrupted turn completed (they already happened; verify their effect, do not repeat them blindly):
 {effects}
 {processes}
-An operation listed as INTERRUPTED may have done part of its work before it was stopped. Inspect its effects (files, Git, GitHub, logs) before running it again, and repeat it only when that is safe. If it may already have had an external effect (a network request, a remote API call, a message) that you cannot verify and that must not happen twice, do not repeat it: record a `devctx.py note blocker` and end with RELAY_STATUS blocked.
+An operation listed as INTERRUPTED may have done part of its work before it was stopped. Inspect its effects (files, Git, GitHub, logs) before running it again, and repeat it only when that is safe. An operation listed as UNRESOLVED (parked) was checked by the supervisor and could not be settled. If an operation may already have had an external effect (a network request, a remote API call, a message) that you cannot verify and that must not happen twice, do not repeat it: record a `devctx.py note blocker` for that one item, park only the work that depends on it and continue other authorized work; end with RELAY_STATUS blocked only when no such work remains.
+Commit and push in a separate short command, never chained with a long test run, well before the turn deadline.
 If the work now needs a maintainer decision, stop and report instead of continuing."""
 
 PROCESSES_STOPPED = ("Nothing the previous turn started is still running, except durable jobs registered with "
@@ -2402,7 +2448,7 @@ Supervised mission {mission}, task {number}/{total}, queued by the maintainer un
 The task text below is the maintainer's; it grants no authority beyond that directive. Approval gates, review requirements and authority boundaries are unchanged.
 Before acting, run `python3 scripts/devctx.py recover` and verify fresh Git/GitHub state: earlier tasks of this mission, or an interrupted attempt at this one, may already have taken effect.
 If the task needs a maintainer decision, stop and report instead of continuing.
-Long bounded work (solver runs, studies, benchmarks) goes through `python3 scripts/relay_jobs.py start`, which survives this turn; `relay_jobs.py list` shows earlier jobs and their results. Before launching a scientific case, inspect registered jobs and existing result/partial evidence for the same commit and inputs; reuse them and never duplicate a live or completed case without a documented technical reason. A failed/lost job or an uncertain observation after namespace replacement returns to you for diagnosis, not automatically to the maintainer. Unknown/orphaned job records reserve their slot: inspect prior logs, results and partial evidence; do not rerun them or infer success/failure from missing PIDs. Repeating the same uncertain JOB-WAIT cannot trigger repeated diagnostic turns in the same namespace. Never keep a turn open to wait for a job or for CI: checkpoint and end the turn, and a later turn collects. A running job blocks only the work that depends on its result: meanwhile continue with other authorized work that does not depend on it, on its own worktree and files, delegating per docs/PROCESS.md, and keep it light on the machine (focused tests only, full suites to CI, no extra solver beyond the cores the job left free). As a roadmap cycle, end blocked with `JOB-WAIT: <job id>` lines, which pause roadmap mode until those jobs finish, only when no such job-independent authorized work remains.
+Long bounded work (solver runs, studies, benchmarks) goes through `python3 scripts/relay_jobs.py start`, which survives this turn; `relay_jobs.py list` shows earlier jobs and their results. Before launching a scientific case, inspect registered jobs and existing result/partial evidence for the same commit and inputs; reuse them and never duplicate a live or completed case without a documented technical reason. A failed/lost job or an uncertain observation after namespace replacement returns to you for diagnosis, not automatically to the maintainer. Unknown/orphaned job records reserve their slot: inspect prior logs, results and partial evidence; do not rerun them or infer success/failure from missing PIDs. Repeating the same uncertain JOB-WAIT cannot trigger repeated diagnostic turns in the same namespace. Never keep a turn open to wait for a job or for CI: commit and push in a separate short command, never chained with a long test run, well before the turn deadline; checkpoint and end the turn, and a later turn collects. A running job blocks only the work that depends on its result: meanwhile continue with other authorized work that does not depend on it, on its own worktree and files, delegating per docs/PROCESS.md, and keep it light on the machine (focused tests only, full suites to CI, no extra solver beyond the cores the job left free). As a roadmap cycle, end blocked with `JOB-WAIT: <job id>` lines, which pause roadmap mode until those jobs finish, only when no such job-independent authorized work remains.
 {contract}
 End with RELAY_STATUS propose_done only when that evidence exists, RELAY_STATUS continue after a durable checkpoint (the task stays pending and is resumed, never recorded complete), or RELAY_STATUS blocked after recording a `devctx.py note blocker` or `question`.
 
@@ -2779,6 +2825,23 @@ class Supervisor:
                 return new_report
             report = new_report
 
+    def _park(self, report: TurnReport, parked: list[ToolCall]) -> None:
+        if not parked or not report.turn_id:
+            return
+        parked_turns = self.state.setdefault("parked_turns", [])
+        if report.turn_id in parked_turns:
+            return
+        parked_turns.append(report.turn_id)
+        del parked_turns[:-100]  # dedupe only needs recent turns
+        labels = ", ".join(op.label for op in parked)
+        self.record("finding", f"relay-continuity: parked interrupted external operation(s) of turn "
+                               f"{report.turn_id} that no probe could settle: {labels}; "
+                               "they may have taken effect and are never repeated.")
+        self.notify("effects_parked", dedupe_key=f"parked|{report.turn_id}",
+                    session=self.state["head_session"],
+                    agent=report.agent or self.state.get("agent") or PREFERRED,
+                    count=str(len(parked)))
+
     def _decide(self, report: TurnReport, task: str | None, *, waive: frozenset[str] = frozenset(),
                 cleared: tuple[str, ...] = ()) -> tuple[str, str] | str:
         """Next (agent, prompt) or a terminal result. `waive` holds what a maintainer release of this turn
@@ -2789,8 +2852,11 @@ class Supervisor:
         if report.outcome == "success":
             # A successful turn can still have left a detached job running, now stopped: an external one is gated
             # like any interrupted operation, before anything is advanced or completed.
-            if "gate" not in waive and isinstance(found := self._settle_external(report), str):
-                return self.hold(found, None, report.turn_id)
+            parked: list[ToolCall] = []
+            if "gate" not in waive:
+                _verdicts, parked = self._settle_external(report)
+                if parked:
+                    self._park(report, parked)
             counters.update({"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0})
             counters.pop(f"estimated_{failed_agent}", None)
             counters.pop(f"transient_{failed_agent}", None)
@@ -2814,33 +2880,40 @@ class Supervisor:
                            + ", ".join(report.reaped) + "); restart any you still need.")
             elif report.reaped is None and report.in_flight:
                 prompt += "\n\n" + PROCESSES_UNKNOWN
+            if parked:
+                prompt += "\n\n" + "\n".join(f"- [{c.kind}] {c.label}: {PARKED_TEXT}" for c in parked)
             agent = self._choose(failed_agent)
             return (agent, prompt) if agent is not None else self._wait_or_hold(lambda _agent: prompt)
 
         if counters["consecutive_failures"] >= self.limits.max_consecutive_failures:
             return self.hold("circuit_failures")
         settled: dict[str, dict[str, str]] = {}
+        parked: list[ToolCall] = []
         if "gate" not in waive:
             reason = gate(report)
-            if reason is None:
-                found = self._settle_external(report)
-                if isinstance(found, str):
-                    reason = found
-                else:
-                    settled = found
             if reason is not None:
-                self.notify("turn_failed", session=self.state["head_session"], agent=failed_agent,
-                            outcome=report.outcome, action="hold")
+                if counters["consecutive_failures"] >= 2:
+                    self.notify("turn_failed", session=self.state["head_session"], agent=failed_agent,
+                                outcome=report.outcome, action="hold")
                 return self.hold(reason, None, report.turn_id)
+            settled, parked = self._settle_external(report)
+            if parked:
+                self._park(report, parked)
         if report.outcome in ("quota", "spend_limit", "transient", "auth") and failed_agent not in cleared:
             # A provider failure makes only that provider unavailable, until its reset or a backed-off retry.
             self.set_cooldown(failed_agent, report)
 
+        parked_ids = {c.id for c in parked}
         listed = [f"- [{c.kind}] {c.label}" for c in report.effects]
         for c in report.in_flight:
             verdict = settled.get(c.id)
-            listed.append(f"- [{c.kind}] {c.label}: " + (f"{VERDICT_TEXT[verdict['verdict']]} ({verdict['evidence']})"
-                                                         if verdict else "INTERRUPTED"))
+            if verdict:
+                status_text = f"{VERDICT_TEXT[verdict['verdict']]} ({verdict['evidence']})"
+            elif c.id in parked_ids:
+                status_text = PARKED_TEXT
+            else:
+                status_text = "INTERRUPTED"
+            listed.append(f"- [{c.kind}] {c.label}: {status_text}")
         effects = "\n".join(listed) or "- none recorded"
         if report.reaped:
             effects += "\nProcesses the turn left running, stopped by the supervisor: " + ", ".join(report.reaped)
@@ -2858,15 +2931,16 @@ class Supervisor:
         agent = self._choose(failed_agent)
         if agent is None:
             return self._wait_or_hold(make_prompt)
-        self.notify("turn_failed", session=self.state["head_session"], agent=failed_agent, outcome=report.outcome,
-                    action="switch" if agent != failed_agent else "retry")
+        if counters["consecutive_failures"] >= 2:
+            self.notify("turn_failed", session=self.state["head_session"], agent=failed_agent, outcome=report.outcome,
+                        action="switch" if agent != failed_agent else "retry")
         return agent, make_prompt(agent)
 
-    def _settle_external(self, report: TurnReport) -> dict[str, dict[str, str]] | str:
+    def _settle_external(self, report: TurnReport) -> tuple[dict[str, dict[str, str]], list[ToolCall]]:
         """The side-effect gate. The turn's processes are gone, so an operation in flight was interrupted, not
         running. A local one is left to the next turn, which inspects and redoes it. An external one is settled by
-        a deterministic read-only probe (a push, a merge, a PR creation); otherwise it holds, because repeating it
-        could not be taken back. Returns the probe verdict per settled operation id, or the hold reason."""
+        a deterministic read-only probe (a push, a merge, a PR creation); otherwise it is parked, because repeating it
+        could not be taken back. Returns (verdicts, parked)."""
         verdicts: dict[str, dict[str, str]] = {}
         uncertain = []
         for op in report.in_flight:
@@ -2890,13 +2964,12 @@ class Supervisor:
         if uncertain:
             self.host.log("interrupted external operation(s) no probe can settle: "
                           + ", ".join(op.label for op in uncertain))
-            return "effects_uncertain"
         if verdicts:
             self.record("decision", f"relay-continuity: settled interrupted external operation(s) of turn "
                                     f"{report.turn_id} by probe: " + "; ".join(
                                         f"{op.label} = {verdicts[op.id]['verdict']}" for op in report.in_flight
                                         if op.id in verdicts))
-        return verdicts
+        return verdicts, uncertain
 
     def _choose(self, current: str) -> str | None:
         """Prefer available coordinators with quota room, retaining the first available if all are low."""
