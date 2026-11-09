@@ -240,8 +240,9 @@ def parse_iso(ts: str | None) -> datetime | None:
             return None
 
 
-def _is_stale_unknown(job: dict[str, Any], now: datetime) -> bool:
-    if effective_status(job) != "unknown":
+def _is_stale_unknown(job: dict[str, Any], status: str, now: datetime) -> bool:
+    """An `unknown` record past its deadline by more than LOST_GRACE: its wrapper would have ended it (spec 254)."""
+    if status != "unknown":
         return False
     deadline = parse_iso(job.get("deadline"))
     return deadline is not None and (now - deadline > LOST_GRACE)
@@ -343,8 +344,8 @@ def start(argv: list[str], *, label: str, authority: str, cwd: Path, wall_hours:
         # `starting` record counts as active, so the slot stays reserved until its wrapper is up.
         fcntl.flock(admission, fcntl.LOCK_EX)
         previous = all_jobs(root)
-        running = [j for j in previous if effective_status(j) in ACTIVE + UNRESOLVED
-                   and not _is_stale_unknown(j, created)]
+        running = [j for j in previous if (status := effective_status(j)) in ACTIVE + UNRESOLVED
+                   and not _is_stale_unknown(j, status, created)]
         duplicate = next((j for j in sorted(previous, key=lambda j: j not in running) if j.get("argv") == argv and j.get("cwd") == str(cwd)
                           and j.get("inputs") == digests and j.get("git") == job["git"]), None)
         if duplicate is not None and (duplicate in running or not retry_reason or not retry_reason.strip()):

@@ -2832,6 +2832,7 @@ class Supervisor:
         if report.turn_id in parked_turns:
             return
         parked_turns.append(report.turn_id)
+        del parked_turns[:-100]  # dedupe only needs recent turns
         labels = ", ".join(op.label for op in parked)
         self.record("finding", f"relay-continuity: parked interrupted external operation(s) of turn "
                                f"{report.turn_id} that no probe could settle: {labels}; "
