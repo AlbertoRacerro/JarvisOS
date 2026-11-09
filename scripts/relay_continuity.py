@@ -2416,7 +2416,7 @@ def _probe_commit_push(effectful: list[tuple[Path | None, list[str]]], run: Runn
     probed = _probe_push(cwd, push[1:], run, repo)
     if probed is None or probed[0] != "completed":
         return probed
-    code, dirty = run(["git", "-C", str(cwd), "status", "--porcelain", "--untracked-files=no"])
+    code, dirty = run(["git", "--no-optional-locks", "-C", str(cwd), "status", "--porcelain", "--untracked-files=no"])
     if code != 0 or dirty.strip():
         return None
     return probed

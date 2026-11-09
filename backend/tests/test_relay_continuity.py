@@ -3822,3 +3822,119 @@ def test_supervisor_block_persists_the_quota_snapshot(tmp_path: Path, monkeypatc
     saved = json.loads((tmp_path / ".agent-relay" / "worker-quota.json").read_text())
     assert saved["schema"] == "worker-quota.v1" and saved["pools"]["codex"]["windows"]["weekly"] == 0.9
     rc.worker_routing._cache.update(at=None, line=None, ttl=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Spec 254: never stop for checkable, compound push probe, park and continue
+
+
+PUSH_COMPLETED = {
+    "show-ref": (0, ""),
+    "rev-parse --verify": (0, "a" * 40 + "\n"),
+    "ls-remote": (0, f"{'a' * 40}\trefs/heads/b\n"),
+}
+
+
+@pytest.mark.parametrize(("command", "responses", "expected"), [
+    (
+        "cd /r && git add -A && git commit -m x && git push origin b",
+        {**PUSH_COMPLETED, "status --porcelain": (0, "")},
+        "completed",
+    ),
+    (
+        "cd /r && git add -A && git commit -m x && git push origin b",
+        {"show-ref": (0, ""), "rev-parse --verify": (0, "a" * 40 + "\n"), "ls-remote": (0, "")},
+        "not_started",
+    ),
+    (
+        "cd /r && git add -A && git commit -m x && git push origin b",
+        {**PUSH_COMPLETED, "status --porcelain": (0, " M a.py\n")},
+        None,
+    ),
+    (
+        "git add -A && git commit -m x && git push origin b",
+        {**PUSH_COMPLETED, "status --porcelain": (0, "")},
+        None,
+    ),
+    (
+        "cd /r && rm -rf x && git push origin b",
+        {**PUSH_COMPLETED, "status --porcelain": (0, "")},
+        None,
+    ),
+    (
+        "cd /r && git commit -m x && gh pr create --fill",
+        {**PUSH_COMPLETED, "status --porcelain": (0, "")},
+        None,
+    ),
+])
+def test_compound_commit_and_push_is_settled_by_the_push_probe(
+    command: str, responses: dict[str, tuple[int, str]], expected: str | None,
+) -> None:
+    run = fake_runner(responses)
+    probed = rc.probe_call(bash(command), Path("/r"), run)
+    assert (probed[0] if probed else None) == expected
+    for args in run.calls:
+        cmd = args[4] if "--no-optional-locks" in args else (args[3] if args[:2] == ["git", "-C"] else " ".join(args[1:3]))
+        assert cmd in ("rev-parse", "ls-remote", "merge-base", "show-ref", "status")
+
+
+@pytest.mark.parametrize("command", [
+    "cd /r && git add -A && git commit -m x && git push origin b",
+    "cd /r && git push origin b",
+    "cd /r && git push origin b && gh pr create --fill",
+    "gh pr comment 7 --body done",
+])
+def test_interrupted_commit_push_and_comment_park_once_and_continue(tmp_path: Path, command: str) -> None:
+    env = Env(tmp_path, [("codex", CODEX_SUCCESS)])
+    env.host.probe = lambda call: None
+    env.head([tool_use("x", "Bash", command=command), *QUOTA])
+    result, sup = env.run()
+    assert result == "idle" and sup.state["hold"] is None
+    assert len(env.relay.launches) == 1
+    task = env.relay.launches[0]["task"]
+    label = rc.classify_command(command)[1]
+    assert rc.PARKED_TEXT in task and label in task
+    assert sum(1 for kind, text in env.ledger if kind == "finding" and "parked interrupted external operation(s)" in text) == 1
+    assert sum(1 for text in env.sent if "ha messo da parte un'operazione non verificabile" in text) == 1
+    env.relay.script = [("codex", CODEX_SUCCESS)]
+    result2, sup2 = env.run()
+    assert result2 == "idle" and sup2.state["hold"] is None
+    assert sum(1 for kind, text in env.ledger if kind == "finding" and "parked interrupted external operation(s)" in text) == 1
+    assert sum(1 for text in env.sent if "ha messo da parte un'operazione non verificabile" in text) == 1
+
+
+def test_a_successful_turn_with_an_unresolved_external_operation_continues(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("first", "second")
+    start_mission(env, mission)
+    env.relay.script = [("claude", [IN_FLIGHT["gh pr comment"], *SUCCESS]), ("claude", SUCCESS)]
+    result, sup = run_mission(env, mission)
+    assert result == "idle" and sup.state["hold"] is None
+    assert len(env.relay.launches) == 2
+    assert rc.PARKED_TEXT in env.relay.launches[1]["task"]
+    assert sum(1 for kind, text in env.ledger if kind == "finding" and "parked interrupted" in text) == 1
+
+
+def test_turn_failed_is_sent_only_from_the_second_consecutive_failure(tmp_path: Path) -> None:
+    env = Env(tmp_path, [("claude", CRASH), ("claude", CRASH), ("claude", SUCCESS)])
+    failed_counts_at_start: list[int] = []
+    real_start = env.relay.start
+
+    def record_start(agent: str, parent: str, task: str, turns: int) -> FakeProc:
+        failed_counts_at_start.append(
+            sum(1 for t in env.sent if t.startswith("Alcuni tentativi di lavoro di seguito non sono riusciti"))
+        )
+        return real_start(agent, parent, task, turns)
+
+    env.relay.start = record_start  # type: ignore[method-assign]
+    env.head(CRASH)
+    result, sup = env.run()
+    assert result == "idle" and sup.state["hold"] is None
+    assert failed_counts_at_start == [0, 0, 1]
+    turn_failed_events = [e for e in env.events() if e.startswith("Alcuni tentativi di lavoro di seguito non sono riusciti")]
+    assert len(turn_failed_events) == 1
+
+
+def test_no_supervisor_event_tells_the_maintainer_to_write_in_chat() -> None:
+    assert not any("scrivi a Claude in chat" in text for text, _ in rc.EVENTS.values())
+

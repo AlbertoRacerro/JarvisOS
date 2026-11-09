@@ -22,7 +22,8 @@ past their deadlines, fill `MAX_RUNNING` so no durable job can start in any late
 
 In scope (`scripts/relay_continuity.py`, `scripts/relay_jobs.py`):
 - **Compound push probe.** `probe_call` also settles a command whose effectful steps are only local git steps
-  (`add`, `commit`, `rm`, `mv`, `tag` without push) followed by exactly one `git push`: the verdict is the push probe's.
+  (`add`, `commit`, `rm`, `mv`, `tag` without push) followed by exactly one `git push`, all in one named absolute
+  directory: the verdict is the push probe's, and `completed` only when that worktree is clean of tracked changes.
   Any other effectful step keeps returning `None`.
 - **Park, do not hold.** When `_settle_external` leaves operations unresolved, `_decide` (both the success and the
   failure path) no longer returns `hold("effects_uncertain")`. It journals the reconcile (as today), records one ledger
@@ -67,8 +68,10 @@ Out of scope (binding non-goals):
 
 ## Acceptance criteria
 
-1. `probe_call` on `git add -A && git commit -m x && git push origin b` returns the push probe's verdict; with another
-   effectful step (e.g. `rm -rf x && git push`) it returns `None`.
+1. `probe_call` on `cd /r && git add -A && git commit -m x && git push origin b` returns the push probe's verdict when
+   the worktree in that absolute directory has no staged or modified tracked file (otherwise the commit may not have
+   happened and it returns `None`); without a named absolute directory, or with another effectful step
+   (e.g. `rm -rf x && git push`), it returns `None`.
 2. An interrupted turn whose push no probe can settle yields an (agent, prompt) decision, not a hold; the prompt marks
    the operation `UNRESOLVED (parked)`; one ledger finding and one `effects_parked` notification are recorded. This holds
    for interruptions before the commit, after the commit before the push, after the push, and after a PR comment
