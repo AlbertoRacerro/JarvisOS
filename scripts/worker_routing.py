@@ -4,10 +4,14 @@
 Coordinators plan, review and integrate; bounded implementation goes to the cheapest worker that is adequate for
 the task and whose subscription pool still has headroom. Required tier = max(difficulty, risk), low=1, medium=2,
 high=3. A model qualifies when its capability is at least that tier and its pool's free fraction (the minimum over
-the pool's 5-hour and weekly windows) is at least the pool's reserve (RESERVES). A pool that is disabled or unreadable is skipped
-(fail-closed per pool). Candidates are ordered by smallest capability surplus (cheapest adequate), then pool priority
-(gemini, copilot, codex, claude last), then most free quota, then table order. Nothing qualifying exits 3 with reason `no_worker`: the coordinator then does the work
-itself or waits.
+the pool's windows) is at least the pool's reserve (RESERVES); a window that resets within SPEND_DOWN may be spent to 0
+(use it or lose it, spec 255). A pool that is disabled or unreadable is skipped (fail-closed per pool). Capability is
+per effort, never per brand: Flash and Argon at medium take tier 2, at high tier 3, until measured results say
+otherwise. Candidates are ordered by another family than `--review-of` first (never required), then smallest capability
+surplus (effort follows the task), then the gemini family, then the quota that would expire unused soonest (binding
+window's free fraction per hour to its reset), then most free quota, then table order. One `agy /quota` reading feeds
+the gemini, argon (plus its own weekly bucket) and agy3p (third-party Sonnet/Opus) pools. Nothing qualifying exits 3
+with reason `no_worker`: the coordinator then does the work itself or waits.
 
 Quota is read without a model turn: Codex through `codex app-server` `account/rateLimits/read`, Gemini through
 `agy -p /quota`, Copilot through `gh api copilot_internal/user`, Claude through `agent-relay --json limits --refresh`. This tool only reads quota and prints a decision; it launches nothing, writes nothing and holds no
@@ -390,7 +394,9 @@ def read_agy(name: str) -> Pool:
 
 
 def read_gemini() -> Pool:
-    return read_agy("gemini")
+    """A fresh reading of the general Gemini pool (read_pools shares one reading across the agy pools)."""
+    reading = read_agy_document()
+    return unreadable("gemini", reading) if isinstance(reading, str) else parse_gemini(reading, "gemini")
 
 
 def read_agy_document() -> dict[str, Any] | str:
@@ -504,7 +510,7 @@ def read_codex() -> Pool:
 
 
 READERS: dict[str, Callable[[], Pool]] = {
-    "codex": read_codex, "gemini": read_gemini, "copilot": read_copilot, "claude": read_claude,
+    "codex": read_codex, "gemini": lambda: read_agy("gemini"), "copilot": read_copilot, "claude": read_claude,
     "argon": lambda: read_agy("argon"), "agy3p": lambda: read_agy("agy3p"),
 }
 
@@ -612,6 +618,8 @@ def read_pools(readers: dict[str, Callable[[], Pool]] | None = None, timeout: fl
     running at the deadline leaves its pool unreadable; nothing here ever hangs or raises."""
     chosen = READERS if readers is None else readers
     names = list(dict.fromkeys(m.pool for m in MODELS))
+    with _agy_lock:
+        _agy_doc["at"] = None  # the agy pools share one fresh reading per call
     out: dict[str, Pool] = {name: unreadable(name, "timeout") for name in names}
 
     def run(name: str) -> None:
@@ -717,9 +725,9 @@ def summary_line(pools: dict[str, Pool]) -> str:
         low = " [below reserve]" if below_reserve(pool) else ""
         stale = " [snapshot]" if pool.source == "snapshot" else ""
         parts.append(f"{name} {pct(pool.free)} free{short}{low}{stale}")
-    tiers = " · ".join(f"{m.key} t{m.capability}" for m in MODELS)
+    tiers = ", ".join(f"{m.key} t{m.capability}" for m in MODELS)
     return ("worker quota: " + " · ".join(parts) + " — effort by task tier, gemini first, then quota expiring "
-            "unused\nworker tiers: " + tiers)
+            "unused; tiers: " + tiers)
 
 
 _cache: dict[str, Any] = {"at": None, "line": None, "ttl": 0.0}
