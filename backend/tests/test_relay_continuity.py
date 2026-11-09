@@ -2106,7 +2106,8 @@ def test_mission_advances_each_task_only_on_success_and_completes(tmp_path: Path
 
 def test_mission_quota_fails_over_to_codex_with_task_context_and_continues(tmp_path: Path) -> None:
     env = Env(tmp_path, [("claude", SUCCESS), ("claude", QUOTA), ("codex", CODEX_SUCCESS), ("codex", CODEX_SUCCESS)])
-    env.relay.readings = room(env, "codex")
+    # spec 255: an agent without a reading ranks after one with proven room, so both have one here
+    env.relay.readings = lambda: {**room(env, "claude")(), **room(env, "codex")()}
     mission = mission_def("first task", "second task", "third task")
     start_mission(env, mission)
     result, sup = run_mission(env, mission)

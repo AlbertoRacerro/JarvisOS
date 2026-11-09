@@ -151,7 +151,7 @@ def test_choice_follows_quota_expiring_unused_and_keeps_the_current_agent_on_tie
     allowed.add("codex")
     assert sup._choose("argon") == "argon"  # a tie keeps the current agent
     allowed.add("claude")
-    assert sup._choose("codex") == "codex"
+    assert sup._choose("codex") == "claude"  # a Codex fallback hands back on a tie
     scores["claude"] = 0.4 / 6  # 40% free resetting in 6 h beats 70% resetting in 6 days
     scores["codex"] = 0.7 / 144
     assert sup._choose("codex") == "claude"
@@ -360,8 +360,8 @@ def test_preferred_and_fallback_order(tmp_path, monkeypatch):
     available.remove("agy_opus")
     assert sup._choose("agy_opus") == "codex"
     available.add("argon")
-    assert sup._choose("codex") == "codex"  # spec 255: no fixed order, a tie keeps the current agent
-    assert sup._choose("claude") == "argon"  # the preferred order breaks a tie for an unavailable current agent
+    assert sup._choose("codex") == "argon"  # a tie hands a Codex fallback back to the preferred order
+    assert sup._choose("argon") == "argon"  # a tie keeps a preferred current agent
 
 
 @pytest.mark.parametrize("change", ["missing", "duplicate", "disabled", "exhausted", "boolean", "nan"])
@@ -396,12 +396,14 @@ def test_native_family_identity_rejects_unverified_agents_and_models():
 
 def test_adapter_keeps_native_quota_caches_separate_by_subscription_family(tmp_path, monkeypatch):
     calls = []
+    documents = []
     monkeypatch.setattr(rc.shutil, "which", lambda _: "agy")
 
-    def read_quota(binary, env, *, agent):
-        calls.append(agent)
+    def read_quota(binary, env, *, agent, document=None):
+        calls.append((agent, document))
         return [{"remaining_fraction": 0.4 if agent == "agy_opus" else 0.8}]
 
+    monkeypatch.setattr(ra, "quota_document", lambda binary, env: documents.append(1) or {"doc": len(documents)})
     monkeypatch.setattr(ra, "read_quota", read_quota)
     adapter = rc.RelayAdapter(tmp_path, env={"JARVISOS_MISSION_PROFILE": "1"})
     opus = adapter.argon_limits("agy_opus")
@@ -409,7 +411,8 @@ def test_adapter_keeps_native_quota_caches_separate_by_subscription_family(tmp_p
     assert opus["windows"][0]["used_percent"] == pytest.approx(60)
     assert argon["windows"][0]["used_percent"] == pytest.approx(20)
     assert adapter.argon_limits("agy_opus") == opus
-    assert calls == ["agy_opus", "argon"]
+    # spec 255: one agy /quota document serves every native agent; each selects its own buckets
+    assert documents == [1] and calls == [("agy_opus", {"doc": 1}), ("argon", {"doc": 1})]
 
 
 def test_native_opus_runner_preflights_and_launches_the_same_model_family(tmp_path, monkeypatch):

@@ -2928,8 +2928,9 @@ class Supervisor:
 
     def _choose(self, current: str) -> str | None:
         """Among available coordinators, the one whose quota would expire unused first (spec 255); agents under
-        the reserve only when every available one is. Ties keep the current agent, then the preferred order."""
-        order = dict.fromkeys([current, *PREFERRED_AGENTS, "codex"] if current in AGENTS else [*PREFERRED_AGENTS, "codex"])
+        the reserve only when every available one is. Ties keep a preferred current agent, then the preferred
+        order, with Codex last: a Codex fallback hands back on a tie once a preferred coordinator recovers."""
+        order = dict.fromkeys(([current] if current in PREFERRED_AGENTS else []) + [*PREFERRED_AGENTS, "codex"])
         available = [a for a in order if self.available(a)]
         roomy = [a for a in available if not self.low_headroom(a)] or available
         agent = max(roomy, key=lambda a: (self.expiry_score(a), -roomy.index(a))) if roomy else None
