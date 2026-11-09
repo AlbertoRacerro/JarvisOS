@@ -223,3 +223,90 @@ def test_declared_temperature_difference_is_info_only_above_five_kelvin() -> Non
         assert bool(hits) == expected, feed_k
         if hits:
             assert hits[0]["severity"] == "info" and hits[0]["field"] == "temperature_mean"
+
+
+# ----------------------------------------------------------------------------------------------
+# Spec 257 item 1: PBR loop-hydraulics pre-run domain check
+# ----------------------------------------------------------------------------------------------
+
+
+def test_hydraulics_precheck_blocks_a_mean_temperature_outside_the_water_eos() -> None:
+    from app.modules.process_stack import pbr_unit
+
+    document = draft.apply_ops(
+        pbr_document(),
+        [SetUnitParams(op="set_unit_params", unit="pbr",
+                       values=pbr_quantities(temperature_mean=(1500.0, "K"), temperature_amplitude=(0.1, "K")))],
+    )
+    findings = pbr_validation.pbr_findings(document)
+    hits = find(findings, "PBR_HYDRAULICS_OUTSIDE_DOMAIN")
+    assert len(hits) == 1
+    hit = hits[0]
+    assert hit["severity"] == "blocker"
+    assert hit["field"] == "temperature_mean"
+    assert (hit.get("backend_code") or "").startswith("coolprop")
+
+    unit = document["objects"]["pbr"]
+    with pytest.raises(pbr_unit.PbrFailure) as exc_info:
+        pbr_unit.hydraulics(pbr_unit._parameters(unit))
+    assert exc_info.value.detail.get("backend_code") == hit["backend_code"]
+
+
+def test_hydraulics_precheck_warns_in_the_transitional_regime() -> None:
+    from app.modules.process_stack import pbr_unit
+
+    document = draft.apply_ops(
+        pbr_document(),
+        [SetUnitParams(op="set_unit_params", unit="pbr",
+                       values=pbr_quantities(liquid_velocity=(0.075, "m/s"), tube_inner_diameter=(0.04, "m")))],
+    )
+    unit = document["objects"]["pbr"]
+    result = pbr_unit.hydraulics(pbr_unit._parameters(unit))
+    reynolds = result["reynolds_number"]
+    assert 2040 <= reynolds < 4000
+
+    findings = pbr_validation.pbr_findings(document)
+    warns = find(findings, "transitional_regime")
+    assert len(warns) == 1
+    assert warns[0]["severity"] == "warning"
+    assert warns[0]["field"] == "liquid_velocity"
+    assert f"Re={reynolds:.4g}" in warns[0]["message"]
+    assert not find(findings, "PBR_HYDRAULICS_OUTSIDE_DOMAIN")
+
+
+def test_hydraulics_precheck_is_silent_for_a_turbulent_loop() -> None:
+    document = pbr_document()
+    finding_codes = codes(pbr_validation.pbr_findings(document))
+    assert not finding_codes & {"PBR_HYDRAULICS_OUTSIDE_DOMAIN", "transitional_regime", "PBR_HYDRAULICS_CFD_OUT_OF_RANGE"}
+
+
+def test_hydraulics_precheck_skips_missing_inputs() -> None:
+    document = pbr_document()
+    document["objects"]["pbr"]["params"].pop("liquid_velocity", None)
+    finding_codes = codes(pbr_validation.pbr_findings(document))
+    assert not finding_codes & {"PBR_HYDRAULICS_OUTSIDE_DOMAIN", "transitional_regime", "PBR_HYDRAULICS_CFD_OUT_OF_RANGE"}
+
+
+def test_hydraulics_precheck_warns_when_the_pinned_cfd_model_is_out_of_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.modules.process_stack.pbr_unit.hydraulics",
+        lambda *args, **kwargs: {
+            "reynolds_number": 1e5,
+            "regime": "turbulent",
+            "cfd": {"status": "refused", "violations": ["Re 100000 is outside the validated range"]},
+        },
+    )
+    document = pbr_document()
+    unit = document["objects"]["pbr"]
+    unit["hydraulics_model"] = {"studio_version_id": "v1"}
+
+    findings = pbr_validation.pbr_findings(document, "ws")
+    hits = find(findings, "PBR_HYDRAULICS_CFD_OUT_OF_RANGE")
+    assert len(hits) == 1
+    hit = hits[0]
+    assert hit["severity"] == "warning"
+    assert hit["field"] == "hydraulics_model"
+    assert "Re 100000 is outside the validated range" in hit["message"]
+
+    no_ws = pbr_validation.pbr_findings(document, None)
+    assert not find(no_ws, "PBR_HYDRAULICS_CFD_OUT_OF_RANGE")
