@@ -139,17 +139,53 @@ def test_quota_rejects_nonzero_or_error_even_with_buckets(monkeypatch):
         ra.read_quota("agy")
 
 
-def test_last_resort_returns_to_primary_as_soon_as_it_recovers(tmp_path, monkeypatch):
+def test_choice_follows_quota_expiring_unused_and_keeps_the_current_agent_on_ties(tmp_path, monkeypatch):
     env = Env(tmp_path)
     sup = rc.Supervisor(env.store, env.host)
     allowed = {"argon"}
+    scores = {"argon": 0.01, "codex": 0.01, "claude": 0.01, "flash": 0.01}
     monkeypatch.setattr(sup, "available", lambda agent: agent in allowed)
+    monkeypatch.setattr(sup, "low_headroom", lambda agent: False)
+    monkeypatch.setattr(sup, "expiry_score", lambda agent: scores[agent])
     assert sup._choose("claude") == "argon"
     allowed.add("codex")
-    assert sup._choose("argon") == "argon"
+    assert sup._choose("argon") == "argon"  # a tie keeps the current agent
     allowed.add("claude")
-    assert sup._choose("argon") == "argon"
-    assert sup._choose("codex") == "claude"  # recover from fallback
+    assert sup._choose("codex") == "codex"
+    scores["claude"] = 0.4 / 6  # 40% free resetting in 6 h beats 70% resetting in 6 days
+    scores["codex"] = 0.7 / 144
+    assert sup._choose("codex") == "claude"
+    allowed.add("flash")
+    scores["flash"] = 0.9 / 3
+    assert sup._choose("claude") == "flash"
+
+
+def test_claude_codex_and_argon_out_still_coordinate_with_flash_or_3p(tmp_path, monkeypatch):
+    env = Env(tmp_path)
+    sup = rc.Supervisor(env.store, env.host)
+    out = {"windows": [{"used_percent": 100, "resets_at": rc.iso(T0 + timedelta(days=3))}]}
+    room = {"windows": [{"used_percent": 10, "resets_at": rc.iso(T0 + timedelta(days=3))}]}
+    native = {"argon": out, "flash": room, "agy_sonnet": room, "agy_opus": room}
+    monkeypatch.setattr(env.relay, "argon_limits", lambda agent: native[agent])
+    env.relay.readings = {name: {"status": "ok", "as_of": rc.iso(T0), "windows": [
+        {"used_percent": 100, "resets_at": rc.iso(T0 + timedelta(days=3))}]} for name in ("claude", "codex")}
+    assert sup._choose("claude") == "flash"
+    native["flash"] = out
+    assert sup._choose("flash") in ("agy_sonnet", "agy_opus")
+    native["agy_sonnet"] = native["agy_opus"] = out
+    assert sup._choose("agy_opus") is None  # only when every pool is out
+
+
+def test_window_resetting_within_a_day_may_be_spent_down(tmp_path, monkeypatch):
+    env = Env(tmp_path)
+    sup = rc.Supervisor(env.store, env.host)
+    reading = {"windows": [{"used_percent": 98, "resets_at": rc.iso(T0 + timedelta(hours=20))}]}
+    monkeypatch.setattr(env.relay, "argon_limits", lambda agent: reading)
+    assert not sup.low_headroom("flash")
+    reading["windows"][0]["resets_at"] = rc.iso(T0 + timedelta(days=5))
+    assert sup.low_headroom("flash")
+    reading["windows"][0]["used_percent"] = 94
+    assert not sup.low_headroom("flash")
 
 
 def test_native_exhaustion_preserves_exact_reset(tmp_path, monkeypatch):
@@ -316,12 +352,16 @@ def test_preferred_and_fallback_order(tmp_path, monkeypatch):
     env = Env(tmp_path)
     sup = rc.Supervisor(env.store, env.host)
     available = {"agy_opus", "codex"}
+    scores = {"agy_opus": 0.02, "codex": 0.01, "argon": 0.01}
     monkeypatch.setattr(sup, "available", lambda agent: agent in available)
+    monkeypatch.setattr(sup, "expiry_score", lambda agent: scores[agent])
+    monkeypatch.setattr(sup, "low_headroom", lambda agent: False)
     assert sup._choose("codex") == "agy_opus"
     available.remove("agy_opus")
     assert sup._choose("agy_opus") == "codex"
     available.add("argon")
-    assert sup._choose("codex") == "argon"
+    assert sup._choose("codex") == "codex"  # spec 255: no fixed order, a tie keeps the current agent
+    assert sup._choose("claude") == "argon"  # the preferred order breaks a tie for an unavailable current agent
 
 
 @pytest.mark.parametrize("change", ["missing", "duplicate", "disabled", "exhausted", "boolean", "nan"])
@@ -347,7 +387,11 @@ def test_native_family_identity_rejects_unverified_agents_and_models():
         ra.model_for("agy_opus", {"JARVISOS_AGY_OPUS_MODEL": ra.MODEL})
     with pytest.raises(ra.Refused, match="model_not_allowed"):
         ra.model_for("argon", {"JARVISOS_AGY_ARGON_MODEL": ra.OPUS_MODEL})
-    assert ra.model_for("agy_opus", {}) == "claude-opus-5-5-medium"
+    assert ra.model_for("agy_opus", {}) == "claude-opus-5-5-high"  # spec 255: coordinators run at high effort
+    assert ra.model_for("flash", {}) == "gemini-3.8-flash-high" and ra.model_for("agy_sonnet", {}) == "claude-sonnet-5-5-high"
+    with pytest.raises(ra.Refused, match="model_not_allowed"):
+        ra.model_for("flash", {"JARVISOS_AGY_FLASH_COORDINATOR_MODEL": "gemini-3.8-flash-low"})
+    assert ra.TURN_TIMEOUT == 3600
 
 
 def test_adapter_keeps_native_quota_caches_separate_by_subscription_family(tmp_path, monkeypatch):
@@ -418,7 +462,7 @@ def test_completed_missions_rotate_preference_without_a_new_state_store(tmp_path
 
     for mission in missions:
         assert rc.serve_step(root, factory, conflicts=lambda: [], now=lambda: T0) == f"ran:{mission['id']}:idle"
-    assert seen == ["claude", "argon", "agy_opus", "claude"]
+    assert seen == ["claude", "argon", "flash", "agy_sonnet"]  # the seed rotates over every preferred agent
 
 
 def test_resume_preserves_the_selected_native_coordinator(tmp_path):

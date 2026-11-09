@@ -81,9 +81,10 @@ if "worker_routing" not in sys.modules:
     _ROUTING_SPEC.loader.exec_module(worker_routing)
 
 SCHEMA = "relay-continuity.v1"
-AGENTS = ("claude", "codex", "argon", "agy_opus")
-PREFERRED_AGENTS = ("claude", "argon", "agy_opus")
-NATIVE_AGENTS = ("argon", "agy_opus")
+AGENTS = ("claude", "codex", "argon", "agy_opus", "flash", "agy_sonnet")
+# Rotation seed and tie order only: `_choose` ranks available agents by the quota that would expire unused (spec 255).
+PREFERRED_AGENTS = ("claude", "argon", "flash", "agy_sonnet", "agy_opus")
+NATIVE_AGENTS = ("argon", "agy_opus", "flash", "agy_sonnet")
 PREFERRED = "claude"
 OUTCOMES = ("success", "quota", "spend_limit", "transient", "auth", "crash", "unknown")
 FAILURES = tuple(o for o in OUTCOMES if o != "success")
@@ -131,7 +132,8 @@ class Limits:
     max_wait: timedelta = timedelta(days=8)
     reading_freshness: timedelta = timedelta(minutes=15)
     max_reset_ahead: timedelta = timedelta(days=8)
-    min_free_percent: float = 25.0
+    min_free_percent: float = 5.0  # spec 255 reserve; a window resetting within `spend_down` may go to 0
+    spend_down: timedelta = timedelta(hours=24)
     reap_grace: float = 5.0  # seconds a leftover process gets to exit on SIGTERM before SIGKILL
 
 
@@ -1123,7 +1125,7 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
             initialized = True
             conversation = event.get("conversation_id")
             init = event.get("init")
-            if not isinstance(init, dict) or init.get("model") != meta.get("model") or init.get("model") not in (relay_argon.OPUS_MODELS if agent == "agy_opus" else relay_argon.MODELS):
+            if not isinstance(init, dict) or init.get("model") != meta.get("model") or init.get("model") not in relay_argon.models_for(agent):
                 report.bad_lines += 1
         elif typ == "step_update":
             step = event.get("step_update")
@@ -2602,26 +2604,47 @@ class Supervisor:
             self.state["cooldowns"].pop(agent, None)
         return True
 
-    def low_headroom(self, agent: str) -> bool:
-        """Whether a usable quota reading shows less than the minimum free room in any window."""
+    def _windows(self, agent: str) -> list[tuple[float, datetime | None]] | None:
+        """(free percent, reset) per window of a usable quota reading, else None."""
         native = agent in NATIVE_AGENTS
         entry = self.host.relay.argon_limits(agent) if native else self.reading(agent)
         if not isinstance(entry, dict) or not isinstance(entry.get("windows"), list) or not entry["windows"]:
-            return False
+            return None
         now = self.host.now()
-        used_values = []
+        out = []
         for window in entry["windows"]:
             if not isinstance(window, dict):
-                return False
+                return None
             used = window.get("used_percent")
             if isinstance(used, bool) or not isinstance(used, (int, float)) or not 0 <= used <= 100:
-                return False
-            if not native:
-                reset = parse_ts(window.get("resets_at"))
-                if reset is None or not now < reset <= now + self.limits.max_reset_ahead:
-                    return False
-            used_values.append(used)
-        return any(100 - used < self.limits.min_free_percent for used in used_values)
+                return None
+            reset = parse_ts(window.get("resets_at"))
+            if reset is not None and not now < reset <= now + self.limits.max_reset_ahead:
+                if not native:
+                    return None
+                reset = None
+            out.append((100 - used, reset))
+        return out
+
+    def low_headroom(self, agent: str) -> bool:
+        """Whether a usable quota reading shows a window under the reserve that does not reset within
+        `spend_down` (use it or lose it: a window about to reset may be spent down to 0)."""
+        windows = self._windows(agent)
+        if windows is None:
+            return False
+        soon = self.host.now() + self.limits.spend_down
+        return any(free < self.limits.min_free_percent and not (reset is not None and reset <= soon)
+                   for free, reset in windows)
+
+    def expiry_score(self, agent: str) -> float:
+        """Quota that would expire unused: the binding (least free) window's free fraction per hour to its reset;
+        an unknown reset counts as a week away. -1 when there is no usable reading (still tried, ranked last)."""
+        windows = self._windows(agent)
+        if not windows:
+            return -1.0
+        free, reset = min(windows, key=lambda w: w[0])
+        hours = (reset - self.host.now()).total_seconds() / 3600 if reset is not None else 168.0
+        return free / 100 / max(hours, 1.0)
 
     def set_cooldown(self, agent: str, report: TurnReport) -> None:
         now = self.host.now()
@@ -2899,18 +2922,12 @@ class Supervisor:
         return verdicts
 
     def _choose(self, current: str) -> str | None:
-        """Prefer available coordinators with quota room, retaining the first available if all are low."""
-        # A completed mission rotates the next mission's seed; Codex follows the preferred routes in this order.
-        order = ([current] + [a for a in PREFERRED_AGENTS if a != current]) if current in PREFERRED_AGENTS else list(PREFERRED_AGENTS)
-        first_available = None
-        for agent in [*order, "codex"]:
-            if self.available(agent):
-                first_available = first_available or agent
-                if self.low_headroom(agent):
-                    continue
-                break
-        else:
-            agent = first_available
+        """Among available coordinators, the one whose quota would expire unused first (spec 255); agents under
+        the reserve only when every available one is. Ties keep the current agent, then the preferred order."""
+        order = dict.fromkeys([current, *PREFERRED_AGENTS, "codex"] if current in AGENTS else [*PREFERRED_AGENTS, "codex"])
+        available = [a for a in order if self.available(a)]
+        roomy = [a for a in available if not self.low_headroom(a)] or available
+        agent = max(roomy, key=lambda a: (self.expiry_score(a), -roomy.index(a))) if roomy else None
         if agent is not None:
             if agent != current:
                 now = self.host.now()
