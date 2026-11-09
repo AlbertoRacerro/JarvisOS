@@ -69,7 +69,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `frontend/src/styles` | live | Design tokens and style sheets for the shell and each surface. | `tokens.css`, `global.css`, `lumen.css` | 5300 |
 | `frontend/tests` | live | Static frontend tests (node .mjs) run by `npm run build`; they assert literal strings and source patterns. | `package.json (scripts.build)` | 6200 |
 | `schemas` | live | JSON schemas for BLUECAD specs, results and tool registry, and Jarvis records. | `bluecad_geometry_spec_v0_1.schema.json` | <100 |
-| `scripts` | live | Repository tooling: CI gates, spec-status check, frontend contract codegen, module-table generator, launcher, supervisor (Relay continuity, jobs, observer, host ops), worker routing, Copilot CLI delegation and control-room recovery (devctx). | `relay_continuity.py`, `devctx.py`, `worker_routing.py`, `copilot_worker.py`, `jarvisos_launcher.py`, `check_spec_status.py` | 16900 |
+| `scripts` | live | Repository tooling: CI gates, spec-status check, frontend contract codegen, module-table generator, launcher, supervisor (Relay continuity, jobs, observer, host ops), worker routing, Copilot CLI delegation and control-room recovery (devctx). | `relay_continuity.py`, `devctx.py`, `worker_routing.py`, `copilot_worker.py`, `jarvisos_launcher.py`, `check_spec_status.py` | 17000 |
 | `scripts/benchmarks` | in-development | Solver benchmarks against real OpenFOAM, DWSIM and process libraries; today scripts that record evidence, to be turned into pinned regression tests. | `README.md` | 2400 |
 | `tests` | live | Tests for the Relay supervisor's output parser and diagnostics (outside the backend suite). | `relay_reliability/` | 500 |
 
