@@ -20,14 +20,23 @@ sys.modules["worker_routing_under_test"] = wr
 SPEC.loader.exec_module(wr)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_agy_reading() -> Any:
+    wr._agy_doc.update(at=None, reading=None)
+    yield
+    wr._agy_doc.update(at=None, reading=None)
+
+
 def pool(name: str, five_hour: float, weekly: float | None = None) -> Any:
     windows = {"5h": five_hour, "weekly": five_hour if weekly is None else weekly}
     return wr.Pool(name, windows, min(windows.values()))
 
 
-def pools(codex: Any = None, gemini: Any = None, claude: Any = None, copilot: Any = None) -> dict[str, Any]:
+def pools(codex: Any = None, gemini: Any = None, claude: Any = None, copilot: Any = None, argon: Any = None,
+          agy3p: Any = None) -> dict[str, Any]:
     return {"codex": codex or pool("codex", 0.95), "gemini": gemini or pool("gemini", 0.99),
-            "claude": claude or pool("claude", 0.60), "copilot": copilot or wr.unreadable("copilot", "no_reading")}
+            "claude": claude or pool("claude", 0.60), "copilot": copilot or wr.unreadable("copilot", "no_reading"),
+            "argon": argon or wr.unreadable("argon", "no_reading"), "agy3p": agy3p or wr.unreadable("agy3p", "no_reading")}
 
 
 def test_tier_is_the_maximum_of_difficulty_and_risk() -> None:
@@ -38,30 +47,39 @@ def test_tier_is_the_maximum_of_difficulty_and_risk() -> None:
     assert wr.tier("medium", "medium") == 2
 
 
-def test_models_table_is_declarative_and_argon_free() -> None:
-    assert [m.key for m in wr.MODELS] == ["luna", "flash", "copilot-auto", "haiku", "terra", "sonnet", "sol"]
+def test_models_table_is_declarative_with_effort_tiers() -> None:
+    assert [m.key for m in wr.MODELS] == ["luna", "flash", "copilot-auto", "haiku", "flash-medium", "argon-medium",
+                                          "terra", "sonnet", "flash-high", "argon-high", "agy-sonnet", "agy-opus", "sol"]
     assert {m.kind for m in wr.MODELS} == {"codex", "agy", "copilot", "claude"}
     by_key = {m.key: m for m in wr.MODELS}
     assert (by_key["haiku"].model, by_key["haiku"].pool, by_key["haiku"].capability) == ("claude-haiku-5-5", "claude", 1)
     assert (by_key["sonnet"].model, by_key["sonnet"].pool, by_key["sonnet"].capability) == ("claude-sonnet-5-5", "claude", 2)
-    assert wr.RESERVES == {"claude": 0.03, "codex": 0.10, "copilot": 0.10, "gemini": 0.10}
+    assert wr.RESERVES == {"claude": 0.03, "codex": 0.05, "copilot": 0.05, "gemini": 0.05, "argon": 0.05, "agy3p": 0.05}
     assert all(1 <= m.capability <= 3 for m in wr.MODELS)
-    assert "argon" not in {m.key for m in wr.MODELS}  # spec 221: Argon is an agy worker only under --coordinator-fallback
+    # spec 255: no brand bias; Flash and Argon at high effort take tier 3 until measured
+    assert {m.key: (m.pool, m.capability) for m in wr.MODELS if m.kind == "agy"} == {
+        "flash": ("gemini", 1), "flash-medium": ("gemini", 2), "flash-high": ("gemini", 3),
+        "argon-medium": ("argon", 2), "argon-high": ("argon", 3), "agy-sonnet": ("agy3p", 3), "agy-opus": ("agy3p", 3)}
+    assert {wr.family(m) for m in wr.MODELS if m.pool == "agy3p"} == {"claude"}
 
 
 def test_cheapest_adequate_model_wins_by_smallest_surplus() -> None:
-    assert wr.decide("medium", "low", pools())["worker"] == "terra"  # terra (cap 2) beats sol (cap 3)
-    assert wr.decide("high", "low", pools())["worker"] == "sol"
+    assert wr.decide("medium", "low", pools())["worker"] == "flash-medium"  # effort by task: medium, not high
+    assert wr.decide("high", "low", pools())["worker"] == "flash-high"
     low = wr.decide("low", "low", pools())
-    assert low["worker"] == "flash"  # equal surplus: the pool with more headroom
-    assert [a["worker"] for a in low["alternatives"]] == ["luna", "haiku", "terra", "sonnet", "sol"]
+    assert low["worker"] == "flash"  # equal surplus: the gemini family first
+    assert [a["worker"] for a in low["alternatives"]] == ["luna", "haiku", "flash-medium", "terra", "sonnet",
+                                                          "flash-high", "sol"]
+    no_gemini = pools(gemini=pool("gemini", 0.0))
+    assert wr.decide("medium", "low", no_gemini)["worker"] == "terra"  # terra (cap 2) beats sol (cap 3)
+    assert wr.decide("high", "low", no_gemini)["worker"] == "sol"
 
 
 def test_pool_priority_then_headroom_then_table_order_break_a_capability_tie() -> None:
     # gemini, codex, claude: the pool priority outranks headroom
     assert wr.decide("low", "low", pools(gemini=pool("gemini", 0.15)))["worker"] == "flash"
-    assert wr.decide("low", "low", pools(gemini=pool("gemini", 0.05)))["worker"] == "luna"
-    # pools with no priority entry fall back to most headroom, then table order
+    assert wr.decide("low", "low", pools(gemini=pool("gemini", 0.04)))["worker"] == "luna"
+    # other pools: quota that would expire unused first, then most headroom, then table order
     models = (wr.Model("a", "codex", "x", "p1", 1, 1), wr.Model("b", "codex", "y", "p2", 1, 1),
               wr.Model("c", "codex", "z", "p2", 1, 1))
     ranked, _ = wr.rank(1, {"p1": pool("p1", 0.5), "p2": pool("p2", 0.9)}, models)
@@ -72,14 +90,14 @@ def test_pool_free_fraction_is_the_minimum_over_its_windows() -> None:
     decision = wr.decide("low", "low", pools(gemini=pool("gemini", 1.0, 0.30)))
     assert decision["worker"] == "flash" and "luna" in [a["worker"] for a in decision["alternatives"]]
     assert wr.rank(1, pools(gemini=pool("gemini", 1.0, 0.30)))[0][0]["free"] == pytest.approx(0.30)  # the weekly window
-    assert wr.decide("low", "low", pools(gemini=pool("gemini", 1.0, 0.05)))["worker"] == "luna"  # weekly under reserve
+    assert wr.decide("low", "low", pools(gemini=pool("gemini", 1.0, 0.04)))["worker"] == "luna"  # weekly under reserve
 
 
 def test_pool_below_the_reserve_is_skipped() -> None:
-    near = wr.decide("low", "low", pools(gemini=pool("gemini", 1.0, 0.0999)))
+    near = wr.decide("low", "low", pools(gemini=pool("gemini", 1.0, 0.0499)))
     assert near["worker"] == "luna"
     assert {"worker": "flash", "skipped": "below_reserve"}.items() <= next(s for s in near["skipped"] if s["worker"] == "flash").items()
-    assert wr.decide("low", "low", pools(gemini=pool("gemini", 0.10)))["worker"] == "flash"  # exactly 10% is allowed
+    assert wr.decide("low", "low", pools(gemini=pool("gemini", 0.05)))["worker"] == "flash"  # exactly 5% is allowed
 
 
 def test_unreadable_or_disabled_pool_fails_closed_for_that_pool_only() -> None:
@@ -87,7 +105,7 @@ def test_unreadable_or_disabled_pool_fails_closed_for_that_pool_only() -> None:
     low = wr.decide("low", "low", state)
     assert low["worker"] == "luna" and "flash" not in [a["worker"] for a in low["alternatives"]]
     assert next(s for s in low["skipped"] if s["worker"] == "flash")["skipped"] == "timeout"
-    codex_down = pools(codex=wr.unreadable("codex", "no_reading"))
+    codex_down = pools(codex=wr.unreadable("codex", "no_reading"), gemini=wr.unreadable("gemini", "timeout"))
     assert wr.decide("medium", "low", codex_down)["worker"] == "sonnet"  # the claude pool still serves tier 2
     codex_down["claude"] = wr.unreadable("claude", "stale")
     assert wr.decide("medium", "low", codex_down)["status"] == "no_worker"
@@ -96,9 +114,9 @@ def test_unreadable_or_disabled_pool_fails_closed_for_that_pool_only() -> None:
 
 
 def test_no_worker_when_nothing_qualifies() -> None:
-    decision = wr.decide("high", "medium", pools(codex=pool("codex", 0.05)))
+    decision = wr.decide("high", "medium", pools(codex=pool("codex", 0.04), gemini=pool("gemini", 0.04)))
     assert decision["status"] == "no_worker" and decision["reason"] == "no_worker"
-    assert [s["worker"] for s in decision["skipped"]] == ["sol"]
+    assert [s["worker"] for s in decision["skipped"]] == ["flash-high", "argon-high", "agy-sonnet", "agy-opus", "sol"]
     assert "worker" not in decision
 
 
@@ -165,10 +183,12 @@ def test_codex_parse_uses_primary_as_5h_and_secondary_as_weekly() -> None:
 
 def test_summary_line_formatting() -> None:
     line = wr.summary_line(pools(codex=pool("codex", 1.0, 0.95), gemini=pool("gemini", 1.0, 0.99)))
-    assert line == ("worker quota: codex 95% free (5h 100%) · gemini 99% free (5h 100%) · copilot unavailable (no_reading) · claude 60% free (5h 60%)"
-                    " — prefer cheapest adequate pool")
-    degraded = wr.summary_line(pools(codex=pool("codex", 0.05), gemini=wr.unreadable("gemini", "timeout")))
-    assert "codex 5% free (5h 5%) [below reserve]" in degraded and "gemini unavailable (timeout)" in degraded
+    assert line.startswith("worker quota: codex 95% free (5h 100%) · gemini 99% free (5h 100%) · copilot unavailable "
+                           "(no_reading) · claude 60% free (5h 60%) · argon unavailable (no_reading) · agy3p unavailable "
+                           "(no_reading) — effort by task tier, gemini first, then quota expiring unused; tiers: luna t1, ")
+    assert "flash-high t3, argon-high t3, agy-sonnet t3, agy-opus t3, sol t3" in line
+    degraded = wr.summary_line(pools(codex=pool("codex", 0.04), gemini=wr.unreadable("gemini", "timeout")))
+    assert "codex 4% free (5h 4%) [below reserve]" in degraded and "gemini unavailable (timeout)" in degraded
     assert "\n" not in line
 
 
@@ -214,7 +234,7 @@ def test_cached_summary_caches_and_never_raises() -> None:
 
 def test_cli_pick_prints_and_exits(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
                                    tmp_path: Path) -> None:
-    monkeypatch.setattr(wr, "read_pools", lambda: pools())
+    monkeypatch.setattr(wr, "read_pools", lambda: pools(gemini=pool("gemini", 0.0)))
     nothing = ["--quota-file", str(tmp_path / "none.json")]
     assert wr.main(["pick", "--difficulty", "medium", "--risk", "low", *nothing]) == 0
     out = capsys.readouterr().out
@@ -227,7 +247,7 @@ def test_cli_pick_prints_and_exits(monkeypatch: pytest.MonkeyPatch, capsys: pyte
 
 def test_cli_pick_exits_three_when_no_worker(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
                                              tmp_path: Path) -> None:
-    monkeypatch.setattr(wr, "read_pools", lambda: {"codex": wr.unreadable("codex", "timeout"), "gemini": pool("gemini", 0.5)})
+    monkeypatch.setattr(wr, "read_pools", lambda: {"codex": wr.unreadable("codex", "timeout"), "gemini": pool("gemini", 0.0)})
     nothing = ["--quota-file", str(tmp_path / "none.json")]
     assert wr.main(["pick", "--difficulty", "high", "--risk", "high", *nothing]) == wr.NO_WORKER_EXIT == 3
     assert "no_worker" in capsys.readouterr().out
@@ -299,7 +319,7 @@ def test_partial_reading_keeps_the_other_pools_older_entry(tmp_path: Path) -> No
 
 
 def test_fresh_snapshot_is_the_fallback_for_an_unreadable_pool(tmp_path: Path) -> None:
-    live = {"codex": wr.unreadable("codex", "timeout"), "gemini": pool("gemini", 0.99)}
+    live = {"codex": wr.unreadable("codex", "timeout"), "gemini": pool("gemini", 0.0)}
     resolved = wr.apply_snapshot(live, wr.load_snapshot([snapshot_file(tmp_path / "q.json", age_s=1799)]), NOW)
     assert resolved["codex"].source == "snapshot" and resolved["codex"].free == pytest.approx(0.80)
     assert resolved["gemini"].source == "live"
@@ -309,7 +329,7 @@ def test_fresh_snapshot_is_the_fallback_for_an_unreadable_pool(tmp_path: Path) -
 
 
 def test_stale_missing_or_malformed_snapshot_is_ignored(tmp_path: Path) -> None:
-    live = {"codex": wr.unreadable("codex", "timeout"), "gemini": pool("gemini", 0.99)}
+    live = {"codex": wr.unreadable("codex", "timeout"), "gemini": pool("gemini", 0.0)}
     for case in (snapshot_file(tmp_path / "old.json", age_s=1801), snapshot_file(tmp_path / "future.json", age_s=-3600),
                  snapshot_file(tmp_path / "schema.json", schema="other.v9"), tmp_path / "missing.json"):
         assert wr.apply_snapshot(live, wr.load_snapshot([case]), NOW)["codex"].free is None
@@ -335,7 +355,7 @@ def test_resolve_pools_reads_live_first_and_cli_marks_the_snapshot_source(
     quota = tmp_path / "q.json"
     quota.write_text(json.dumps({"schema": wr.SNAPSHOT_SCHEMA, "as_of": fresh, "pools": {
         "codex": {"as_of": fresh, "windows": {"5h": 1.0, "weekly": 0.7}}}}))
-    monkeypatch.setattr(wr, "read_pools", lambda: {"codex": wr.unreadable("codex", "timeout"), "gemini": pool("gemini", 0.99)})
+    monkeypatch.setattr(wr, "read_pools", lambda: {"codex": wr.unreadable("codex", "timeout"), "gemini": pool("gemini", 0.0)})
     assert wr.main(["pick", "--difficulty", "medium", "--risk", "low", "--json", "--quota-file", str(quota)]) == 0
     data = json.loads(capsys.readouterr().out)
     assert data["worker"] == "terra" and data["source"] == "snapshot"
@@ -351,15 +371,20 @@ def test_resolve_pools_reads_live_first_and_cli_marks_the_snapshot_source(
 # ---------------------------------------------------------------------------
 # Claude Code workers (haiku, sonnet) on the coordinator's own pool
 
-LOW_CODEX_GEMINI = {"codex": pool("codex", 0.05), "gemini": pool("gemini", 0.05)}
+LOW_CODEX_GEMINI = {"codex": pool("codex", 0.04), "gemini": pool("gemini", 0.04)}
 
 
-def test_claude_workers_are_ordered_after_gemini_and_codex_at_equal_surplus() -> None:
+def test_gemini_first_then_quota_expiring_unused_at_equal_surplus() -> None:
     low = wr.decide("low", "low", pools(claude=pool("claude", 1.0), gemini=pool("gemini", 0.2)))
-    assert [low["worker"], *[a["worker"] for a in low["alternatives"]][:2]] == ["flash", "luna", "haiku"]
-    medium = wr.decide("medium", "low", pools(claude=pool("claude", 1.0)))
-    assert [medium["worker"], medium["alternatives"][0]["worker"]] == ["terra", "sonnet"]  # more headroom does not help
-    assert medium["claude_pool_low"] is False and "note" not in medium
+    assert low["worker"] == "flash"  # the gemini family first, whatever the headroom elsewhere
+    # no fixed claude-last order: with equal (unknown) resets, more free room ranks first
+    assert [a["worker"] for a in low["alternatives"]][:2] == ["haiku", "luna"]
+    now = datetime.now(UTC)
+    soon = wr.Pool("claude", {"5h": 0.9, "weekly": 0.4}, 0.4, resets={"weekly": now + timedelta(hours=6)})
+    later = wr.Pool("codex", {"5h": 0.9, "weekly": 0.7}, 0.7, resets={"weekly": now + timedelta(days=6)})
+    medium = wr.decide("medium", "low", pools(claude=soon, codex=later, gemini=pool("gemini", 0.0)))
+    assert [medium["worker"], medium["alternatives"][0]["worker"]] == ["sonnet", "terra"]  # 40% in 6 h beats 70% in 6 d
+    assert medium["claude_pool_low"] is False
 
 
 def test_claude_worker_is_chosen_when_the_cheaper_pools_are_below_reserve() -> None:
@@ -367,7 +392,7 @@ def test_claude_worker_is_chosen_when_the_cheaper_pools_are_below_reserve() -> N
     assert low["worker"] == "haiku" and low["pool"] == "claude" and low["claude_pool_low"] is False
     medium = wr.decide("medium", "low", pools(claude=pool("claude", 0.8), **LOW_CODEX_GEMINI))
     assert medium["worker"] == "sonnet" and 'cd "$WORKTREE" && claude -p --model claude-sonnet-5-5' in medium["command"]
-    assert wr.decide("high", "low", pools(claude=pool("claude", 0.8), **LOW_CODEX_GEMINI))["status"] == "no_worker"  # cap 3 is sol only
+    assert wr.decide("high", "low", pools(claude=pool("claude", 0.8), **LOW_CODEX_GEMINI))["status"] == "no_worker"  # no tier-3 pool
 
 
 def test_claude_pool_is_not_skipped_at_forty_percent_but_carries_a_low_pool_note(capsys: pytest.CaptureFixture[str]) -> None:
@@ -379,7 +404,7 @@ def test_claude_pool_is_not_skipped_at_forty_percent_but_carries_a_low_pool_note
     assert "note: claude_pool_low" in wr.render(decision)
     assert wr.decide("medium", "low", pools(claude=pool("claude", 0.40), **LOW_CODEX_GEMINI))["claude_pool_low"] is False
     # the note rides on the chosen Claude worker only
-    assert wr.decide("medium", "low", pools(claude=pool("claude", 0.35)))["claude_pool_low"] is False
+    assert wr.decide("medium", "low", pools(claude=pool("claude", 0.35), gemini=pool("gemini", 0.9)))["claude_pool_low"] is False
 
 
 def test_claude_pool_is_skipped_below_three_percent() -> None:
@@ -523,14 +548,15 @@ def test_copilot_parse_entitlement_and_overage_boundaries() -> None:
 def test_copilot_routing_priority_and_fourth_column() -> None:
     available = pools(copilot=wr.Pool("copilot", {"monthly": 0.8}, 0.8))
     assert wr.decide("low", "low", available)["worker"] == "flash"
-    available["gemini"] = wr.Pool("gemini", {"5h": 0.05, "weekly": 0.05}, 0.05)
-    assert wr.decide("low", "low", available)["worker"] == "copilot-auto"
+    available["gemini"] = wr.Pool("gemini", {"5h": 0.04, "weekly": 0.04}, 0.04)
+    available["codex"] = wr.Pool("codex", {"5h": 0.6, "weekly": 0.6}, 0.6)
+    assert wr.decide("low", "low", available)["worker"] == "copilot-auto"  # most free room among unknown resets
     assert wr.decide("medium", "low", available)["worker"] == "terra"
     assert wr.bare_command(next(m for m in wr.MODELS if m.key == "copilot-auto")) == (
         'python3 scripts/copilot_worker.py run --task-file "$TASK_FILE" '
         '--worktree "$WORKTREE" --model copilot-auto')
     assert "copilot 80% free" in wr.summary_line(available)
-    available["copilot"] = wr.Pool("copilot", {"monthly": 0.09}, 0.09)
+    available["copilot"] = wr.Pool("copilot", {"monthly": 0.04}, 0.04)
     assert wr.decide("medium", "low", available)["worker"] == "terra"
 
 
@@ -588,3 +614,232 @@ def test_read_claude_cached_and_stale_refresh(monkeypatch: pytest.MonkeyPatch) -
     calls.clear()
     documents[1] = {"agents": []}
     assert wr.read_claude().free is None and len(calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# Spec 255: every agy pool, use it or lose it, review by another family
+
+AGY_DOC = {"status": "SUCCESS", "command": {"data": {"groups": [{"buckets": [
+    {"id": "gemini-5h", "remaining_fraction": 0.9}, {"id": "gemini-weekly", "remaining_fraction": 0.8},
+    {"id": "gemini-argon-wtu-weekly", "remaining_fraction": 0.0, "reset_time": "2030-01-01T00:00:00Z"},
+    {"id": "3p-5h", "remaining_fraction": 0.7}, {"id": "3p-weekly", "remaining_fraction": 0.5}]}]}}}
+
+
+def test_one_agy_reading_feeds_gemini_argon_and_3p_pools(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+    monkeypatch.setattr(wr, "read_agy_document", lambda: calls.append(1) or AGY_DOC)
+    result = wr.read_pools({name: wr.READERS[name] for name in ("gemini", "argon", "agy3p")})
+    assert len(calls) == 1
+    assert result["gemini"].free == pytest.approx(0.8)
+    assert result["argon"].windows["argon-weekly"] == 0.0
+    assert result["argon"].resets["argon-weekly"] == datetime(2030, 1, 1, tzinfo=UTC)
+    assert result["agy3p"].free == pytest.approx(0.5)
+    monkeypatch.setattr(wr, "read_agy_document", lambda: "auth_required")
+    assert wr.read_pools({"argon": wr.READERS["argon"]})["argon"].reason == "auth_required"
+
+
+def test_claude_codex_and_argon_out_still_route_every_tier() -> None:
+    out = wr.Pool("argon", {"5h": 0.9, "weekly": 0.8, "argon-weekly": 0.0}, 0.0)
+    state = pools(claude=pool("claude", 0.0), codex=pool("codex", 0.0), argon=out)
+    assert wr.decide("low", "low", state)["worker"] == "flash"
+    assert wr.decide("medium", "medium", state)["worker"] == "flash-medium"
+    assert wr.decide("medium", "high", state)["worker"] == "flash-high"
+    only_3p = {**state, "gemini": pool("gemini", 0.0), "agy3p": pool("agy3p", 0.6)}
+    assert wr.decide("medium", "high", only_3p)["worker"] in ("agy-sonnet", "agy-opus")
+    only_argon = {**state, "gemini": pool("gemini", 0.6), "argon": pool("argon", 0.6)}
+    high = wr.decide("high", "high", only_argon)
+    assert high["worker"] == "flash-high" and high["alternatives"][0]["worker"] == "argon-high"
+    assert "--model argon-high" in wr.bare_command(next(m for m in wr.MODELS if m.key == "argon-high"))
+
+
+def test_window_resetting_within_a_day_may_be_spent_down() -> None:
+    now = datetime(2030, 1, 1, tzinfo=UTC)
+    soon = wr.Pool("codex", {"5h": 0.9, "weekly": 0.02}, 0.02, resets={"weekly": now + timedelta(hours=20)})
+    far = wr.Pool("codex", {"5h": 0.9, "weekly": 0.04}, 0.04, resets={"weekly": now + timedelta(days=5)})
+    empty = wr.Pool("codex", {"5h": 0.9, "weekly": 0.0}, 0.0, resets={"weekly": now + timedelta(hours=2)})
+    assert not wr.below_reserve(soon, now) and wr.below_reserve(far, now) and wr.below_reserve(empty, now)
+    assert wr.expiry_score(soon, now) > wr.expiry_score(far, now)
+
+
+def test_review_of_prefers_another_family_but_never_blocks() -> None:
+    state = pools(agy3p=pool("agy3p", 0.6))
+    assert wr.decide("medium", "high", state)["worker"] == "flash-high"
+    review = wr.decide("medium", "high", state, review_of="gemini")
+    assert review["status"] == "ok" and wr.family(next(m for m in wr.MODELS if m.key == review["worker"])) != "gemini"
+    gemini_only = pools(codex=pool("codex", 0.0), claude=pool("claude", 0.0), argon=pool("argon", 0.6))
+    fallback = wr.decide("medium", "high", gemini_only, review_of="gemini")
+    assert fallback["status"] == "ok" and fallback["worker"] in ("flash-high", "argon-high")
+    assert wr.build_parser().parse_args(["pick", "--difficulty", "low", "--risk", "low", "--review-of", "claude"]).review_of == "claude"
+
+
+# ---------------------------------------------------------------------------
+# Spec 256: worker outcomes, escalation, measured adequacy and report
+
+
+def test_spec_256_criterion_1_record_validation_and_append(tmp_path: Path) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    entry = wr.record(task="255-review", kind="review", worker="flash-medium", tier=2,
+                      ci_first_pass="pass", findings="0,1,0,0", rework_rounds=1,
+                      escalated=False, salvage="salvaged", failure="none", coordinator_tokens=120,
+                      record_file=rf)
+    assert rf.is_file()
+    lines = [json.loads(line) for line in rf.read_text(encoding="utf-8").strip().splitlines()]
+    assert len(lines) == 1 and lines[0] == entry
+    assert lines[0]["task"] == "255-review"
+    assert lines[0]["kind"] == "review"
+    assert lines[0]["worker"] == "flash-medium"
+    assert lines[0]["model"] == "gemini-3.8-flash-medium"
+    assert lines[0]["tier"] == 2
+    assert lines[0]["ci_first_pass"] == "pass"
+    assert lines[0]["findings"] == {"P0": 0, "P1": 1, "P2": 0, "P3": 0}
+    assert lines[0]["rework_rounds"] == 1
+    assert lines[0]["escalated"] is False
+    assert lines[0]["salvage"] == "salvaged"
+    assert lines[0]["failure"] == "none"
+    assert lines[0]["coordinator_tokens"] == 120
+
+    assert wr.main(["record", "--task", "256-fix", "--kind", "fix", "--worker", "terra",
+                    "--record-file", str(rf)]) == 0
+    lines = [json.loads(line) for line in rf.read_text(encoding="utf-8").strip().splitlines()]
+    assert len(lines) == 2
+    assert lines[1]["worker"] == "terra"
+    assert lines[1]["model"] == "gpt-6.1-terra"
+
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="magic", worker="flash", record_file=rf)
+    assert wr.main(["record", "--task", "t1", "--kind", "magic", "--worker", "flash", "--record-file", str(rf)]) != 0
+
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="docs", worker="flash", failure="quantum", record_file=rf)
+    assert wr.main(["record", "--task", "t1", "--kind", "docs", "--worker", "flash", "--failure", "quantum", "--record-file", str(rf)]) != 0
+
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="docs", worker="flash", salvage="maybe", record_file=rf)
+    assert wr.main(["record", "--task", "t1", "--kind", "docs", "--worker", "flash", "--salvage", "maybe", "--record-file", str(rf)]) != 0
+
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="docs", worker="flash", salvage="restarted", reason=None, record_file=rf)
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="docs", worker="flash", salvage="restarted", reason="   ", record_file=rf)
+    assert wr.main(["record", "--task", "t1", "--kind", "docs", "--worker", "flash", "--salvage", "restarted", "--record-file", str(rf)]) != 0
+
+    res = wr.record(task="t1", kind="docs", worker="flash", salvage="restarted", reason="wrong approach", record_file=rf)
+    assert res["salvage"] == "restarted" and res["reason"] == "wrong approach"
+
+    with pytest.raises(ValueError):
+        wr.record(task="t1", kind="docs", worker="unknown-bot", record_file=rf)
+    assert wr.main(["record", "--task", "t1", "--kind", "docs", "--worker", "unknown-bot", "--record-file", str(rf)]) != 0
+
+
+def test_spec_256_criterion_2_model_failure_escalates_away_from_gemini(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    wr.record(task="task-A", kind="feature", worker="flash-high", failure="model", record_file=rf)
+
+    outcomes = wr.load_records(rf)
+    decision = wr.decide("high", "high", pools(), task="task-A", outcomes=outcomes)
+    assert decision["status"] == "ok"
+    assert wr.family(next(m for m in wr.MODELS if m.key == decision["worker"])) != "gemini"
+    for entry in [decision, *decision["alternatives"]]:
+        assert wr.family(next(m for m in wr.MODELS if m.key == entry["worker"])) != "gemini"
+    assert next(s for s in decision["skipped"] if s["worker"] == "flash-high")["skipped"] == "escalated_from_family"
+
+    gemini_only = pools(codex=pool("codex", 0.0), claude=pool("claude", 0.0), copilot=pool("copilot", 0.0))
+    wait_decision = wr.decide("high", "high", gemini_only, task="task-A", outcomes=outcomes)
+    assert wait_decision["status"] == "no_worker"
+    assert wait_decision["reason"] == "wait_for_escalation_pool"
+
+    monkeypatch.setattr(wr, "read_pools", lambda: gemini_only)
+    nothing = ["--quota-file", str(tmp_path / "none.json"), "--record-file", str(rf)]
+    assert wr.main(["pick", "--difficulty", "high", "--risk", "high", "--task", "task-A", "--json", *nothing]) == wr.NO_WORKER_EXIT
+    cli_data = json.loads(capsys.readouterr().out)
+    assert cli_data["status"] == "no_worker" and cli_data["reason"] == "wait_for_escalation_pool"
+
+    assert wr.main(["pick", "--difficulty", "high", "--risk", "high", "--task", "task-A", *nothing]) == wr.NO_WORKER_EXIT
+    out_text = capsys.readouterr().out
+    assert "no_worker (wait_for_escalation_pool)" in out_text
+
+
+def test_spec_256_criterion_3_harness_failure_leaves_pick_unchanged(tmp_path: Path) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    wr.record(task="task-B", kind="feature", worker="flash-high", failure="harness", record_file=rf)
+
+    outcomes = wr.load_records(rf)
+    baseline = wr.decide("high", "high", pools())
+    with_task = wr.decide("high", "high", pools(), task="task-B", outcomes=outcomes)
+    assert baseline["worker"] == with_task["worker"]
+    assert [a["worker"] for a in baseline["alternatives"]] == [a["worker"] for a in with_task["alternatives"]]
+    assert [s["worker"] for s in baseline["skipped"]] == [s["worker"] for s in with_task["skipped"]]
+
+
+def test_spec_256_criterion_4_measured_inadequate_at_five_records(tmp_path: Path) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    for i in range(3):
+        wr.record(task=f"terra-{i}", kind="feature", worker="terra", ci_first_pass="pass",
+                  findings="0,0,0,0", rework_rounds=0, record_file=rf)
+
+    for i in range(2):
+        wr.record(task=f"flash-pass-{i}", kind="feature", worker="flash-medium", ci_first_pass="pass",
+                  findings="0,1,0,0", rework_rounds=2, record_file=rf)
+    for i in range(2):
+        wr.record(task=f"flash-fail-{i}", kind="feature", worker="flash-medium", ci_first_pass="fail",
+                  findings="0,1,0,0", rework_rounds=2, record_file=rf)
+
+    outcomes_4 = wr.load_records(rf)
+    decision_4 = wr.decide("medium", "low", pools(), kind="feature", outcomes=outcomes_4)
+    assert decision_4["worker"] == "flash-medium"
+    assert not any(s["worker"] == "flash-medium" for s in decision_4["skipped"])
+
+    wr.record(task="flash-fail-3", kind="feature", worker="flash-medium", ci_first_pass="fail",
+              findings="0,1,0,0", rework_rounds=2, record_file=rf)
+
+    outcomes_5 = wr.load_records(rf)
+    decision_5 = wr.decide("medium", "low", pools(), kind="feature", outcomes=outcomes_5)
+    assert decision_5["worker"] == "terra"
+    skipped_fm = next(s for s in decision_5["skipped"] if s["worker"] == "flash-medium")
+    assert skipped_fm["skipped"] == "measured_inadequate"
+
+
+def test_spec_256_criterion_5_report_in_italian(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    now = datetime(2026, 11, 9, 12, 0, tzinfo=UTC)
+
+    wr.record(task="t1", kind="feature", worker="flash-medium", ci_first_pass="pass",
+              findings="0,0,0,0", rework_rounds=0, escalated=False, coordinator_tokens=150,
+              record_file=rf, now=now - timedelta(days=1))
+    wr.record(task="t2", kind="fix", worker="flash-high", ci_first_pass="fail",
+              findings="0,1,0,0", rework_rounds=2, escalated=True, coordinator_tokens=300,
+              record_file=rf, now=now - timedelta(days=2))
+    wr.record(task="t3", kind="tests", worker="terra", ci_first_pass="pass",
+              findings="0,0,0,0", rework_rounds=1, escalated=False,
+              record_file=rf, now=now - timedelta(days=3))
+
+    text = wr.report(days=7, record_file=rf, now=now)
+    assert "gemini-3.8-flash-medium" in text
+    assert "gemini-3.8-flash-high" in text
+    assert "gpt-6.1-terra" in text
+    assert "compiti" in text
+    assert "prima prova" in text
+    assert "rilievi" in text
+    assert "rilavorazioni" in text
+    assert "escalation" in text
+    assert "Risparmio netto: 1 compiti Claude e GPT evitati (1 compiti Gemini non escalati), meno 150 token coordinatore registrati." in text
+
+    assert wr.main(["report", "--days", "7", "--record-file", str(rf)]) == 0
+    cli_out = capsys.readouterr().out
+    assert "Risparmio netto:" in cli_out
+    assert "token coordinatore" in cli_out
+
+
+def test_spec_256_review_records_without_a_first_pass_never_judge_a_model(tmp_path: Path) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    for i in range(6):
+        wr.record(task=f"r{i}", kind="review", worker="flash-high", rework_rounds=3, record_file=rf)
+        wr.record(task=f"t{i}", kind="review", worker="terra", rework_rounds=0, record_file=rf)
+    decision = wr.decide("medium", "high", pools(), kind="review", outcomes=wr.load_records(rf))
+    assert decision["worker"] == "flash-high"  # n/a first pass: no evidence for or against
+    wr.record(task="broken", kind="review", worker="flash-high", record_file=rf)
+    with rf.open("a", encoding="utf-8") as handle:
+        handle.write('{"model": "x", "at": "2099-01-01T00:00:00Z", "rework_rounds": "lots"}\nnot json\n')
+    assert "Risparmio netto" in wr.report(record_file=rf, now=datetime(2099, 1, 2, tzinfo=UTC))

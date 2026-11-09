@@ -1,6 +1,7 @@
 # 255 — Never idle while any pool can work
 
-Status: ready
+Status: merged (worker part). The coordinator scope below was superseded by maintainer directive
+`L20261109084653-6274` (coordinators unchanged) and reverted; the agy harness belongs to `L20261109090457-68e4`.
 Depends on: none
 
 ## Goal

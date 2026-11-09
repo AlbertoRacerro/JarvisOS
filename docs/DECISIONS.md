@@ -748,3 +748,26 @@ The following were not measured: pixel OCR or vision, Windows UIAutomation, the 
 behaviour of existing products, mixed DPI or multiple monitors, other themes and viewports, resource use beyond DOM-query
 latency, and cases 02, 11, 24, 34, 35 and 38. The audit gives the reason each of those cases cannot be
 produced on the current product.
+
+## ADR-062: Gemini first for workers
+
+Status: Accepted (2026-11-09, coordinator, under maintainer directive `L20261109084653-6274`, which superseded
+`L20261109084309-afcd`; implemented by spec 255, whose coordinator part was reverted). It supersedes the spec 221 rule
+that kept Argon a worker only under `--coordinator-fallback` for workers, and the Flash-low-only worker entry.
+Coordinators are unchanged.
+
+Context: Claude and Codex end the week at 100% and then cannot orchestrate, while about 90% of the Gemini quota is
+unused. Tier 2 and 3 worker tasks went straight to Sonnet or Terra on a prior belief about Flash's quality, not evidence.
+
+Decision:
+
+- Capability is per model and effort, from measured results. Until measured, Gemini 3.8 Flash and Gemini 4 Argon at
+  high effort take tier 3 worker tasks and at medium tier 2. A model loses a tier only on evidence.
+- Workers: the gemini family first at every tier, effort following difficulty times risk. Claude and GPT workers only
+  when the gemini pool is below its reserve, when the measured record says Flash is inadequate for that task kind, or
+  as escalation after a Flash attempt failed its checks (one Flash attempt per task, `L20261109085335-06cf`). The
+  router's reserve is 5%, and 0 for a window that resets within 24 hours.
+- An independent review prefers another family but never blocks on it.
+
+Consequences: quality rests on the gates, which apply unchanged to every model. A later slice records per worker task
+the model, effort, tier, CI first pass, findings, rework and escalation, and recomputes capability from those numbers.
