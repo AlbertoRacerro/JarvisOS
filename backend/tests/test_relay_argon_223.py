@@ -96,7 +96,8 @@ def test_unknown_native_interrupted_tool_keeps_external_uncertainty(tmp_path):
     assert len(report.in_flight) == 1
     assert rc.external(report.in_flight[0])
     env = Env(tmp_path / "env")
-    assert rc.Supervisor(env.store, env.host)._settle_external(report) == "effects_uncertain"
+    verdicts, parked = rc.Supervisor(env.store, env.host)._settle_external(report)
+    assert verdicts == {} and [c.label for c in parked] == ["future_remote_tool"]  # spec 254: parked, never settled
 
 
 def test_nonce_recovery_uses_real_prompt_without_provider_parent(tmp_path):
