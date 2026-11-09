@@ -40,8 +40,8 @@ The draft's anchors were checked against the code before acceptance:
   and energy-stream requirements. No property package declares an operating range today. The coherence table is
   therefore dropped (absorbed); adding one would be new infrastructure with no case to check.
 - Open question 1 is settled by "do not change runtime behaviour": the pre-check uses the runtime's own severity. A
-  runtime refusal becomes a `blocker`; a runtime soft result (`transitional_regime`, a CFD model with
-  `out_of_range: "warn"`) becomes a `warning`. Open question 2 lapses with the coherence table.
+  runtime refusal becomes a `blocker`; a runtime soft result (`transitional_regime`, a pinned CFD model out
+  of its range) becomes a `warning`. Open question 2 lapses with the coherence table.
 
 ## Scope
 
@@ -52,7 +52,8 @@ The draft's anchors were checked against the code before acceptance:
    - for an unpinned loop, the Reynolds number from `liquid_velocity`, `tube_inner_diameter` and those properties; the
      transitional band gives a `warning` with code `transitional_regime`, matching the runtime's soft result;
    - for a pinned CFD reduced model, the model's own range check (`reduced_model.evaluate` with the pin's `out_of_range`
-     policy); `refuse` gives a `blocker`, `warn` a `warning`, and an unavailable model is left to the existing finding.
+     policy). The runtime reports a refused or warned evaluation as a caveat and still runs, so both give a `warning`
+     `PBR_HYDRAULICS_CFD_OUT_OF_RANGE` listing the violations; an unavailable model is left to the runtime.
    The check runs only when every input it needs is set; a missing input is already reported by `UNIT_PARAM_MISSING`.
 2. **Degrees-of-freedom report.** For each unit and feed stream, the required specifications come from the existing
    `UNIT_REGISTRY`/`STREAM_SPECS` and `spec.params_for(mode)` (`draft_models.py`), so this adds no new registry. Each
@@ -88,7 +89,7 @@ The draft's anchors were checked against the code before acceptance:
 1. Runtime behaviour is unchanged: the existing `pbr_unit`, correlation and property tests pass unmodified.
 2. A PBR draft whose `temperature_mean` is outside the water EOS range gets a Pre-Run `blocker` with the runtime backend
    code, and the run is refused before any solve starts. A draft in the transitional Reynolds band gets a `warning`
-   `transitional_regime` and can still run. A pinned CFD model out of range follows its `out_of_range` policy.
+   `transitional_regime` and can still run. A pinned CFD model out of range gives a `warning`.
 3. A draft with an unset hydraulics input gets no hydraulics domain finding, only the existing `UNIT_PARAM_MISSING`.
 4. The DOF report lists every required specification of every unit and feed as `set`, `unset` or `available`. An
    `available` entry names the design value, its source and its validation state. A red-dot value is shown as such and
