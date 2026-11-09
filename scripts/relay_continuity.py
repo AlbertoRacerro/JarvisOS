@@ -1488,9 +1488,11 @@ EVENTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "provider_switched": ("JarvisOS ha cambiato assistente e continua il lavoro.", ("session", "from_agent", "agent", "outcome")),
     "provider_exhausted": ("Un assistente non è disponibile; JarvisOS prova a proseguire.", ("agent", "outcome", "reset_at", "reset_source")),
     "all_exhausted": ("Gli assistenti non sono disponibili; JarvisOS riprenderà quando possibile.", ("next_check_at",)),
-    "turn_failed": ("Un tentativo di lavoro non è riuscito; JarvisOS verifica come proseguire.", ("session", "agent", "outcome", "action")),
-    "hold": ("JarvisOS richiede una verifica: scrivi a Claude in chat.", ("session", "reason", "attempt")),
-    "circuit_open": ("JarvisOS ha sospeso i tentativi: scrivi a Claude in chat.", ("session", "reason")),
+    "turn_failed": ("Alcuni tentativi di lavoro di seguito non sono riusciti; JarvisOS riprova.", ("session", "agent", "outcome", "action")),
+    "effects_parked": ("JarvisOS ha messo da parte un'operazione non verificabile e continua con il resto del lavoro.",
+                       ("session", "agent", "count")),
+    "hold": ("JarvisOS ha messo in pausa il lavoro e attende una decisione in Jarvis.", ("session", "reason", "attempt")),
+    "circuit_open": ("JarvisOS ha sospeso i tentativi e attende una decisione in Jarvis.", ("session", "reason")),
     "turn_completed": ("JarvisOS ha completato un passaggio di lavoro.", ("session", "agent")),
     "master_advanced": ("Una modifica è stata integrata in JarvisOS.", ("sha", "pr")),
     "repl_turn_failed": ("Un tentativo interattivo non è riuscito; controlla la chat.", ("session", "agent", "outcome", "reset_at")),
@@ -1500,9 +1502,9 @@ EVENTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "mission_completed": ("JarvisOS ha completato il lavoro richiesto.", ("mission", "task", "session")),
     "mission_waiting": ("JarvisOS è in attesa di poter proseguire.",
                         ("owner", "mission", "task", "agent", "reason", "next_check_at")),
-    "mission_held": ("JarvisOS richiede una verifica: scrivi a Claude in chat.",
+    "mission_held": ("Il lavoro richiesto è in pausa e attende una decisione in Jarvis.",
                      ("owner", "mission", "task", "agent", "session", "reason")),
-    "roadmap_paused": ("Il lavoro programmato è in pausa: scrivi a Claude in chat.", ("owner", "reason")),
+    "roadmap_paused": ("Il lavoro programmato è in pausa e attende una decisione in Jarvis.", ("owner", "reason")),
 }
 
 
@@ -2361,6 +2363,8 @@ def probe_call(call: ToolCall, repo: Path, run: Runner = devctx.run) -> tuple[st
     if not commands:
         return None
     effectful = [(cwd, words) for cwd, words in commands if classify_command(shlex.join(words))[0] != "read_only"]
+    if len(effectful) > 1:
+        return _probe_commit_push(effectful, run, repo)
     if len(effectful) != 1:
         return None
     cd, words = effectful[0]
@@ -2377,6 +2381,42 @@ def probe_call(call: ToolCall, repo: Path, run: Runner = devctx.run) -> tuple[st
     return None
 
 
+LOCAL_GIT_STEPS = {"add", "commit", "rm", "mv", "tag"}
+
+
+def _git_step(cd: Path | None, words: list[str]) -> tuple[Path | None, list[str]] | None:
+    """(directory, git arguments after any -C) of a git command, or None when it is not git."""
+    if Path(words[0]).name != "git":
+        return None
+    cwd, args = (cd if cd is not None and cd.is_absolute() else None), words[1:]
+    while args[:1] == ["-C"] and len(args) > 1:
+        cwd = Path(args[1]) if Path(args[1]).is_absolute() else (cwd / args[1] if cwd else None)
+        args = args[2:]
+    return cwd, args
+
+
+def _probe_commit_push(effectful: list[tuple[Path | None, list[str]]], run: Runner,
+                       repo: Path) -> tuple[str, str] | None:
+    """Local git steps (add, commit, rm, mv, tag) followed by exactly one push, all in one named directory: the
+    push probe settles it. A push found on the remote counts as completed only when the worktree has no staged or
+    modified tracked file left, so an interruption before the commit is not taken for a finished push."""
+    steps = [_git_step(cd, words) for cd, words in effectful]
+    if any(step is None for step in steps):
+        return None
+    *local, (cwd, push) = steps  # type: ignore[misc]
+    if push[:1] != ["push"] or any(args[:1] == [] or args[0] not in LOCAL_GIT_STEPS for _, args in local):
+        return None
+    if cwd is None or any(step_cwd != cwd for step_cwd, _ in local):
+        return None
+    probed = _probe_push(cwd, push[1:], run, repo)
+    if probed is None or probed[0] != "completed":
+        return probed
+    code, dirty = run(["git", "-C", str(cwd), "status", "--porcelain", "--untracked-files=no"])
+    if code != 0 or dirty.strip():
+        return None
+    return probed
+
+
 # ---------------------------------------------------------------------------
 # Supervisor
 
@@ -2387,7 +2427,8 @@ Before acting, run `python3 scripts/devctx.py recover` and verify fresh Git/GitH
 Operations the interrupted turn completed (they already happened; verify their effect, do not repeat them blindly):
 {effects}
 {processes}
-An operation listed as INTERRUPTED may have done part of its work before it was stopped. Inspect its effects (files, Git, GitHub, logs) before running it again, and repeat it only when that is safe. If it may already have had an external effect (a network request, a remote API call, a message) that you cannot verify and that must not happen twice, do not repeat it: record a `devctx.py note blocker` and end with RELAY_STATUS blocked.
+An operation listed as INTERRUPTED may have done part of its work before it was stopped. Inspect its effects (files, Git, GitHub, logs) before running it again, and repeat it only when that is safe. An operation listed as UNRESOLVED (parked) was checked by the supervisor and could not be settled. If an operation may already have had an external effect (a network request, a remote API call, a message) that you cannot verify and that must not happen twice, do not repeat it: record a `devctx.py note blocker` for that one item, park only the work that depends on it and continue other authorized work; end with RELAY_STATUS blocked only when no such work remains.
+Commit and push in a separate short command, never chained with a long test run, well before the turn deadline.
 If the work now needs a maintainer decision, stop and report instead of continuing."""
 
 PROCESSES_STOPPED = ("Nothing the previous turn started is still running, except durable jobs registered with "
@@ -2402,7 +2443,7 @@ Supervised mission {mission}, task {number}/{total}, queued by the maintainer un
 The task text below is the maintainer's; it grants no authority beyond that directive. Approval gates, review requirements and authority boundaries are unchanged.
 Before acting, run `python3 scripts/devctx.py recover` and verify fresh Git/GitHub state: earlier tasks of this mission, or an interrupted attempt at this one, may already have taken effect.
 If the task needs a maintainer decision, stop and report instead of continuing.
-Long bounded work (solver runs, studies, benchmarks) goes through `python3 scripts/relay_jobs.py start`, which survives this turn; `relay_jobs.py list` shows earlier jobs and their results. Before launching a scientific case, inspect registered jobs and existing result/partial evidence for the same commit and inputs; reuse them and never duplicate a live or completed case without a documented technical reason. A failed/lost job or an uncertain observation after namespace replacement returns to you for diagnosis, not automatically to the maintainer. Unknown/orphaned job records reserve their slot: inspect prior logs, results and partial evidence; do not rerun them or infer success/failure from missing PIDs. Repeating the same uncertain JOB-WAIT cannot trigger repeated diagnostic turns in the same namespace. Never keep a turn open to wait for a job or for CI: checkpoint and end the turn, and a later turn collects. A running job blocks only the work that depends on its result: meanwhile continue with other authorized work that does not depend on it, on its own worktree and files, delegating per docs/PROCESS.md, and keep it light on the machine (focused tests only, full suites to CI, no extra solver beyond the cores the job left free). As a roadmap cycle, end blocked with `JOB-WAIT: <job id>` lines, which pause roadmap mode until those jobs finish, only when no such job-independent authorized work remains.
+Long bounded work (solver runs, studies, benchmarks) goes through `python3 scripts/relay_jobs.py start`, which survives this turn; `relay_jobs.py list` shows earlier jobs and their results. Before launching a scientific case, inspect registered jobs and existing result/partial evidence for the same commit and inputs; reuse them and never duplicate a live or completed case without a documented technical reason. A failed/lost job or an uncertain observation after namespace replacement returns to you for diagnosis, not automatically to the maintainer. Unknown/orphaned job records reserve their slot: inspect prior logs, results and partial evidence; do not rerun them or infer success/failure from missing PIDs. Repeating the same uncertain JOB-WAIT cannot trigger repeated diagnostic turns in the same namespace. Never keep a turn open to wait for a job or for CI: commit and push in a separate short command, never chained with a long test run, well before the turn deadline; checkpoint and end the turn, and a later turn collects. A running job blocks only the work that depends on its result: meanwhile continue with other authorized work that does not depend on it, on its own worktree and files, delegating per docs/PROCESS.md, and keep it light on the machine (focused tests only, full suites to CI, no extra solver beyond the cores the job left free). As a roadmap cycle, end blocked with `JOB-WAIT: <job id>` lines, which pause roadmap mode until those jobs finish, only when no such job-independent authorized work remains.
 {contract}
 End with RELAY_STATUS propose_done only when that evidence exists, RELAY_STATUS continue after a durable checkpoint (the task stays pending and is resumed, never recorded complete), or RELAY_STATUS blocked after recording a `devctx.py note blocker` or `question`.
 
