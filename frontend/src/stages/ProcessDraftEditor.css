@@ -625,3 +625,22 @@
 }
 /* The floating panel's portal wrapper only carries the editor's scoped styles; it has no box of its own. */
 .draft-editor.draft-solver-portal { display: contents; }
+
+/* Spec 257: degrees-of-freedom toggle button in Pre-Run area */
+.draft-dof-toggle-wrap {
+  display: flex;
+}
+.draft-dof-toggle {
+  align-self: flex-start;
+  padding: 4px 12px;
+  font-size: 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+.draft-dof-toggle:hover {
+  background: var(--color-bg-subtle);
+}
+
