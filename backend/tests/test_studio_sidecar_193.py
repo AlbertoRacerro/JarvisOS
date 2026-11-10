@@ -326,7 +326,7 @@ def test_secret_like_proposal_is_refused_and_not_stored(client):
 def test_hermes_studio_grant_owns_target_draft_and_revision(client, monkeypatch):
     from datetime import UTC, datetime, timedelta
 
-    from app.modules.agents.hermes.supervisor import dispatch_tool
+    from app.modules.agents.hermes.supervisor import UPSTREAM_REVISION, dispatch_tool
     from app.modules.ai.agent_contracts import (
         AgentSessionRef,
         CapabilityGrantRef,
@@ -339,7 +339,7 @@ def test_hermes_studio_grant_owns_target_draft_and_revision(client, monkeypatch)
                                                             studio_model_id=model_id)).base_revision
     session = AgentSessionRef(jarvis_thread_id="thread-193", hermes_session_id="hermes-193", profile_id="default",
                               workspace_id="main", generation=1,
-                              upstream_revision="d337b736aa1e8ebecfab043842d13e4a2d2f48a3")
+                              upstream_revision=UPSTREAM_REVISION)
     now = datetime.now(UTC)
     grant = CapabilityGrantRef(
         grant_id="studio-act", capability_id="jarvis.studio_act", issuer="jarvis_policy",

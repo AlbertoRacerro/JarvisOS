@@ -456,6 +456,52 @@ export const getDraftRegistry = (workspaceId: string) => request<DraftRegistry>(
 export const listDrafts = (workspaceId: string) => request<DraftSummary[]>(base(workspaceId));
 export const createDraft = (workspaceId: string, name: string) => post<DraftProjection>(base(workspaceId), { name });
 export const getDraft = (workspaceId: string, draftId: string) => request<DraftProjection>(draftPath(workspaceId, draftId));
+
+// Spec 257: degrees-of-freedom and missing-inputs report.
+export type DofValueSource = {
+  run_id: string;
+  batch_id: string;
+  output_name: string;
+};
+
+export type DofDesignValue = {
+  value_id: string;
+  value: number;
+  unit: string;
+  si: number;
+  source: DofValueSource;
+  validation: "passed" | "red_dot" | string;
+};
+
+export type DofEntryStatus = "set" | "unset" | "available";
+
+export type DofEntry = {
+  object: string;
+  kind?: "unit" | "stream" | string;
+  key: string;
+  label: string;
+  quantity_kind?: string;
+  status: DofEntryStatus;
+  alternatives?: string[];
+  design_value?: DofDesignValue;
+};
+
+export type DofCounts = {
+  set: number;
+  unset: number;
+  available: number;
+};
+
+export type DofReport = {
+  workspace_id: string;
+  draft_id: string;
+  revision: string;
+  entries: DofEntry[];
+  counts: DofCounts;
+};
+
+export const getDraftDof = (workspaceId: string, draftId: string) =>
+  request<DofReport>(`${draftPath(workspaceId, draftId)}/dof`);
 export const patchDraft = (workspaceId: string, draftId: string, expectedRevision: string, ops: DraftOp[]) =>
   post<DraftProjection>(`${draftPath(workspaceId, draftId)}/patch`, { expected_revision: expectedRevision, ops });
 export const listDraftRevisions = (workspaceId: string, draftId: string) =>

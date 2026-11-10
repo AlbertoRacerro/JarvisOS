@@ -749,7 +749,8 @@ def hydraulics(params: dict[str, float], deadline_s: float = 30.0, pin: dict[str
         PROPERTY_EVALUATOR_ID, "water", {"temperature": (params["temperature_mean"], "K"), "pressure": (101325.0, "Pa")}))
     if water.status != "succeeded":
         raise PbrFailure("PBR_HYDRAULICS_UNAVAILABLE", "Water properties for the loop hydraulics are unavailable at the "
-                         "declared mean temperature; check temperature_mean.")
+                         "declared mean temperature; check temperature_mean.",
+                         {"backend_code": water.failure.backend_code if water.failure else "failed"})
     props = {item.name: item.value.value for item in water.outputs}
     if pin:
         return _cfd_hydraulics(params, props, pin, workspace_id)

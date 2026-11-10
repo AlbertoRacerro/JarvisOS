@@ -244,6 +244,14 @@ def _unit_spec(unit: dict[str, Any]) -> UnitSpec:
     return spec_for(unit)
 
 
+def required_unit_params(unit: dict[str, Any]) -> tuple[ParamSpec, ...]:
+    spec = _unit_spec(unit)
+    required_params = spec.params_for(unit.get("mode"))
+    if unit.get("type") == "PhotobioreactorT1" and (unit.get("options") or {}).get("optics_model") == "t2":
+        required_params += tuple(item for item in PBR_T2_SPECS if item.key not in PBR_T2_OPTIONAL_KEYS)
+    return required_params
+
+
 def _resolve_studio(version_id: str | None, resolve: studio_unit.Resolver | None) -> dict[str, Any]:
     if not version_id or resolve is None:
         raise DraftError("studio_version_required", "A StudioUnit is placed from a published Studio version", field="version_id")
@@ -778,9 +786,7 @@ def validate_document(document: dict[str, Any], workspace_id: str | None = None,
             if port >= spec.required_inlets and not _occupant(document, unit["id"], "target", port):
                 add("warning", "OPTIONAL_PORT_UNCONNECTED", f"Optional {name} inlet is not connected.",
                     unit["tag"], f"inlets[{port}]")
-        required_params = spec.params_for(unit["mode"])
-        if unit["type"] == "PhotobioreactorT1" and (unit.get("options") or {}).get("optics_model") == "t2":
-            required_params += tuple(item for item in PBR_T2_SPECS if item.key not in PBR_T2_OPTIONAL_KEYS)
+        required_params = required_unit_params(unit)
         for param in required_params:
             if param.key not in unit["params"]:
                 add("blocker", "UNIT_PARAM_MISSING", f"Set {param.label}.", unit["tag"], param.key)

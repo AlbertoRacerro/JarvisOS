@@ -21,6 +21,7 @@ import ResultProperties from "../components/process/ResultProperties";
 import { RunComparisonPanel, SettingsDiff, SolverConsole } from "../components/process/SolverConsole";
 import { ObjectResults, OutcomeDetails, ResultsWorkspace, RunStateIndicator, runState } from "../components/process/RunResults";
 import { resultsLayout, streamLabel } from "../components/process/resultsLayout";
+import { DofPanel } from "../components/process/DofPanel";
 import { useFlowsheetViewport, ZOOM_MAX, ZOOM_MIN } from "../components/process/useFlowsheetViewport";
 import { ContextMenu, MenuButton, useContextMenu } from "../components/ui/ContextMenu";
 import type { ContextMenuItem } from "../components/ui/ContextMenu";
@@ -239,6 +240,7 @@ export default function ProcessDraftEditor({ workspaceId, initialDraftId, naviga
   onSelectUnit?: (selection: { draftId: string; revision: string; unit: DraftObject } | null) => void;
 }>) {
   const [biologyOpen, setBiologyOpen] = useState(false);
+  const [dofOpen, setDofOpen] = useState(false);
   const [registry, setRegistry] = useState<DraftRegistry | null>(null);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [draft, setDraft] = useState<DraftProjection | null>(null);
@@ -1743,6 +1745,23 @@ export default function ProcessDraftEditor({ workspaceId, initialDraftId, naviga
             ))}
           </ul>
         </details>
+        <div className="draft-dof-toggle-wrap">
+          <button
+            type="button"
+            className="draft-dof-toggle"
+            aria-expanded={dofOpen}
+            onClick={() => setDofOpen((open) => !open)}
+          >
+            Degrees of freedom
+          </button>
+        </div>
+        {dofOpen && (
+          <DofPanel
+            workspaceId={workspaceId}
+            draftId={draft.draft_id}
+            revision={draft.revision}
+          />
+        )}
         {/* One Solver panel: the settings the next Run uses, the live console and the last outcome. Run opens it
             floating over the page (portalled to the shell root, so no page container can clip or cover it while the
             shell's styles still apply); docking it puts it back here under the flowsheet. The portal wrapper keeps the

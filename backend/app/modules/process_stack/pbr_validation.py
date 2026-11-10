@@ -1,7 +1,7 @@
 """Instant, Jarvis-side Photobioreactor (T1) findings that need more than the culture graph (spec 170 cap. 6).
 
 Culture reachability and the biomass / nitrogen / oxygen requirements live with the other culture findings in
-``culture.py``. This module owns the model-card, temperature and feed-basis HRT findings.
+``culture.py``. This module owns the model-card, temperature, feed-basis HRT and loop-hydraulics domain findings.
 """
 
 from __future__ import annotations
@@ -55,6 +55,52 @@ def _model_findings(workspace_id: str | None, unit: dict[str, Any]) -> list[dict
     except Exception:  # noqa: BLE001 - a broken library must not break instant validation
         return [_finding("blocker", "PBR_MODEL_CARD_UNAVAILABLE", tag, "model",
                          "The pinned model card could not be resolved; re-pin a card in the Biology tab.")]
+
+
+def _hydraulics_findings(workspace_id: str | None, unit: dict[str, Any]) -> list[dict[str, Any]]:
+    from app.modules.process_stack.pbr_unit import PbrFailure, _parameters, hydraulics
+
+    tag = unit["tag"]
+    try:
+        values = _parameters(unit)
+    except PbrFailure:
+        return []
+
+    pin = unit.get("hydraulics_model") or None
+    if pin and workspace_id is None:
+        return []
+
+    try:
+        result = hydraulics(values, deadline_s=5.0, pin=pin, workspace_id=workspace_id)
+    except PbrFailure as exc:
+        if exc.code == "PBR_HYDRAULICS_MODEL_UNAVAILABLE":
+            return []
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        backend_code = detail.get("backend_code")
+        field = "temperature_mean" if str(backend_code or "").startswith("coolprop") else "liquid_velocity"
+        finding = _finding("blocker", "PBR_HYDRAULICS_OUTSIDE_DOMAIN", tag, field, str(exc))
+        if backend_code is not None:
+            finding["backend_code"] = backend_code
+        return [finding]
+    except Exception:  # noqa: BLE001 - instant validation must not break
+        return []
+
+    findings: list[dict[str, Any]] = []
+    if result.get("regime") == "transitional_regime":
+        findings.append(_finding(
+            "warning", "transitional_regime", tag, "liquid_velocity",
+            f"Re={result['reynolds_number']:.4g} is between the laminar and turbulent pipe correlations; Run reports Re but no pressure drop or pumping power.",
+        ))
+    cfd = result.get("cfd") or {}
+    if cfd.get("status") in {"refused", "out_of_range_warned"}:
+        violations = list(cfd.get("violations") or ())
+        findings.append(_finding(
+            "warning", "PBR_HYDRAULICS_CFD_OUT_OF_RANGE", tag, "hydraulics_model",
+            "The pinned CFD reduced model is outside its validated range: "
+            + "; ".join(violations)
+            + ". Run reports it as a caveat.",
+        ))
+    return findings
 
 
 def _feed_flow_kg_s(document: dict[str, Any], feed: dict[str, Any]) -> float | None:
@@ -116,6 +162,7 @@ def pbr_findings(document: dict[str, Any], workspace_id: str | None = None) -> l
             findings.append(_finding("blocker", "PBR_TEMPERATURE_INVALID", tag, "temperature_amplitude",
                                      "The mean culture temperature minus the diel amplitude must stay above 0 K."))
         findings.extend(_model_findings(workspace_id, unit))
+        findings.extend(_hydraulics_findings(workspace_id, unit))
         inlet = next((item for item in objects.values() if item["kind"] == "stream" and item["type"] != "EnergyStream"
                       and (item.get("target") or {}).get("unit") == unit["id"]), None)
         if inlet is None or inlet.get("source") is not None:

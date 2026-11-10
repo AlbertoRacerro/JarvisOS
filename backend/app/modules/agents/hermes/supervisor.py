@@ -32,7 +32,7 @@ from app.modules.ai.jarvis_context import PRODUCTION_CAPABILITY_REGISTRY, build_
 from app.modules.ai.jarvis_context_models import JarvisCapabilityDescriptor, JarvisContextRequest
 from app.modules.events.service import log_event
 
-UPSTREAM_REVISION = "d337b736aa1e8ebecfab043842d13e4a2d2f48a3"
+UPSTREAM_REVISION = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
 _MAPPING_EVENT = "hermes.session_bound"
 _AGENT_EVENT = "hermes.agent_event"
 _CONTROL_EVENT = "hermes.control"
