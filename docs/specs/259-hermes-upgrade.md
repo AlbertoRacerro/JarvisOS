@@ -18,10 +18,14 @@ behaviour.
 ## Upstream changes that touch JarvisOS (from the v0.22.0–v0.23.0 release notes)
 
 - Python 3.14 is the managed runtime; the source still accepts `>=3.11,<3.15`.
-- The source tree's `pyproject.toml` says `version = "0.0.0"`; the release version comes from an install stamp
-  (`hermes_cli.version_info`). `importlib.metadata.version("hermes-agent")` on a source install is therefore not
-  `0.23.0`, so the version check must read the release identity Hermes itself reports, still bound to the pinned git
-  revision.
+- The source tree's `pyproject.toml` says `version = "0.0.0"`; the release version comes from an install stamp or from
+  git tags (`hermes_cli/version_info.py`), and neither exists in a shallow source checkout of the pinned commit. The
+  pinned git revision of the source that `run_agent` is imported from is therefore the sole release identity; the
+  `importlib.metadata` version equality check is removed rather than pinned to `0.0.0`.
+- Checked against the v0.23.0 source: `AIAgent.__init__` accepts every keyword the shim passes (new parameters are
+  optional), `run_conversation`, `interrupt`, `clear_interrupt`, `close`, `hermes_state_registry.acquire` and
+  `tools.mcp_tool_discovery.register_mcp_servers` keep their signatures, and built-in memory keeps
+  `memories/MEMORY.md` / `USER.md` split by `\n§\n`.
 - The ten `browser_*` tools are removed (`browser_exec` only); delegation backends are a bundled plugin; external memory
   providers moved to catalog plugins; `hermes mcp serve` moved to a plugin. JarvisOS enables none of these.
 
@@ -48,8 +52,8 @@ Out of scope (binding non-goals):
 ## Acceptance criteria
 
 1. No source, test or fixture outside `docs/` and `eval/` names `0.21.4` or `d337b736…` as the qualified release.
-2. The worker shim and the availability probe accept exactly v0.23.0 at commit `2bd378ed…` and refuse any other
-   version or revision (tests cover accept, wrong version, wrong revision).
+2. The worker shim and the availability probe accept exactly commit `2bd378ed…` and refuse any other revision or a
+   missing source checkout (tests cover accept, wrong revision, missing source).
 3. The toolset allowlist is unchanged or narrower; a test asserts the agent is constructed with only the enabled
    toolsets.
 4. The memory adapter reads the v0.23.0 format; its existing tests pass, and a test fixture reflects any format change.
