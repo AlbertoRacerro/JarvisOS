@@ -290,6 +290,10 @@ def test_dof_case_d_non_matching_gives_unset(test_setup: tuple[TestClient, str, 
 
     # Different workspace -> unset
     with open_sqlite_connection() as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO workspaces (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            ("other_workspace", "Other", "other-workspace", "2026-11-09T12:00:00+00:00", "2026-11-09T12:00:00+00:00"),
+        )
         _insert_result_value(
             connection,
             workspace_id="other_workspace",
