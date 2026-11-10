@@ -247,16 +247,15 @@ def _hermes_revision_probe(python: str, mtime_ns: int, revision: str) -> bool:
     del mtime_ns  # cache key only
     import subprocess
     try:
-        code = ("from importlib import metadata, util; import subprocess; from pathlib import Path; "
+        code = ("from importlib import util; import subprocess; from pathlib import Path; "
                 "s=util.find_spec('run_agent'); "
-                "print(metadata.version('hermes-agent') + ':' + subprocess.run(['git','-C',"
-                "str(Path(s.origin).parent),'rev-parse','HEAD'],capture_output=True,text=True,check=True)"
-                ".stdout.strip())")
+                "print(subprocess.run(['git','-C',str(Path(s.origin).parent),'rev-parse','HEAD'],"
+                "capture_output=True,text=True,check=True).stdout.strip())")
         result = subprocess.run([python, "-c", code],
                                 capture_output=True, text=True, timeout=3, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return result.returncode == 0 and result.stdout.strip() == f"0.21.4:{revision}"
+    return result.returncode == 0 and result.stdout.strip() == revision
 
 
 def _ollama_route_availability(route: str, model_id: str) -> AIConversationRouteAvailability:
