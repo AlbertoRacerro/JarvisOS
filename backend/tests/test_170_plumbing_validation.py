@@ -236,7 +236,7 @@ def test_hydraulics_precheck_blocks_a_mean_temperature_outside_the_water_eos() -
     document = draft.apply_ops(
         pbr_document(),
         [SetUnitParams(op="set_unit_params", unit="pbr",
-                       values=pbr_quantities(temperature_mean=(1500.0, "K"), temperature_amplitude=(0.1, "K")))],
+                       values=pbr_quantities(temperature_mean=(2500.0, "K"), temperature_amplitude=(0.1, "K")))],
     )
     findings = pbr_validation.pbr_findings(document)
     hits = find(findings, "PBR_HYDRAULICS_OUTSIDE_DOMAIN")
