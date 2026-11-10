@@ -41,9 +41,9 @@ nested modules listed separately, rounded to the nearest 100.
 | `backend/app/schemas` | backlog-candidate | One shared dataclass (ServiceStatus) with no consumer in the app; delete it or give it a purpose. | `common.py` | <100 |
 | `backend/tests` | live | Backend test suite (pytest): offline, fake providers, isolated data root, a fake project pack. | `conftest.py`, `scripts/test_backend_sharded.sh` | 99000 |
 | `configs` | live | Declarative configuration: AI provider catalog, cloud escalation and egress policy, architecture-enforcement rules, BLUECAD tool registry, relay gateway. | `ai_providers.yaml`, `ai_egress_policy.json`, `architecture_enforcement.json` | <100 |
-| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 4000 |
+| `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs` | 4200 |
 | `eval` | in-development | Local-model re-evaluation: classification and intake quality, latency, llama.cpp qualification and the second-brain retrieval benchmark. Everything here is marked to improve. | `local/README.md`, `local/llamacpp_qualification.py` | 1000 |
-| `frontend/src/api` | live | Typed API client wrappers per backend area, plus the generated contract types (generated/). | `client.ts`, `generated/` | 4500 |
+| `frontend/src/api` | live | Typed API client wrappers per backend area, plus the generated contract types (generated/). | `client.ts`, `generated/` | 4600 |
 | `frontend/src/app` | live | Routing table and router hook, navigation history, selection, and the owner and target registries Bubu uses to find controls. | `routes.ts`, `useAppRouter.ts`, `designTargets.ts` | 700 |
 | `frontend/src/components` | live | Shared and top-level components (layout, workspace bootstrap, 3D viewer, error boundary); feature components live in the subdirectories. | `Layout.tsx`, `WorkspaceBootstrap.tsx` | 800 |
 | `frontend/src/components/ai` | live | Jarvis chat sidecar: message rendering, workspace action cards, math text and proposal presentation. | `useJarvisSidecar.tsx`, `JarvisSidecar.css` | 2200 |
@@ -57,7 +57,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `frontend/src/components/engineering-data` | live | State logic for the Engineering Data page. | `engineeringDataState.ts` | 100 |
 | `frontend/src/components/environment` | live | Environment profile UI: site form, import wizard, generators, profile chart and table, provenance. | `ImportWizard.tsx`, `ProfileList.tsx` | 700 |
 | `frontend/src/components/fusion` | live | Operator surfaces shared across workspaces: workspace header, settings surface, project archive, knowledge and search panels. | `FinalWorkspaceHeader.tsx`, `FinalSettingsSurface.tsx` | 800 |
-| `frontend/src/components/process` | live | Process workspace panels: PBR model picker, inspector and results, biology model library, reactor kinetics, dynamic runs and proposals. | `PbrInspector.tsx`, `ReactorKinetics.tsx`, `BiologyModelLibrary.tsx` | 3400 |
+| `frontend/src/components/process` | live | Process workspace panels: PBR model picker, inspector and results, biology model library, reactor kinetics, dynamic runs and proposals. | `PbrInspector.tsx`, `ReactorKinetics.tsx`, `BiologyModelLibrary.tsx` | 3600 |
 | `frontend/src/components/review` | live | State logic for the Review stage. | `reviewState.ts` | 200 |
 | `frontend/src/components/runs` | live | State logic for the Runs workbench. | `state.ts` | <100 |
 | `frontend/src/components/shell` | live | Application shell: rail, top bar, navigator, contextual sidecar, analysis dock, project switcher and the Bubu launcher. | `Rail.tsx`, `TopBar.tsx`, `BubuLauncher.tsx` | 700 |
@@ -67,7 +67,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `frontend/src/pages` | live | Page-level screens: Design project, Studio, Runs, Coding, Settings, Literature, Model dossier, Engineering Data, Development roadmap, AI threads, and the CFD panels. | `DesignProject.tsx`, `Studio.tsx`, `CodingWorkbench.tsx` | 6400 |
 | `frontend/src/stages` | live | Stage containers for the Design workspace (process, studies, model, review), the environment panel and the process draft editor. | `registry.ts`, `ProcessStage.tsx`, `ModelStage.tsx` | 6500 |
 | `frontend/src/styles` | live | Design tokens and style sheets for the shell and each surface. | `tokens.css`, `global.css`, `lumen.css` | 5300 |
-| `frontend/tests` | live | Static frontend tests (node .mjs) run by `npm run build`; they assert literal strings and source patterns. | `package.json (scripts.build)` | 6200 |
+| `frontend/tests` | live | Static frontend tests (node .mjs) run by `npm run build`; they assert literal strings and source patterns. | `package.json (scripts.build)` | 6300 |
 | `schemas` | live | JSON schemas for BLUECAD specs, results and tool registry, and Jarvis records. | `bluecad_geometry_spec_v0_1.schema.json` | <100 |
 | `scripts` | live | Repository tooling: CI gates, spec-status check, frontend contract codegen, module-table generator, launcher, supervisor (Relay continuity, jobs, observer, host ops), worker routing, Copilot CLI delegation and control-room recovery (devctx). | `relay_continuity.py`, `devctx.py`, `worker_routing.py`, `copilot_worker.py`, `jarvisos_launcher.py`, `check_spec_status.py` | 17300 |
 | `scripts/benchmarks` | in-development | Solver benchmarks against real OpenFOAM, DWSIM and process libraries; today scripts that record evidence, to be turned into pinned regression tests. | `README.md` | 2400 |
