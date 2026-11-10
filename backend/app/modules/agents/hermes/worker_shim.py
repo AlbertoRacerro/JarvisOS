@@ -13,11 +13,11 @@ import traceback
 import uuid
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib import metadata, util
+from importlib import util
 from pathlib import Path
 from typing import Any
 
-UPSTREAM_REVISION = "d337b736aa1e8ebecfab043842d13e4a2d2f48a3"
+UPSTREAM_REVISION = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
 AUXILIARY_TASKS = (
     "vision", "compression", "skills_hub", "approval", "review", "mcp",
     "title_generation", "memory_query_rewrite", "tts_audio_tags", "triage_specifier",
@@ -132,9 +132,7 @@ def completion_message(text: str, tools: Any) -> dict[str, Any]:
 
 
 def verify_upstream() -> None:
-    """Refuse an installed Hermes build other than the qualified source checkout."""
-    if metadata.version("hermes-agent") != "0.21.4":
-        raise RuntimeError("Hermes package version is not qualified")
+    """Refuse an installed Hermes build other than the pinned source revision identity."""
     spec = util.find_spec("run_agent")
     if spec is None or spec.origin is None:
         raise RuntimeError("Hermes source is unavailable")

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import httpx
 
-from app.modules.agents.hermes.supervisor import dispatch_tool
+from app.modules.agents.hermes.supervisor import UPSTREAM_REVISION, dispatch_tool
 from app.modules.ai.agent_contracts import (
     AgentSessionRef,
     CapabilityGrantRef,
@@ -27,7 +27,7 @@ from app.modules.workspace_actions.models import SurfaceBrief, SurfaceRef
 
 SESSION = AgentSessionRef(jarvis_thread_id="thread-166", hermes_session_id="hermes-166",
                           profile_id="default", workspace_id="workspace-166", generation=1,
-                          upstream_revision="d337b736aa1e8ebecfab043842d13e4a2d2f48a3")
+                          upstream_revision=UPSTREAM_REVISION)
 
 
 def test_turn_tools_are_scoped_to_owner_derived_surface() -> None:

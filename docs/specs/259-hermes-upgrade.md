@@ -60,3 +60,11 @@ Out of scope (binding non-goals):
 5. `scripts/test_backend_sharded.sh`, ruff and the CI gates pass.
 6. Proof (high risk, runtime boundary): with a side-by-side v0.23.0 checkout and venv, `verify_upstream()` passes and
    one offline Hermes turn through the shim with the fake/local route completes; the evidence directory is recorded.
+
+## Live activation (owed after merge)
+
+v0.23.0 pins its dependencies for Python 3.14 only (`environments = ["python_version >= '3.14'"]`), and pip cannot
+resolve them without upstream's `uv.lock`; the Jarvis broker needs the `mcp` extra. The proof venv was built as:
+`UV_PROJECT_ENVIRONMENT=<venv> uv sync --frozen --extra mcp --python <cpython 3.14>` inside a checkout of
+`2bd378ed…`. The live app then points `JARVIS_HERMES_VENV` at that venv; the v0.21.4 venv is refused by the new pin.
+

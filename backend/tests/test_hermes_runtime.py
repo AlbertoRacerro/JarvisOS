@@ -23,6 +23,7 @@ from app.modules.agents.hermes.broker_mcp import _TOOLS, _reply
 from app.modules.agents.hermes.session_pool import HermesSessionPool
 from app.modules.agents.hermes.supervisor import (
     RELAY_TOOL_PROTOCOL,
+    UPSTREAM_REVISION,
     HermesSupervisor,
     bind_session,
     current_mapping,
@@ -56,7 +57,7 @@ from app.modules.ai.jarvis_context_models import SourceRef
 NOW = datetime.now(UTC)
 SESSION = AgentSessionRef(jarvis_thread_id="thread-1", hermes_session_id="hermes-1",
                           profile_id="profile-1", workspace_id="workspace-1", generation=1,
-                          upstream_revision="d337b736aa1e8ebecfab043842d13e4a2d2f48a3")
+                          upstream_revision=UPSTREAM_REVISION)
 
 
 def _connection() -> sqlite3.Connection:
@@ -868,7 +869,8 @@ def test_real_worker_turn_interrupt_relay(tmp_path: Path) -> None:
             "mcp__jarvis__jarvis_context_preview", "mcp__jarvis__jarvis_retrieval_query",
             "mcp__jarvis__jarvis_decide", "mcp__jarvis__jarvis_process_read",
             "mcp__jarvis__jarvis_process_act", "mcp__jarvis__jarvis_bluecad_read",
-            "mcp__jarvis__jarvis_bluecad_act", "memory", "session_search",
+            "mcp__jarvis__jarvis_bluecad_act", "mcp__jarvis__jarvis_studio_read",
+            "mcp__jarvis__jarvis_studio_act", "memory", "session_search",
         }
         process.stdin.write(json.dumps({"type": "turn", "id": "turn-1", "prompt": "Say hello"}) + "\n")
         process.stdin.flush()
@@ -963,3 +965,66 @@ def test_hermes_agent_gets_the_thread_formula_instruction(monkeypatch) -> None:
     shim.session = {"hermes_session_id": "h1"}
     shim._build_agent()
     assert captured["ephemeral_system_prompt"] == worker_shim.PRESENTATION_INSTRUCTIONS
+    assert captured["enabled_toolsets"] == ["mcp-jarvis", "memory", "session_search"]
+
+
+def test_verify_upstream_qualifies_pinned_revision_and_requires_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.modules.agents.hermes import worker_shim
+
+    fake_spec = SimpleNamespace(origin="/opt/hermes/run_agent.py")
+
+    monkeypatch.setattr(worker_shim.util, "find_spec", lambda name: fake_spec if name == "run_agent" else None)
+    monkeypatch.setattr(
+        worker_shim.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args, returncode=0, stdout=UPSTREAM_REVISION + "\n", stderr=""
+        ),
+    )
+    worker_shim.verify_upstream()
+
+    monkeypatch.setattr(
+        worker_shim.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args, returncode=0, stdout="deadbeef00000000000000000000000000000000\n", stderr=""
+        ),
+    )
+    with pytest.raises(RuntimeError, match="Hermes source revision is not qualified"):
+        worker_shim.verify_upstream()
+
+    monkeypatch.setattr(worker_shim.util, "find_spec", lambda _name: None)
+    with pytest.raises(RuntimeError, match="Hermes source is unavailable"):
+        worker_shim.verify_upstream()
+
+
+def test_hermes_revision_probe_accepts_pinned_revision_and_rejects_other(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modules.ai.thread_routes import _hermes_revision_probe
+
+    _hermes_revision_probe.cache_clear()
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args, returncode=0, stdout=UPSTREAM_REVISION + "\n", stderr=""
+        ),
+    )
+    assert _hermes_revision_probe("/usr/bin/python3", 1000, UPSTREAM_REVISION) is True
+
+    _hermes_revision_probe.cache_clear()
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args, returncode=0, stdout="deadbeef00000000000000000000000000000000\n", stderr=""
+        ),
+    )
+    assert _hermes_revision_probe("/usr/bin/python3", 1000, UPSTREAM_REVISION) is False
+    _hermes_revision_probe.cache_clear()
+
+
+def test_hermes_enabled_toolsets_allowlist_is_unchanged() -> None:
+    assert ENABLED_TOOLSETS == ["mcp-jarvis", "memory", "session_search"]
+

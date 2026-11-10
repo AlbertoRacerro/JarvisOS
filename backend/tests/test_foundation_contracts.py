@@ -105,7 +105,7 @@ def _session(**overrides: object) -> agent.AgentSessionRef:
         "profile_id": "default",
         "workspace_id": "main",
         "generation": 2,
-        "upstream_revision": "v0.21.4",
+        "upstream_revision": "v0.23.0",
     }
     fields.update(overrides)
     return agent.AgentSessionRef.model_validate(fields)
