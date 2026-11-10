@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from starlette.concurrency import run_in_threadpool
 
-from app.modules.process_stack import draft, solve_jobs
+from app.modules.process_stack import dof_report, draft, solve_jobs
 from app.modules.process_stack.draft_models import (
     CreateDraft,
     PatchRequest,
@@ -53,6 +53,14 @@ def create(workspace_id: str, payload: CreateDraft) -> dict[str, Any]:
 def get(workspace_id: str, draft_id: str) -> dict[str, Any]:
     try:
         return draft.projection(workspace_id, draft_id)
+    except draft.DraftError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/{draft_id}/dof")
+def dof(workspace_id: str, draft_id: str) -> dict[str, Any]:
+    try:
+        return dof_report.dof_report(workspace_id, draft_id)
     except draft.DraftError as exc:
         raise _error(exc) from exc
 
