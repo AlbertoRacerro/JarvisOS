@@ -1,0 +1,108 @@
+/* Spec 257: degrees-of-freedom and missing-inputs report panel. */
+.dof-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-default, #30363d);
+  border-radius: 6px;
+  background: var(--color-bg-surface, #161b22);
+  font-size: 12px;
+}
+
+.dof-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.dof-panel__header h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dof-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-muted, #8b949e);
+}
+
+.dof-entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dof-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-default, #30363d);
+  border-radius: 4px;
+  background: var(--color-bg-subtle, #0d1117);
+}
+
+.dof-entry__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.dof-entry__title {
+  font-weight: 600;
+  color: var(--color-text-primary, #c9d1d9);
+}
+
+.dof-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--color-border-default, #30363d);
+}
+
+.dof-chip--set {
+  background: var(--color-bg-surface, #161b22);
+  color: var(--color-text-secondary, #8b949e);
+}
+
+.dof-chip--unset {
+  background: var(--color-status-warning-bg, #272115);
+  color: var(--color-status-warning-text, #d29922);
+  border-color: var(--color-status-warning-text, #d29922);
+}
+
+.dof-chip--available {
+  background: var(--color-bg-surface, #161b22);
+  color: var(--color-status-info-text, #58a6ff);
+  border-color: var(--color-status-info-text, #58a6ff);
+}
+
+.dof-entry__detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--color-text-muted, #8b949e);
+}
+
+.dof-entry__validation--red-dot {
+  color: var(--color-status-danger-text, #f85149);
+  font-weight: 600;
+}
+
+.dof-entry__validation--passed {
+  color: var(--color-status-success-text, #3fb950);
+}
