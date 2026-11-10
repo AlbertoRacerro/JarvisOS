@@ -80,7 +80,8 @@ def _match_design_value(
         return None
 
     status_str = str(row["status"])
-    validation = "red_dot" if (status_str == "exception" or bool(unvalidated_inputs)) else "passed"
+    # Spec 253: an exception stays a red dot after the user confirms it; only passed and corrected values validate.
+    validation = "red_dot" if (status_str in {"exception", "confirmed"} or bool(unvalidated_inputs)) else "passed"
 
     return {
         "value_id": str(row["value_id"]),

@@ -383,3 +383,25 @@ def test_dof_case_f_unknown_draft_or_workspace_error(test_setup: tuple[TestClien
     res_get_ws = client.get(f"/workspaces/nonexistent_ws/process/drafts/{draft_id}")
     assert res_dof_ws.status_code == res_get_ws.status_code == 404
     assert res_dof_ws.json() == res_get_ws.json()
+
+
+def test_dof_confirmed_exception_stays_red_dot(test_setup: tuple[TestClient, str, str]) -> None:
+    client, ws_id, draft_id = test_setup
+    _setup_draft_with_missing_inputs(client, ws_id, draft_id)
+
+    with open_sqlite_connection() as connection:
+        _insert_result_value(
+            connection,
+            workspace_id=ws_id,
+            quantity="H1.outlet_temperature",
+            value_text="400.0",
+            unit="K",
+            status="confirmed",
+            conditions={},
+        )
+
+    res = client.get(f"/workspaces/{ws_id}/process/drafts/{draft_id}/dof")
+    assert res.status_code == 200
+    entry = {(e["object"], e["key"]): e for e in res.json()["entries"]}[("H1", "outlet_temperature")]
+    assert entry["status"] == "available"
+    assert entry["design_value"]["validation"] == "red_dot"
