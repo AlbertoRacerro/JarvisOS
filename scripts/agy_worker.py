@@ -327,6 +327,7 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
         diff = collect_diff(worktree, result["start_head"])
         (evidence / "diff.patch").write_text(diff, encoding="utf-8")
     if reason != "git_metadata_modified" and status != "timeout" and not (reason or "").startswith("spawn_failed"):
+        runner_cause = relay_argon.harness_cause(relay_argon.native_error(stderr))
         if document is not None:
             denied = document.get("denied_actions")
             if isinstance(denied, list) and denied:
@@ -335,10 +336,16 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
                 status, reason = "failed", f"permission_denied: {actions}"
             elif document.get("status") != "SUCCESS":
                 status, reason = "failed", f"stream_status_{document.get('status') or 'missing'}"
-            elif not str(document.get("response") or "").strip() and not diff:
-                status, reason = "failed", "empty_result"
+            elif not str(document.get("response") or "").strip():
+                if status != "failed" and runner_cause is not None:
+                    status, reason = "failed", f"runner_{runner_cause[1]}"
+                elif status != "failed":
+                    status, reason = "failed", "empty_result"
         else:
-            status, reason = "failed", "empty_result" if not diff else "stream_status_missing"
+            if status != "failed" and runner_cause is not None:
+                status, reason = "failed", f"runner_{runner_cause[1]}"
+            elif status != "failed" and not stdout.strip():
+                status, reason = "failed", "empty_result"
     cid = document.get("conversation_id") if isinstance(document, dict) else None
     result.update(status=status, reason=reason, failure_class=failure_class(status, reason, stderr),
                   diff_bytes=len(diff.encode("utf-8")),
@@ -355,11 +362,13 @@ def failure_class(status: str, reason: str | None, stderr: str) -> str | None:
         return "policy"
     if reason == "empty_result" or (reason or "").startswith(("permission_denied:", "stream_status_")):
         return "harness"
-    if status == "timeout" or (reason or "").startswith("spawn_failed"):
+    if status == "timeout" or reason == "timeout" or (reason or "").startswith("spawn_failed"):
         return "harness"
     cause = relay_argon.harness_cause(relay_argon.native_error(stderr))
     if cause is not None:
         return "provider_quota" if cause[0] == "quota" else "harness"
+    if (reason or "").startswith("runner_"):
+        return "provider_quota" if "quota" in reason else "harness"
     return "model_or_unknown"
 
 
