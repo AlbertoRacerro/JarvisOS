@@ -29,6 +29,7 @@ import os
 import queue
 import shlex
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -100,31 +101,28 @@ class Model:
     model: str
     pool: str
     capability: int  # 1..3, the highest required tier it may take
-    cost: int  # relative cost, informational (the ordering uses capability surplus, then headroom)
 
 
 # Capability is provisional and per effort, never per brand (spec 255, directive L20261109084309-afcd): until
 # measured, Flash and Argon at high take tier 3. Effort follows the task: the smallest adequate tier is chosen first.
-# agy keys are agy_worker.py aliases.
-# Hydrogen costs about 2.2x Flash in quota (directive L20261113192444-38eb): at equal tier and pool the ordering falls
-# back to table index, so it comes after Flash until cost per accepted task is measured.
+# agy keys are agy_worker.py aliases. Order comes from capability, pools and measured spend.
 MODELS: tuple[Model, ...] = (
-    Model("luna", "codex", "gpt-6-luna", "codex", 1, 1),
-    Model("flash", "agy", "gemini-3.8-flash-low", "gemini", 1, 1),
-    Model("hydrogen-low", "agy", "gemini-4-hydrogen-low", "gemini", 1, 2),
-    Model("copilot-auto", "copilot", "auto", "copilot", 1, 1),
-    Model("haiku", "claude", "claude-haiku-5-5", "claude", 1, 2),
-    Model("flash-medium", "agy", "gemini-3.8-flash-medium", "gemini", 2, 2),
-    Model("hydrogen-medium", "agy", "gemini-4-hydrogen-medium", "gemini", 2, 4),
-    Model("argon-medium", "agy", "gemini-4-argon-medium", "argon", 2, 3),
-    Model("terra", "codex", "gpt-6.1-terra", "codex", 2, 3),
-    Model("sonnet", "claude", "claude-sonnet-5-5", "claude", 2, 5),
-    Model("flash-high", "agy", "gemini-3.8-flash-high", "gemini", 3, 3),
-    Model("hydrogen-high", "agy", "gemini-4-hydrogen-high", "gemini", 3, 6),
-    Model("argon-high", "agy", "gemini-4-argon-high", "argon", 3, 5),
-    Model("agy-sonnet", "agy", "claude-sonnet-5-5-high", "agy3p", 3, 6),
-    Model("agy-opus", "agy", "claude-opus-5-5-high", "agy3p", 3, 8),
-    Model("sol", "codex", "gpt-6-sol", "codex", 3, 8),
+    Model("luna", "codex", "gpt-6-luna", "codex", 1),
+    Model("flash", "agy", "gemini-3.8-flash-low", "gemini", 1),
+    Model("hydrogen-low", "agy", "gemini-4-hydrogen-low", "gemini", 1),
+    Model("copilot-auto", "copilot", "auto", "copilot", 1),
+    Model("haiku", "claude", "claude-haiku-5-5", "claude", 1),
+    Model("flash-medium", "agy", "gemini-3.8-flash-medium", "gemini", 2),
+    Model("hydrogen-medium", "agy", "gemini-4-hydrogen-medium", "gemini", 2),
+    Model("argon-medium", "agy", "gemini-4-argon-medium", "argon", 2),
+    Model("terra", "codex", "gpt-6.1-terra", "codex", 2),
+    Model("sonnet", "claude", "claude-sonnet-5-5", "claude", 2),
+    Model("flash-high", "agy", "gemini-3.8-flash-high", "gemini", 3),
+    Model("hydrogen-high", "agy", "gemini-4-hydrogen-high", "gemini", 3),
+    Model("argon-high", "agy", "gemini-4-argon-high", "argon", 3),
+    Model("agy-sonnet", "agy", "claude-sonnet-5-5-high", "agy3p", 3),
+    Model("agy-opus", "agy", "claude-opus-5-5-high", "agy3p", 3),
+    Model("sol", "codex", "gpt-6-sol", "codex", 3),
 )
 
 
@@ -662,8 +660,8 @@ def load_records(path: Path | None = None) -> list[dict[str, Any]]:
 def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_first_pass: str = "n/a",
            findings: Any = "0,0,0,0", rework_rounds: int = 0, escalated: bool = False,
            salvage: str = "n/a", reason: str | None = None, failure: str = "none",
-           coordinator_tokens: int | None = None, record_file: Path | None = None,
-           now: datetime | None = None) -> dict[str, Any]:
+           coordinator_tokens: int | None = None, evidence: list[str | Path] | str | Path | None = None,
+           record_file: Path | None = None, now: datetime | None = None) -> dict[str, Any]:
     """Append one worker outcome record atomically. Refuses invalid input."""
     by_key = {m.key: m for m in MODELS}
     if worker not in by_key:
@@ -708,6 +706,55 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
         except (TypeError, ValueError) as exc:
             raise ValueError(f"invalid coordinator_tokens: {coordinator_tokens}") from exc
 
+    spend_data: dict[str, Any] | None = None
+    if evidence is not None:
+        raw_list = [evidence] if isinstance(evidence, (str, Path)) else list(evidence)
+        if raw_list:
+            total_tokens = 0
+            sum_quota = 0.0
+            quota_runs = 0
+            overlap_runs = 0
+            for item in raw_list:
+                item_path = Path(item)
+                res_path = item_path / "result.json" if item_path.is_dir() else item_path
+                if not res_path.is_file():
+                    raise ValueError(f"evidence result missing or unreadable: {item}")
+                try:
+                    res_dict = json.loads(res_path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    raise ValueError(f"evidence result missing or unreadable: {item}") from exc
+                if not isinstance(res_dict, dict):
+                    raise ValueError(f"evidence result missing or unreadable: {item}")
+                usage = res_dict.get("usage")
+                if isinstance(usage, dict):
+                    tot = usage.get("total_tokens", 0)
+                    if isinstance(tot, int) and not isinstance(tot, bool) and tot >= 0:
+                        total_tokens += tot
+                overlap = res_dict.get("overlap")
+                if overlap is True:
+                    overlap_runs += 1
+                elif overlap is False:
+                    qb = res_dict.get("quota")
+                    qa = res_dict.get("quota_after")
+                    if isinstance(qb, list) and isinstance(qa, list):
+                        bb = next((b for b in qb if isinstance(b, dict) and b.get("id") == "gemini-weekly"), None)
+                        ba = next((b for b in qa if isinstance(b, dict) and b.get("id") == "gemini-weekly"), None)
+                        if bb and ba:
+                            fb = bb.get("remaining_fraction")
+                            fa = ba.get("remaining_fraction")
+                            if isinstance(fb, (int, float)) and not isinstance(fb, bool) and \
+                                    isinstance(fa, (int, float)) and not isinstance(fa, bool):
+                                drop = max(0.0, float(fb) - float(fa))
+                                sum_quota += drop
+                                quota_runs += 1
+            spend_data = {
+                "runs": len(raw_list),
+                "tokens": total_tokens,
+                "quota": round(sum_quota, 6),
+                "quota_runs": quota_runs,
+                "overlap_runs": overlap_runs,
+            }
+
     moment = now or datetime.now(UTC)
     entry: dict[str, Any] = {
         "at": _iso(moment),
@@ -726,6 +773,8 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
     }
     if tokens_val is not None:
         entry["coordinator_tokens"] = tokens_val
+    if spend_data is not None:
+        entry["spend"] = spend_data
 
     target = resolve_record_path(record_file)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -760,6 +809,7 @@ def cmd_record(args: argparse.Namespace) -> int:
             reason=args.reason,
             failure=args.failure,
             coordinator_tokens=args.coordinator_tokens,
+            evidence=args.evidence,
             record_file=args.record_file,
         )
         return 0
@@ -874,6 +924,61 @@ def pct(value: float) -> str:
     return f"{round(value * 100)}%"
 
 
+def _is_clean_spend(spend: dict[str, Any]) -> bool:
+    runs = spend.get("runs", 0)
+    quota_runs = spend.get("quota_runs", 0)
+    overlap_runs = spend.get("overlap_runs", 0)
+    return (isinstance(runs, int) and isinstance(quota_runs, int) and isinstance(overlap_runs, int)
+            and overlap_runs == 0 and quota_runs == runs and runs > 0)
+
+
+def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[dict[str, Any]] | None) -> tuple[float | None, int]:
+    """Median measured quota per accepted task of the requested kind (failure != harness, with spend).
+    Returns (median_cost or None, count of costed records). Measured when count >= 5."""
+    if kind is None or not outcomes:
+        return None, 0
+
+    c_records = [
+        r for r in outcomes
+        if (r.get("worker") == candidate.key or r.get("model") == candidate.model)
+        and r.get("kind") == kind
+        and r.get("failure") != "harness"
+        and isinstance(r.get("spend"), dict)
+    ]
+    if not c_records:
+        return None, 0
+
+    all_spend_records = [
+        r for r in outcomes
+        if (r.get("worker") == candidate.key or r.get("model") == candidate.model)
+        and r.get("failure") != "harness"
+        and isinstance(r.get("spend"), dict)
+    ]
+    clean_records = [r for r in all_spend_records if _is_clean_spend(r["spend"])]
+    clean_quota = sum(float(r["spend"].get("quota", 0.0)) for r in clean_records)
+    clean_tokens = sum(int(r["spend"].get("tokens", 0)) for r in clean_records)
+    ratio = (clean_quota / clean_tokens) if (clean_records and clean_tokens > 0) else None
+
+    costs: list[float] = []
+    for r in c_records:
+        if r.get("failure") == "model" or r.get("escalated") is True:
+            costs.append(math.inf)
+        elif _is_clean_spend(r["spend"]):
+            costs.append(float(r["spend"].get("quota", 0.0)))
+        elif ratio is not None:
+            tokens = int(r["spend"].get("tokens", 0))
+            costs.append(tokens * ratio)
+        else:
+            # no clean run -> that record has no cost
+            pass
+
+    count = len(costs)
+    if count < 5:
+        return None, count
+
+    return float(statistics.median(costs)), count
+
+
 def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODELS, review_of: str | None = None,
          now: datetime | None = None, task: str | None = None, kind: str | None = None,
          outcomes: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -941,9 +1046,11 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
         if model.capability < required:
             continue
         pool = pools.get(model.pool) or unreadable(model.pool, "no_reading")
+        cost, count = candidate_measured_cost(model, kind, outcomes)
         entry: dict[str, Any] = {"worker": model.key, "kind": model.kind, "model": model.model, "pool": model.pool,
-                                 "family": family(model), "capability": model.capability, "cost": model.cost,
-                                 "free": None if pool.free is None else round(pool.free, 4), "source": pool.source}
+                                 "family": family(model), "capability": model.capability,
+                                 "free": None if pool.free is None else round(pool.free, 4), "source": pool.source,
+                                 "measured_cost": cost, "record_count": count}
         if pool.free is None:
             skipped.append({**entry, "skipped": pool.reason or "unreadable"})
         elif below_reserve(pool, now):
@@ -954,10 +1061,35 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
             skipped.append({**entry, "skipped": "measured_inadequate"})
         else:
             same = int(review_of is not None and family(model) == review_of)
+            entry["same"] = same
             first = 0 if model.pool in FIRST_POOLS else 1
             eligible.append(((same, model.capability - required, first, -expiry_score(pool, now), -pool.free, index),
                              entry))
-    return [entry for _, entry in sorted(eligible, key=lambda item: item[0])], skipped
+
+    today_sorted = [entry for _, entry in sorted(eligible, key=lambda item: item[0])]
+    result_list = list(today_sorted)
+
+    for same_val in (0, 1):
+        pools_in_partition = dict.fromkeys(e["pool"] for e in result_list if e.get("same", 0) == same_val)
+        for p in pools_in_partition:
+            measured_indices = [
+                i for i, e in enumerate(result_list)
+                if e.get("same", 0) == same_val and e["pool"] == p and e.get("measured_cost") is not None
+            ]
+            if len(measured_indices) <= 1:
+                continue
+            measured_entries = [result_list[i] for i in measured_indices]
+            sorted_entries = sorted(
+                measured_entries,
+                key=lambda item: (item["measured_cost"], measured_indices[measured_entries.index(item)])
+            )
+            for idx, entry in zip(measured_indices, sorted_entries, strict=True):
+                result_list[idx] = entry
+
+    for e in result_list:
+        e.pop("same", None)
+
+    return result_list, skipped
 
 
 def bare_command(model: Model) -> str:
@@ -997,6 +1129,7 @@ def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | 
     return {**decision, "status": "ok", "worker": chosen["worker"], "model": chosen["model"], "pool": chosen["pool"],
             "source": chosen["source"], "command": launch_command(by_key[chosen["worker"]]),
             "claude_pool_low": low, **({"note": CLAUDE_LOW_NOTE} if low else {}),
+            "measured_cost": chosen.get("measured_cost"), "record_count": chosen.get("record_count", 0),
             "alternatives": eligible[1:], "skipped": skipped}
 
 
@@ -1170,6 +1303,8 @@ def build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--reason", default=None, help="reason when salvage is restarted")
     rec.add_argument("--failure", default="none", help="none, harness, or model")
     rec.add_argument("--coordinator-tokens", type=int, default=None, help="coordinator tokens recorded on task")
+    rec.add_argument("--evidence", action="append", default=None,
+                     help="result.json directory of an agy worker run contributing to the task")
     rec.add_argument("--record-file", type=Path, default=None,
                      help="record file of worker outcomes (default: main checkout .agent-relay/worker-outcomes.jsonl)")
     rec.set_defaults(func=cmd_record)

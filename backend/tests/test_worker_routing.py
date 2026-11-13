@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import subprocess
 import sys
 import time
@@ -85,8 +86,8 @@ def test_pool_priority_then_headroom_then_table_order_break_a_capability_tie() -
     assert wr.decide("low", "low", pools(gemini=pool("gemini", 0.15)))["worker"] == "flash"
     assert wr.decide("low", "low", pools(gemini=pool("gemini", 0.04)))["worker"] == "luna"
     # other pools: quota that would expire unused first, then most headroom, then table order
-    models = (wr.Model("a", "codex", "x", "p1", 1, 1), wr.Model("b", "codex", "y", "p2", 1, 1),
-              wr.Model("c", "codex", "z", "p2", 1, 1))
+    models = (wr.Model("a", "codex", "x", "p1", 1), wr.Model("b", "codex", "y", "p2", 1),
+              wr.Model("c", "codex", "z", "p2", 1))
     ranked, _ = wr.rank(1, {"p1": pool("p1", 0.5), "p2": pool("p2", 0.9)}, models)
     assert [e["worker"] for e in ranked] == ["b", "c", "a"]
 
@@ -879,3 +880,187 @@ def test_spec_256_report_has_no_first_pass_rate_without_judged_records(tmp_path:
     wr.record(task="r1", kind="review", worker="flash-high", rework_rounds=2, record_file=rf)
     text = wr.report(record_file=rf)
     assert "prima prova n/d" in text and "rilavorazioni 2," in text
+
+
+# --- Spec 272 (WORKER-COST-1): measured spend per accepted task -----------------------
+
+
+def test_record_with_evidence_and_spend_calculation(tmp_path: Path) -> None:
+    dir_a = tmp_path / "run_a"
+    dir_a.mkdir()
+    (dir_a / "result.json").write_text(json.dumps({
+        "usage": {"total_tokens": 500, "input_tokens": 400, "output_tokens": 100},
+        "quota": [{"id": "gemini-weekly", "remaining_fraction": 0.80}],
+        "quota_after": [{"id": "gemini-weekly", "remaining_fraction": 0.78}],
+        "overlap": False,
+    }))
+
+    dir_b = tmp_path / "run_b"
+    dir_b.mkdir()
+    (dir_b / "result.json").write_text(json.dumps({
+        "usage": {"total_tokens": 300, "input_tokens": 200, "output_tokens": 100},
+        "quota": [{"id": "gemini-weekly", "remaining_fraction": 0.78}],
+        "quota_after": [{"id": "gemini-weekly", "remaining_fraction": 0.75}],
+        "overlap": False,
+    }))
+
+    rf = tmp_path / "worker-outcomes.jsonl"
+    entry = wr.record(task="t1", kind="feature", worker="flash-medium", evidence=[dir_a, dir_b], record_file=rf)
+    assert "spend" in entry
+    assert entry["spend"] == {
+        "runs": 2,
+        "tokens": 800,
+        "quota": pytest.approx(0.05),
+        "quota_runs": 2,
+        "overlap_runs": 0,
+    }
+
+
+def test_record_with_overlapped_run_adds_tokens_but_no_quota(tmp_path: Path) -> None:
+    dir_a = tmp_path / "run_a"
+    dir_a.mkdir()
+    (dir_a / "result.json").write_text(json.dumps({
+        "usage": {"total_tokens": 500},
+        "quota": [{"id": "gemini-weekly", "remaining_fraction": 0.80}],
+        "quota_after": [{"id": "gemini-weekly", "remaining_fraction": 0.78}],
+        "overlap": False,
+    }))
+
+    dir_b = tmp_path / "run_b"
+    dir_b.mkdir()
+    (dir_b / "result.json").write_text(json.dumps({
+        "usage": {"total_tokens": 300},
+        "quota": [{"id": "gemini-weekly", "remaining_fraction": 0.78}],
+        "quota_after": [{"id": "gemini-weekly", "remaining_fraction": 0.75}],
+        "overlap": True,
+    }))
+
+    rf = tmp_path / "worker-outcomes.jsonl"
+    entry = wr.record(task="t2", kind="feature", worker="flash-medium", evidence=[dir_a, dir_b], record_file=rf)
+    assert entry["spend"] == {
+        "runs": 2,
+        "tokens": 800,
+        "quota": pytest.approx(0.02),
+        "quota_runs": 1,
+        "overlap_runs": 1,
+    }
+
+
+def test_record_missing_or_unreadable_result_refused(tmp_path: Path) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    missing = tmp_path / "missing_dir"
+
+    with pytest.raises(ValueError, match="missing or unreadable"):
+        wr.record(task="t3", kind="feature", worker="flash-medium", evidence=[missing], record_file=rf)
+    assert not rf.exists()
+
+    ret = wr.main(["record", "--task", "t3", "--kind", "feature", "--worker", "flash-medium",
+                   "--evidence", str(missing), "--record-file", str(rf)])
+    assert ret == 2
+    assert not rf.exists()
+
+
+def test_measured_ordering_hydrogen_medium_cheaper_than_flash_medium_ranks_first() -> None:
+    records_flash_5 = [
+        {"task": f"f{i}", "kind": "feature", "worker": "flash-medium", "model": "gemini-3.8-flash-medium",
+         "failure": "none", "spend": {"runs": 1, "tokens": 1000, "quota": 0.03, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(5)
+    ]
+    records_hydrogen_5 = [
+        {"task": f"h{i}", "kind": "feature", "worker": "hydrogen-medium", "model": "gemini-4-hydrogen-medium",
+         "failure": "none", "spend": {"runs": 1, "tokens": 1000, "quota": 0.015, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(5)
+    ]
+
+    # With 5 records for both: hydrogen-medium is cheaper and measured -> ranked first
+    ranked, _ = wr.rank(2, pools(), kind="feature", outcomes=records_flash_5 + records_hydrogen_5)
+    assert ranked[0]["worker"] == "hydrogen-medium"
+    assert ranked[0]["measured_cost"] == pytest.approx(0.015)
+    assert ranked[0]["record_count"] == 5
+    assert ranked[1]["worker"] == "flash-medium"
+    assert ranked[1]["measured_cost"] == pytest.approx(0.03)
+    assert ranked[1]["record_count"] == 5
+
+    # With 4 records for hydrogen: unmeasured -> today's order (flash-medium first)
+    ranked_4, _ = wr.rank(2, pools(), kind="feature", outcomes=records_flash_5 + records_hydrogen_5[:4])
+    assert ranked_4[0]["worker"] == "flash-medium"
+    assert ranked_4[1]["worker"] == "hydrogen-medium"
+
+    # With 4 records for flash: unmeasured -> today's order (flash-medium first)
+    ranked_flash_4, _ = wr.rank(2, pools(), kind="feature", outcomes=records_flash_5[:4] + records_hydrogen_5)
+    assert ranked_flash_4[0]["worker"] == "flash-medium"
+    assert ranked_flash_4[1]["worker"] == "hydrogen-medium"
+
+
+def test_model_with_three_accepted_and_three_model_failures_has_infinite_median() -> None:
+    records = [
+        {"task": f"h{i}", "kind": "feature", "worker": "hydrogen-medium", "model": "gemini-4-hydrogen-medium",
+         "failure": "none", "spend": {"runs": 1, "tokens": 500, "quota": 0.01, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(3)
+    ] + [
+        {"task": f"hf{i}", "kind": "feature", "worker": "hydrogen-medium", "model": "gemini-4-hydrogen-medium",
+         "failure": "model", "spend": {"runs": 1, "tokens": 500, "quota": 0.01, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(3)
+    ] + [
+        {"task": f"f{i}", "kind": "feature", "worker": "flash-medium", "model": "gemini-3.8-flash-medium",
+         "failure": "none", "spend": {"runs": 1, "tokens": 1000, "quota": 0.05, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(5)
+    ]
+
+    h_cost, h_count = wr.candidate_measured_cost(
+        next(m for m in wr.MODELS if m.key == "hydrogen-medium"), "feature", records
+    )
+    assert h_count == 6
+    assert h_cost == math.inf
+
+    ranked, _ = wr.rank(2, pools(), kind="feature", outcomes=records)
+    # Measured flash-medium with finite median ranks BEFORE infinite-median hydrogen-medium
+    workers = [r["worker"] for r in ranked]
+    assert workers.index("flash-medium") < workers.index("hydrogen-medium")
+
+
+def test_candidates_in_different_pools_never_reordered_by_measured_cost() -> None:
+    # terra is codex pool, flash-medium is gemini pool
+    records_terra = [
+        {"task": f"t{i}", "kind": "feature", "worker": "terra", "model": "gpt-6.1-terra",
+         "failure": "none", "spend": {"runs": 1, "tokens": 1000, "quota": 0.001, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(5)
+    ]
+    records_flash = [
+        {"task": f"f{i}", "kind": "feature", "worker": "flash-medium", "model": "gemini-3.8-flash-medium",
+         "failure": "none", "spend": {"runs": 1, "tokens": 1000, "quota": 0.05, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(5)
+    ]
+    ranked, _ = wr.rank(2, pools(), kind="feature", outcomes=records_terra + records_flash)
+    workers = [r["worker"] for r in ranked]
+    # gemini pool candidate still comes before codex pool candidate despite higher measured cost
+    assert workers.index("flash-medium") < workers.index("terra")
+
+
+def test_measured_candidate_never_jumps_review_of_split() -> None:
+    # review_of="gemini": gemini candidates have same=1, codex terra has same=0
+    records_flash = [
+        {"task": f"f{i}", "kind": "review", "worker": "flash-medium", "model": "gemini-3.8-flash-medium",
+         "failure": "none", "spend": {"runs": 1, "tokens": 1000, "quota": 0.001, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(5)
+    ]
+    ranked, _ = wr.rank(2, pools(), review_of="gemini", kind="review", outcomes=records_flash)
+    # terra (different family than gemini) comes before flash-medium despite flash being measured cheaper
+    workers = [r["worker"] for r in ranked]
+    assert workers.index("terra") < workers.index("flash-medium")
+
+
+def test_model_cost_deleted() -> None:
+    from dataclasses import fields
+    model_field_names = [f.name for f in fields(wr.Model)]
+    assert "cost" not in model_field_names
+
+    ranked, _ = wr.rank(1, pools())
+    for entry in ranked:
+        assert "cost" not in entry
+        assert "measured_cost" in entry
+        assert "record_count" in entry
+
+    decision = wr.decide("low", "low", pools())
+    assert "measured_cost" in decision
+    assert "record_count" in decision

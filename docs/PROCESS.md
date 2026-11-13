@@ -43,7 +43,7 @@ python3 scripts/worker_routing.py pick --difficulty D --risk R
 and delegates to the worker it returns: the cheapest adequate one whose subscription pool has headroom. `no_worker`
 means the coordinator does the work or waits. The router only reads quota; it launches nothing and grants no authority.
 The coordinator reviews the worker's diff in proportion to risk before adopting it, and runs the checks itself.
-Record every worker outcome with `python3 scripts/worker_routing.py record`. On a model failure, escalate with salvage (the next worker starts from the
+Record every worker outcome with `python3 scripts/worker_routing.py record` (pass `--evidence <dir>` for each agy worker run). On a model failure, escalate with salvage (the next worker starts from the
 failed branch or diff plus the findings, unless the coordinator records why the approach is wrong).
 
 Worker routing rules (ADR-062): Gemini first for workers at every tier, with effort from difficulty times risk (Flash
