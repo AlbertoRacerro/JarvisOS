@@ -2681,26 +2681,31 @@ class Supervisor:
             self.state["cooldowns"].pop(agent, None)
         return True
 
-    def low_headroom(self, agent: str) -> bool:
-        """Whether a usable quota reading shows less than the minimum free room in any window."""
+    def free_room(self, agent: str) -> float | None:
+        """The smallest free room (100 - used_percent) over windows of a usable reading, or None."""
         native = agent in NATIVE_AGENTS
         entry = self.host.relay.argon_limits(agent) if native else self.reading(agent)
         if not isinstance(entry, dict) or not isinstance(entry.get("windows"), list) or not entry["windows"]:
-            return False
+            return None
         now = self.host.now()
         used_values = []
         for window in entry["windows"]:
             if not isinstance(window, dict):
-                return False
+                return None
             used = window.get("used_percent")
             if isinstance(used, bool) or not isinstance(used, (int, float)) or not 0 <= used <= 100:
-                return False
+                return None
             if not native:
                 reset = parse_ts(window.get("resets_at"))
                 if reset is None or not now < reset <= now + self.limits.max_reset_ahead:
-                    return False
+                    return None
             used_values.append(used)
-        return any(100 - used < self.limits.min_free_percent for used in used_values)
+        return min(100 - used for used in used_values)
+
+    def low_headroom(self, agent: str) -> bool:
+        """Whether a usable quota reading shows less than the minimum free room in any window."""
+        room = self.free_room(agent)
+        return room is not None and room < self.limits.min_free_percent
 
     def set_cooldown(self, agent: str, report: TurnReport) -> None:
         now = self.host.now()
@@ -3022,8 +3027,13 @@ class Supervisor:
 
     def _choose(self, current: str) -> str | None:
         """Prefer available coordinators with quota room, retaining the first available if all are low."""
-        # A completed mission rotates the next mission's seed; Codex follows the preferred routes in this order.
-        order = ([current] + [a for a in PREFERRED_AGENTS if a != current]) if current in PREFERRED_AGENTS else list(PREFERRED_AGENTS)
+        remaining = [a for a in PREFERRED_AGENTS if a != current]
+        rooms = {a: self.free_room(a) for a in remaining}
+        sorted_remaining = sorted(
+            remaining,
+            key=lambda a: ((0, -rooms[a]) if rooms[a] is not None else (1, 0.0)),
+        )
+        order = ([current] + sorted_remaining) if current in PREFERRED_AGENTS else sorted_remaining
         first_available = None
         for agent in [*order, "codex"]:
             if self.available(agent):
@@ -3772,8 +3782,7 @@ def serve_step(root: Path, factory: Callable[[Store, dict[str, Any]], Supervisor
                 return f"waiting:{mission_id}:{'repl_active' if 'repl_active' in found else 'legacy_autopilot'}"
             if state is None and last_completed_agent:
                 state = default_state()
-                state["agent"] = (PREFERRED_AGENTS[(PREFERRED_AGENTS.index(last_completed_agent) + 1) % len(PREFERRED_AGENTS)]
-                                  if last_completed_agent in PREFERRED_AGENTS else PREFERRED)
+                state["agent"] = last_completed_agent if last_completed_agent in PREFERRED_AGENTS else PREFERRED
             state = init_mission_state(store, mission, state, now)
             if not state.get("pending") and (reopened := reopen_unverified(state)):
                 store.save(state, now())

@@ -367,6 +367,152 @@ def test_choose_skips_native_coordinator_with_low_headroom(tmp_path: Path) -> No
     assert env.supervisor()._choose("argon") == "claude"
 
 
+def test_choose_headroom_ordering_prefers_agent_with_more_free_room(tmp_path: Path) -> None:
+    # Acceptance criterion 3: Seeded agent (claude) is low. Between argon and agy_opus,
+    # agy_opus has more room (70% vs 40%), so agy_opus is chosen despite tuple order.
+    env = Env(tmp_path, readings={"claude": reading("claude", 90, T0 + timedelta(days=5), T0)})
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 60 if a == "argon" else 30}]} if a in ("argon", "agy_opus") else None
+    assert env.supervisor()._choose("claude") == "agy_opus"
+
+    # When argon has more room (70% vs 40%), argon is chosen.
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 30 if a == "argon" else 60}]} if a in ("argon", "agy_opus") else None
+    assert env.supervisor()._choose("claude") == "argon"
+
+    # With equal room (both 50%), tuple order decides (argon before agy_opus).
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 50}]} if a in ("argon", "agy_opus") else None
+    assert env.supervisor()._choose("claude") == "argon"
+
+
+def test_choose_ranks_agents_without_usable_reading_after_those_with_room(tmp_path: Path) -> None:
+    # Acceptance criterion 4: An agent with no usable reading is chosen only after every
+    # available agent with a usable reading and enough room.
+    # Seeded agent argon is low on headroom (85% used, 15% room).
+    # claude has no usable reading (empty readings dict), while agy_opus has room (40% used, 60% room).
+    env = Env(tmp_path, readings={})
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 85 if a == "argon" else 40}]} if a in ("argon", "agy_opus") else None
+    assert env.supervisor()._choose("argon") == "agy_opus"
+
+    # When claude has a usable reading with room (30% used) and agy_opus has no usable reading, claude is chosen.
+    env = Env(tmp_path, readings={"claude": reading("claude", 30, T0 + timedelta(days=5), T0)})
+    env.relay.argon_limits = lambda a: (
+        {"windows": [{"used_percent": 85}]} if a == "argon"
+        else {"windows": [{"used_percent": -5}]} if a == "agy_opus"
+        else None
+    )
+    assert env.supervisor()._choose("argon") == "claude"
+
+    # When neither has a usable reading, tuple order applies as today (claude before agy_opus).
+    env = Env(tmp_path, readings={})
+    env.relay.argon_limits = lambda a: (
+        {"windows": [{"used_percent": 85}]} if a == "argon"
+        else {"windows": [{"used_percent": -5}]} if a == "agy_opus"
+        else None
+    )
+    assert env.supervisor()._choose("argon") == "claude"
+
+    # When an agent with a usable reading is LOW on headroom, an agent with no usable reading is chosen over it.
+    # claude (seeded) is low (90% used). argon has a usable reading but is LOW (85% used -> 15% room < 25%).
+    # agy_opus has no usable reading (used_percent -5). agy_opus is chosen because argon has low headroom.
+    env = Env(tmp_path, readings={"claude": reading("claude", 90, T0 + timedelta(days=5), T0)})
+    env.relay.argon_limits = lambda a: (
+        {"windows": [{"used_percent": 85}]} if a == "argon"
+        else {"windows": [{"used_percent": -5}]} if a == "agy_opus"
+        else None
+    )
+    assert env.supervisor()._choose("claude") == "agy_opus"
+
+
+def test_choose_all_low_fallback_and_codex_last_resort(tmp_path: Path) -> None:
+    # Acceptance criterion 5: When every available agent is low, the first available one in the
+    # headroom ordering is returned, and codex is chosen only when no preferred agent is available.
+
+    # 1. Every available agent is low. current (claude) is in cooldown.
+    # argon has 20% room (80% used), agy_opus has 15% room (85% used), codex has 5% room (95% used).
+    # Headroom ordering of remaining preferred agents: argon (20%) before agy_opus (15%).
+    # Since all are low, first available in headroom ordering (argon) is returned. codex is NOT chosen.
+    env = Env(tmp_path, readings={
+        "claude": reading("claude", 90, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 95, T0 + timedelta(days=5), T0),
+    })
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 80 if a == "argon" else 85}]} if a in ("argon", "agy_opus") else None
+    sup = env.supervisor()
+    sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    assert sup._choose("claude") == "argon"
+
+    # If agy_opus has 22% room and argon has 18% room, agy_opus is first available in headroom order.
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 82 if a == "argon" else 78}]} if a in ("argon", "agy_opus") else None
+    sup = env.supervisor()
+    sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    assert sup._choose("claude") == "agy_opus"
+
+    # 2. Codex is chosen only when no preferred agent is available.
+    # All preferred agents in cooldown / unavailable; codex is available (even if low).
+    env = Env(tmp_path, readings={"codex": reading("codex", 95, T0 + timedelta(days=5), T0)})
+    env.relay.argon_limits = lambda a: None
+    sup = env.supervisor()
+    sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    assert sup._choose("claude") == "codex"
+
+
+def test_low_headroom_and_free_room_conformance(tmp_path: Path) -> None:
+    # Acceptance criterion 6: low_headroom returns identical results and is backed by free_room.
+    # Usable reading with room (30% free >= 25%)
+    env = Env(tmp_path, readings={"claude": reading("claude", 70, T0 + timedelta(days=1), T0)})
+    sup = env.supervisor()
+    assert sup.free_room("claude") == 30.0
+    assert not sup.low_headroom("claude")
+
+    # Usable reading with low headroom (20% free < 25%)
+    env = Env(tmp_path, readings={"claude": reading("claude", 80, T0 + timedelta(days=1), T0)})
+    sup = env.supervisor()
+    assert sup.free_room("claude") == 20.0
+    assert sup.low_headroom("claude")
+
+    # Multiple windows: smallest free room over windows is returned
+    multi = {
+        "agent_key": "claude", "status": "ok", "as_of": rc.iso(T0),
+        "windows": [
+            {"id": "session", "used_percent": 50, "resets_at": rc.iso(T0 + timedelta(days=1))},
+            {"id": "weekly", "used_percent": 85, "resets_at": rc.iso(T0 + timedelta(days=3))},
+        ],
+    }
+    env = Env(tmp_path, readings={"claude": multi})
+    sup = env.supervisor()
+    assert sup.free_room("claude") == 15.0
+    assert sup.low_headroom("claude")
+
+    # Stale or unusable readings return None and low_headroom is False
+    stale = reading("claude", 90, T0 + timedelta(days=1), T0 - timedelta(hours=2))
+    env = Env(tmp_path, readings={"claude": stale})
+    sup = env.supervisor()
+    assert sup.free_room("claude") is None
+    assert not sup.low_headroom("claude")
+
+    past_reset = reading("claude", 90, T0 - timedelta(hours=1), T0)
+    env = Env(tmp_path, readings={"claude": past_reset})
+    sup = env.supervisor()
+    assert sup.free_room("claude") is None
+    assert not sup.low_headroom("claude")
+
+    # Native agents
+    env = Env(tmp_path)
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 80}]} if a == "argon" else None
+    sup = env.supervisor()
+    assert sup.free_room("argon") == 20.0
+    assert sup.low_headroom("argon")
+
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 60}]} if a == "argon" else None
+    sup = env.supervisor()
+    assert sup.free_room("argon") == 40.0
+    assert not sup.low_headroom("argon")
+
+    # Missing native limits
+    env.relay.argon_limits = lambda a: None
+    sup = env.supervisor()
+    assert sup.free_room("argon") is None
+    assert not sup.low_headroom("argon")
+
+
 def test_claude_quota_switches_to_codex_and_goes_idle(tmp_path: Path) -> None:
     env = Env(tmp_path, [("codex", CODEX_SUCCESS)])
     env.relay.readings = room(env, "codex")

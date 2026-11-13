@@ -405,7 +405,7 @@ def test_completed_missions_rotate_preference_without_a_new_state_store(tmp_path
     root = tmp_path / "control"
     seen = []
     missions = [mission_def(f"cycle {i}", mid=f"m-20261018T08000{i}Z-aabbc{i}",
-                            submitted=T0 + timedelta(seconds=i)) for i in range(4)]
+                            submitted=T0 + timedelta(seconds=i)) for i in range(5)]
     for mission in missions:
         _write_mission(root, mission)
 
@@ -414,6 +414,8 @@ def test_completed_missions_rotate_preference_without_a_new_state_store(tmp_path
             state = store.load()
             state["agent"] = state.get("agent") or "claude"
             seen.append(state["agent"])
+            if len(seen) == 4:
+                state["agent"] = "codex"
             state["mission"].update(next=1, done=[{"task": 0, "outcome": "verified"}], completed_at=rc.iso(T0))
             store.save(state, T0)
             return "idle"
@@ -421,7 +423,7 @@ def test_completed_missions_rotate_preference_without_a_new_state_store(tmp_path
 
     for mission in missions:
         assert rc.serve_step(root, factory, conflicts=lambda: [], now=lambda: T0) == f"ran:{mission['id']}:idle"
-    assert seen == ["claude", "argon", "agy_opus", "claude"]
+    assert seen == ["claude", "claude", "claude", "claude", "claude"]
 
 
 def test_resume_preserves_the_selected_native_coordinator(tmp_path):
