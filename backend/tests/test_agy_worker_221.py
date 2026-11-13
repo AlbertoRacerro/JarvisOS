@@ -327,6 +327,14 @@ def test_effort_and_3p_aliases(env: Env, alias: str, model_id: str, pool: set[st
     assert {b["id"] for b in result["quota"]} == pool
 
 
+def test_hydrogen_buckets_and_fixed_models_resolve_to_family_buckets() -> None:
+    assert worker.target_buckets("hydrogen-high") == ("gemini-5h", "gemini-weekly")
+    for alias in worker.FIXED_MODELS:
+        family = alias.split("-")[0]
+        assert family in worker.FAMILY_BUCKETS, f"alias {alias!r} family {family!r} not in FAMILY_BUCKETS"
+        assert worker.target_buckets(alias) == worker.FAMILY_BUCKETS[family]
+
+
 def test_argon_own_bucket_exhausted(env: Env) -> None:
     quota = json.loads(json.dumps(GOOD_QUOTA))
     quota["command"]["data"]["groups"][0]["buckets"][2]["remaining_fraction"] = 0
