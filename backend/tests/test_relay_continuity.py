@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import collections
+import hashlib
 import importlib.util
 import json
 import os
@@ -51,12 +52,18 @@ class Clock:
 
 
 def write_turn(session_dir: Path, events: list[dict[str, Any]], *, agent: str = "claude", status: str = "propose_done",
-               prompt: str = "task", number: int = 1) -> Path:
+               prompt: str = "task", number: int = 1, last_message: str | None = None,
+               context_used_tokens: int | None = None) -> Path:
     turn = session_dir / "turns" / f"turn-{number:03d}"
     turn.mkdir(parents=True, exist_ok=True)
     (turn / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
-    (turn / "state.json").write_text(json.dumps({"agent_key": agent, "status": status}))
+    state_data: dict[str, Any] = {"agent_key": agent, "status": status}
+    if context_used_tokens is not None:
+        state_data["context_used_tokens"] = context_used_tokens
+    (turn / "state.json").write_text(json.dumps(state_data))
     (turn / "prompt.md").write_text(prompt)
+    if last_message is not None:
+        (turn / "last-message.txt").write_text(last_message, encoding="utf-8")
     pin_to_t0(turn)
     return turn
 
@@ -117,15 +124,21 @@ class FakeRelay(rc.RelayAdapter):
         self.readings = readings
         self.clock: Clock | None = None
         (repo / ".agent-relay" / "sessions").mkdir(parents=True, exist_ok=True)
+        self._conv_store = repo / ".agent-relay" / "conversations"
+        self._conv_store.mkdir(parents=True, exist_ok=True)
+
+    def conversation_store(self) -> Path:
+        return self._conv_store
 
     def limits(self) -> dict[str, Any] | None:
         return self.readings() if callable(self.readings) else self.readings
 
-    def start(self, agent: str, parent: str, task: str, turns: int) -> FakeProc:
+    def start(self, agent: str, parent: str, task: str, turns: int,
+              resume: str | None = None, **kwargs: Any) -> FakeProc:
         if not self.script:
             raise AssertionError("unexpected Relay invocation")
         self.launches.append({"agent": agent, "parent": parent, "task": task, "turns": turns,
-                              "at": self.clock.now() if self.clock else None})
+                              "resume": resume, "at": self.clock.now() if self.clock else None, **kwargs})
         step = self.script.pop(0)
         self._current = (step, agent, task)
         return FakeProc(None)
@@ -138,8 +151,16 @@ class FakeRelay(rc.RelayAdapter):
         if callable(events):  # a reply that depends on the task (a diagnostic answers its own nonce)
             events = events(task)
         sid = f"20261018-{len(self.launches):06d}-{'b' * 6}"
-        write_turn(self.sessions_dir() / sid, events, agent=agent, prompt=relay_prompt(task),
-                   status=reported[0] if reported else "propose_done")
+        status = reported[0] if reported else "propose_done"
+        last_msg = reported[1] if len(reported) > 1 else None
+        tokens = reported[2] if len(reported) > 2 else None
+        turn = write_turn(self.sessions_dir() / sid, events, agent=agent, prompt=relay_prompt(task),
+                          status=status, last_message=last_msg, context_used_tokens=tokens)
+        if agent in rc.NATIVE_AGENTS and not (turn / "native-result.json").exists():
+            (turn / "native-result.json").write_text(
+                json.dumps({"schema": "argon-coordinator.v1", "launched": True, "exit_code": 0, "quota": [], "reason": None,
+                            "model": rc.relay_argon.MODEL})
+            )
         return rc.RunResult(sid, 0, True)
 
 
@@ -159,11 +180,15 @@ class Env:
         self.alive: dict[int, int] = {}
         self.sent: list[str] = []
         self.store = rc.Store(tmp / "control")
+        self.jobs: dict[str, dict[str, Any]] = {}
+        self.ci: dict[tuple[int, str], dict[str, Any]] = {}
         self.host = rc.Host(
             relay=self.relay, now=self.clock.now, sleep=self.clock.sleep, fingerprint=lambda: self.fp["v"],
             conflicts=lambda own: list(self.conflicts), pid_alive=self._alive,
             ledger=lambda kind, text: self.ledger.append((kind, text)), permissions_digest=lambda: self.perm["v"],
-            log=self.logs.append)
+            log=self.logs.append,
+            job_status=lambda jid: self.jobs.get(jid),
+            pr_ci_status=lambda pr, sha: self.ci.get((pr, sha)))
         self.limits = limits or rc.Limits()
         self.sender = sender if sender is not None else self._send
 
@@ -4084,7 +4109,10 @@ def test_prompts_keep_working_on_job_independent_work_while_a_job_runs() -> None
     assert "blocks only the work that depends on its result" in mission
     assert "only when no such job-independent authorized work remains" in mission
     assert "focused tests only, full suites to CI" in mission
-    assert "A running registered job never idles the cycle" in rc.ROADMAP_TASK
+    assert "While a registered job runs, take the next item in the order the standing directives give" in rc.ROADMAP_TASK
+    assert "A running registered job never idles the cycle" not in rc.ROADMAP_TASK
+    assert "end with `RELAY_STATUS continue` and a `JOB-WAIT:` or `CI-WAIT:` line" in rc.ROADMAP_TASK
+    assert "next directive item" in rc.ROADMAP_TASK
     # The JOB-WAIT pause itself is unchanged: a cycle that does end blocked on jobs still pauses until they finish.
     assert "`JOB-WAIT: <job id>` lines, which pause roadmap mode until those jobs finish" in mission
 
@@ -4271,4 +4299,1368 @@ def test_no_supervisor_event_tells_the_maintainer_to_write_in_chat() -> None:
 def test_roadmap_task_readiness_is_yours_to_give() -> None:
     assert "readiness is yours to give" in rc.ROADMAP_TASK
     assert "still requires explicit readiness" not in rc.ROADMAP_TASK
+
+
+# ---------------------------------------------------------------------------
+# Spec 264 (SESSION-BRIEF-1): operator mission brief and standing directives at session start
+
+
+def test_no_session_context_configured_journal_and_prompt_unchanged(tmp_path: Path) -> None:
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    env.head(SUCCESS)
+    assert env.host.session_context is None
+    result, sup = env.run(task="do next step {nonce}")
+    assert result == "idle"
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert "brief" not in launch_events[0]
+    assert "directives" not in launch_events[0]
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER not in launched_task
+    assert rc.DIRECTIVES_HEADER not in launched_task
+
+
+def test_session_context_block_no_setting_no_authority(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+    text, fields = rc.session_context_block(control, dev_env, None)
+    assert text == ""
+    assert fields == {"brief": None, "directives": []}
+
+
+def test_setting_present_fresh_launch_includes_brief_before_worker_routing(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Execute the plan strictly in order.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    env.host.worker_routing = lambda: "## Worker routing\npick: auto"
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    env.host.session_context = lambda authority: rc.session_context_block(control, dev_env, authority)
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+
+    result = sup._launch("claude", "fresh turn {nonce}", previous=None)
+    assert isinstance(result, rc.TurnReport) or result in ("success", "idle", "waiting")
+    assert env.relay.launches[0]["parent"] is None
+    launched_task = env.relay.launches[0]["task"]
+    assert launched_task.count(rc.BRIEF_HEADER) == 1
+    assert "Execute the plan strictly in order." in launched_task
+    assert "## Worker routing" in launched_task
+    assert launched_task.index(rc.BRIEF_HEADER) < launched_task.index("## Worker routing")
+
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert launch_events[0]["brief"] == hashlib.sha256(b"Execute the plan strictly in order.").hexdigest()[:12]
+    assert launch_events[0]["directives"] == []
+
+
+def test_resumed_same_agent_turn_skips_session_context(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Private brief.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    calls: list[str | None] = []
+
+    def mock_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        calls.append(authority)
+        return rc.session_context_block(control, dev_env, authority)
+
+    env.host.session_context = mock_context
+    sup = env.supervisor()
+    sup.state["head_session"] = "20261018-000001-bbbbbb"
+    sup.state["agent"] = "claude"
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.save()
+
+    report = rc.TurnReport(
+        turn_id="20261018-000001-bbbbbb/turn-001",
+        outcome="success",
+        agent="claude",
+        detail="turn complete",
+    )
+    sup._launch("claude", "continue cycle {nonce}", report)
+    assert calls == []
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER not in launched_task
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert launch_events[0]["brief"] is None
+    assert launch_events[0]["directives"] == []
+
+
+def test_native_retry_resuming_conversation_skips_session_context(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Private brief for native agent.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("argon", SUCCESS)])
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    calls: list[str | None] = []
+
+    def mock_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        calls.append(authority)
+        return rc.session_context_block(control, dev_env, authority)
+
+    env.host.session_context = mock_context
+    sup = env.supervisor()
+    sup.state["head_session"] = "20261018-000001-bbbbbb"
+    sup.state["agent"] = "argon"
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.save()
+
+    # Create previous native turn output with conversation_id
+    turn_dir = env.relay.sessions_dir() / "20261018-000001-bbbbbb" / "turns" / "turn-001"
+    turn_dir.mkdir(parents=True)
+    cid = "5b934b69-1847-40af-93ec-eefda93178a5"
+    (turn_dir / "output.jsonl").write_text(
+        json.dumps({"event": "init", "conversation_id": cid, "init": {"model": "argon"}}) + "\n",
+        encoding="utf-8",
+    )
+    # Store file exists and is within cap: conversation is resumable
+    (env.relay.conversation_store() / f"{cid}.db").write_bytes(b"x" * 1024)
+
+    report = rc.TurnReport(
+        turn_id="20261018-000001-bbbbbb/turn-001",
+        outcome="transient",
+        agent="argon",
+        detail="network blip",
+    )
+    sup._launch("argon", "retry turn {nonce}", report)
+    # Native retry resumes the same conversation, so session_context must NOT be attached:
+    assert calls == []
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER not in launched_task
+    assert env.relay.launches[0]["resume"] == cid
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert launch_events[0]["resume"] == cid
+    assert launch_events[0]["brief"] is None
+    assert launch_events[0]["directives"] == []
+
+
+def test_native_retry_missing_conversation_store_attaches_session_context(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Private brief for native agent.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("argon", SUCCESS)])
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    calls: list[str | None] = []
+
+    def mock_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        calls.append(authority)
+        return rc.session_context_block(control, dev_env, authority)
+
+    env.host.session_context = mock_context
+    sup = env.supervisor()
+    sup.state["head_session"] = "20261018-000001-bbbbbb"
+    sup.state["agent"] = "argon"
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.save()
+
+    # Create previous native turn output with conversation_id, but NO store file
+    turn_dir = env.relay.sessions_dir() / "20261018-000001-bbbbbb" / "turns" / "turn-001"
+    turn_dir.mkdir(parents=True)
+    cid = "5b934b69-1847-40af-93ec-eefda93178a5"
+    (turn_dir / "output.jsonl").write_text(
+        json.dumps({"event": "init", "conversation_id": cid, "init": {"model": "argon"}}) + "\n",
+        encoding="utf-8",
+    )
+    # Notice: env.relay.conversation_store() / f"{cid}.db" does NOT exist (missing store)
+
+    report = rc.TurnReport(
+        turn_id="20261018-000001-bbbbbb/turn-001",
+        outcome="transient",
+        agent="argon",
+        detail="network blip",
+    )
+    sup._launch("argon", "retry turn {nonce}", report)
+    # Missing store causes runner rejection -> fresh context actually starts -> session_context MUST be attached:
+    assert len(calls) == 1
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER in launched_task
+    assert "Private brief for native agent." in launched_task
+    assert env.relay.launches[0]["resume"] is None
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert "resume" not in launch_events[0] or launch_events[0]["resume"] is None
+    assert launch_events[0]["brief"] is not None
+    # Verify logs do NOT leak brief content
+    assert any("native conversation store missing; starting fresh context" in line for line in env.logs)
+    assert not any("Private brief for native agent." in line for line in env.logs)
+
+
+def test_native_retry_oversize_conversation_store_attaches_session_context(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Private brief for native agent.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("argon", SUCCESS)])
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    calls: list[str | None] = []
+
+    def mock_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        calls.append(authority)
+        return rc.session_context_block(control, dev_env, authority)
+
+    env.host.session_context = mock_context
+    sup = env.supervisor()
+    sup.state["head_session"] = "20261018-000001-bbbbbb"
+    sup.state["agent"] = "argon"
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.save()
+
+    # Create previous native turn output with conversation_id
+    turn_dir = env.relay.sessions_dir() / "20261018-000001-bbbbbb" / "turns" / "turn-001"
+    turn_dir.mkdir(parents=True)
+    cid = "5b934b69-1847-40af-93ec-eefda93178a5"
+    (turn_dir / "output.jsonl").write_text(
+        json.dumps({"event": "init", "conversation_id": cid, "init": {"model": "argon"}}) + "\n",
+        encoding="utf-8",
+    )
+    # Store file exists but is oversize (> RESUME_MAX_BYTES)
+    with (env.relay.conversation_store() / f"{cid}.db").open("wb") as handle:
+        handle.truncate(rc.relay_argon.RESUME_MAX_BYTES + 1)
+
+    report = rc.TurnReport(
+        turn_id="20261018-000001-bbbbbb/turn-001",
+        outcome="transient",
+        agent="argon",
+        detail="network blip",
+    )
+    sup._launch("argon", "retry turn {nonce}", report)
+    # Oversize store causes runner rejection -> fresh context actually starts -> session_context MUST be attached:
+    assert len(calls) == 1
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER in launched_task
+    assert "Private brief for native agent." in launched_task
+    assert env.relay.launches[0]["resume"] is None
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert "resume" not in launch_events[0] or launch_events[0]["resume"] is None
+    assert launch_events[0]["brief"] is not None
+    # Verify logs do NOT leak brief content
+    assert any("oversize" in line and "starting fresh context" in line for line in env.logs)
+    assert not any("Private brief for native agent." in line for line in env.logs)
+
+
+def test_agent_switch_with_non_null_parent_attaches_block(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Operator brief on switch.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    calls: list[str | None] = []
+
+    def mock_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        calls.append(authority)
+        return rc.session_context_block(control, dev_env, authority)
+
+    env.host.session_context = mock_context
+    sup = env.supervisor()
+    sup.state["head_session"] = "20261018-000001-bbbbbb"
+    sup.state["agent"] = "claude_prior"
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.save()
+
+    report = rc.TurnReport(
+        turn_id="20261018-000001-bbbbbb/turn-001",
+        outcome="success",
+        agent="claude_prior",
+        detail="turn complete",
+    )
+    sup._launch("claude", "takeover turn {nonce}", report)
+    assert len(calls) == 1
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER in launched_task
+    assert "Operator brief on switch." in launched_task
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert launch_events[0]["brief"] == hashlib.sha256(b"Operator brief on switch.").hexdigest()[:12]
+
+
+def test_brief_failure_modes_produce_one_line_notice_without_path(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    setting = control / "mission-brief"
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+
+    # 1. Relative path
+    setting.write_text("relative/path/brief.md", encoding="utf-8")
+    logs: list[str] = []
+    text, fields = rc.session_context_block(control, dev_env, None, log=logs.append)
+    assert text == "Operator mission brief not attached: not an absolute path"
+    assert "relative" not in text
+    assert fields["brief"] is None
+    assert logs == ["Operator mission brief not attached: not an absolute path"]
+
+    # 2. Missing file
+    missing = tmp_path / "missing_brief.md"
+    setting.write_text(str(missing), encoding="utf-8")
+    logs.clear()
+    text, fields = rc.session_context_block(control, dev_env, None, log=logs.append)
+    assert text == "Operator mission brief not attached: missing"
+    assert str(tmp_path) not in text
+    assert fields["brief"] is None
+    assert logs == ["Operator mission brief not attached: missing"]
+
+    # 3. Unreadable file
+    unreadable = tmp_path / "unreadable_brief.md"
+    unreadable.write_text("Secret content", encoding="utf-8")
+    unreadable.chmod(0o000)
+    setting.write_text(str(unreadable), encoding="utf-8")
+    logs.clear()
+    try:
+        text, fields = rc.session_context_block(control, dev_env, None, log=logs.append)
+        assert text == "Operator mission brief not attached: unreadable"
+        assert str(tmp_path) not in text
+        assert fields["brief"] is None
+        assert logs == ["Operator mission brief not attached: unreadable"]
+    finally:
+        unreadable.chmod(0o644)
+
+    # 4. Oversize file (> 24,000 bytes)
+    oversize = tmp_path / "oversize_brief.md"
+    oversize.write_bytes(b"A" * 24_001)
+    setting.write_text(str(oversize), encoding="utf-8")
+    logs.clear()
+    text, fields = rc.session_context_block(control, dev_env, None, log=logs.append)
+    assert text == "Operator mission brief not attached: larger than 24000 bytes"
+    assert str(tmp_path) not in text
+    assert fields["brief"] is None
+    assert logs == ["Operator mission brief not attached: larger than 24000 bytes"]
+
+    # Verify launch proceeds with notice
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    env.host.session_context = lambda authority: rc.session_context_block(control, dev_env, authority)
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    result = sup._launch("claude", "fresh turn with oversize brief {nonce}", previous=None)
+    assert isinstance(result, rc.TurnReport) or result in ("success", "idle", "waiting")
+    assert env.relay.launches[0]["parent"] is None
+    launched = env.relay.launches[0]["task"]
+    assert "Operator mission brief not attached: larger than 24000 bytes" in launched
+    assert str(tmp_path) not in launched
+
+
+def test_directives_authority_superseded_mismatch_and_cap(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+
+    # D1: Older than authority -> must not be included
+    e1 = rc.devctx.record_directive(dev_env, "D1 older directive", source=None, supersedes=None, author="maintainer")
+    # D2: Authority directive -> included
+    e2 = rc.devctx.record_directive(dev_env, "D2 authority directive text", source=None, supersedes=None, author="maintainer")
+    # D3: Recorded after authority, but later superseded -> absent
+    e3 = rc.devctx.record_directive(dev_env, "D3 old standing directive", source=None, supersedes=None, author="maintainer")
+    # D4: Supersedes D3 -> included
+    e4 = rc.devctx.record_directive(dev_env, "D4 supersedes D3 directive text", source=None, supersedes=[e3["id"]], author="maintainer")
+    # D5: Hash mismatched -> replaced by notice
+    e5 = rc.devctx.record_directive(dev_env, "D5 original text", source=None, supersedes=None, author="maintainer")
+    Path(e5["directive"]["path"]).write_text("D5 tampered text", encoding="utf-8")
+
+    text, fields = rc.session_context_block(control, dev_env, e2["id"])
+    assert rc.DIRECTIVES_HEADER in text
+    assert e1["id"] not in text
+    assert f"### Directive {e2['id']}\nD2 authority directive text" in text
+    assert e3["id"] not in text
+    assert f"### Directive {e4['id']}\nD4 supersedes D3 directive text" in text
+    assert f"Directive {e5['id']} not attached: file modified after recording" in text
+    # D2 and D4 were attached in order; D5 was replaced by notice, so not in attached directives
+    assert fields["directives"] == [e2["id"], e4["id"]]
+    # Oldest-first order verification
+    pos_d2 = text.index(f"### Directive {e2['id']}")
+    pos_d4 = text.index(f"### Directive {e4['id']}")
+    pos_d5 = text.index(f"Directive {e5['id']} not attached")
+    assert pos_d2 < pos_d4 < pos_d5
+
+    # Cap exceeded test: add a large directive D6 (23,950 bytes) so total exceeds 24,000 bytes
+    e6 = rc.devctx.record_directive(dev_env, "X" * 23_950, source=None, supersedes=None, author="maintainer")
+    text_capped, fields_capped = rc.session_context_block(control, dev_env, e2["id"])
+    # Newest (D6) fits, older (D2, D4, D5) are omitted for length
+    assert f"### Directive {e6['id']}" in text_capped
+    assert "Older standing directives omitted for length:" in text_capped
+    assert f"{e2['id']}, {e4['id']}, {e5['id']}" in text_capped
+    assert "(devctx.py show <id>)" in text_capped
+    assert fields_capped["directives"] == [e6["id"]]
+
+
+def test_directives_body_limit_24000_and_24001_bytes(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+
+    # 1. Exactly 24,000 bytes directive body: MUST be attached (heading not counted against limit)
+    exact_text = "E" * 24_000
+    e_exact = rc.devctx.record_directive(dev_env, exact_text, source=None, supersedes=None, author="maintainer")
+    text_exact, fields_exact = rc.session_context_block(control, dev_env, e_exact["id"])
+    assert fields_exact["directives"] == [e_exact["id"]]
+    assert f"### Directive {e_exact['id']}\n{exact_text}" in text_exact
+    assert "Older standing directives omitted for length:" not in text_exact
+
+    # 2. 24,001 bytes directive body: exceeds limit, MUST NOT be attached and must be explicitly omitted
+    over_text = "O" * 24_001
+    e_over = rc.devctx.record_directive(dev_env, over_text, source=None, supersedes=None, author="maintainer")
+    text_over, fields_over = rc.session_context_block(control, dev_env, e_over["id"])
+    assert fields_over["directives"] == []
+    assert f"### Directive {e_over['id']}" not in text_over
+    assert "Standing directives omitted for length:" in text_over
+    assert "Older standing directives omitted for length:" not in text_over
+    assert e_over["id"] in text_over
+
+
+def test_oversize_newest_directive_preserves_earlier_authority_directive(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+
+    # D1 is short mission authority directive (fits well within 24,000 bytes)
+    e1 = rc.devctx.record_directive(dev_env, "D1 authority short directive text", source=None, supersedes=None, author="maintainer")
+    # D2 is newest directive, exceeds 24,000 bytes (e.g. 24,500 bytes)
+    e2 = rc.devctx.record_directive(dev_env, "Y" * 24_500, source=None, supersedes=None, author="maintainer")
+
+    text, fields = rc.session_context_block(control, dev_env, e1["id"])
+    # Earlier short mission authority directive MUST NOT be suppressed by oversize newest directive:
+    assert fields["directives"] == [e1["id"]]
+    assert f"### Directive {e1['id']}\nD1 authority short directive text" in text
+    assert f"### Directive {e2['id']}" not in text
+
+    # Omission notice must be accurate: D2 is newer than kept directives, so not labeled as "Older":
+    assert "Newer standing directives omitted for length:" in text
+    assert e2["id"] in text
+    assert "Older standing directives omitted for length:" not in text
+
+
+def test_multiple_directives_older_and_newer_omission_notices(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+
+    # D1 (authority): 50 bytes
+    e1 = rc.devctx.record_directive(dev_env, "D1 " + "1" * 47, source=None, supersedes=None, author="maintainer")
+    # D2: 100 bytes
+    e2 = rc.devctx.record_directive(dev_env, "D2 " + "2" * 97, source=None, supersedes=None, author="maintainer")
+    # D3: 23,900 bytes
+    e3 = rc.devctx.record_directive(dev_env, "D3 " + "3" * 23_897, source=None, supersedes=None, author="maintainer")
+    # D4: 25,000 bytes (oversize newest)
+    e4 = rc.devctx.record_directive(dev_env, "D4 " + "4" * 24_997, source=None, supersedes=None, author="maintainer")
+
+    text, fields = rc.session_context_block(control, dev_env, e1["id"])
+    # D4 (>24k) is oversize omitted.
+    # D3 (23,900) fits.
+    # D2 (100) fits (23,900 + 100 = 24,000 <= 24,000).
+    # D1 (50) exceeds remaining capacity (24,000 + 50 > 24,000), so older omitted.
+    assert fields["directives"] == [e2["id"], e3["id"]]
+    assert f"### Directive {e2['id']}" in text
+    assert f"### Directive {e3['id']}" in text
+    assert f"### Directive {e1['id']}" not in text
+    assert f"### Directive {e4['id']}" not in text
+
+    # Both accurate omission notices must be recorded:
+    assert "Newer standing directives omitted for length:" in text
+    assert e4["id"] in text
+    assert "Older standing directives omitted for length:" in text
+    assert e1["id"] in text
+
+
+def test_directives_authority_not_found(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+    text, fields = rc.session_context_block(control, dev_env, "L20261113000000-0000")
+    assert text == "Directive L20261113000000-0000 not attached: not found in ledger"
+    assert fields["directives"] == []
+
+
+def test_launch_journal_records_brief_and_directives_never_text_or_path(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_secret_brief.md"
+    brief_file.write_text("Strict secret instructions: deploy alpha first.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+    d_auth = rc.devctx.record_directive(dev_env, "Maintainer directive content", source=None, supersedes=None, author="maintainer")
+
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    env.host.session_context = lambda authority: rc.session_context_block(control, dev_env, authority)
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.mission = {"id": "M100", "authority": d_auth["id"], "tasks": [{"text": "Task A"}]}
+    sup.state["mission"] = {"id": "M100", "next": 0, "total": 1}
+
+    sup._launch("claude", "execute task {nonce}", previous=None)
+
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    event = launch_events[0]
+    expected_brief_digest = hashlib.sha256(b"Strict secret instructions: deploy alpha first.").hexdigest()[:12]
+    assert event["brief"] == expected_brief_digest
+    assert event["directives"] == [d_auth["id"]]
+
+    event_str = json.dumps(event)
+    assert "Strict secret instructions" not in event_str
+    assert "Maintainer directive content" not in event_str
+    assert str(brief_file) not in event_str
+    assert str(tmp_path) not in event_str
+
+
+def test_session_context_raising_logs_and_launches_without_it(tmp_path: Path) -> None:
+    env = Env(tmp_path, [("claude", SUCCESS)])
+
+    def failing_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        raise ValueError("simulated session context reader crash")
+
+    env.host.session_context = failing_context
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    result = sup._launch("claude", "perform turn {nonce}", previous=None)
+    assert isinstance(result, rc.TurnReport) or result in ("success", "idle", "waiting")
+    assert any("session context skipped: ValueError" in log for log in env.logs)
+
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert launch_events[0]["brief"] is None
+    assert launch_events[0]["directives"] == []
+
+
+def test_gitignore_contains_agent_relay() -> None:
+    gitignore_path = Path(__file__).resolve().parents[2] / ".gitignore"
+    assert gitignore_path.exists()
+    lines = [line.strip() for line in gitignore_path.read_text(encoding="utf-8").splitlines()]
+    assert ".agent-relay/" in lines
+
+
+def test_make_host_wires_session_context(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    host = rc.make_host(repo)
+    assert host.session_context is not None
+    assert callable(host.session_context)
+    text, fields = host.session_context(None)
+    assert text == ""
+    assert fields == {"brief": None, "directives": []}
+
+
+# ---------------------------------------------------------------------------
+# Spec 267: Session continuity across external waits
+
+
+def test_wait_parsing_strict_and_deduplicated() -> None:
+    text = (
+        "Some thoughts and progress...\n"
+        "RELAY_STATUS continue\n"
+        "JOB-WAIT: j-20261113T120000Z-111111\n"
+        "CI-WAIT: 42@0123456789abcdef0123456789abcdef01234567\n"
+        "JOB-WAIT: j-20261113T120000Z-222222\n"
+        "JOB-WAIT: j-20261113T120000Z-111111\n"  # duplicate
+        "CI-WAIT: 42@0123456789abcdef0123456789abcdef01234567\n"  # duplicate
+        "JOB-WAIT: `j-20261113T120000Z-333333`\n"  # backticks: rejected
+        "JOB-WAIT: j-20261113T120000Z-444444; rm -rf /\n"  # shell injection: rejected
+        "CI-WAIT: 42@0123456789abcdef0123456789abcdef01234567 | cat\n"  # shell pipe: rejected
+        "CI-WAIT: 42@shortsha\n"  # short sha: rejected
+        "CI-WAIT: https://github.com/org/repo/pull/42\n"  # url: rejected
+        "CI-WAIT: 0@0123456789abcdef0123456789abcdef01234567\n"  # pr 0: rejected
+        "JOB-WAIT: \n"  # empty: rejected
+        "CI-WAIT: \n"  # empty: rejected
+    )
+    jobs, ci_waits = rc.parse_wait_directives(text)
+    assert jobs == ["j-20261113T120000Z-111111", "j-20261113T120000Z-222222"]
+    assert ci_waits == [(42, "0123456789abcdef0123456789abcdef01234567")]
+    _, zero_waits = rc.parse_wait_directives("CI-WAIT: 0@0123456789abcdef0123456789abcdef01234567")
+    assert zero_waits == []
+
+
+def test_job_wait_satisfaction_and_resume_prompt(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("run worker jobs")
+    start_mission(env, mission)
+    t0 = env.clock.now()
+
+    def job_status(jid: str) -> dict[str, Any] | None:
+        if jid == "j-20261113T120000Z-111111":
+            if (env.clock.now() - t0).total_seconds() >= 15:
+                return {"status": "failed"}
+            return {"status": "running"}
+        if jid == "j-20261113T120000Z-222222":
+            return {"status": "succeeded"}
+        return None
+
+    env.host.job_status = job_status
+
+    turn1_msg = (
+        "Started background solver jobs.\n"
+        "RELAY_STATUS continue\n"
+        "JOB-WAIT: j-20261113T120000Z-111111\n"
+        "JOB-WAIT: j-20261113T120000Z-222222"
+    )
+    env.relay.script = [
+        ("claude", SUCCESS, "continue", turn1_msg),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    assert len(env.relay.launches) == 2
+    l2 = env.relay.launches[1]
+    assert l2["parent"] is not None
+    assert "External wait satisfied:" in l2["task"]
+    assert "- JOB j-20261113T120000Z-111111: failed" in l2["task"]
+    assert "- JOB j-20261113T120000Z-222222: succeeded" in l2["task"]
+    assert f"Resume work on mission {mission['id']} task 1/1." in l2["task"]
+
+
+def test_ci_wait_satisfaction_and_unrelated_ci_ignored(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("wait for PR checks")
+    start_mission(env, mission)
+    t0 = env.clock.now()
+    head_sha = "1111111111111111111111111111111111111111"
+
+    # Unrelated CI run on another PR / head exists
+    env.ci[(99, "9999999999999999999999999999999999999999")] = {
+        "observed_head": "9999999999999999999999999999999999999999",
+        "state": "open",
+        "required_checks": ["backend"],
+        "checks": [{"name": "backend", "status": "completed", "conclusion": "success"}],
+    }
+
+    def pr_status(pr: int, sha: str) -> dict[str, Any] | None:
+        if pr == 42 and sha == head_sha:
+            if (env.clock.now() - t0).total_seconds() >= 60:
+                return {
+                    "observed_head": head_sha,
+                    "state": "open",
+                    "required_checks": ["backend"],
+                    "checks": [{"name": "backend", "status": "completed", "conclusion": "success"}],
+                }
+            return {
+                "observed_head": head_sha,
+                "state": "open",
+                "required_checks": ["backend"],
+                "checks": [{"name": "backend", "status": "in_progress", "conclusion": ""}],
+            }
+        return env.ci.get((pr, sha))
+
+    env.host.pr_ci_status = pr_status
+
+    turn1_msg = f"Waiting for PR checks.\nRELAY_STATUS continue\nCI-WAIT: 42@{head_sha}"
+    env.relay.script = [
+        ("claude", SUCCESS, "continue", turn1_msg),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    assert len(env.relay.launches) == 2
+    l2 = env.relay.launches[1]
+    assert l2["parent"] is not None
+    assert "External wait satisfied:" in l2["task"]
+    assert f"- CI PR #42@{head_sha}: success" in l2["task"]
+    assert sum(env.clock.slept) >= rc.CI_POLL_INTERVAL_SECONDS
+
+
+def test_pr_head_change_or_closure_wakes_immediately_with_uncertainty(tmp_path: Path) -> None:
+    head_sha = "1111111111111111111111111111111111111111"
+
+    # Part A: Head changes
+    env_a = Env(tmp_path / "a")
+    mission_a = mission_def("pr head advances")
+    start_mission(env_a, mission_a)
+    env_a.jobs["j-20261113T120000Z-111111"] = {"status": "running"}
+    env_a.ci[(42, head_sha)] = {
+        "observed_head": "2222222222222222222222222222222222222222",  # advanced!
+        "state": "open",
+        "required_checks": ["backend"],
+        "checks": [{"name": "backend", "status": "in_progress", "conclusion": ""}],
+    }
+    msg_a = f"RELAY_STATUS continue\nJOB-WAIT: j-20261113T120000Z-111111\nCI-WAIT: 42@{head_sha}"
+    env_a.relay.script = [
+        ("claude", SUCCESS, "continue", msg_a),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result_a, sup_a = run_mission(env_a, mission_a)
+    assert result_a == "idle"
+    assert len(env_a.relay.launches) == 2
+    l2_a = env_a.relay.launches[1]
+    assert "External wait terminated (head_changed):" in l2_a["task"]
+    assert "- JOB j-20261113T120000Z-111111: uncertain" in l2_a["task"]
+    assert f"- CI PR #42@{head_sha}: head_changed (uncertain)" in l2_a["task"]
+
+    # Part B: PR closed
+    env_b = Env(tmp_path / "b")
+    mission_b = mission_def("pr closed")
+    start_mission(env_b, mission_b)
+    env_b.ci[(42, head_sha)] = {
+        "observed_head": head_sha,
+        "state": "closed",
+        "required_checks": ["backend"],
+        "checks": [],
+    }
+    msg_b = f"RELAY_STATUS continue\nCI-WAIT: 42@{head_sha}"
+    env_b.relay.script = [
+        ("claude", SUCCESS, "continue", msg_b),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result_b, sup_b = run_mission(env_b, mission_b)
+    assert result_b == "idle"
+    assert len(env_b.relay.launches) == 2
+    l2_b = env_b.relay.launches[1]
+    assert "External wait terminated (pr_closed):" in l2_b["task"]
+    assert f"- CI PR #42@{head_sha}: pr_closed (uncertain)" in l2_b["task"]
+
+
+def test_unregistered_job_wakes_immediately_with_uncertainty(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("unregistered job")
+    start_mission(env, mission)
+    env.jobs["j-20261113T120000Z-888888"] = {"status": "running"}  # registered
+    # j-20261113T120000Z-999999 is NOT in env.jobs
+
+    turn_msg = (
+        "RELAY_STATUS continue\n"
+        "JOB-WAIT: j-20261113T120000Z-999999\n"
+        "JOB-WAIT: j-20261113T120000Z-888888"
+    )
+    env.relay.script = [
+        ("claude", SUCCESS, "continue", turn_msg),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    assert len(env.relay.launches) == 2
+    l2 = env.relay.launches[1]
+    assert "External wait terminated (unregistered_job):" in l2["task"]
+    assert "- JOB j-20261113T120000Z-999999: unregistered_job (uncertain)" in l2["task"]
+    assert "- JOB j-20261113T120000Z-888888: uncertain" in l2["task"]
+
+
+def test_wait_timeout_wakes_with_uncertainty(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("wait timeout")
+    start_mission(env, mission)
+    env.jobs["j-20261113T120000Z-111111"] = {"status": "running"}  # never finishes
+
+    turn_msg = "RELAY_STATUS continue\nJOB-WAIT: j-20261113T120000Z-111111"
+    env.relay.script = [
+        ("claude", SUCCESS, "continue", turn_msg),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    assert len(env.relay.launches) == 2
+    l2 = env.relay.launches[1]
+    assert "External wait terminated (wait_timeout):" in l2["task"]
+    assert "- JOB j-20261113T120000Z-111111: wait_timeout (uncertain)" in l2["task"]
+    assert sum(env.clock.slept) >= rc.WAIT_TIMEOUT_SECONDS
+
+
+def test_no_checks_or_unreadable_ci_fails_closed(tmp_path: Path) -> None:
+    head_sha = "1111111111111111111111111111111111111111"
+
+    # Part A: Zero checks after 120s
+    env_a = Env(tmp_path / "a")
+    mission_a = mission_def("no checks")
+    start_mission(env_a, mission_a)
+    env_a.ci[(42, head_sha)] = {
+        "observed_head": head_sha,
+        "state": "open",
+        "required_checks": ["backend"],
+        "checks": [],
+    }
+    msg_a = f"RELAY_STATUS continue\nCI-WAIT: 42@{head_sha}"
+    env_a.relay.script = [
+        ("claude", SUCCESS, "continue", msg_a),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result_a, _ = run_mission(env_a, mission_a)
+    assert result_a == "idle"
+    l2_a = env_a.relay.launches[1]
+    assert "External wait terminated (no_checks_reported):" in l2_a["task"]
+    assert f"- CI PR #42@{head_sha}: no_checks_reported (uncertain)" in l2_a["task"]
+    assert sum(env_a.clock.slept) >= 120
+
+    # Part B: Unreadable through timeout
+    env_b = Env(tmp_path / "b")
+    mission_b = mission_def("unreadable ci")
+    start_mission(env_b, mission_b)
+    env_b.ci[(42, head_sha)] = {"unreadable": True}
+    msg_b = f"RELAY_STATUS continue\nCI-WAIT: 42@{head_sha}"
+    env_b.relay.script = [
+        ("claude", SUCCESS, "continue", msg_b),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result_b, _ = run_mission(env_b, mission_b)
+    assert result_b == "idle"
+    l2_b = env_b.relay.launches[1]
+    assert "External wait terminated (remote_unreadable):" in l2_b["task"]
+    assert f"- CI PR #42@{head_sha}: remote_unreadable (uncertain)" in l2_b["task"]
+    assert sum(env_b.clock.slept) >= rc.WAIT_TIMEOUT_SECONDS
+
+
+def test_satisfied_waits_do_not_consume_checkpoint_limit(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("checkpoints test")
+    start_mission(env, mission)
+    env.jobs["j-20261113T120000Z-111111"] = {"status": "succeeded"}
+    msg = "RELAY_STATUS continue\nJOB-WAIT: j-20261113T120000Z-111111"
+
+    # 12 consecutive satisfied waits
+    env.relay.script = [("claude", SUCCESS, "continue", msg) for _ in range(12)]
+    env.relay.script.append(("claude", SUCCESS, "propose_done"))
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    assert sup.state["hold"] is None
+    # Verify checkpoints were not consumed by satisfied waits
+    rec = sup.state["mission"]
+    assert rec.get("checkpoints", {}).get("0", 0) == 0
+
+    # Now run 12 bare checkpoints:
+    env2 = Env(tmp_path / "bare")
+    mission2 = mission_def("bare checkpoints")
+    start_mission(env2, mission2)
+    env2.relay.script = [("claude", SUCCESS, "continue", "bare checkpoint") for _ in range(13)]
+    result2, sup2 = run_mission(env2, mission2)
+    assert result2 == "held"
+    assert sup2.state["hold"]["reason"] == "task_checkpoint_limit"
+
+
+def test_bare_checkpoint_enforces_minimum_interval(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("bare checkpoint interval")
+    start_mission(env, mission)
+    env.relay.script = [
+        ("claude", SUCCESS, "continue", "first checkpoint"),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    # Bare continue turn must sleep MIN_CHECKPOINT_INTERVAL_SECONDS (60s) before relaunch
+    assert sum(env.clock.slept) >= rc.MIN_CHECKPOINT_INTERVAL_SECONDS
+
+
+def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    # Under cap (< 2M tokens) and under 4 resumes: continues session
+    env1 = Env(tmp_path / "under")
+    mission1 = mission_def("under cap")
+    start_mission(env1, mission1)
+    env1.jobs[jid] = {"status": "succeeded"}
+    env1.relay.script = [
+        ("claude", SUCCESS, "continue", msg, 1_400_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result1, sup1 = run_mission(env1, mission1)
+    assert result1 == "idle"
+    assert env1.relay.launches[1]["parent"] is not None
+    assert "External wait satisfied:" in env1.relay.launches[1]["task"]
+
+    # Over cap (> 2M tokens): forces fresh context (parent = None)
+    env2 = Env(tmp_path / "over")
+    mission2 = mission_def("over cap")
+    start_mission(env2, mission2)
+    env2.jobs[jid] = {"status": "succeeded"}
+    env2.relay.script = [
+        ("claude", SUCCESS, "continue", msg, 2_100_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result2, sup2 = run_mission(env2, mission2)
+    assert result2 == "idle"
+    assert env2.relay.launches[1]["parent"] is None
+    assert "[Durable handoff summary]" in env2.relay.launches[1]["task"]
+
+    # Missing context_used_tokens: does not force fresh context
+    env3 = Env(tmp_path / "missing")
+    mission3 = mission_def("missing tokens")
+    start_mission(env3, mission3)
+    env3.jobs[jid] = {"status": "succeeded"}
+    env3.relay.script = [
+        ("claude", SUCCESS, "continue", msg, None),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result3, sup3 = run_mission(env3, mission3)
+    assert result3 == "idle"
+    assert env3.relay.launches[1]["parent"] is not None
+
+    # 5th consecutive resume forces fresh context
+    env4 = Env(tmp_path / "fifth")
+    mission4 = mission_def("consecutive resumes")
+    start_mission(env4, mission4)
+    env4.jobs[jid] = {"status": "succeeded"}
+    # 5 "continue"+JOB-WAIT turns then propose_done
+    env4.relay.script = [
+        ("claude", SUCCESS, "continue", msg, 100_000),
+        ("claude", SUCCESS, "continue", msg, 100_000),
+        ("claude", SUCCESS, "continue", msg, 100_000),
+        ("claude", SUCCESS, "continue", msg, 100_000),
+        ("claude", SUCCESS, "continue", msg, 100_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result4, sup4 = run_mission(env4, mission4)
+    assert result4 == "idle"
+    for i in range(1, 5):
+        assert env4.relay.launches[i]["parent"] is not None
+        assert env4.relay.launches[i]["task"].startswith("[relay-continuity resume")
+    assert env4.relay.launches[5]["parent"] is None
+    assert "[Durable handoff summary]" in env4.relay.launches[5]["task"]
+
+
+def test_provider_change_and_native_agents_force_fresh_context(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    # Provider switch from claude to codex forces parent = None
+    env1 = Env(tmp_path / "switch")
+    mission1 = mission_def("switch agent")
+    start_mission(env1, mission1)
+    env1.jobs[jid] = {"status": "succeeded"}
+    env1.relay.readings = room(env1, "codex")
+    env1.head(SUCCESS, agent="claude")
+    sup1 = env1.supervisor()
+    sup1.mission = mission1
+    sup1.state = env1.store.load()
+    sup1.state["head_session"] = HEAD
+    sup1.state["agent"] = "claude"
+    sup1.state["cooldowns"]["claude"] = {"until": rc.iso(env1.clock.now() + timedelta(hours=2)), "reason": "quota"}
+    sup1.save()
+    turn_dir = env1.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    (turn_dir / "last-message.txt").write_text(msg, encoding="utf-8")
+    (turn_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    env1.relay.script = [("codex", CODEX_SUCCESS, "propose_done")]
+    result1 = sup1.run(HEAD)
+    assert result1 == "idle"
+    assert env1.relay.launches[0]["agent"] == "codex"
+    assert env1.relay.launches[0]["parent"] is None
+
+    # Native agent (argon) forces parent = None
+    env2 = Env(tmp_path / "native")
+    mission2 = mission_def("native agent")
+    start_mission(env2, mission2)
+    env2.jobs[jid] = {"status": "succeeded"}
+    env2.relay.argon_limits = lambda agent: {"windows": [{"used_percent": 10}]} if agent == "argon" else None
+
+    ra = rc.relay_argon
+    argon_ev = [
+        {"event": "init", "conversation_id": "c1", "init": {"model": ra.MODEL}},
+        {"event": "step_update", "step_update": {"step_index": 2, "state": "ACTIVE", "conversation_id": "c1",
+         "step_type": "tool", "tool_name": "read_file", "tool_info": {"parameters": {"Path": "/tmp/test"}}}},
+        {"event": "step_update", "step_update": {"step_index": 2, "state": "DONE", "conversation_id": "c1",
+         "step_type": "tool", "tool_name": "read_file", "tool_info": {"parameters": {"Path": "/tmp/test"}}}},
+        {"event": "result", "result": {"conversation_id": "c1", "status": "SUCCESS", "response": msg}},
+    ]
+    meta = {"schema": "argon-coordinator.v1", "launched": True, "exit_code": 0, "quota": [], "reason": None, "model": ra.MODEL}
+
+    turn_dir2 = env2.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    turn_dir2.mkdir(parents=True, exist_ok=True)
+    (turn_dir2 / "last-message.txt").write_text(msg, encoding="utf-8")
+    (turn_dir2 / "state.json").write_text(json.dumps({"agent_key": "argon", "status": "continue"}))
+    (turn_dir2 / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in argon_ev))
+    (turn_dir2 / "native-result.json").write_text(json.dumps(meta))
+    pin_to_t0(turn_dir2)
+
+    sup2 = env2.supervisor()
+    sup2.mission = mission2
+    sup2.state = env2.store.load()
+    sup2.state["head_session"] = HEAD
+    sup2.state["agent"] = "argon"
+    sup2.save()
+    env2.relay.script = [("argon", argon_ev, "propose_done")]
+    result2 = sup2.run(HEAD)
+    assert result2 == "idle"
+    assert len(env2.relay.launches) == 1
+    assert env2.relay.launches[0]["agent"] == "argon"
+    assert env2.relay.launches[0]["parent"] is None
+
+
+def test_wait_persists_across_restart_and_honors_stop(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    env = Env(tmp_path)
+    mission = mission_def("wait persists")
+    start_mission(env, mission)
+    env.jobs[jid] = {"status": "running"}
+
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+    env.head(SUCCESS, agent="claude")
+    turn_dir = env.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    (turn_dir / "last-message.txt").write_text(msg, encoding="utf-8")
+    (turn_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+
+    sup = env.supervisor()
+    sup.mission = mission
+    sup.state["mission"] = {"id": mission["id"], "next": 0, "total": 1, "done": []}
+
+    # Request stop before running
+    env.store.stop_path.write_text("stop requested")
+    res = sup.run(HEAD)
+    assert res == "stopped"
+    assert sup.state["phase"] == "stopped"
+    assert sup.state["wait"] is not None
+    assert sup.state["wait"]["jobs"] == [jid]
+    # No new launch occurred
+    assert len(env.relay.launches) == 0
+
+    # Restart: clear stop, job is still running, stop again while waiting
+    env.store.stop_path.unlink()
+
+    def dynamic_job(job_id: str) -> dict[str, Any] | None:
+        if env.clock.now() > T0 + timedelta(seconds=20):
+            return {"status": "succeeded"}
+        return {"status": "running"}
+
+    env.host.job_status = dynamic_job
+    env.relay.script = [("claude", SUCCESS, "propose_done")]
+
+    sup2 = env.supervisor()
+    sup2.mission = mission
+    res2 = sup2.run(HEAD)
+    assert res2 == "idle"
+    assert len(env.relay.launches) == 1
+    assert "External wait satisfied:" in env.relay.launches[0]["task"]
+
+
+def test_side_effect_holds_preempt_external_waits(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    # Part A: gate hold (output_unparseable) preempts wait
+    env_a = Env(tmp_path / "a")
+    mission_a = mission_def("gate hold preempts")
+    start_mission(env_a, mission_a)
+    env_a.head(SUCCESS, agent="claude")
+    turn_a = env_a.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    (turn_a / "last-message.txt").write_text(msg, encoding="utf-8")
+    (turn_a / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    (turn_a / "output.jsonl").write_text("{bad json\n")
+    sup_a = env_a.supervisor()
+    sup_a.mission = mission_a
+    sup_a.state["mission"] = {"id": mission_a["id"], "next": 0, "total": 1, "done": []}
+    res_a = sup_a.run(HEAD)
+    assert res_a == "held"
+    assert sup_a.state["hold"]["reason"] == "output_unparseable"
+    assert sup_a.state["wait"] is None
+
+    # Part B: effects_uncertain (unresolved push) preempts wait
+    env_b = Env(tmp_path / "b")
+    mission_b = mission_def("effects uncertain preempts")
+    start_mission(env_b, mission_b)
+    env_b.head([IN_FLIGHT["git push"], *SUCCESS], agent="claude")
+    turn_b = env_b.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    (turn_b / "last-message.txt").write_text(msg, encoding="utf-8")
+    (turn_b / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    sup_b = env_b.supervisor()
+    sup_b.mission = mission_b
+    sup_b.state["mission"] = {"id": mission_b["id"], "next": 0, "total": 1, "done": []}
+    res_b = sup_b.run(HEAD)
+    assert res_b == "held"
+    assert sup_b.state["hold"]["reason"] == "effects_uncertain"
+    assert sup_b.state["wait"] is None
+
+
+def test_default_pr_ci_status_ruleset_and_fallback(tmp_path: Path) -> None:
+    head = "a" * 40
+    pr_json = json.dumps({
+        "state": "OPEN",
+        "headRefOid": head,
+        "baseRefName": "main",
+        "statusCheckRollup": [
+            {"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"name": "test", "status": "IN_PROGRESS", "conclusion": ""},
+        ],
+    })
+
+    # Case 1: ruleset provides required checks
+    ruleset_json = json.dumps([
+        {
+            "type": "required_status_checks",
+            "parameters": {
+                "required_status_checks": [
+                    {"context": "build"},
+                    "test",
+                ],
+            },
+        },
+    ])
+
+    def mock_run_ruleset(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return 0, pr_json
+        if cmd[:4] == ["gh", "api", "repos/:owner/:repo/rules/branches/main"]:
+            return 0, ruleset_json
+        return 1, "not found"
+
+    res = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_ruleset)
+    assert not res.get("unreadable")
+    assert res["required_checks"] == ["build", "test"]
+    assert res["observed_head"] == head
+    assert res["base_ref"] == "main"
+
+    # Case 2: ruleset fails, branch protection fallback provides required checks
+    prot_json = json.dumps({
+        "contexts": ["lint"],
+        "checks": [{"context": "backend"}],
+        "enforcement_level": "non_admins",
+    })
+
+    def mock_run_fallback(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return 0, pr_json
+        if cmd[:4] == ["gh", "api", "repos/:owner/:repo/rules/branches/main"]:
+            return 1, "404 Not Found"
+        if cmd[:4] == ["gh", "api", "repos/:owner/:repo/branches/main/protection/required_status_checks"]:
+            return 0, prot_json
+        return 1, "not found"
+
+    res_fb = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_fallback)
+    assert not res_fb.get("unreadable")
+    assert res_fb["required_checks"] == ["backend", "lint"]
+
+    # Case 3: both surfaces fail or yield empty required checks -> fails closed
+    def mock_run_fail_closed(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return 0, pr_json
+        return 1, "404 Not Found"
+
+    res_fc = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_fail_closed)
+    assert res_fc == {"unreadable": True}
+
+    # Case 4: PR view fails -> fails closed
+    def mock_run_pr_fail(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+        return 1, "error"
+
+    res_pf = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_pr_fail)
+    assert res_pf == {"unreadable": True}
+
+    # Case 5: PR view JSON has no headRefOid -> fails closed
+    pr_json_no_head = json.dumps({
+        "state": "OPEN",
+        "baseRefName": "main",
+        "statusCheckRollup": [
+            {"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        ],
+    })
+
+    def mock_run_no_head(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return 0, pr_json_no_head
+        if cmd[:4] == ["gh", "api", "repos/:owner/:repo/rules/branches/main"]:
+            return 0, ruleset_json
+        return 1, "not found"
+
+    res_nh = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_no_head)
+    assert res_nh == {"unreadable": True}
+
+
+def test_status_context_ci_checks(tmp_path: Path) -> None:
+    head = "a" * 40
+
+    def make_mock(rollup: list[dict[str, Any]]) -> rc.Runner:
+        pr_json = json.dumps({
+            "state": "OPEN",
+            "headRefOid": head,
+            "baseRefName": "main",
+            "statusCheckRollup": rollup,
+        })
+        ruleset_json = json.dumps([
+            {
+                "type": "required_status_checks",
+                "parameters": {
+                    "required_status_checks": [
+                        {"context": "ci/jenkins"},
+                    ]
+                },
+            },
+        ])
+
+        def mock_run(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return 0, pr_json
+            if cmd[:4] == ["gh", "api", "repos/:owner/:repo/rules/branches/main"]:
+                return 0, ruleset_json
+            return 1, "not found"
+
+        return mock_run
+
+    # 1. Success case: SUCCESS state maps to completed success
+    runner_success = make_mock([{"context": "ci/jenkins", "state": "SUCCESS"}])
+    res_success = rc.default_pr_ci_status(tmp_path, 42, head, run=runner_success)
+    assert not res_success.get("unreadable")
+    assert res_success["checks"] == [{"name": "ci/jenkins", "status": "success", "conclusion": "success"}]
+    assert rc.evaluate_pr_ci(res_success, head, 0.0) == ("completed", "success")
+
+    # 2. Failure case: FAILURE state maps to failure
+    runner_failure = make_mock([{"context": "ci/jenkins", "state": "FAILURE"}])
+    res_failure = rc.default_pr_ci_status(tmp_path, 42, head, run=runner_failure)
+    assert not res_failure.get("unreadable")
+    assert res_failure["checks"] == [{"name": "ci/jenkins", "status": "failure", "conclusion": "failure"}]
+    assert rc.evaluate_pr_ci(res_failure, head, 0.0) == ("immediate_wake", "check_failed")
+
+    # 3. Error case: ERROR state maps to failure (error in CI_FAILURE_CONCLUSIONS)
+    runner_error = make_mock([{"context": "ci/jenkins", "state": "ERROR"}])
+    res_error = rc.default_pr_ci_status(tmp_path, 42, head, run=runner_error)
+    assert not res_error.get("unreadable")
+    assert res_error["checks"] == [{"name": "ci/jenkins", "status": "error", "conclusion": "error"}]
+    assert rc.evaluate_pr_ci(res_error, head, 0.0) == ("immediate_wake", "check_failed")
+
+    # 4. Pending cases: PENDING / EXPECTED state stays pending
+    runner_pending = make_mock([{"context": "ci/jenkins", "state": "PENDING"}])
+    res_pending = rc.default_pr_ci_status(tmp_path, 42, head, run=runner_pending)
+    assert not res_pending.get("unreadable")
+    assert res_pending["checks"] == [{"name": "ci/jenkins", "status": "pending", "conclusion": "pending"}]
+    assert rc.evaluate_pr_ci(res_pending, head, 0.0) == ("pending", "in_progress")
+
+    runner_expected = make_mock([{"context": "ci/jenkins", "state": "EXPECTED"}])
+    res_expected = rc.default_pr_ci_status(tmp_path, 42, head, run=runner_expected)
+    assert not res_expected.get("unreadable")
+    assert res_expected["checks"] == [{"name": "ci/jenkins", "status": "expected", "conclusion": "expected"}]
+    assert rc.evaluate_pr_ci(res_expected, head, 0.0) == ("pending", "in_progress")
+
+
+def test_evaluate_pr_ci_acceptance_criteria() -> None:
+    head = "a" * 40
+    # 1. unreadable input
+    assert rc.evaluate_pr_ci({"unreadable": True}, head, 0.0) == ("unreadable", "remote_unreadable")
+    assert rc.evaluate_pr_ci({}, head, 0.0) == ("unreadable", "remote_unreadable")
+    # missing or empty required_checks fails closed
+    empty_req = {"observed_head": head, "state": "open", "required_checks": [], "checks": []}
+    assert rc.evaluate_pr_ci(empty_req, head, 0.0) == ("unreadable", "remote_unreadable")
+    # missing or empty observed_head fails closed
+    info_no_head = {
+        "state": "open",
+        "required_checks": ["backend"],
+        "checks": [{"name": "backend", "status": "completed", "conclusion": "success"}],
+    }
+    assert rc.evaluate_pr_ci(info_no_head, head, 0.0) == ("unreadable", "remote_unreadable")
+    info_empty_head = {
+        "observed_head": "",
+        "state": "open",
+        "required_checks": ["backend"],
+        "checks": [{"name": "backend", "status": "completed", "conclusion": "success"}],
+    }
+    assert rc.evaluate_pr_ci(info_empty_head, head, 0.0) == ("unreadable", "remote_unreadable")
+
+    # 2. head changed -> immediate wake
+    info_changed = {"observed_head": "b" * 40, "state": "open", "required_checks": ["backend"], "checks": []}
+    assert rc.evaluate_pr_ci(info_changed, head, 0.0) == ("immediate_wake", "head_changed")
+
+    # 3. PR closed / merged -> immediate wake
+    info_closed = {"observed_head": head, "state": "closed", "required_checks": ["backend"], "checks": []}
+    assert rc.evaluate_pr_ci(info_closed, head, 0.0) == ("immediate_wake", "pr_closed")
+    info_merged = {"observed_head": head, "state": "merged", "required_checks": ["backend"], "checks": []}
+    assert rc.evaluate_pr_ci(info_merged, head, 0.0) == ("immediate_wake", "pr_closed")
+
+    # 4. Immediate wake on required check failure
+    info_failed = {
+        "observed_head": head,
+        "state": "open",
+        "required_checks": ["backend", "frontend"],
+        "checks": [
+            {"name": "backend", "status": "completed", "conclusion": "failure"},
+            {"name": "frontend", "status": "in_progress", "conclusion": ""},
+        ],
+    }
+    assert rc.evaluate_pr_ci(info_failed, head, 0.0) == ("immediate_wake", "check_failed")
+
+    # 5. Non-required check failure does not fail if required checks pass
+    info_non_req_failed = {
+        "observed_head": head,
+        "state": "open",
+        "required_checks": ["backend"],
+        "checks": [
+            {"name": "backend", "status": "completed", "conclusion": "success"},
+            {"name": "optional_check", "status": "completed", "conclusion": "failure"},
+        ],
+    }
+    assert rc.evaluate_pr_ci(info_non_req_failed, head, 0.0) == ("completed", "success")
+
+    # 6. Zero checks reported rule: 120s threshold
+    info_zero = {"observed_head": head, "state": "open", "required_checks": ["backend"], "checks": []}
+    assert rc.evaluate_pr_ci(info_zero, head, 60.0) == ("pending", "no_checks_reported")
+    assert rc.evaluate_pr_ci(info_zero, head, 120.0) == ("immediate_wake", "no_checks_reported")
+    assert rc.evaluate_pr_ci(info_zero, head, 150.0) == ("immediate_wake", "no_checks_reported")
+
+    # 7. In progress pending
+    info_running = {
+        "observed_head": head,
+        "state": "open",
+        "required_checks": ["backend"],
+        "checks": [{"name": "backend", "status": "in_progress", "conclusion": ""}],
+    }
+    assert rc.evaluate_pr_ci(info_running, head, 60.0) == ("pending", "in_progress")
+
+
+def test_validate_state_spec_267_fields() -> None:
+    state = rc.default_state()
+    assert rc.validate_state(state) is None
+
+    # resumes validation
+    bad_resumes = {**state, "resumes": -1}
+    assert rc.validate_state(bad_resumes) == "bad resumes"
+    bad_resumes_bool = {**state, "resumes": True}
+    assert rc.validate_state(bad_resumes_bool) == "bad resumes"
+    valid_resumes = {**state, "resumes": 3}
+    assert rc.validate_state(valid_resumes) is None
+
+    # last_checkpoint_at validation
+    bad_cp = {**state, "last_checkpoint_at": "not-a-timestamp"}
+    assert rc.validate_state(bad_cp) == "bad last_checkpoint_at"
+    valid_cp = {**state, "last_checkpoint_at": rc.iso(T0)}
+    assert rc.validate_state(valid_cp) is None
+
+    # wait validation
+    bad_wait_empty = {**state, "wait": {"jobs": [], "ci": [], "started_at": rc.iso(T0)}}
+    assert rc.validate_state(bad_wait_empty) == "bad wait record"
+    bad_wait_job = {**state, "wait": {"jobs": ["invalid_job_id"], "ci": [], "started_at": rc.iso(T0)}}
+    assert rc.validate_state(bad_wait_job) == "bad wait record"
+    bad_wait_ci_sha = {**state, "wait": {"jobs": [], "ci": [{"pr": 1, "sha": "short"}], "started_at": rc.iso(T0)}}
+    assert rc.validate_state(bad_wait_ci_sha) == "bad wait record"
+    bad_wait_ci_pr = {**state, "wait": {"jobs": [], "ci": [{"pr": 0, "sha": "a" * 40}], "started_at": rc.iso(T0)}}
+    assert rc.validate_state(bad_wait_ci_pr) == "bad wait record"
+    bad_wait_ts = {**state, "wait": {"jobs": ["j-20261113T120000Z-111111"], "ci": [], "started_at": "bogus"}}
+    assert rc.validate_state(bad_wait_ts) == "bad wait record"
+
+    valid_wait = {
+        **state,
+        "wait": {
+            "jobs": ["j-20261113T120000Z-111111"],
+            "ci": [{"pr": 42, "sha": "a" * 40}],
+            "started_at": rc.iso(T0),
+            "last_job_poll": rc.iso(T0),
+            "last_ci_poll": None,
+        },
+    }
+    assert rc.validate_state(valid_wait) is None
 

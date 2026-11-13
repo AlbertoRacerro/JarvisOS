@@ -722,10 +722,16 @@ def test_retry_after_an_unsuccessful_native_turn_resumes_its_conversation(tmp_pa
     session_id, _, turn_name = report.turn_id.partition("/")
     assert (sessions / session_id / "turns" / turn_name).is_dir()
     seen = {}
+    store = tmp_path / "conversations"
+    store.mkdir()
+    (store / f"{CID}.db").write_bytes(b"x")  # resumable: the supervisor only resumes a conversation that exists
 
     class Relay:
         def sessions_dir(self):
             return sessions
+
+        def conversation_store(self):
+            return store
 
         def start(self, agent, parent, task, turns, resume=None):
             seen.update(agent=agent, resume=resume)
