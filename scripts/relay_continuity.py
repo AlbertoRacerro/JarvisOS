@@ -3038,7 +3038,10 @@ class Supervisor:
         for agent in [*order, "codex"]:
             if self.available(agent):
                 first_available = first_available or agent
-                if self.low_headroom(agent):
+                if agent not in rooms:
+                    rooms[agent] = self.free_room(agent)
+                room = rooms[agent]
+                if room is not None and room < self.limits.min_free_percent:
                     continue
                 break
         else:

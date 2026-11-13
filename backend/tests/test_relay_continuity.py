@@ -1,6 +1,7 @@
 """Spec 195: Relay provider continuity supervisor and Slack outbound monitor (offline, injected Relay)."""
 from __future__ import annotations
 
+import collections
 import importlib.util
 import json
 import os
@@ -511,6 +512,61 @@ def test_low_headroom_and_free_room_conformance(tmp_path: Path) -> None:
     sup = env.supervisor()
     assert sup.free_room("argon") is None
     assert not sup.low_headroom("argon")
+
+
+def test_choose_reads_quota_at_most_once_per_agent_per_choice(tmp_path: Path) -> None:
+    # Scope item 2/3: quota readings stay at most one per agent per decision.
+    class CountingSupervisor(rc.Supervisor):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.readings_by_agent: dict[str, int] = collections.defaultdict(int)
+
+        def free_room(self, agent: str) -> float | None:
+            self.readings_by_agent[agent] += 1
+            return super().free_room(agent)
+
+    # 1. Seeded agent claude is low on headroom, argon is low, agy_opus is low, codex has room.
+    # _choose evaluates every candidate in order, proving at most one quota reading per agent.
+    env = Env(
+        tmp_path,
+        readings={
+            "claude": reading("claude", 90, T0 + timedelta(days=5), T0),
+            "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+        },
+    )
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 85 if a == "argon" else 80}]} if a in ("argon", "agy_opus") else None
+    sup = CountingSupervisor(env.store, env.host, env.limits, sender=env.sender)
+    assert sup._choose("claude") == "codex"
+    assert sup.readings_by_agent["claude"] == 1
+    assert sup.readings_by_agent["argon"] == 1
+    assert sup.readings_by_agent["agy_opus"] == 1
+    assert sup.readings_by_agent["codex"] == 1
+    assert all(count <= 1 for count in sup.readings_by_agent.values())
+
+    # 2. When seeded agent (claude) has headroom, codex is never read,
+    # and preferred agents are read at most once.
+    sup2 = CountingSupervisor(env.store, env.host, env.limits, sender=env.sender)
+    env.relay.readings = {
+        "claude": reading("claude", 30, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+    }
+    assert sup2._choose("claude") == "claude"
+    assert sup2.readings_by_agent["claude"] == 1
+    assert sup2.readings_by_agent["codex"] == 0
+    assert all(count <= 1 for count in sup2.readings_by_agent.values())
+
+    # 3. Seeded with a non-preferred agent (codex): preferred agents are ordered by headroom,
+    # codex is not re-read, and no agent is read more than once.
+    sup3 = CountingSupervisor(env.store, env.host, env.limits, sender=env.sender)
+    env.relay.readings = {
+        "claude": reading("claude", 90, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+    }
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 30 if a == "argon" else 90}]} if a in ("argon", "agy_opus") else None
+    assert sup3._choose("codex") == "argon"
+    assert sup3.readings_by_agent["argon"] == 1
+    assert sup3.readings_by_agent["codex"] == 0
+    assert all(count <= 1 for count in sup3.readings_by_agent.values())
 
 
 def test_claude_quota_switches_to_codex_and_goes_idle(tmp_path: Path) -> None:
