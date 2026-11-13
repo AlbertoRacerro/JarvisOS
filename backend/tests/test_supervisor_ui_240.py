@@ -12,8 +12,12 @@ def test_question_parsing_and_text_settlement():
         {"id": "L20261103151937-abcd", "kind": "question", "text": "Proceed?\n1. (recommended) Yes - Consequence: safe"},
     ]
     questions = ro.parse_open_questions(entries)
-    assert len(questions) == 1
-    assert questions[0]["options"] == [{"index": 1, "label": "Yes", "recommended": True, "consequence": "safe"}]
+    assert len(questions) == 2
+    assert questions[0]["id"] == "L20261014124945-bc19"
+    assert questions[0]["prompt"] == "Historical free-form blocker without numbered options"
+    assert questions[0]["options"] == []
+    assert questions[1]["id"] == "L20261103151937-abcd"
+    assert questions[1]["options"] == [{"index": 1, "label": "Yes", "recommended": True, "consequence": "safe"}]
 
 
 def test_controls_and_answer(tmp_path, monkeypatch):
