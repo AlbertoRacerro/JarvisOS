@@ -11,6 +11,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -38,11 +39,77 @@ def model_for(agent: str, env: Mapping[str, str]) -> str:
 
 
 QUOTA_TIMEOUT = 45
-TURN_TIMEOUT = 1800
+# Our own turn budget, not a model limit. 30 minutes cut most long implementation turns mid-way (most of
+# the agy turns that ended unsettled on 2026-11-07); one hour keeps the deadline handling with room for real work.
+TURN_TIMEOUT = 3600
+
+AGY_ERROR_PREFIX = "AGY_ERROR: "
+
+# Resuming an interrupted agy conversation (maintainer directive L20261109091909-a4bb): the CLI keeps the whole
+# conversation locally (full tool results, scratch artifacts) and `--conversation <id>` resumes it in print mode
+# (verified live 2026-11-09: same id, memory kept, step indices continue, a missing id starts a new one).
+# A large conversation is compacted first (`/compact`, verified live: memory kept); a huge one is not resumed.
+CONVERSATION_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+RESUME_COMPACT_BYTES = 6 * 2**20  # about one and a half long implementation turns of conversation store
+RESUME_MAX_BYTES = 48 * 2**20
+COMPACT_TIMEOUT = 600
 
 
 class Refused(Exception):
     pass
+
+
+def conversation_of(turn: Path) -> str | None:
+    """The agy conversation id a retained turn ran in (its stream's init event), or None."""
+    try:
+        with (turn / "output.jsonl").open(encoding="utf-8", errors="replace") as handle:
+            first = json.loads(handle.readline() or "null")
+    except (OSError, json.JSONDecodeError):
+        return None
+    cid = first.get("conversation_id") if isinstance(first, dict) and first.get("event") == "init" else None
+    return cid if isinstance(cid, str) and CONVERSATION_RE.fullmatch(cid) else None
+
+
+def conversation_store(home: Path | None = None) -> Path:
+    return (home or Path.home()) / ".local/share/jarvisos-sandbox/state/agy-home/antigravity-cli/conversations"
+
+
+def native_error(stderr: str) -> dict[str, Any] | None:
+    """The CLI's own structured error line (`AGY_ERROR: {...}`), the last one if several; None when absent.
+    Model prose never reaches stderr, so this is runner evidence, not a claim by the model."""
+    found = None
+    for line in stderr.splitlines():
+        if line.startswith(AGY_ERROR_PREFIX):
+            try:
+                item = json.loads(line[len(AGY_ERROR_PREFIX):])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                found = item
+    return found
+
+
+def harness_cause(error: dict[str, Any] | None) -> tuple[str, str] | None:
+    """(outcome, cause) for a native error that is the harness or the provider, never a capability verdict.
+    outcome uses the continuity vocabulary: quota (provider limit, cool down), transient (back off, retry),
+    unknown (retry the same agent after reconciling effects). None: no such evidence."""
+    if not error:
+        return None
+    status = str(error.get("status") or "")
+    reason = str(error.get("reason") or "")
+    code = error.get("error_code")
+    text = str(error.get("short_error") or "")
+    if status == "RESOURCE_EXHAUSTED" or code == 429:
+        return "quota", "provider_quota"
+    if reason == "print_timeout" or (status == "DEADLINE_EXCEEDED" and "print timeout" in text):
+        return "unknown", "turn_time_limit"
+    if status == "UNAUTHENTICATED" or code == 401:
+        # The login was proven by the preflight quota read moments before; a mid-turn 401 is a token blip.
+        return "transient", "provider_auth_blip"
+    if status in ("UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED") or (isinstance(code, int) and 500 <= code <= 599) \
+            or "request failed" in text:
+        return "transient", "provider_network"
+    return None
 
 
 def sandbox() -> bool:
@@ -120,10 +187,16 @@ def require_room(reading: list[dict[str, Any]]) -> None:
         raise Refused("quota_exhausted")
 
 
-def new_session(repo: Path, task: str, agent: str = "argon") -> tuple[str, Path]:
+def new_session(repo: Path, task: str, agent: str = "argon", resume: str | None = None) -> tuple[str, Path]:
     sid = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
     turn = repo / ".agent-relay/sessions" / sid / "turns/turn-001"
     turn.mkdir(parents=True)
+    if resume is not None and CONVERSATION_RE.fullmatch(resume):
+        (turn / "resume.json").write_text(json.dumps({"conversation": resume}) + "\n", encoding="utf-8")
+        task = ("## Resumed\nThis continues your previous conversation on this work, which was interrupted (the "
+                "turn time limit, a network or provider error, or a failed attempt). Your earlier context and "
+                "scratch files are still available. First check what is already done (git status, git log, the PR, "
+                "your scratch notes), keep what is good, then finish the work.\n\n" + task)
     rules = ('# Native subscription coordinator\n\n## Rules\n'
              'Execute only the maintainer-authorized task below within the existing sandbox and repository invariants. '
              'A model response never proves delivery; retain real evidence for the independent mission check. '
@@ -131,10 +204,53 @@ def new_session(repo: Path, task: str, agent: str = "argon") -> tuple[str, Path]
              'RELAY_STATUS: {"status":"propose_done"}. Use status continue for a durable checkpoint, '
              'or blocked only for a real maintainer gate. Do not finish while a command you started is still running: '
              'use command_status until the executor reports its real exit status. '
-             'Do not invent execution evidence.\n\n## Task\n\n')
+             'Do not invent execution evidence.\n\n'
+             '## Working in this harness\n'
+             f'- Your turn has a hard limit of {TURN_TIMEOUT // 60} minutes. Plan for it: after each finished unit of '
+             'work, commit and push it as its own short command, well before the limit, then continue.\n'
+             '- Run tests, builds and walks in the foreground with an explicit timeout, for example '
+             '`timeout 900 <command>`. Do not start them as background tasks and then wait for them.\n'
+             '- File tools need absolute paths.\n'
+             '- A tool call or command that fails is normal: read the error, adjust and continue. '
+             'It is not a reason to stop or to report the task blocked.\n\n## Task\n\n')
     (turn / "prompt.md").write_text(rules + task + "\n", encoding="utf-8")
     (turn / "state.json").write_text(json.dumps({"agent_key": agent, "status": "continue"}) + "\n")
     return sid, turn
+
+
+def prepare_resume(binary: str, model: str, repo: Path, turn: Path, metadata: dict[str, Any],
+                   store: Path | None = None) -> str | None:
+    """The conversation to resume for this turn, compacted first when large; None starts a new conversation.
+    Every choice is recorded in metadata["resume"]."""
+    try:
+        wanted = json.loads((turn / "resume.json").read_text(encoding="utf-8")).get("conversation")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+    if not isinstance(wanted, str) or not CONVERSATION_RE.fullmatch(wanted):
+        return None
+    record: dict[str, Any] = {"conversation": wanted, "used": False}
+    metadata["resume"] = record
+    try:
+        size = ((store or conversation_store()) / f"{wanted}.db").stat().st_size
+    except OSError:
+        record["why"] = "missing"
+        return None
+    record["bytes"] = size
+    if size > RESUME_MAX_BYTES:
+        record["why"] = "too_large"
+        return None
+    if size > RESUME_COMPACT_BYTES:
+        try:
+            with (turn / "compact.jsonl").open("w") as out, (turn / "compact-stderr.log").open("w") as err:
+                done = subprocess.run([binary, "-p", "/compact", "--model", model, "--conversation", wanted,
+                                       "--output-format", "stream-json", "--sandbox", "--print-timeout",
+                                       f"{COMPACT_TIMEOUT}s"], cwd=repo, stdout=out, stderr=err,
+                                      stdin=subprocess.DEVNULL, timeout=COMPACT_TIMEOUT + 30, check=False)
+            record["compacted"] = done.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            record["compacted"] = False
+    record["used"] = True
+    return wanted
 
 
 def run(repo: Path, session: str, agent: str = "argon") -> int:
@@ -160,8 +276,9 @@ def run(repo: Path, session: str, agent: str = "argon") -> int:
         metadata["quota"] = read_quota(binary, agent=agent)
         require_room(metadata["quota"])
         prompt = (turn / "prompt.md").read_text(encoding="utf-8")
+        resume = prepare_resume(binary, model, repo, turn, metadata)
         argv = [binary, "-p", prompt, "--model", model, "--output-format", "stream-json", "--mode", "accept-edits", "--dangerously-skip-permissions",
-                "--sandbox", "--print-timeout", f"{TURN_TIMEOUT}s"]
+                "--sandbox", "--print-timeout", f"{TURN_TIMEOUT}s", *(["--conversation", resume] if resume else [])]
         metadata["model"] = model
         metadata["launched"] = True
         with (turn / "output.jsonl").open("w") as out, (turn / "stderr.log").open("w") as err:

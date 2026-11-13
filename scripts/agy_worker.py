@@ -5,6 +5,7 @@ Runs one headless `agy` worker turn inside the certified sandbox, in a linked gi
 Git credentials removed from the child environment, behind an allowlist of models and a no-model-turn quota
 preflight (spec 217 probe). Evidence (transcript, diff against the starting HEAD, result.json) is written to an
 evidence directory. The wrapper writes no ledger entry and makes no commit: the coordinator reviews the diff.
+The worker has full CLI permissions only after the sandbox check passes.
 Stdlib only.
 """
 
@@ -15,6 +16,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import secrets
 import shutil
 import signal
 import socket
@@ -53,7 +55,7 @@ MAX_TASK_BYTES = 200 * 1024
 STRIPPED_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR", "GIT_CONFIG_GLOBAL", "SSH_AUTH_SOCK",
                 "GH_ENTERPRISE_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN")
 STRIPPED_PREFIXES = ("GH_", "GIT_")
-FORBIDDEN_FLAGS = ("--dangerously-skip-permissions", "--remote-control")
+FORBIDDEN_FLAGS = ("--remote-control",)
 
 
 class Refused(Exception):
@@ -215,9 +217,14 @@ def quota_preflight(agy: str, alias: str, env: dict[str, str]) -> list[dict[str,
     return target
 
 
-def run_argv(agy: str, task: str, model: str, timeout: int) -> list[str]:
-    argv = [agy, "-p", task, "--model", model, "--output-format", "json", "--mode", "accept-edits", "--sandbox",
-            "--print-timeout", f"{timeout}s"]
+def run_argv(agy: str, task: str, model: str, timeout: int, resume: str | None = None) -> list[str]:
+    argv = [agy, "-p", task, "--model", model, "--output-format", "json", "--mode", "accept-edits",
+            "--dangerously-skip-permissions", "--sandbox", "--print-timeout", f"{timeout}s"]
+    if resume is not None:
+        # Retry the same model in its own interrupted conversation (full context and scratch artifacts).
+        if not relay_argon.CONVERSATION_RE.fullmatch(resume):
+            raise Refused("invalid_conversation_id")
+        argv += ["--conversation", resume]
     if any(flag in argv[3:] for flag in FORBIDDEN_FLAGS):
         raise Refused("forbidden_flag")
     return argv
@@ -237,7 +244,7 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 
 def default_evidence_dir() -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return Path.home() / "jarvis-control" / "work" / "evidence" / f"agy-worker-{stamp}"
+    return Path.home() / "jarvis-control" / "work" / "evidence" / f"agy-worker-{stamp}-{secrets.token_hex(3)}"
 
 
 def execute(args: argparse.Namespace, sandbox_check: Callable[[], bool] | None = None) -> tuple[Path | None, dict[str, Any]]:
@@ -283,7 +290,7 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     except relay_argon.Refused as error:
         raise Refused(str(error)) from error
     result["quota"] = quota_preflight(agy, alias, env)
-    argv = run_argv(agy, task, model, args.timeout)
+    argv = run_argv(agy, task, model, args.timeout, getattr(args, "resume_conversation", None))
     result["argv"] = [f"<task-file:{args.task_file} {digest}>" if item == task else item for item in argv]
     before = git_fingerprint(git_dir, common)
     status, reason = "succeeded", None
@@ -309,20 +316,67 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     if after != before:
         status, reason = "failed", "git_metadata_modified"
         result["git_metadata"] = {"before": before, "after": after}
-    if json_document(stdout) is not None:
+    document = json_document(stdout)
+    if document is not None:
         (evidence / "transcript.json").write_text(stdout, encoding="utf-8")
     else:
         (evidence / "transcript.txt").write_text(stdout, encoding="utf-8")
     (evidence / "stderr.txt").write_text(stderr, encoding="utf-8")
+    diff = ""
     if reason != "git_metadata_modified":  # never run git over planted config or hooks
-        (evidence / "diff.patch").write_text(collect_diff(worktree, result["start_head"]), encoding="utf-8")
-    result.update(status=status, reason=reason)
+        diff = collect_diff(worktree, result["start_head"])
+        (evidence / "diff.patch").write_text(diff, encoding="utf-8")
+    if reason != "git_metadata_modified" and status != "timeout" and not (reason or "").startswith("spawn_failed"):
+        if document is not None:
+            denied = document.get("denied_actions")
+            if isinstance(denied, list) and denied:
+                actions = ", ".join(str(item.get("action", item)) if isinstance(item, dict) else str(item)
+                                    for item in denied)
+                status, reason = "failed", f"permission_denied: {actions}"
+            elif document.get("status") != "SUCCESS":
+                status, reason = "failed", f"stream_status_{document.get('status') or 'missing'}"
+            elif not str(document.get("response") or "").strip() and not diff:
+                status, reason = "failed", "empty_result"
+        else:
+            status, reason = "failed", "empty_result" if not diff else "stream_status_missing"
+    cid = document.get("conversation_id") if isinstance(document, dict) else None
+    result.update(status=status, reason=reason, failure_class=failure_class(status, reason, stderr),
+                  diff_bytes=len(diff.encode("utf-8")),
+                  conversation_id=cid if isinstance(cid, str) and relay_argon.CONVERSATION_RE.fullmatch(cid) else None)
+
+
+def failure_class(status: str, reason: str | None, stderr: str) -> str | None:
+    """Why a worker run did not succeed, so the coordinator never mistakes the harness for the model.
+    harness / provider_quota: retry the same model (after the reset for quota); this is no capability verdict.
+    policy: the run touched git metadata. model_or_unknown: judge the delivered diff before escalating."""
+    if status == "succeeded":
+        return None
+    if reason == "git_metadata_modified":
+        return "policy"
+    if reason == "empty_result" or (reason or "").startswith(("permission_denied:", "stream_status_")):
+        return "harness"
+    if status == "timeout" or (reason or "").startswith("spawn_failed"):
+        return "harness"
+    cause = relay_argon.harness_cause(relay_argon.native_error(stderr))
+    if cause is not None:
+        return "provider_quota" if cause[0] == "quota" else "harness"
+    return "model_or_unknown"
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     path, result = execute(args)
     print(f"result: {path}")
     print(f"status: {result['status']}" + (f" ({result['reason']})" if result["reason"] else ""))
+    if result.get("failure_class"):
+        advice = {"harness": "retry the same model, never another provider for this; not a capability verdict",
+                  "provider_quota": "retry the same model after its reset; not a capability verdict",
+                  "policy": "the run touched git metadata",
+                  "model_or_unknown": "judge the delivered diff; a one-off slip gets one more try on the same model "
+                                      "from the salvaged diff, and only a repeat escalates (salvaging again)"}
+        print(f"failure_class: {result['failure_class']} ({advice[result['failure_class']]}); "
+              f"diff_bytes: {result.get('diff_bytes', 0)}")
+        if result.get("conversation_id") and result["failure_class"] != "policy":
+            print(f"retry in the same conversation: --resume-conversation {result['conversation_id']}")
     return {"succeeded": 0, "refused": 2}.get(result["status"], 1)
 
 
@@ -336,6 +390,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     run.add_argument("--evidence-dir")
     run.add_argument("--coordinator-fallback", action="store_true")
+    run.add_argument("--resume-conversation", help="retry in this earlier run's agy conversation (its result's "
+                                                   "conversation_id) instead of a new one")
     run.set_defaults(func=cmd_run)
     return parser
 

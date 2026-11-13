@@ -67,6 +67,8 @@ def test_native_incomplete_or_ambiguous_work_never_succeeds(tmp_path, change):
     elif change == "incomplete":
         events.pop(2)
     elif change == "error-tool":
+        # An external call with error metadata stays strict (a failed local or read-only call does not: see below).
+        events = stream("gh pr merge 1")
         events[2]["step_update"]["error"] = "failed"
     elif change == "trailing":
         events.append(events[1])
@@ -541,3 +543,196 @@ def test_native_read_file_is_read_only_without_reclassifying_unknown_tools(tmp_p
     other = tmp_path / "other"
     other.mkdir()
     assert rc.classify_turn(write_native(other, events)).calls[0].kind == "external"
+
+
+# --- maintainer directive L20261109090114-5e79: harness failures are never capability verdicts -----------------
+
+def tool_step(index: int, state: str, name: str, params: dict, **extra) -> dict:
+    info = {"name": name, "parameters": params, **extra}
+    return {"event": "step_update", "step_update": {"conversation_id": "native-test", "step_index": index,
+            "state": state, "step_type": "tool", "tool_name": name, "tool_info": info}}
+
+
+def test_recovered_local_and_read_tool_errors_do_not_fail_a_successful_turn(tmp_path):
+    events = stream()
+    recovered = [
+        tool_step(5, "ACTIVE", "read_file", {"Path": "/repo/missing.py"}),
+        tool_step(5, "ERROR", "read_file", {"Path": "/repo/missing.py"},
+                  error={"type": "TOOL_ERROR", "message": "file does not exist"}),
+        tool_step(6, "ACTIVE", "edit_file", {"Path": "/repo/a.py"}),
+        tool_step(6, "ERROR", "edit_file", {"Path": "/repo/a.py"}, error={"type": "TOOL_ERROR", "message": "no match"}),
+        tool_step(7, "ACTIVE", "write_file", {"Path": "/repo/b.py"}),
+        tool_step(7, "DONE", "write_file", {"Path": "/repo/b.py"}),
+        tool_step(8, "ACTIVE", "manage_task", {"Action": "kill", "TaskId": "c/task-6"}),
+        tool_step(8, "ERROR", "manage_task", {"Action": "kill", "TaskId": "c/task-6"},
+                  error={"type": "TOOL_ERROR", "message": "task is not running (status: DONE)"}),
+    ]
+    report = rc.classify_turn(write_native(tmp_path, events[:3] + recovered + events[3:]))
+    assert report.outcome == "success"
+    kinds = {c.tool: c.kind for c in report.calls}
+    assert kinds["edit_file"] == kinds["write_file"] == kinds["manage_task"] == "local_write"
+    assert kinds["read_file"] == "read_only"
+    assert not report.in_flight and report.harness_cause is None
+
+
+def test_failed_external_tool_call_stays_strict(tmp_path):
+    events = stream("gh pr merge 1")
+    events[2]["step_update"]["state"] = "ERROR"
+    assert rc.classify_turn(write_native(tmp_path, events)).outcome != "success"
+
+
+def agy_error(**fields) -> str:
+    return "root agent idle\nerror: x\n" + ra.AGY_ERROR_PREFIX + json.dumps(fields) + "\n"
+
+
+def interrupted(tmp_path: Path, stderr: str, *, command: str = "git push origin topic") -> rc.TurnReport:
+    events = stream(command)[:2]  # the push started, then the runner cut the turn: no result event
+    turn = write_native(tmp_path, events, meta={"exit_code": 3})
+    (turn / "stderr.log").write_text(stderr)
+    return rc.classify_turn(turn)
+
+
+def test_print_timeout_is_a_harness_cause_and_keeps_the_effect_in_flight(tmp_path):
+    report = interrupted(tmp_path, agy_error(short_error="print timeout after 30m0s with the turn still in progress",
+                                             status="DEADLINE_EXCEEDED", reason="print_timeout"))
+    assert report.outcome == "unknown"  # same agent resumes after reconciliation
+    assert report.harness_cause == "turn_time_limit"
+    assert [c.label for c in report.in_flight] == ["git push"]  # still gated and probed, never assumed
+
+
+@pytest.mark.parametrize(("fields", "outcome", "cause"), [
+    ({"status": "RESOURCE_EXHAUSTED", "error_code": 429, "short_error": "Individual quota reached"}, "quota",
+     "provider_quota"),
+    ({"status": "UNAUTHENTICATED", "error_code": 401, "short_error": "UNAUTHENTICATED (code 401)"}, "transient",
+     "provider_auth_blip"),
+    ({"status": "UNKNOWN", "short_error": "agent executor error: request failed: Post"}, "transient",
+     "provider_network"),
+])
+def test_provider_errors_are_classified_from_runner_evidence(tmp_path, fields, outcome, cause):
+    report = interrupted(tmp_path, agy_error(**fields), command="pwd")
+    assert (report.outcome, report.harness_cause) == (outcome, cause)
+
+
+def test_runner_error_never_overrides_a_genuine_success(tmp_path):
+    turn = write_native(tmp_path, stream())
+    (turn / "stderr.log").write_text(agy_error(status="UNAVAILABLE", short_error="blip"))
+    report = rc.classify_turn(turn)
+    assert report.outcome == "success" and report.harness_cause is None
+
+
+def test_agy_prompt_carries_the_harness_rules_and_the_hour_budget(tmp_path):
+    assert ra.TURN_TIMEOUT == 3600
+    _, turn = ra.new_session(tmp_path, "Task")
+    prompt = (turn / "prompt.md").read_text()
+    assert "hard limit of 60 minutes" in prompt and "timeout 900" in prompt and "absolute paths" in prompt
+
+
+def network_blip_turn(env: Env) -> rc.TurnReport:
+    turn = write_native(env.repo / ".agent-relay", stream("pwd")[:2], meta={"exit_code": 3})
+    (turn / "stderr.log").write_text(agy_error(status="UNKNOWN", short_error="request failed: Post https://x"))
+    report = rc.classify_turn(turn)
+    report.agent = "argon"
+    return report
+
+
+def test_network_blip_retries_the_same_agent_instead_of_switching(tmp_path):
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    sup.state.update(head_session="20261027-075000-112233", agent="argon")
+    report = network_blip_turn(env)
+    assert report.harness_cause == "provider_network"
+    decided = sup._decide(report, "task")
+    assert isinstance(decided, tuple) and decided[0] == "argon"
+    assert "argon" not in sup.state["cooldowns"]  # no cooldown: nothing pushes the work to another provider
+    assert sup.state["counters"]["transient_argon"] == 1
+
+
+def test_a_run_of_network_blips_falls_back_to_the_normal_cooldown(tmp_path):
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    sup.state.update(head_session="20261027-075000-112233", agent="argon")
+    sup.state["counters"]["transient_argon"] = sup.limits.same_agent_retries
+    sup._decide(network_blip_turn(env), "task")
+    assert sup.state["cooldowns"]["argon"]["reason"] == "transient"
+
+
+def test_preflight_unreadable_quota_is_a_network_cause(tmp_path):
+    turn = write_native(tmp_path, [], meta={"launched": False, "exit_code": None, "reason": "quota_unreadable"})
+    report = rc.classify_turn(turn)
+    assert (report.outcome, report.harness_cause) == ("transient", "provider_network")
+
+
+# --- resuming the interrupted agy conversation (maintainer directive L20261109091909-a4bb) ----------------------
+
+CID = "5b934b69-1847-40af-93ec-eefda93178a5"
+
+
+def test_conversation_of_reads_the_init_event(tmp_path):
+    events = stream()
+    events[0]["conversation_id"] = CID
+    assert ra.conversation_of(write_native(tmp_path, events)) == CID
+    events[0]["conversation_id"] = "../../etc"
+    other = tmp_path / "other"
+    other.mkdir()
+    assert ra.conversation_of(write_native(other, events)) is None
+
+
+def test_new_session_records_a_valid_resume_and_tells_the_model(tmp_path):
+    _, turn = ra.new_session(tmp_path, "Task", resume=CID)
+    assert json.loads((turn / "resume.json").read_text()) == {"conversation": CID}
+    assert "## Resumed" in (turn / "prompt.md").read_text()
+    _, fresh = ra.new_session(tmp_path, "Task", resume="not-a-uuid")
+    assert not (fresh / "resume.json").exists() and "## Resumed" not in (fresh / "prompt.md").read_text()
+
+
+@pytest.mark.parametrize(("size", "used", "compacted", "why"), [
+    (None, False, None, "missing"),
+    (1024, True, None, None),
+    (ra.RESUME_COMPACT_BYTES + 1, True, True, None),
+    (ra.RESUME_MAX_BYTES + 1, False, None, "too_large"),
+])
+def test_prepare_resume_uses_compacts_or_skips_by_size(tmp_path, monkeypatch, size, used, compacted, why):
+    store = tmp_path / "store"
+    store.mkdir()
+    if size is not None:
+        with (store / f"{CID}.db").open("wb") as handle:
+            handle.truncate(size)
+    _, turn = ra.new_session(tmp_path, "Task", resume=CID)
+    calls = []
+    monkeypatch.setattr(ra.subprocess, "run", lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0))
+    meta: dict = {}
+    got = ra.prepare_resume("agy", ra.MODEL, tmp_path, turn, meta, store=store)
+    assert got == (CID if used else None)
+    assert meta["resume"]["used"] is used and meta["resume"].get("why") == why
+    assert meta["resume"].get("compacted") == compacted
+    assert bool(calls) is bool(compacted) and (not calls or ["-p", "/compact"] == calls[0][1:3])
+
+
+def test_retry_after_an_unsuccessful_native_turn_resumes_its_conversation(tmp_path):
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    events = stream("pwd")[:2]
+    events[0]["conversation_id"] = CID
+    turn = write_native(env.repo / ".agent-relay", events, meta={"exit_code": 3})
+    report = rc.classify_turn(turn)
+    report.agent = "argon"
+    sessions = env.repo / ".agent-relay/sessions"
+    session_id, _, turn_name = report.turn_id.partition("/")
+    assert (sessions / session_id / "turns" / turn_name).is_dir()
+    seen = {}
+
+    class Relay:
+        def sessions_dir(self):
+            return sessions
+
+        def start(self, agent, parent, task, turns, resume=None):
+            seen.update(agent=agent, resume=resume)
+            raise OSError("stop here")
+
+    sup.host.relay = Relay()
+    sup.state["permissions_digest"] = sup.host.permissions_digest()
+    sup._launch("argon", "[relay-continuity attempt {nonce}]\ntask", report)
+    assert seen == {"agent": "argon", "resume": CID}
+    report.outcome = "success"
+    sup._launch("argon", "[relay-continuity attempt {nonce}]\ntask", report)
+    assert seen["resume"] is None  # a new task after success starts a fresh conversation

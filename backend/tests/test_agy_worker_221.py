@@ -44,8 +44,9 @@ if cfg.get("plant"):
     else:
         os.makedirs(os.path.join(common, "hooks"), exist_ok=True)
         open(os.path.join(common, "hooks", "post-checkout"), "w").write("#!/bin/sh\\n")
-Path("tracked.txt").write_text("changed\\n")
-Path("new.txt").write_text("brand new\\n")
+if cfg.get("write", True):
+    Path("tracked.txt").write_text("changed\\n")
+    Path("new.txt").write_text("brand new\\n")
 print(cfg["run_out"]); sys.stderr.write("worker stderr\\n"); sys.exit(cfg["exit"])
 """
 
@@ -75,7 +76,7 @@ class Env:
         self.cfg = tmp / "cfg.json"
         self.log = tmp / "log.json"
         self.evidence = tmp / "evidence"
-        self.set(quota_out=json.dumps(GOOD_QUOTA), run_out=json.dumps({"ok": True}), exit=0)
+        self.set(quota_out=json.dumps(GOOD_QUOTA), run_out=json.dumps({"status": "SUCCESS", "response": "done"}), exit=0)
         fake = tmp / "agy"
         fake.write_text(FAKE.format(python=sys.executable, cfg=str(self.cfg)))
         fake.chmod(0o755)
@@ -116,13 +117,13 @@ def test_success_argv_evidence_and_diff(env: Env, monkeypatch: pytest.MonkeyPatc
     assert result["status"] == "succeeded" and result["exit_code"] == 0 and result["alias"] == "flash"
     log = json.loads(env.log.read_text())
     assert log["argv"] == ["-p", "do the thing\n", "--model", worker.FLASH_MODEL, "--output-format", "json",
-                           "--mode", "accept-edits", "--sandbox", "--print-timeout", "30s"]
+                           "--mode", "accept-edits", "--dangerously-skip-permissions", "--sandbox", "--print-timeout", "30s"]
     assert Path(log["cwd"]).resolve() == env.wt.resolve()
-    assert "--dangerously-skip-permissions" not in log["argv"] and "--remote-control" not in log["argv"]
+    assert "--remote-control" not in log["argv"]
     assert result["argv"][2].startswith("<task-file:") and "do the thing" not in json.dumps(result["argv"])
     assert {b["id"] for b in result["quota"]} == {"gemini-5h", "gemini-weekly"}
     assert result["start_head"] == git(env.wt, "rev-parse", "HEAD").strip()
-    assert json.loads((env.evidence / "transcript.json").read_text()) == {"ok": True}
+    assert json.loads((env.evidence / "transcript.json").read_text()) == {"status": "SUCCESS", "response": "done"}
     assert "worker stderr" in (env.evidence / "stderr.txt").read_text()
     diff = (env.evidence / "diff.patch").read_text()
     assert "+changed" in diff and "-original" in diff and "+brand new" in diff and "new.txt" in diff
@@ -132,7 +133,8 @@ def test_success_argv_evidence_and_diff(env: Env, monkeypatch: pytest.MonkeyPatc
 def test_non_json_transcript_and_failure_evidence(env: Env) -> None:
     env.set(run_out="plain text", exit=1)
     result = env.run()
-    assert result["status"] == "failed" and result["exit_code"] == 1 and result["reason"] == "exit_code_1"
+    assert result["status"] == "failed" and result["exit_code"] == 1 and result["reason"] == "stream_status_missing"
+    assert result["failure_class"] == "harness"
     assert (env.evidence / "transcript.txt").read_text().strip() == "plain text"
     assert (env.evidence / "stderr.txt").exists() and "+brand new" in (env.evidence / "diff.patch").read_text()
 
@@ -154,6 +156,50 @@ def test_credentials_are_stripped(env: Env, monkeypatch: pytest.MonkeyPatch) -> 
 def test_not_sandbox(env: Env) -> None:
     refused(env.run(sandbox=False), "not_sandbox")
     assert not env.invoked()
+
+
+def test_denied_action_is_harness_failure(env: Env) -> None:
+    env.set(run_out=json.dumps({"status": "SUCCESS", "response": "", "denied_actions": [{"action": "command"}]}),
+            write=False)
+    result = env.run()
+    assert result["status"] == "failed" and result["failure_class"] == "harness"
+    assert result["reason"] == "permission_denied: command"
+
+
+def test_error_status_is_harness_failure(env: Env) -> None:
+    env.set(run_out=json.dumps({"status": "ERROR", "response": "done"}))
+    result = env.run()
+    assert result["status"] == "failed" and result["failure_class"] == "harness"
+    assert result["reason"] == "stream_status_ERROR"
+
+
+def test_empty_response_and_diff_is_harness_failure(env: Env) -> None:
+    env.set(run_out=json.dumps({"status": "SUCCESS", "response": "  \n"}), write=False)
+    result = env.run()
+    assert result["status"] == "failed" and result["failure_class"] == "harness"
+    assert result["reason"] == "empty_result" and result["diff_bytes"] == 0
+
+
+def test_empty_response_with_diff_succeeds(env: Env) -> None:
+    env.set(run_out=json.dumps({"status": "SUCCESS", "response": ""}))
+    result = env.run()
+    assert result["status"] == "succeeded" and result["diff_bytes"] > 0
+
+
+def test_default_evidence_dirs_are_unique_in_same_second(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class FixedDatetime(worker.datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> worker.datetime:
+            return cls(2026, 11, 13, tzinfo=tz)
+
+    monkeypatch.setattr(worker, "datetime", FixedDatetime)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    first = worker.default_evidence_dir()
+    second = worker.default_evidence_dir()
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    assert "20261113T000000Z" in first.name and "20261113T000000Z" in second.name
+    assert first != second and first.is_dir() and second.is_dir()
 
 
 def test_main_checkout_and_non_worktree(env: Env) -> None:
@@ -313,3 +359,20 @@ def test_prepare_login_links_gemini_and_refuses_missing_or_conflicting_home(env:
     (env.tmp / ".gemini").rmdir()
     assert env.run()["status"] == "succeeded"
     assert (env.tmp / ".gemini").is_symlink() and (env.tmp / ".gemini").resolve() == target.resolve()
+
+
+# --- maintainer directive L20261109090114-5e79: a worker's harness failure is never a capability verdict -------
+
+@pytest.mark.parametrize(("status", "reason", "stderr", "expected"), [
+    ("succeeded", None, "", None),
+    ("timeout", "exceeded 930s", "", "harness"),
+    ("failed", "spawn_failed: no such file", "", "harness"),
+    ("failed", "exit_code_3", 'AGY_ERROR: {"status": "DEADLINE_EXCEEDED", "reason": "print_timeout", '
+                              '"short_error": "print timeout after 30m0s"}', "harness"),
+    ("failed", "exit_code_3", 'AGY_ERROR: {"status": "RESOURCE_EXHAUSTED", "error_code": 429}', "provider_quota"),
+    ("failed", "exit_code_3", 'AGY_ERROR: {"status": "UNAUTHENTICATED", "error_code": 401}', "harness"),
+    ("failed", "exit_code_1", "plain failure", "model_or_unknown"),
+    ("failed", "git_metadata_modified", "", "policy"),
+])
+def test_failure_class_separates_harness_from_model(status, reason, stderr, expected):
+    assert worker.failure_class(status, reason, stderr) == expected

@@ -119,6 +119,9 @@ LEGACY_MARKERS = ("jarvis-control/autopilot/run.sh", "jarvis-control/autopilot/w
                   "jarvis-control/autopilot/resume-after-reset.sh", "jarvis-control/autopilot/drain-guard.sh")
 
 
+SAME_AGENT_CAUSES = frozenset(("provider_network", "provider_auth_blip"))
+
+
 @dataclass
 class Limits:
     """Bounds that make every loop finite. Provider failures are bounded by their cooldowns and `max_wait`;
@@ -126,6 +129,7 @@ class Limits:
     max_consecutive_failures: int = 8
     transient_base: float = 60.0
     transient_cap: float = 1_800.0
+    same_agent_retries: int = 3  # network/auth blips retried on the same agent before the normal cooldown applies
     recheck: timedelta = timedelta(minutes=30)
     recheck_cap: timedelta = timedelta(hours=4)  # estimated cooldowns double per repeated failure up to this
     max_wait: timedelta = timedelta(days=8)
@@ -193,6 +197,9 @@ class TurnReport:
     relay_status: str | None = None
     no_evidence: bool = False  # the turn left no output of its own: nothing shows what it did
     turn_id: str | None = None  # "<session>/<turn>" of the classified turn
+    # Set when the runner's own evidence shows the turn ended for a harness or provider reason (time limit, quota,
+    # auth blip, network). It is never a verdict on the model's capability; capability is judged on delivered work.
+    harness_cause: str | None = None
     spend_cap: bool = False  # the provider message named a spend/credit cap (even if it also printed a reset)
     reaped: list[str] | None = None  # processes the turn left running, stopped at its end; None: not launched here
 
@@ -1101,6 +1108,8 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
         report.outcome = "quota" if reason == "quota_exhausted" else (
             "auth" if reason in ("login_state_missing", "login_path_conflict", "agy_missing", "not_sandbox") else "transient")
         report.detail = f"native preflight refused: {reason}"
+        if report.outcome == "transient":
+            report.harness_cause = "provider_network"  # e.g. the quota read could not reach the provider
         if report.outcome == "quota":
             resets = [parse_ts(b.get("reset_time")) for b in meta.get("quota", [])
                       if isinstance(b, dict) and (b.get("disabled") or b.get("remaining_fraction") == 0)]
@@ -1151,7 +1160,11 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
                     kind = "external" if kind == "unknown" else kind
                     probe = {"command": params["CommandLine"]}
                 else:
-                    local = {"write_to_file", "replace_file_content", "multi_replace_file_content", "notebook_edit"}
+                    # The stream reports `edit_file`, `write_file` and `read_file` for the file tools whatever their
+                    # advertised names are (all retained turns, 2026-11); an edit is a local write, never external.
+                    # manage_task controls the CLI's own background tasks on this workstation (status, kill).
+                    local = {"write_to_file", "replace_file_content", "multi_replace_file_content", "notebook_edit",
+                             "edit_file", "write_file", "manage_task"}
                     read = {"view_file", "read_file", "list_dir", "find_by_name", "grep_search", "sed_file", "search_web",
                             "read_url_content", "command_status", "wait", "wait_5_seconds"}
                     kind, label, probe = ("local_write" if name in local else "read_only" if name in read else "external"), name, {}
@@ -1199,9 +1212,27 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
     report.calls = list(calls.values())
     if events and not initialized:
         report.bad_lines += 1
-    if not initialized or report.bad_lines or len(results) != 1 or not meta \
-            or any(c.pending or c.ended_abnormally for c in calls.values()):
+    # The runner's structured error (stderr), when present, names a harness or provider cause. It is applied only
+    # to turns that did not succeed, and never touches the effects: interrupted operations stay in flight and are
+    # still gated and reconciled from observable state.
+    try:
+        native = relay_argon.native_error((turn_dir / "stderr.log").read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        native = None
+    cause = relay_argon.harness_cause(native) or (("unknown", "turn_time_limit") if reason == "timeout" else None)
+
+    def harness(report: TurnReport) -> TurnReport:
+        if cause is not None and report.outcome != "success":
+            report.outcome, report.harness_cause = cause
+            report.detail += f"; runner: {cause[1]}"
         return report
+
+    # A failed tool call that cannot act beyond this workstation (a missing file, an edit that did not apply, a
+    # finished-task kill) is the normal back-and-forth of a turn: it is finished and does not hide the outcome.
+    # A failed or cancelled external call stays strict: what it did is not known.
+    if not initialized or report.bad_lines or len(results) != 1 or not meta \
+            or any(c.pending or (c.ended_abnormally and external(c)) for c in calls.values()):
+        return harness(report)
     terminal = results[0]
     report.terminal = True
     if terminal.get("denied_actions"):
@@ -1216,6 +1247,7 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
         if report.outcome == "success":
             report.outcome = "unknown"
         settle_limit(report, str(text or ""), ref or now_utc(), None)
+        harness(report)
     return report
 
 
@@ -1865,7 +1897,8 @@ class RelayAdapter:
         self._argon_reading[agent] = (time.monotonic(), result)
         return result
 
-    def start(self, agent: str, parent: str | None, task: str, turns: int) -> subprocess.Popen:
+    def start(self, agent: str, parent: str | None, task: str, turns: int,
+              resume: str | None = None) -> subprocess.Popen:
         # A mission's first task has no parent: Relay opens a new session for it.
         lease = None
         env = {**os.environ, **self.env} if self.env else dict(os.environ)
@@ -1880,7 +1913,7 @@ class RelayAdapter:
                 raise
             env["JARVISOS_ARGON_LEASE_FD"] = str(lease.fileno())
             try:
-                session, _ = relay_argon.new_session(self.repo, task, agent)
+                session, _ = relay_argon.new_session(self.repo, task, agent, resume=resume)
             except OSError:
                 lease.close()
                 raise
@@ -2899,7 +2932,16 @@ class Supervisor:
             settled, parked = self._settle_external(report)
             if parked:
                 self._park(report, parked)
-        if report.outcome in ("quota", "spend_limit", "transient", "auth") and failed_agent not in cleared:
+        # A network or auth blip is infrastructure, not the model: retry the SAME agent after a short backoff instead
+        # of switching to another provider (maintainer directive L20261109091909-a4bb). Only a bounded run of them
+        # (a real outage) falls through to the normal cooldown, which may switch.
+        retry_same = (report.outcome == "transient" and report.harness_cause in SAME_AGENT_CAUSES
+                      and failed_agent not in cleared
+                      and counters.get(f"transient_{failed_agent}", 0) < self.limits.same_agent_retries)
+        if retry_same:
+            strikes = counters.get(f"transient_{failed_agent}", 0)
+            counters[f"transient_{failed_agent}"] = strikes + 1
+        elif report.outcome in ("quota", "spend_limit", "transient", "auth") and failed_agent not in cleared:
             # A provider failure makes only that provider unavailable, until its reset or a backed-off retry.
             self.set_cooldown(failed_agent, report)
 
@@ -2928,6 +2970,13 @@ class Supervisor:
             return RECOVERY_PROMPT.format(nonce="{nonce}", prev_agent=failed_agent, outcome=report.outcome,
                                           agent=chosen, effects=effects, processes=processes)
 
+        if retry_same:
+            backoff = min(self.limits.transient_base * 2 ** strikes, self.limits.transient_cap)
+            self.host.log(f"{failed_agent} {report.harness_cause}; retrying the same agent in {int(backoff)}s")
+            self.save()
+            if self._sleep(backoff):
+                return "signal" if self.signalled else "stopped"
+            return failed_agent, make_prompt(failed_agent)
         agent = self._choose(failed_agent)
         if agent is None:
             return self._wait_or_hold(make_prompt)
@@ -3065,6 +3114,16 @@ class Supervisor:
         parent = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
                   or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
                   else self.state["head_session"])
+        # A native agent retried after its own unsuccessful turn resumes that agy conversation (its full context and
+        # scratch artifacts, which the retained stream does not carry); a new task or another agent starts fresh.
+        resume = None
+        if agent in NATIVE_AGENTS and previous is not None and previous.agent == agent \
+                and previous.outcome != "success" and previous.turn_id:
+            try:
+                session_id, _, turn_name = previous.turn_id.partition("/")  # "<session>/<turn>"
+                resume = relay_argon.conversation_of(self.host.relay.sessions_dir() / session_id / "turns" / turn_name)
+            except Exception:  # noqa: BLE001 - resuming is an optimisation; the turn launches fresh without it
+                resume = None
         pending = {"nonce": nonce, "agent": agent, "parent": parent, "started_at": iso(now),
                    "pid": None, "pid_start": None, "fingerprint": self.host.fingerprint(), "attempt": self.attempts}
         if (rec := self.state.get("mission")) is not None and self.mission is not None:
@@ -3083,9 +3142,10 @@ class Supervisor:
         self.state["acknowledged"] = None  # the reviewed turn is now behind the chain
         self.state["agent"] = agent
         self.save()
-        self.store.journal({"event": "launch", **{k: v for k, v in pending.items() if k != "fingerprint"}})
+        self.store.journal({"event": "launch", **{k: v for k, v in pending.items() if k != "fingerprint"},
+                            **({"resume": resume} if resume else {})})
         try:
-            proc = self.host.relay.start(agent, parent, text, self.turns)
+            proc = self.host.relay.start(agent, parent, text, self.turns, **({"resume": resume} if resume else {}))
         except OSError:
             # Relay could not be executed at all: nothing started, so the attempt settles as not started.
             self.state["pending"] = None
@@ -3149,10 +3209,13 @@ class Supervisor:
         # Counted once per launched attempt. Provider failures are bounded by their cooldowns instead.
         counters = self.state["counters"]
         # Only an unbroken run of crash/unknown turns counts: any other outcome ends the streak.
+        # A turn cut by our own time limit still counts here: this is the loop guard (eight unbroken one-hour cuts
+        # is a real problem), not a capability verdict; `harness_cause` in the journal keeps the two apart.
         counters["consecutive_failures"] = (counters["consecutive_failures"] + 1
                                             if report.outcome in ("crash", "unknown") else 0)
         self.store.journal({"event": "settle", "nonce": pending["nonce"], "session": session_id,
-                            "outcome": report.outcome, "agent": report.agent, "reaped": report.reaped,
+                            "outcome": report.outcome, "harness_cause": report.harness_cause,
+                            "agent": report.agent, "reaped": report.reaped,
                             "effects": [c.label for c in report.effects], "in_flight": [c.label for c in report.in_flight]})
         # Keep the launched intent durable until mission progress is saved. If this process dies while
         # checking a successful task, restart adopts the turn instead of launching that task again.
