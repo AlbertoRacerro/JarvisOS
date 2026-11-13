@@ -50,12 +50,18 @@ class Clock:
 
 
 def write_turn(session_dir: Path, events: list[dict[str, Any]], *, agent: str = "claude", status: str = "propose_done",
-               prompt: str = "task", number: int = 1) -> Path:
+               prompt: str = "task", number: int = 1, last_message: str | None = None,
+               context_used_tokens: int | None = None) -> Path:
     turn = session_dir / "turns" / f"turn-{number:03d}"
     turn.mkdir(parents=True, exist_ok=True)
     (turn / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
-    (turn / "state.json").write_text(json.dumps({"agent_key": agent, "status": status}))
+    state_data: dict[str, Any] = {"agent_key": agent, "status": status}
+    if context_used_tokens is not None:
+        state_data["context_used_tokens"] = context_used_tokens
+    (turn / "state.json").write_text(json.dumps(state_data))
     (turn / "prompt.md").write_text(prompt)
+    if last_message is not None:
+        (turn / "last-message.txt").write_text(last_message, encoding="utf-8")
     pin_to_t0(turn)
     return turn
 
@@ -143,8 +149,11 @@ class FakeRelay(rc.RelayAdapter):
         if callable(events):  # a reply that depends on the task (a diagnostic answers its own nonce)
             events = events(task)
         sid = f"20261018-{len(self.launches):06d}-{'b' * 6}"
+        status = reported[0] if reported else "propose_done"
+        last_msg = reported[1] if len(reported) > 1 else None
+        tokens = reported[2] if len(reported) > 2 else None
         write_turn(self.sessions_dir() / sid, events, agent=agent, prompt=relay_prompt(task),
-                   status=reported[0] if reported else "propose_done")
+                   status=status, last_message=last_msg, context_used_tokens=tokens)
         return rc.RunResult(sid, 0, True)
 
 
@@ -164,11 +173,15 @@ class Env:
         self.alive: dict[int, int] = {}
         self.sent: list[str] = []
         self.store = rc.Store(tmp / "control")
+        self.jobs: dict[str, dict[str, Any]] = {}
+        self.ci: dict[tuple[int, str], dict[str, Any]] = {}
         self.host = rc.Host(
             relay=self.relay, now=self.clock.now, sleep=self.clock.sleep, fingerprint=lambda: self.fp["v"],
             conflicts=lambda own: list(self.conflicts), pid_alive=self._alive,
             ledger=lambda kind, text: self.ledger.append((kind, text)), permissions_digest=lambda: self.perm["v"],
-            log=self.logs.append)
+            log=self.logs.append,
+            job_status=lambda jid: self.jobs.get(jid),
+            pr_ci_status=lambda pr, sha: self.ci.get((pr, sha)))
         self.limits = limits or rc.Limits()
         self.sender = sender if sender is not None else self._send
 
@@ -3762,7 +3775,10 @@ def test_prompts_keep_working_on_job_independent_work_while_a_job_runs() -> None
     assert "blocks only the work that depends on its result" in mission
     assert "only when no such job-independent authorized work remains" in mission
     assert "focused tests only, full suites to CI" in mission
-    assert "A running registered job never idles the cycle" in rc.ROADMAP_TASK
+    assert "While a registered job runs, take the next item in the order the standing directives give" in rc.ROADMAP_TASK
+    assert "A running registered job never idles the cycle" not in rc.ROADMAP_TASK
+    assert "end with `RELAY_STATUS continue` and a `JOB-WAIT:` or `CI-WAIT:` line" in rc.ROADMAP_TASK
+    assert "next directive item" in rc.ROADMAP_TASK
     # The JOB-WAIT pause itself is unchanged: a cycle that does end blocked on jobs still pauses until they finish.
     assert "`JOB-WAIT: <job id>` lines, which pause roadmap mode until those jobs finish" in mission
 
@@ -4524,4 +4540,482 @@ def test_make_host_wires_session_context(tmp_path: Path) -> None:
     text, fields = host.session_context(None)
     assert text == ""
     assert fields == {"brief": None, "directives": []}
+
+
+# ---------------------------------------------------------------------------
+# Spec 267: Session continuity across external waits
+
+
+def test_wait_parsing_strict_and_deduplicated() -> None:
+    text = (
+        "Some thoughts and progress...\n"
+        "RELAY_STATUS continue\n"
+        "JOB-WAIT: j-20261113T120000Z-111111\n"
+        "CI-WAIT: 42@0123456789abcdef0123456789abcdef01234567\n"
+        "JOB-WAIT: j-20261113T120000Z-222222\n"
+        "JOB-WAIT: j-20261113T120000Z-111111\n"  # duplicate
+        "CI-WAIT: 42@0123456789abcdef0123456789abcdef01234567\n"  # duplicate
+        "JOB-WAIT: `j-20261113T120000Z-333333`\n"  # backticks: rejected
+        "JOB-WAIT: j-20261113T120000Z-444444; rm -rf /\n"  # shell injection: rejected
+        "CI-WAIT: 42@0123456789abcdef0123456789abcdef01234567 | cat\n"  # shell pipe: rejected
+        "CI-WAIT: 42@shortsha\n"  # short sha: rejected
+        "CI-WAIT: https://github.com/org/repo/pull/42\n"  # url: rejected
+        "JOB-WAIT: \n"  # empty: rejected
+        "CI-WAIT: \n"  # empty: rejected
+    )
+    jobs, ci_waits = rc.parse_wait_directives(text)
+    assert jobs == ["j-20261113T120000Z-111111", "j-20261113T120000Z-222222"]
+    assert ci_waits == [(42, "0123456789abcdef0123456789abcdef01234567")]
+
+
+def test_job_wait_satisfaction_and_resume_prompt(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("run worker jobs")
+    start_mission(env, mission)
+    t0 = env.clock.now()
+
+    def job_status(jid: str) -> dict[str, Any] | None:
+        if jid == "j-20261113T120000Z-111111":
+            if (env.clock.now() - t0).total_seconds() >= 15:
+                return {"status": "failed"}
+            return {"status": "running"}
+        if jid == "j-20261113T120000Z-222222":
+            return {"status": "succeeded"}
+        return None
+
+    env.host.job_status = job_status
+
+    turn1_msg = (
+        "Started background solver jobs.\n"
+        "RELAY_STATUS continue\n"
+        "JOB-WAIT: j-20261113T120000Z-111111\n"
+        "JOB-WAIT: j-20261113T120000Z-222222"
+    )
+    env.relay.script = [
+        ("claude", SUCCESS, "continue", turn1_msg),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    assert len(env.relay.launches) == 2
+    l2 = env.relay.launches[1]
+    assert l2["parent"] is not None
+    assert "External wait satisfied:" in l2["task"]
+    assert "- JOB j-20261113T120000Z-111111: failed" in l2["task"]
+    assert "- JOB j-20261113T120000Z-222222: succeeded" in l2["task"]
+    assert f"Resume work on mission {mission['id']} task 1/1." in l2["task"]
+
+
+def test_ci_wait_satisfaction_and_unrelated_ci_ignored(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("wait for PR checks")
+    start_mission(env, mission)
+    t0 = env.clock.now()
+    head_sha = "1111111111111111111111111111111111111111"
+
+    # Unrelated CI run on another PR / head exists
+    env.ci[(99, "9999999999999999999999999999999999999999")] = {
+        "observed_head": "9999999999999999999999999999999999999999",
+        "state": "open",
+        "checks": [{"name": "backend", "status": "completed", "conclusion": "success"}],
+    }
+
+    def pr_status(pr: int, sha: str) -> dict[str, Any] | None:
+        if pr == 42 and sha == head_sha:
+            if (env.clock.now() - t0).total_seconds() >= 60:
+                return {
+                    "observed_head": head_sha,
+                    "state": "open",
+                    "checks": [{"name": "backend", "status": "completed", "conclusion": "success"}],
+                }
+            return {
+                "observed_head": head_sha,
+                "state": "open",
+                "checks": [{"name": "backend", "status": "in_progress", "conclusion": ""}],
+            }
+        return env.ci.get((pr, sha))
+
+    env.host.pr_ci_status = pr_status
+
+    turn1_msg = f"Waiting for PR checks.\nRELAY_STATUS continue\nCI-WAIT: 42@{head_sha}"
+    env.relay.script = [
+        ("claude", SUCCESS, "continue", turn1_msg),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    assert len(env.relay.launches) == 2
+    l2 = env.relay.launches[1]
+    assert l2["parent"] is not None
+    assert "External wait satisfied:" in l2["task"]
+    assert f"- CI PR #42@{head_sha}: success" in l2["task"]
+
+
+def test_pr_head_change_or_closure_wakes_immediately_with_uncertainty(tmp_path: Path) -> None:
+    head_sha = "1111111111111111111111111111111111111111"
+
+    # Part A: Head changes
+    env_a = Env(tmp_path / "a")
+    mission_a = mission_def("pr head advances")
+    start_mission(env_a, mission_a)
+    env_a.jobs["j-20261113T120000Z-111111"] = {"status": "running"}
+    env_a.ci[(42, head_sha)] = {
+        "observed_head": "2222222222222222222222222222222222222222",  # advanced!
+        "state": "open",
+        "checks": [{"name": "backend", "status": "in_progress", "conclusion": ""}],
+    }
+    msg_a = f"RELAY_STATUS continue\nJOB-WAIT: j-20261113T120000Z-111111\nCI-WAIT: 42@{head_sha}"
+    env_a.relay.script = [
+        ("claude", SUCCESS, "continue", msg_a),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result_a, sup_a = run_mission(env_a, mission_a)
+    assert result_a == "idle"
+    assert len(env_a.relay.launches) == 2
+    l2_a = env_a.relay.launches[1]
+    assert "External wait terminated (head_changed):" in l2_a["task"]
+    assert "- JOB j-20261113T120000Z-111111: uncertain" in l2_a["task"]
+    assert f"- CI PR #42@{head_sha}: head_changed (uncertain)" in l2_a["task"]
+
+    # Part B: PR closed
+    env_b = Env(tmp_path / "b")
+    mission_b = mission_def("pr closed")
+    start_mission(env_b, mission_b)
+    env_b.ci[(42, head_sha)] = {
+        "observed_head": head_sha,
+        "state": "closed",
+        "checks": [],
+    }
+    msg_b = f"RELAY_STATUS continue\nCI-WAIT: 42@{head_sha}"
+    env_b.relay.script = [
+        ("claude", SUCCESS, "continue", msg_b),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result_b, sup_b = run_mission(env_b, mission_b)
+    assert result_b == "idle"
+    assert len(env_b.relay.launches) == 2
+    l2_b = env_b.relay.launches[1]
+    assert "External wait terminated (pr_closed):" in l2_b["task"]
+    assert f"- CI PR #42@{head_sha}: pr_closed (uncertain)" in l2_b["task"]
+
+
+def test_unregistered_job_wakes_immediately_with_uncertainty(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("unregistered job")
+    start_mission(env, mission)
+    env.jobs["j-20261113T120000Z-888888"] = {"status": "running"}  # registered
+    # j-20261113T120000Z-999999 is NOT in env.jobs
+
+    turn_msg = (
+        "RELAY_STATUS continue\n"
+        "JOB-WAIT: j-20261113T120000Z-999999\n"
+        "JOB-WAIT: j-20261113T120000Z-888888"
+    )
+    env.relay.script = [
+        ("claude", SUCCESS, "continue", turn_msg),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    assert len(env.relay.launches) == 2
+    l2 = env.relay.launches[1]
+    assert "External wait terminated (unregistered_job):" in l2["task"]
+    assert "- JOB j-20261113T120000Z-999999: unregistered_job (uncertain)" in l2["task"]
+    assert "- JOB j-20261113T120000Z-888888: uncertain" in l2["task"]
+
+
+def test_wait_timeout_wakes_with_uncertainty(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("wait timeout")
+    start_mission(env, mission)
+    env.jobs["j-20261113T120000Z-111111"] = {"status": "running"}  # never finishes
+
+    turn_msg = "RELAY_STATUS continue\nJOB-WAIT: j-20261113T120000Z-111111"
+    env.relay.script = [
+        ("claude", SUCCESS, "continue", turn_msg),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    assert len(env.relay.launches) == 2
+    l2 = env.relay.launches[1]
+    assert "External wait terminated (wait_timeout):" in l2["task"]
+    assert "- JOB j-20261113T120000Z-111111: wait_timeout (uncertain)" in l2["task"]
+    assert sum(env.clock.slept) >= rc.WAIT_TIMEOUT_SECONDS
+
+
+def test_no_checks_or_unreadable_ci_fails_closed(tmp_path: Path) -> None:
+    head_sha = "1111111111111111111111111111111111111111"
+
+    # Part A: Zero checks after 120s
+    env_a = Env(tmp_path / "a")
+    mission_a = mission_def("no checks")
+    start_mission(env_a, mission_a)
+    env_a.ci[(42, head_sha)] = {
+        "observed_head": head_sha,
+        "state": "open",
+        "checks": [],
+    }
+    msg_a = f"RELAY_STATUS continue\nCI-WAIT: 42@{head_sha}"
+    env_a.relay.script = [
+        ("claude", SUCCESS, "continue", msg_a),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result_a, _ = run_mission(env_a, mission_a)
+    assert result_a == "idle"
+    l2_a = env_a.relay.launches[1]
+    assert "External wait terminated (no_checks_reported):" in l2_a["task"]
+    assert f"- CI PR #42@{head_sha}: no_checks_reported (uncertain)" in l2_a["task"]
+    assert sum(env_a.clock.slept) >= 120
+
+    # Part B: Unreadable through timeout
+    env_b = Env(tmp_path / "b")
+    mission_b = mission_def("unreadable ci")
+    start_mission(env_b, mission_b)
+    env_b.ci[(42, head_sha)] = {"unreadable": True}
+    msg_b = f"RELAY_STATUS continue\nCI-WAIT: 42@{head_sha}"
+    env_b.relay.script = [
+        ("claude", SUCCESS, "continue", msg_b),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result_b, _ = run_mission(env_b, mission_b)
+    assert result_b == "idle"
+    l2_b = env_b.relay.launches[1]
+    assert "External wait terminated (remote_unreadable):" in l2_b["task"]
+    assert f"- CI PR #42@{head_sha}: remote_unreadable (uncertain)" in l2_b["task"]
+    assert sum(env_b.clock.slept) >= rc.WAIT_TIMEOUT_SECONDS
+
+
+def test_satisfied_waits_do_not_consume_checkpoint_limit(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("checkpoints test")
+    start_mission(env, mission)
+    env.jobs["j-20261113T120000Z-111111"] = {"status": "succeeded"}
+    msg = "RELAY_STATUS continue\nJOB-WAIT: j-20261113T120000Z-111111"
+
+    # 12 consecutive satisfied waits
+    env.relay.script = [("claude", SUCCESS, "continue", msg) for _ in range(12)]
+    env.relay.script.append(("claude", SUCCESS, "propose_done"))
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    assert sup.state["hold"] is None
+    # Verify checkpoints were not consumed by satisfied waits
+    rec = sup.state["mission"]
+    assert rec.get("checkpoints", {}).get("0", 0) == 0
+
+    # Now run 12 bare checkpoints:
+    env2 = Env(tmp_path / "bare")
+    mission2 = mission_def("bare checkpoints")
+    start_mission(env2, mission2)
+    env2.relay.script = [("claude", SUCCESS, "continue", "bare checkpoint") for _ in range(13)]
+    result2, sup2 = run_mission(env2, mission2)
+    assert result2 == "held"
+    assert sup2.state["hold"]["reason"] == "task_checkpoint_limit"
+
+
+def test_bare_checkpoint_enforces_minimum_interval(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    mission = mission_def("bare checkpoint interval")
+    start_mission(env, mission)
+    env.relay.script = [
+        ("claude", SUCCESS, "continue", "first checkpoint"),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result, sup = run_mission(env, mission)
+    assert result == "idle"
+    # Bare continue turn must sleep MIN_CHECKPOINT_INTERVAL_SECONDS (60s) before relaunch
+    assert any(s >= 60.0 for s in env.clock.slept)
+
+
+def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    # Under cap (< 2M tokens) and under 4 resumes: continues session
+    env1 = Env(tmp_path / "under")
+    mission1 = mission_def("under cap")
+    start_mission(env1, mission1)
+    env1.jobs[jid] = {"status": "succeeded"}
+    env1.relay.script = [
+        ("claude", SUCCESS, "continue", msg, 1_400_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result1, sup1 = run_mission(env1, mission1)
+    assert result1 == "idle"
+    assert env1.relay.launches[1]["parent"] is not None
+    assert "External wait satisfied:" in env1.relay.launches[1]["task"]
+
+    # Over cap (> 2M tokens): forces fresh context (parent = None)
+    env2 = Env(tmp_path / "over")
+    mission2 = mission_def("over cap")
+    start_mission(env2, mission2)
+    env2.jobs[jid] = {"status": "succeeded"}
+    env2.relay.script = [
+        ("claude", SUCCESS, "continue", msg, 2_100_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result2, sup2 = run_mission(env2, mission2)
+    assert result2 == "idle"
+    assert env2.relay.launches[1]["parent"] is None
+    assert "[Durable handoff summary]" in env2.relay.launches[1]["task"]
+
+    # Missing context_used_tokens: does not force fresh context
+    env3 = Env(tmp_path / "missing")
+    mission3 = mission_def("missing tokens")
+    start_mission(env3, mission3)
+    env3.jobs[jid] = {"status": "succeeded"}
+    env3.relay.script = [
+        ("claude", SUCCESS, "continue", msg, None),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result3, sup3 = run_mission(env3, mission3)
+    assert result3 == "idle"
+    assert env3.relay.launches[1]["parent"] is not None
+
+    # 5th consecutive resume forces fresh context
+    env4 = Env(tmp_path / "fifth")
+    mission4 = mission_def("consecutive resumes")
+    start_mission(env4, mission4)
+    env4.jobs[jid] = {"status": "succeeded"}
+    # 4 consecutive resumes with same parent, then 5th must have parent = None
+    env4.relay.script = [
+        ("claude", SUCCESS, "continue", msg, 100_000),
+        ("claude", SUCCESS, "continue", msg, 100_000),
+        ("claude", SUCCESS, "continue", msg, 100_000),
+        ("claude", SUCCESS, "continue", msg, 100_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    result4, sup4 = run_mission(env4, mission4)
+    assert result4 == "idle"
+    assert env4.relay.launches[1]["parent"] is not None  # resume 1
+    assert env4.relay.launches[2]["parent"] is not None  # resume 2
+    assert env4.relay.launches[3]["parent"] is not None  # resume 3
+    assert env4.relay.launches[4]["parent"] is None      # resume 4 was reached, 5th launch has parent = None!
+
+
+def test_provider_change_and_native_agents_force_fresh_context(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    # Provider switch from claude to codex forces parent = None
+    env1 = Env(tmp_path / "switch")
+    mission1 = mission_def("switch agent")
+    start_mission(env1, mission1)
+    env1.jobs[jid] = {"status": "succeeded"}
+    env1.relay.readings = room(env1, "codex")
+    env1.head(SUCCESS, agent="claude")
+    sup1 = env1.supervisor()
+    sup1.mission = mission1
+    sup1.state["mission"] = {"id": mission1["id"], "next": 0, "total": 1, "done": []}
+    sup1.state["cooldowns"]["claude"] = {"until": rc.iso(env1.clock.now() + timedelta(hours=2)), "reason": "quota"}
+    turn_dir = env1.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    (turn_dir / "last-message.txt").write_text(msg, encoding="utf-8")
+    (turn_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    env1.relay.script = [("codex", CODEX_SUCCESS, "propose_done")]
+    result1, _ = env1.run(HEAD)
+    assert result1 == "idle"
+    assert env1.relay.launches[0]["agent"] == "codex"
+    assert env1.relay.launches[0]["parent"] is None
+
+    # Native agent (argon) forces parent = None
+    env2 = Env(tmp_path / "native")
+    mission2 = mission_def("native agent")
+    start_mission(env2, mission2)
+    env2.jobs[jid] = {"status": "succeeded"}
+    env2.head(SUCCESS, agent="argon")
+    sup2 = env2.supervisor()
+    sup2.mission = mission2
+    sup2.state["agent"] = "argon"
+    sup2.state["mission"] = {"id": mission2["id"], "next": 0, "total": 1, "done": []}
+    turn_dir2 = env2.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    (turn_dir2 / "last-message.txt").write_text(msg, encoding="utf-8")
+    (turn_dir2 / "state.json").write_text(json.dumps({"agent_key": "argon", "status": "continue"}))
+    env2.relay.script = [("argon", SUCCESS, "propose_done")]
+    result2, _ = env2.run(HEAD)
+    assert env2.relay.launches[0]["parent"] is None
+
+
+def test_wait_persists_across_restart_and_honors_stop(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    env = Env(tmp_path)
+    mission = mission_def("wait persists")
+    start_mission(env, mission)
+    env.jobs[jid] = {"status": "running"}
+
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+    env.head(SUCCESS, agent="claude")
+    turn_dir = env.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    (turn_dir / "last-message.txt").write_text(msg, encoding="utf-8")
+    (turn_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+
+    sup = env.supervisor()
+    sup.mission = mission
+    sup.state["mission"] = {"id": mission["id"], "next": 0, "total": 1, "done": []}
+
+    # Request stop before running
+    env.store.stop_path.write_text("stop requested")
+    res = sup.run(HEAD)
+    assert res == "stopped"
+    assert sup.state["phase"] == "stopped"
+    assert sup.state["wait"] is not None
+    assert sup.state["wait"]["jobs"] == [jid]
+    # No new launch occurred
+    assert len(env.relay.launches) == 0
+
+    # Restart: clear stop, job is still running, stop again while waiting
+    env.store.stop_path.unlink()
+
+    def dynamic_job(job_id: str) -> dict[str, Any] | None:
+        if env.clock.now() > T0 + timedelta(seconds=20):
+            return {"status": "succeeded"}
+        return {"status": "running"}
+
+    env.host.job_status = dynamic_job
+    env.relay.script = [("claude", SUCCESS, "propose_done")]
+
+    sup2 = env.supervisor()
+    sup2.mission = mission
+    res2 = sup2.run(HEAD)
+    assert res2 == "idle"
+    assert len(env.relay.launches) == 1
+    assert "External wait satisfied:" in env.relay.launches[0]["task"]
+
+
+def test_side_effect_holds_preempt_external_waits(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    # Part A: gate hold (output_unparseable) preempts wait
+    env_a = Env(tmp_path / "a")
+    mission_a = mission_def("gate hold preempts")
+    start_mission(env_a, mission_a)
+    env_a.head(SUCCESS, agent="claude")
+    turn_a = env_a.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    (turn_a / "last-message.txt").write_text(msg, encoding="utf-8")
+    (turn_a / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    (turn_a / "output.jsonl").write_text("{bad json\n")
+    sup_a = env_a.supervisor()
+    sup_a.mission = mission_a
+    sup_a.state["mission"] = {"id": mission_a["id"], "next": 0, "total": 1, "done": []}
+    res_a = sup_a.run(HEAD)
+    assert res_a == "held"
+    assert sup_a.state["hold"]["reason"] == "output_unparseable"
+    assert sup_a.state["wait"] is None
+
+    # Part B: effects_uncertain (unresolved push) preempts wait
+    env_b = Env(tmp_path / "b")
+    mission_b = mission_def("effects uncertain preempts")
+    start_mission(env_b, mission_b)
+    env_b.head([IN_FLIGHT["git push"], *SUCCESS], agent="claude")
+    turn_b = env_b.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    (turn_b / "last-message.txt").write_text(msg, encoding="utf-8")
+    (turn_b / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    sup_b = env_b.supervisor()
+    sup_b.mission = mission_b
+    sup_b.state["mission"] = {"id": mission_b["id"], "next": 0, "total": 1, "done": []}
+    res_b = sup_b.run(HEAD)
+    assert res_b == "held"
+    assert sup_b.state["hold"]["reason"] == "effects_uncertain"
+    assert sup_b.state["wait"] is None
+
 
