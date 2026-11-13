@@ -5726,3 +5726,51 @@ def test_reading_clear_boundaries_estimate_manual_stale_missing_unparseable_exha
     assert "claude" in sup.state["cooldowns"]
 
 
+def test_auth_failure_diagnostic_secret_never_enters_question_or_notification(tmp_path: Path) -> None:
+    """A secret in auth failure diagnostics never enters the recorded ledger question or outbound notification."""
+    env = Env(tmp_path)
+    entries: list[dict[str, Any]] = []
+
+    def fake_ledger(kind: str, text: str) -> str:
+        qid = f"L{env.clock.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(2)}"
+        entry = {"id": qid, "kind": kind, "text": text, "ts": rc.iso(env.clock.now())}
+        entries.append(entry)
+        env.ledger.append((kind, text))
+        return qid
+
+    env.host.ledger = fake_ledger
+    secret = "sk-test-secret-deadbeef0011"
+    raw_diagnostic = f"401 Unauthorized: token={secret} in /var/secrets/key.json"
+    rep = rc.TurnReport(outcome="auth", agent="claude", detail=raw_diagnostic, turn_id="t-auth-sec")
+    sup = env.supervisor()
+    sup.set_cooldown("claude", rep)
+
+    # 1. Proving the secret-like diagnostic content never enters the recorded question
+    q_entries = [e for e in entries if e["kind"] == "question"]
+    assert len(q_entries) == 1
+    question_text = q_entries[0]["text"]
+    assert secret not in question_text
+    assert "token=" not in question_text
+    assert "/var/secrets" not in question_text
+    assert "Autenticazione fallita per l'agente claude" in question_text
+
+    # 2. Proving it never enters outbound notification
+    assert len(env.sent) == 1
+    assert not any(secret in msg for msg in env.sent)
+
+    # 3. Proving outbound question delivery via relay_observe never carries the secret
+    obs_spec = importlib.util.spec_from_file_location("relay_observe", SCRIPT.parent / "relay_observe.py")
+    assert obs_spec and obs_spec.loader
+    obs = importlib.util.module_from_spec(obs_spec)
+    obs_spec.loader.exec_module(obs)
+
+    parsed = obs.parse_open_questions(q_entries)
+    assert len(parsed) == 1
+    outbound = obs.question_text(parsed[0])
+    assert secret not in outbound
+    opts = parsed[0]["options"]
+    assert len(opts) == 2
+    assert opts[0]["index"] == 1
+    assert opts[0]["recommended"] is True
+    assert opts[1]["index"] == 2
+    assert opts[1]["recommended"] is False

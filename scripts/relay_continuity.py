@@ -3307,10 +3307,8 @@ class Supervisor:
         counters = self.state["counters"]
         if report.outcome == "auth":
             until, source = None, "auth"
-            detail = report.detail or "autenticazione non valida"
-            detail = re.sub(r"/(?:[a-zA-Z0-9_.-]+/)+[a-zA-Z0-9_.-]+", "[path]", detail)
             q_text = (
-                f"Autenticazione fallita per l'agente {agent} ({detail}). Come procedere?\n"
+                f"Autenticazione fallita per l'agente {agent}. Come procedere?\n"
                 f"1. (consigliata) Accesso ripristinato per {agent}, riprova — conseguenza: riprova l'agente al prossimo turno\n"
                 f"2. Mantieni {agent} escluso — conseguenza: l'agente resta escluso fino al comando release"
             )
