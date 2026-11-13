@@ -2167,8 +2167,11 @@ def return_release(
     # Move current back to previous release if available (keep current where it is when kind == "return")
     if not is_return_marker and previous_sha and (paths.install / "releases" / previous_sha).is_dir():
         tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
-        os.symlink(paths.install / "releases" / previous_sha, tmp_link)
-        os.replace(tmp_link, paths.install / "current")
+        try:
+            os.symlink(paths.install / "releases" / previous_sha, tmp_link)
+            os.replace(tmp_link, paths.install / "current")
+        finally:
+            tmp_link.unlink(missing_ok=True)
 
     # Restore watcher if it was active
     if marker and marker.get("watcher_active"):
@@ -2347,15 +2350,29 @@ def _pin_guard(paths: Paths, source_dir: Path, source_sha: str) -> None:
     try:
         os.rename(tmp_guard, guard_dir)
     except BaseException:
-        if has_old and not guard_dir.exists():
+        if has_old and not (guard_dir.exists() or guard_dir.is_symlink()):
             try:
                 os.rename(old_aside, guard_dir)
-                has_old = False
             except OSError:
-                pass
+                # A partial copy could pass for a real guard and let the cleanup below delete the only good one;
+                # a symlink either exists whole or not at all, and keeps the old copy in place.
+                try:
+                    guard_dir.symlink_to(old_aside)
+                except OSError:
+                    pass
         raise
     finally:
-        if has_old and (old_aside.exists() or old_aside.is_symlink()):
+        if tmp_guard.exists() or tmp_guard.is_symlink():
+            if tmp_guard.is_dir() and not tmp_guard.is_symlink():
+                shutil.rmtree(tmp_guard, ignore_errors=True)
+            else:
+                tmp_guard.unlink(missing_ok=True)
+        # Only clean up old_aside if guard_dir is safely in place as a real directory
+        if (
+            has_old
+            and (guard_dir.exists() and not guard_dir.is_symlink())
+            and (old_aside.exists() or old_aside.is_symlink())
+        ):
             if old_aside.is_dir() and not old_aside.is_symlink():
                 shutil.rmtree(old_aside, ignore_errors=True)
             else:
@@ -2600,16 +2617,12 @@ class Executor:
         self.restart_requested = True
         if marker is not None:
             marker["unhealthy_reason"] = reason
-            ts_str = iso(self.now())
-            marker["unhealthy_at"] = ts_str
-            marker["unhealthy_time"] = ts_str
+            marker["unhealthy_at"] = iso(self.now())
             state_fd = open_dir(self.paths.state, create=True)
             try:
                 write_at(state_fd, "release-pending.json", canonical(marker))
             finally:
                 os.close(state_fd)
-
-    _return_release = _record_unhealthy
 
     def maybe_confirm_release(self) -> bool:
         try:
@@ -3154,8 +3167,11 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
                           deadline=deadline, request_id=p_req,
                           attempts=p_attempts, watcher_active=p_watch, now=ts)
     tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
-    os.symlink(release, tmp_link)
-    os.replace(tmp_link, paths.install / "current")
+    try:
+        os.symlink(release, tmp_link)
+        os.replace(tmp_link, paths.install / "current")
+    finally:
+        tmp_link.unlink(missing_ok=True)
 
 
 def op_release_install(ctx: Context) -> dict[str, Any]:

@@ -4287,3 +4287,145 @@ def test_guard_return_without_pending_marker_refused(tmp_path, capsys):
     assert len(h.read_release_history(paths)) == 0
     # Current is untouched
     assert (paths.install / "current").resolve() == paths.install / "releases" / confirmed_sha
+
+
+def test_guard_force_return_successful_exit_status_and_cli(tmp_path, capsys):
+    paths = h.Paths(tmp_path)
+    old_sha = "1" * 40
+    candidate_sha = "2" * 40
+    (paths.install / "releases" / old_sha / "scripts").mkdir(parents=True)
+    (paths.install / "releases" / candidate_sha / "scripts").mkdir(parents=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / candidate_sha)
+    h._pin_guard(paths, paths.install / "releases" / old_sha, old_sha)
+
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    h.write_release_pending(paths, previous_sha=old_sha, candidate_sha=candidate_sha,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False, now=t0)
+
+    # Direct guard call with force_return=True must return int 0 on success (never bool True / exit 1)
+    rc = h.guard(paths, force_return=True, reason="manual test return", now=t0)
+    assert type(rc) is int
+    assert rc == 0
+    # Current moved back to old release
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["status"] == "refused"
+    assert history[0]["reason"] == "manual test return"
+
+    # Subsequent force_return without pending marker returns 2 (refusal)
+    # Clear any return confirmation marker written for old_sha
+    paths.release_pending.unlink(missing_ok=True)
+    rc_refused = h.guard(paths, force_return=True)
+    assert type(rc_refused) is int
+    assert rc_refused == 2
+    assert "refus" in capsys.readouterr().err.lower()
+
+    # CLI test: with pending marker, CLI status must be exit 0
+    candidate_b = "3" * 40
+    (paths.install / "releases" / candidate_b / "scripts").mkdir(parents=True)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / candidate_b)
+    h.write_release_pending(paths, previous_sha=old_sha, candidate_sha=candidate_b,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req2", attempts=0, watcher_active=False, now=t0)
+
+    rc_cli = h.main(["--home", str(tmp_path), "guard", "--return", "--reason", "cli manual return"])
+    assert type(rc_cli) is int
+    assert rc_cli == 0
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+
+    # CLI test: without pending marker, CLI status must be exit 2
+    paths.release_pending.unlink(missing_ok=True)
+    rc_cli_refused = h.main(["--home", str(tmp_path), "guard", "--return"])
+    assert type(rc_cli_refused) is int
+    assert rc_cli_refused == 2
+    assert "refus" in capsys.readouterr().err.lower()
+
+
+def test_pin_guard_replacement_failure_restores_usable_old_guard(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    old_sha = "a" * 40
+    candidate_sha = "b" * 40
+
+    old_source = tmp_path / "old_release"
+    old_source.mkdir()
+    (old_source / "RELEASE").write_text(f"{old_sha}\n")
+    (old_source / "host_ops.py").write_text("# old guard code\n")
+
+    # Initial pin of old guard
+    h._pin_guard(paths, old_source, old_sha)
+    assert paths.guard.is_dir()
+    assert (paths.guard / "RELEASE").read_text().strip() == old_sha
+    assert (paths.guard / "host_ops.py").read_text() == "# old guard code\n"
+
+    candidate_source = tmp_path / "cand_release"
+    candidate_source.mkdir()
+    (candidate_source / "RELEASE").write_text(f"{candidate_sha}\n")
+    (candidate_source / "host_ops.py").write_text("# candidate code\n")
+
+    real_rename = os.rename
+
+    def faulty_rename(src, dst):
+        # Fail only when replacing guard_dir with the candidate's tmp_guard
+        s_src = str(src)
+        s_dst = str(dst)
+        if s_dst == str(paths.guard) and ".guard-" in s_src and ".guard-old-" not in s_src:
+            raise OSError("injected replacement rename failure")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(os, "rename", faulty_rename)
+
+    with pytest.raises(OSError, match="injected replacement rename failure"):
+        h._pin_guard(paths, candidate_source, candidate_sha)
+
+    # Safe previous-release guard is restored and usable
+    assert paths.guard.is_dir()
+    assert not paths.guard.is_symlink()
+    assert (paths.guard / "RELEASE").read_text().strip() == old_sha
+    assert (paths.guard / "host_ops.py").read_text() == "# old guard code\n"
+
+    # Temporary directories cleaned up; no leaked .guard-*
+    leftover = list(paths.install.glob(".guard*"))
+    assert len(leftover) == 0
+
+
+def test_pin_guard_restore_failure_preserves_old_aside(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    old_sha = "a" * 40
+    candidate_sha = "b" * 40
+
+    old_source = tmp_path / "old_release"
+    old_source.mkdir()
+    (old_source / "RELEASE").write_text(f"{old_sha}\n")
+    (old_source / "host_ops.py").write_text("# safe previous code\n")
+
+    h._pin_guard(paths, old_source, old_sha)
+
+    candidate_source = tmp_path / "cand_release"
+    candidate_source.mkdir()
+    (candidate_source / "RELEASE").write_text(f"{candidate_sha}\n")
+    (candidate_source / "host_ops.py").write_text("# candidate code\n")
+
+    real_rename = os.rename
+
+    def always_fail_to_guard(src, dst):
+        if str(dst) == str(paths.guard):
+            raise OSError("cannot rename to guard")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(os, "rename", always_fail_to_guard)
+
+    with pytest.raises(OSError, match="cannot rename to guard"):
+        h._pin_guard(paths, candidate_source, candidate_sha)
+
+    # guard_dir could not be renamed back: it points at the kept old copy, which cleanup must not delete
+    old_asides = list(paths.install.glob(".guard-old-*"))
+    assert len(old_asides) == 1
+    assert paths.guard.is_symlink() and paths.guard.resolve() == old_asides[0].resolve()
+    assert (old_asides[0] / "RELEASE").read_text().strip() == old_sha
+    assert (old_asides[0] / "host_ops.py").read_text() == "# safe previous code\n"
+    # Candidate tmp_guard was cleaned up
+    cand_tmps = [p for p in paths.install.glob(".guard-*") if ".guard-old-" not in p.name]
+    assert len(cand_tmps) == 0
