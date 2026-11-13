@@ -1124,10 +1124,27 @@ def release_archive(extra=()):
                    + [("repo/README.md", tarfile.REGTYPE), *extra])
 
 
-def mock_install(monkeypatch, data, status="ahead"):
+def mock_install(monkeypatch, data, status="ahead", rules=None, checks=None):
     monkeypatch.delenv("JARVIS_SANDBOX", raising=False)
     monkeypatch.setattr(h.socket, "gethostname", lambda: "host")
-    monkeypatch.setattr(h, "_gh", lambda args: status)
+    if rules is None:
+        rules = [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "backend"}]}}]
+    if checks is None:
+        checks = [{"name": "backend", "status": "completed", "conclusion": "success", "id": 1, "completed_at": "2026-01-01T00:00:00Z"}]
+
+    def gh(args, **kw):
+        endpoint = args[0]
+        if "rules/branches/" in endpoint:
+            if isinstance(rules, Exception):
+                raise rules
+            return json.dumps(rules) if isinstance(rules, (list, dict)) else str(rules)
+        if "check-runs" in endpoint:
+            if isinstance(checks, Exception):
+                raise checks
+            return json.dumps({"check_runs": checks}) if isinstance(checks, (list, dict)) else str(checks)
+        return status
+
+    monkeypatch.setattr(h, "_gh", gh)
     calls = []
 
     def run(argv, **kw):
@@ -1174,6 +1191,202 @@ def test_install_release_and_units(host, monkeypatch):
         assert "python3 -I %h/.local/share/jarvisos-hostops/current/scripts/" in body
     for setting in ("NoNewPrivileges=yes", "MemoryMax=2G", "TasksMax=256", "CPUQuota=200%", "RestartForceExitStatus=75"):
         assert setting in h.SERVICE_UNIT
+
+
+def test_required_checks_problem_ruleset_and_check_runs(monkeypatch):
+    # Unreadable ruleset
+    monkeypatch.setattr(h, "_gh", lambda args: (_ for _ in ()).throw(RuntimeError("api error")))
+    assert "unreadable ruleset" in h.required_checks_problem(SHA)
+
+    monkeypatch.setattr(h, "_gh", lambda args: "not-json{")
+    assert "unreadable ruleset" in h.required_checks_problem(SHA)
+
+    monkeypatch.setattr(h, "_gh", lambda args: json.dumps({"not": "a list"}))
+    assert "unreadable ruleset" in h.required_checks_problem(SHA)
+
+    # Empty ruleset
+    monkeypatch.setattr(h, "_gh", lambda args: "[]")
+    assert "empty ruleset" in h.required_checks_problem(SHA)
+
+    monkeypatch.setattr(h, "_gh", lambda args: json.dumps([{"type": "other_rule"}]))
+    assert "empty ruleset" in h.required_checks_problem(SHA)
+
+    rules = [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "backend"}]}}]
+
+    # Check runs query fails
+    def gh_runs_fail(args):
+        if "rules/branches/" in args[0]:
+            return json.dumps(rules)
+        raise RuntimeError("check-runs failed")
+
+    monkeypatch.setattr(h, "_gh", gh_runs_fail)
+    assert "unreadable check runs" in h.required_checks_problem(SHA)
+
+    # Missing check run
+    def gh_missing(args):
+        if "rules/branches/" in args[0]:
+            return json.dumps(rules)
+        return json.dumps({"check_runs": [{"name": "other_check", "status": "completed", "conclusion": "success"}]})
+
+    monkeypatch.setattr(h, "_gh", gh_missing)
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' is missing" in prob
+
+    # Pending check run
+    def gh_pending(args):
+        if "rules/branches/" in args[0]:
+            return json.dumps(rules)
+        return json.dumps({"check_runs": [{"name": "backend", "status": "in_progress", "conclusion": None, "id": 1}]})
+
+    monkeypatch.setattr(h, "_gh", gh_pending)
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' is not completed (in_progress)" in prob
+
+    # Failure conclusion
+    def gh_failed(args):
+        if "rules/branches/" in args[0]:
+            return json.dumps(rules)
+        return json.dumps({"check_runs": [{"name": "backend", "status": "completed", "conclusion": "failure", "id": 1}]})
+
+    monkeypatch.setattr(h, "_gh", gh_failed)
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' did not succeed (failure)" in prob
+
+    # Multiple runs: latest decides
+    # Case A: earlier failure, latest success -> None
+    def gh_latest_success(args):
+        if "rules/branches/" in args[0]:
+            return json.dumps(rules)
+        return json.dumps({"check_runs": [
+            {"name": "backend", "status": "completed", "conclusion": "failure", "id": 1, "completed_at": "2026-01-01T00:00:00Z"},
+            {"name": "backend", "status": "completed", "conclusion": "success", "id": 2, "completed_at": "2026-01-01T00:05:00Z"},
+        ]})
+
+    monkeypatch.setattr(h, "_gh", gh_latest_success)
+    assert h.required_checks_problem(SHA) is None
+
+    # Case B: earlier success, latest failure -> problem
+    def gh_latest_failure(args):
+        if "rules/branches/" in args[0]:
+            return json.dumps(rules)
+        return json.dumps({"check_runs": [
+            {"name": "backend", "status": "completed", "conclusion": "success", "id": 1, "completed_at": "2026-01-01T00:00:00Z"},
+            {"name": "backend", "status": "completed", "conclusion": "failure", "id": 2, "completed_at": "2026-01-01T00:05:00Z"},
+        ]})
+
+    monkeypatch.setattr(h, "_gh", gh_latest_failure)
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' did not succeed (failure)" in prob
+
+
+def test_install_release_green_installs(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    paths.config.mkdir(parents=True, exist_ok=True)
+    paths.policy.write_text(json.dumps(h.DEFAULT_POLICY))
+    paths.policy.chmod(0o600)
+    mock_install(monkeypatch, release_archive())
+    h.install_release(paths, SHA)
+    current = paths.install / "current"
+    assert current.resolve() == paths.install / "releases" / SHA
+    assert (paths.install / "releases" / SHA / "scripts" / "host_ops.py").is_file()
+    # Re-install candidate again (identical sha) succeeds
+    h.install_release(paths, SHA)
+    assert current.resolve() == paths.install / "releases" / SHA
+
+
+@pytest.mark.parametrize("rules,checks,match", [
+    (None, [{"name": "other", "status": "completed", "conclusion": "success"}], "missing"),
+    (None, [{"name": "backend", "status": "in_progress", "conclusion": None, "id": 1}], "in_progress"),
+    (None, [{"name": "backend", "status": "completed", "conclusion": "failure", "id": 1}], "failure"),
+    (RuntimeError("rules error"), None, "unreadable ruleset"),
+    ([], None, "empty ruleset"),
+])
+def test_install_release_refuses_checks_problems(tmp_path, monkeypatch, rules, checks, match):
+    paths = h.Paths(tmp_path)
+    old_sha = "1" * 40
+    (paths.install / "releases" / old_sha / "scripts").mkdir(parents=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    mock_install(monkeypatch, release_archive(), status="ahead", rules=rules, checks=checks)
+    with pytest.raises(h.Refused, match=match):
+        h.install_release(paths, SHA)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+
+
+def test_install_release_candidate_behind_installed_refused(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    old_sha = "1" * 40
+    candidate_sha = "2" * 40
+    (paths.install / "releases" / old_sha / "scripts").mkdir(parents=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    def gh(args, **kw):
+        endpoint = args[0]
+        if f"compare/{candidate_sha}...master" in endpoint:
+            return "ahead"
+        if f"compare/{old_sha}...{candidate_sha}" in endpoint:
+            return "behind"
+        if "rules/branches/" in endpoint:
+            return json.dumps([{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "backend"}]}}])
+        if "check-runs" in endpoint:
+            return json.dumps({"check_runs": [{"name": "backend", "status": "completed", "conclusion": "success", "id": 1, "completed_at": "2026-01-01T00:00:00Z"}]})
+        return "behind"
+
+    monkeypatch.delenv("JARVIS_SANDBOX", raising=False)
+    monkeypatch.setattr(h.socket, "gethostname", lambda: "host")
+    monkeypatch.setattr(h, "_gh", gh)
+    monkeypatch.setattr(h.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, release_archive(), b""))
+
+    with pytest.raises(h.Refused, match="not ahead or identical to installed"):
+        h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+
+
+def test_install_release_preflight_failure_refused(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    old_sha = "1" * 40
+    candidate_sha = "2" * 40
+    (paths.install / "releases" / old_sha / "scripts").mkdir(parents=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    mock_install(monkeypatch, release_archive(), status="ahead")
+    monkeypatch.setattr(h, "_run_preflight", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", "policy enables unknown operations ['bad_op']\nextra info"))
+
+    with pytest.raises(h.Refused, match=r"candidate preflight failed: policy enables unknown operations \['bad_op'\]"):
+        h.install_release(paths, candidate_sha)
+
+    # Release directory not created and current unchanged
+    assert not (paths.install / "releases" / candidate_sha).exists()
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+
+
+def test_preflight_cli_ok_and_unknown_op(tmp_path, capsys):
+    paths = h.Paths(tmp_path)
+    paths.config.mkdir(parents=True, exist_ok=True)
+    paths.policy.write_text(json.dumps(h.DEFAULT_POLICY))
+    paths.policy.chmod(0o600)
+
+    # Valid policy
+    before = sorted(tmp_path.rglob("*"))
+    rc = h.main(["--home", str(tmp_path), "preflight"])
+    out, err = capsys.readouterr()
+    assert rc == 0
+    data = json.loads(out)
+    assert data == {"ok": True, "version": h.executor_version()}
+    assert not err
+    after = sorted(tmp_path.rglob("*"))
+    assert before == after  # Preflight must not write anything
+
+    # Policy enabling unknown operation
+    bad_policy = copy.deepcopy(h.DEFAULT_POLICY)
+    bad_policy["ops"]["nonexistent.op"] = {}
+    paths.policy.write_text(json.dumps(bad_policy))
+    rc = h.main(["--home", str(tmp_path), "preflight"])
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert "policy enables unknown operations" in err
+    assert "nonexistent.op" in err
+    assert not out
 
 
 def test_release_operation_receipts_before_restart(host, monkeypatch):

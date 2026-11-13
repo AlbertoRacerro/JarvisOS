@@ -13,6 +13,7 @@ receipt with the published public key; nobody without the host-only private key 
     host_ops.py serve                                                    (host executor; systemd unit)
     host_ops.py install --sha SHA [--with-watch]                           (host; maintainer/host session only)
     host_ops.py health                                                   (host)
+    host_ops.py preflight                                                (host)
 
 Stdlib only: the installed copy must not import anything from a checkout an agent can write.
 """
@@ -2237,6 +2238,86 @@ def _gh(args: list[str], timeout: float = 60) -> str:
     return proc.stdout
 
 
+def _parse_check_runs(raw: str) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    raw = raw.strip()
+    if not raw:
+        return runs
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(raw):
+        while idx < len(raw) and raw[idx].isspace():
+            idx += 1
+        if idx >= len(raw):
+            break
+        obj, end = decoder.raw_decode(raw, idx)
+        idx = end
+        if isinstance(obj, dict):
+            cr = obj.get("check_runs")
+            if isinstance(cr, list):
+                runs.extend(item for item in cr if isinstance(item, dict))
+        elif isinstance(obj, list):
+            runs.extend(item for item in obj if isinstance(item, dict))
+    return runs
+
+
+def required_checks_problem(sha: str) -> str | None:
+    if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+        return "invalid commit sha"
+    try:
+        raw_rules = _gh([f"repos/{REPO}/rules/branches/master"])
+        rules = json.loads(raw_rules)
+    except Exception as exc:
+        return f"unreadable ruleset: {exc}"
+    if not isinstance(rules, list):
+        return "unreadable ruleset: rules response is not a list"
+
+    contexts: set[str] = set()
+    for entry in rules:
+        if isinstance(entry, dict) and entry.get("type") == "required_status_checks":
+            params = entry.get("parameters")
+            if isinstance(params, dict):
+                checks = params.get("required_status_checks")
+                if isinstance(checks, list):
+                    for check in checks:
+                        if isinstance(check, dict) and isinstance(check.get("context"), str):
+                            contexts.add(check["context"])
+                        elif isinstance(check, str):
+                            contexts.add(check)
+    if not contexts:
+        return "empty ruleset: no required status checks found on master"
+
+    try:
+        raw_runs = _gh([f"repos/{REPO}/commits/{sha}/check-runs?per_page=100", "--paginate"])
+        check_runs = _parse_check_runs(raw_runs)
+    except Exception as exc:
+        return f"unreadable check runs: {exc}"
+
+    for context in sorted(contexts):
+        matching = [r for r in check_runs if r.get("name") == context]
+        if not matching:
+            return f"required check {context!r} is missing"
+
+        def _run_key(r: dict[str, Any]) -> tuple[str, int]:
+            ts = str(r.get("completed_at") or r.get("started_at") or "")
+            rid = int(r.get("id")) if isinstance(r.get("id"), (int, float)) else 0
+            return (ts, rid)
+
+        latest = max(matching, key=_run_key)
+        status = latest.get("status")
+        conclusion = latest.get("conclusion")
+        if status != "completed":
+            return f"required check {context!r} is not completed ({status})"
+        if conclusion != "success":
+            return f"required check {context!r} did not succeed ({conclusion})"
+
+    return None
+
+
+def _run_preflight(argv: list[str], timeout: float = 60) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+
+
 def install_release(paths: Paths, sha: str) -> None:
     if os.environ.get("JARVIS_SANDBOX") or socket.gethostname() == "jarvis-sandbox":
         raise Refused("installation is host-only")
@@ -2245,6 +2326,18 @@ def install_release(paths: Paths, sha: str) -> None:
     status = _gh([f"repos/{REPO}/compare/{sha}...master", "--jq", ".status"]).strip()
     if status not in ("ahead", "identical"):
         raise Refused(f"{sha} is not on GitHub master ({status})")
+    if problem := required_checks_problem(sha):
+        raise Refused(problem)
+    current = paths.install / "current"
+    if current.is_symlink() or current.exists():
+        try:
+            installed = current.resolve().name
+        except OSError:
+            installed = ""
+        if SHA_RE.fullmatch(installed):
+            cmp_status = _gh([f"repos/{REPO}/compare/{installed}...{sha}", "--jq", ".status"]).strip()
+            if cmp_status not in ("ahead", "identical"):
+                raise Refused(f"candidate {sha} is not ahead or identical to installed {installed} ({cmp_status})")
     proc = subprocess.run(["gh", "api", f"repos/{REPO}/tarball/{sha}"],
                           capture_output=True, timeout=120, check=True)
     releases = paths.install / "releases"
@@ -2270,6 +2363,16 @@ def install_release(paths: Paths, sha: str) -> None:
         for name in ("host_ops.py", "relay_continuity.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
             if not (stage / "scripts" / name).is_file():
                 raise Refused(f"release missing {name}")
+        cmd = [sys.executable, "-I", str(stage / "scripts" / "host_ops.py"), "--home", str(paths.home), "preflight"]
+        try:
+            proc_pf = _run_preflight(cmd, timeout=60)
+        except subprocess.TimeoutExpired:
+            raise Refused("candidate preflight failed: timeout after 60s") from None
+        if proc_pf.returncode != 0:
+            stderr_text = proc_pf.stderr.decode() if isinstance(proc_pf.stderr, bytes) else (proc_pf.stderr or "")
+            lines = stderr_text.strip().splitlines()
+            first_line = lines[0].strip() if lines else f"exit code {proc_pf.returncode}"
+            raise Refused(f"candidate preflight failed: {first_line}")
         if not release.exists():
             os.rename(stage, release)
     tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
@@ -2294,13 +2397,16 @@ OPERATIONS["release.install"] = op_release_install
 
 
 def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
+    paths.config.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(paths.config, 0o700)
+    if not paths.policy.exists():
+        paths.policy.write_text(json.dumps(DEFAULT_POLICY, indent=1, sort_keys=True) + "\n")
+        os.chmod(paths.policy, 0o600)
     try:
         install_release(paths, sha)
     except Refused as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    paths.config.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(paths.config, 0o700)
     if not paths.key.is_file():
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", SIGNER, "-f", str(paths.key)],
                        check=True, timeout=30)
@@ -2308,9 +2414,6 @@ def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
     paths.published.mkdir(parents=True, exist_ok=True)
     (paths.published / "allowed_signers").write_text(
         f'{SIGNER} namespaces="{SIG_NAMESPACE}" {public[0]} {public[1]}\n')
-    if not paths.policy.exists():
-        paths.policy.write_text(json.dumps(DEFAULT_POLICY, indent=1, sort_keys=True) + "\n")
-        os.chmod(paths.policy, 0o600)
     paths.units.mkdir(parents=True, exist_ok=True)
     (paths.units / UNIT).write_text(SERVICE_UNIT)
     (paths.units / "jarvisos-relay-watch.service").write_text(UNIT_TEMPLATES["jarvisos-relay-watch"])
@@ -2323,6 +2426,22 @@ def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
                        check=True, timeout=60, env=env)
     print(f"installed host-ops executor {sha} and restarted {UNIT}")
     return 0
+
+
+def preflight(paths: Paths) -> int:
+    try:
+        policy, _ = load_policy(paths)
+        ops = policy.get("ops")
+        if not isinstance(ops, dict):
+            raise RuntimeError("policy ops must be a dict")
+        unknown = set(ops) - set(OPERATIONS)
+        if unknown:
+            raise RuntimeError(f"policy enables unknown operations {sorted(unknown)}")
+        print(json.dumps({"ok": True, "version": executor_version()}))
+        return 0
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
 
 def health(paths: Paths) -> int:
@@ -2387,6 +2506,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--sha", required=True)
     p.add_argument("--with-watch", action="store_true")
     sub.add_parser("health", help="host-side health check")
+    sub.add_parser("preflight", help="candidate preflight validation")
     args = parser.parse_args(argv)
     paths = Paths(Path(args.home))
 
@@ -2453,6 +2573,8 @@ def main(argv: list[str] | None = None) -> int:
         return install(paths, args.sha, args.with_watch)
     if args.action == "health":
         return health(paths)
+    if args.action == "preflight":
+        return preflight(paths)
     return 2
 
 
