@@ -3457,7 +3457,7 @@ def release_sha() -> str | None:
     try:
         here = Path(__file__).resolve().parent.parent.name
         return here if host_ops.SHA_RE.fullmatch(here) else None
-    except Exception:
+    except (OSError, ValueError):
         return None
 
 
@@ -3493,7 +3493,7 @@ def check_and_request_release_update(
             status = host_ops._gh([f"repos/{host_ops.REPO}/compare/{owner_sha}...{candidate_sha}", "--jq", ".status"]).strip()
             if status == "ahead":
                 is_newer = True
-        except Exception:
+        except (RuntimeError, subprocess.SubprocessError, OSError):
             is_newer = False
 
     if not is_newer:
@@ -3505,6 +3505,30 @@ def check_and_request_release_update(
         return False
 
     target_paths = paths or host_ops.Paths(Path.home())
+    for h_entry in host_ops.read_release_history(target_paths):
+        if h_entry.get("candidate_sha") == candidate_sha and h_entry.get("status") in ("refused", "returned"):
+            log(f"owner: candidate {candidate_sha[:12]} was previously refused ({h_entry.get('reason', 'unhealthy')})")
+            return False
+
+    try:
+        for receipt_file in target_paths.receipts.glob("*.json"):
+            if receipt_file.name.endswith(".sig"):
+                continue
+            try:
+                receipt, _ = host_ops.load_receipt(target_paths, receipt_file.stem)
+                if (
+                    receipt
+                    and receipt.get("op") == "release.install"
+                    and (receipt.get("sha") == candidate_sha or (receipt.get("args") or {}).get("sha") == candidate_sha)
+                    and receipt.get("outcome") in ("refused", "failed")
+                ):
+                    log(f"owner: candidate {candidate_sha[:12]} was previously refused in receipt {receipt_file.stem[:8]}")
+                    return False
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        pass
+
     req = host_ops.make_request(
         op="release.install",
         args={"sha": candidate_sha},

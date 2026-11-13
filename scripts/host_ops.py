@@ -2283,14 +2283,16 @@ def return_release(
         owner_unit = "jarvisos-mission-owner.service"
         try:
             run(["systemctl", "--user", "start", owner_unit], timeout=60)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
 
     # Notification
     notified = False
-    if candidate_sha:
+    if candidate_sha and not (marker and marker.get("notified") is True):
         notified = notify_return(paths, candidate_sha, reason, post=post,
                                  kind=marker.get("kind") if marker else None)
+    elif marker and marker.get("notified") is True:
+        notified = True
 
     # Append refusal or return_unconfirmed to history
     entry = dict(marker) if marker else {}
@@ -2311,6 +2313,7 @@ def return_release(
             os.fsync(handle.fileno())
     finally:
         os.close(state_fd)
+    sync_published_release_history(paths)
 
     # Clean up or quarantine pending marker
     if marker is None and paths.release_pending.exists():
@@ -2484,10 +2487,25 @@ def _pin_guard(paths: Paths, source_dir: Path, source_sha: str) -> None:
                 old_aside.unlink(missing_ok=True)
 
 
-def read_release_history(paths: Paths) -> list[dict[str, Any]]:
+def sync_published_release_history(paths: Paths) -> None:
     try:
-        lines = (paths.state / "release-history.jsonl").read_text(encoding="utf-8").splitlines()
+        if paths.release_history.exists():
+            paths.published.mkdir(parents=True, exist_ok=True)
+            tmp = paths.published / f".release-history.{secrets.token_hex(4)}"
+            tmp.write_bytes(paths.release_history.read_bytes())
+            os.replace(tmp, paths.published / "release-history.jsonl")
     except OSError:
+        pass
+
+
+def read_release_history(paths: Paths) -> list[dict[str, Any]]:
+    for candidate_file in (paths.release_history, paths.published / "release-history.jsonl"):
+        try:
+            lines = candidate_file.read_text(encoding="utf-8").splitlines()
+            break
+        except OSError:
+            continue
+    else:
         return []
     out = []
     for line in lines:
@@ -2719,6 +2737,29 @@ class Executor:
                         except MalformedPendingRelease:
                             _quarantine_pending_marker(self.paths)
 
+                if candidate and SHA_RE.fullmatch(str(candidate)):
+                    already_recorded = any(
+                        h.get("candidate_sha") == candidate and h.get("status") in ("refused", "returned")
+                        for h in read_release_history(self.paths)
+                    )
+                    if not already_recorded:
+                        entry = {
+                            "candidate_sha": candidate,
+                            "status": "refused",
+                            "reason": error or outcome,
+                            "returned_at": iso(self.now()),
+                            "notified": False,
+                        }
+                        state_fd = open_dir(self.paths.state, create=True)
+                        try:
+                            with open(self.paths.release_history, "a", encoding="utf-8") as handle:
+                                handle.write(json.dumps(entry, sort_keys=True) + "\n")
+                                handle.flush()
+                                os.fsync(handle.fileno())
+                        finally:
+                            os.close(state_fd)
+                        sync_published_release_history(self.paths)
+
                 if request.get("requester") == "relay-continuity:owner" or (request.get("args") or {}).get("owner_active") is True:
                     if not (self.paths.published / "current").exists():
                         inst = None
@@ -2781,6 +2822,7 @@ class Executor:
             return False
 
     def _handle_owner_timeout(self, marker: dict[str, Any], candidate: str) -> None:
+        reason = "owner release sha not reported within deadline"
         prev_sha = marker.get("previous_sha")
         if not prev_sha and (self.paths.guard / "RELEASE").is_file():
             try:
@@ -2789,29 +2831,26 @@ class Executor:
                     prev_sha = g_sha
             except OSError:
                 pass
-        if prev_sha:
-            return_published_release(self.paths, prev_sha)
-        self._start_owner()
-        notified = notify_return(
-            self.paths, candidate, "owner release sha not reported within deadline",
-            post=self.post, kind="owner_timeout"
+
+        return_release(
+            self.paths,
+            marker=marker,
+            reason=reason,
+            post=self.post,
+            run=self.run,
+            now=self.now(),
+            confirm_previous=False,
         )
-        entry = dict(marker)
-        entry.update({
-            "status": "refused",
-            "reason": "owner release sha not reported within deadline",
-            "returned_at": iso(self.now()),
-            "notified": notified,
-        })
-        state_fd = open_dir(self.paths.state, create=True)
-        try:
-            with open(self.paths.release_history, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(entry, sort_keys=True) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            unlink_at(state_fd, "release-pending.json")
-        finally:
-            os.close(state_fd)
+
+        inst_curr = self.paths.install / "current"
+        if prev_sha and inst_curr.exists():
+            try:
+                if inst_curr.resolve().name == prev_sha:
+                    self.restart_requested = True
+            except OSError:
+                pass
+
+        sync_published_release_history(self.paths)
         self.log(f"hostops: owner release sha not reported within deadline for {candidate}")
 
     def _publish(self, request_id: str, data: bytes, signature: bytes) -> None:
@@ -3029,6 +3068,7 @@ class Executor:
             unlink_at(state_fd, "release-pending.json")
         finally:
             os.close(state_fd)
+        sync_published_release_history(self.paths)
         self.log(f"hostops: release {candidate} confirmed")
         return True
 
@@ -3415,12 +3455,12 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
         if not (paths.published / "releases" / installed).is_dir():
             try:
                 publish_release(paths, installed, switch_current=False)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 pass
         if not (paths.published / "current").exists():
             try:
                 switch_published_release(paths, installed)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 pass
 
     # Stage files for candidate under published/releases/sha without switching published/current

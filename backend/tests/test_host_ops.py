@@ -4562,6 +4562,8 @@ def test_confirm_release_owner_timeout_returns_published_link_and_restarts_owner
     assert not paths.release_pending.exists()
     # Published current returned to previous release
     assert (paths.published / "current").resolve().name == prev_sha
+    assert (paths.install / "current").resolve().name == prev_sha
+    assert ex.restart_requested is True
     # Owner was started again on previous release
     restart_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
     assert len(restart_calls) >= 1
@@ -4572,6 +4574,116 @@ def test_confirm_release_owner_timeout_returns_published_link_and_restarts_owner
     assert history[0]["status"] == "refused"
     assert "owner release sha not reported within deadline" in history[0]["reason"]
     assert history[0]["notified"] is True
+
+
+def test_owner_timeout_returns_executor_and_watcher_to_previous_release(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    prev_sha = "9" * 40
+    for s in (prev_sha, SHA):
+        d = paths.install / "releases" / s / "scripts"
+        d.mkdir(parents=True)
+        (d / "host_ops.py").write_text("# code\n")
+        h.publish_release(paths, s)
+
+    h.write_release_pending(paths, previous_sha=prev_sha, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=True,
+                            owner_active=True, now=t0)
+
+    # Step 1 at t=0
+    ex.step()
+    assert paths.release_pending.is_file()
+
+    # Step 2 past deadline
+    current_time[0] = t0 + timedelta(minutes=11)
+    calls.clear()
+    ex.step()
+
+    # Check recovery: published, install, watcher, owner, executor restart
+    assert not paths.release_pending.exists()
+    assert (paths.published / "current").resolve().name == prev_sha
+    assert (paths.install / "current").resolve().name == prev_sha
+    assert ex.restart_requested is True
+
+    watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
+    assert len(watcher_restarts) >= 1
+
+    owner_starts = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(owner_starts) >= 1
+
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == SHA
+    assert history[0]["status"] == "refused"
+    assert history[0]["notified"] is True
+
+
+def test_owner_timeout_guards_against_unsafe_restart_when_previous_missing(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    prev_sha = "9" * 40
+
+    # Only create candidate release, but NOT previous_sha directory
+    d = paths.install / "releases" / SHA / "scripts"
+    d.mkdir(parents=True)
+    (d / "host_ops.py").write_text("# code\n")
+    h.publish_release(paths, SHA)
+
+    h.write_release_pending(paths, previous_sha=prev_sha, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False,
+                            owner_active=True, now=t0)
+
+    ex.step()
+    current_time[0] = t0 + timedelta(minutes=11)
+    calls.clear()
+    ex.step()
+
+    # Previous release cannot be restored, so install/current is unlinked
+    assert not (paths.install / "current").exists()
+    # Executor MUST NOT request restart unsafely into missing release
+    assert ex.restart_requested is False
+
+
+def test_owner_timeout_guards_against_repeated_notification(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    prev_sha = "9" * 40
+
+    notices = []
+    ex.post = lambda text, _: notices.append(text) or 200
+
+    for s in (prev_sha, SHA):
+        d = paths.install / "releases" / s / "scripts"
+        d.mkdir(parents=True)
+        (d / "host_ops.py").write_text("# code\n")
+        h.publish_release(paths, s)
+
+    h.write_release_pending(paths, previous_sha=prev_sha, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False,
+                            owner_active=True, now=t0)
+
+    ex.step()
+    current_time[0] = t0 + timedelta(minutes=11)
+    ex.step()
+
+    assert len(notices) == 1
+
+    # Simulate another return or step attempting notification for same candidate
+    notified_again = h.notify_return(paths, SHA, "another return attempt", post=ex.post)
+    assert notified_again is False
+    assert len(notices) == 1
 
 
 def test_release_install_refusal_restarts_owner(host):

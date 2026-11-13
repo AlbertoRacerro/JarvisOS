@@ -180,3 +180,119 @@ def test_owner_does_not_request_install_during_running_turn(tmp_path, monkeypatc
     res = rc.command_serve(args)
     assert res == 0
     assert not check_called_during_turn
+
+
+def test_check_and_request_release_update_consults_refused_history_and_retries_next_newer(tmp_path, monkeypatch):
+    owner_sha = "c" * 40
+    refused_sha = "d" * 40
+    newer_sha = "e" * 40
+    paths = rc.host_ops.Paths(tmp_path)
+
+    # Record refused_sha in release history
+    refused_entry = {
+        "candidate_sha": refused_sha,
+        "previous_sha": owner_sha,
+        "status": "refused",
+        "reason": "owner timeout",
+        "returned_at": "2026-11-13T10:00:00Z",
+        "notified": True,
+    }
+    paths.state.mkdir(parents=True, exist_ok=True)
+    with open(paths.release_history, "a", encoding="utf-8") as f:
+        f.write(json.dumps(refused_entry) + "\n")
+
+    current_candidate = [refused_sha]
+
+    def fake_run(args, cwd=None, timeout=20.0):
+        if "rev-parse" in args:
+            return 0, f"{current_candidate[0]}\n"
+        if "merge-base" in args:
+            return 0, ""  # ancestor
+        return 0, ""
+
+    monkeypatch.setattr(rc.host_ops, "required_checks_problem", lambda sha: None)
+    logs = []
+
+    # Attempt 1: origin/master is refused_sha -> must be refused per criterion 7!
+    res1 = rc.check_and_request_release_update(
+        tmp_path, tmp_path, run=fake_run, current_sha=owner_sha, paths=paths, log=logs.append,
+        now=lambda: datetime(2026, 11, 13, 12, 0, 0, tzinfo=UTC),
+    )
+    assert not res1
+    assert any("previously refused" in m for m in logs)
+    assert len(list(paths.requests.glob("*.json"))) == 0
+
+    # Attempt 2: next newer commit lands on master -> must be requested per criterion 7!
+    current_candidate[0] = newer_sha
+    logs.clear()
+    res2 = rc.check_and_request_release_update(
+        tmp_path, tmp_path, run=fake_run, current_sha=owner_sha, paths=paths, log=logs.append,
+        now=lambda: datetime(2026, 11, 13, 12, 5, 0, tzinfo=UTC),
+    )
+    assert res2
+    assert any("requested release.install" in m for m in logs)
+    requests = list(paths.requests.glob("*.json"))
+    assert len(requests) == 1
+    req_data = json.loads(requests[0].read_text(encoding="utf-8"))
+    assert req_data["sha"] == newer_sha
+
+
+def test_refused_install_restarts_owner_and_owner_does_not_loop(tmp_path, monkeypatch):
+    import copy
+    import subprocess
+    paths = rc.host_ops.Paths(tmp_path)
+    owner_sha = "1" * 40
+    candidate_sha = "2" * 40
+
+    policy = copy.deepcopy(rc.host_ops.DEFAULT_POLICY)
+    policy["ops"]["release.install"]["trust_master"] = False
+    paths.policy.parent.mkdir(parents=True, exist_ok=True)
+    paths.policy.write_text(json.dumps(policy))
+    paths.config.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(paths.key)], check=True)
+    paths.published.mkdir(parents=True, exist_ok=True)
+    paths.allowed_signers.write_text(
+        f'{rc.host_ops.SIGNER} namespaces="{rc.host_ops.SIG_NAMESPACE}" ' + Path(f"{paths.key}.pub").read_text()
+    )
+
+    calls = []
+    ex = rc.host_ops.Executor(paths, run=lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", ""),
+                              post=lambda t, b: 200, log=lambda m: None)
+
+    # 1. Owner requests release.install
+    req = rc.host_ops.make_request("release.install", {"sha": candidate_sha}, candidate_sha, "relay-continuity:owner", ex.now())
+    rc.host_ops.submit(paths, req)
+
+    # 2. Executor executes step -> refuses install and restarts owner
+    ex.step()
+    receipt, _ = rc.host_ops.load_receipt(paths, req["id"])
+    assert receipt["outcome"] == "refused"
+    assert any("start" in c and "jarvisos-mission-owner.service" in c for c in calls)
+
+    # Release history records refusal
+    history = rc.host_ops.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == candidate_sha
+    assert history[0]["status"] == "refused"
+
+    # 3. Owner wakes up and runs check_and_request_release_update at boundary
+    def fake_run(args, cwd=None, timeout=20.0):
+        if "rev-parse" in args:
+            return 0, f"{candidate_sha}\n"
+        if "merge-base" in args:
+            return 0, ""
+        return 0, ""
+
+    monkeypatch.setattr(rc.host_ops, "required_checks_problem", lambda sha: None)
+    logs = []
+    # Spool requests directory should be empty now that executor finished req
+    assert len(list(paths.requests.glob("*.json"))) == 0
+
+    res = rc.check_and_request_release_update(
+        tmp_path, tmp_path, run=fake_run, current_sha=owner_sha, paths=paths, log=logs.append,
+    )
+    # Owner does NOT request the same candidate again!
+    assert res is False
+    assert any("previously refused" in m for m in logs)
+    # No new request spooled -> loop is broken!
+    assert len(list(paths.requests.glob("*.json"))) == 0
