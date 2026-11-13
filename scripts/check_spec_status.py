@@ -110,9 +110,10 @@ def implementation(rows, pr_number: int, spec_id: str) -> str:
     if spec_id not in rows:
         raise GateError(f"implementation spec {spec_id} is absent from STATUS.md")
     row = rows[spec_id]
-    if row["status"] != "in_review":
+    status = row["status"]
+    if status not in {"in_review", "merged"}:
         raise GateError(
-            f"spec {spec_id}: expected in_review, found {row['status']}"
+            f"spec {spec_id}: expected in_review or merged, found {status}"
         )
     if pr_number not in row["prs"]:
         raise GateError(f"spec {spec_id}: missing current PR #{pr_number}")
@@ -210,10 +211,15 @@ def self_test() -> None:
         }
 
     assert check_event(rows, event("**Spec gate:** implementation 002")).endswith("OK")
+    assert check_event(rows, event("**Spec gate:** implementation 001", 10)).endswith("OK")
     assert check_event(rows, event("**Spec gate:** definition 005b", 77)).endswith("OK")
     assert check_event(rows, event("**Spec gate:** N/A", 77)).endswith("OK")
     expect_error(
         lambda: check_event(rows, event("**Spec gate:** implementation 002", 98)),
+        "missing current PR",
+    )
+    expect_error(
+        lambda: check_event(rows, event("**Spec gate:** implementation 001", 98)),
         "missing current PR",
     )
     blocked = parse_registry(

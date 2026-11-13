@@ -73,7 +73,7 @@ mechanism is part of the outcome. Start from `docs/specs/SPEC_TEMPLATE.md`.
 | `ready` | Accepted contract; implementation may start once hard dependencies are merged |
 | `in_progress` | Implementation active, no PR yet |
 | `in_review` | An implementation PR is open |
-| `merged` | Merged; prune the row and the spec file in a later change |
+| `merged` | Merged (the completing implementation PR may write this itself); prune the row and the spec file in a later change |
 | `cancelled` | Will not be done under this identity |
 
 Rules:
@@ -83,7 +83,9 @@ Rules:
    without a maintainer approval step. Implementation starts only from `ready` with every hard dependency merged (or no
    longer listed).
 2. The implementation PR carries `**Spec gate:** implementation NNN` in its body; the row must be `in_review` with this
-   PR's number. `definition NNN` or `N/A` is used for planning and process work. `scripts/check_spec_status.py` enforces it.
+   PR's number, or `merged` with it when this PR completes the spec (the row reaches the base branch only by that merge, so
+   it is never early there). A slice that leaves work open keeps `in_review`. `definition NNN` or `N/A` is used for
+   planning and process work. `scripts/check_spec_status.py` enforces it.
 3. Definition, spec, acceptance (`ready`) and implementation may be combined or split as risk warrants; keep a separate
    planning checkpoint only when destructive authority, credentials, migrations, security boundaries or an open question
    to the maintainer (section 7) require it.
@@ -116,8 +118,9 @@ Rules:
 8. **Merge** is an explicit act by the coordinator, never GitHub auto-merge. Immediately before it, check only what can
    invalidate it: the head SHA is the one that was checked and reviewed, required checks are green on it, no P0 or P1 is
    open, the registry row is truthful, and the PR is mergeable against the current base. Then merge, verify the base
-   branch, update the registry (`in_review` to `merged`), and continue with the next authorized goal. Do not launch one more
-   review after every condition is met.
+   branch; the registry already says `merged` when the PR wrote it; otherwise update it in the next PR that touches the
+   registry (no PR only for that). Continue with the next authorized goal. Do not launch one more review after every
+   condition is met.
 9. **A head change invalidates only the evidence it affects.** Reuse the rest.
 
 ## 5. Supervisor and Relay
