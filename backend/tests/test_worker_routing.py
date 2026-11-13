@@ -843,3 +843,10 @@ def test_spec_256_review_records_without_a_first_pass_never_judge_a_model(tmp_pa
     with rf.open("a", encoding="utf-8") as handle:
         handle.write('{"model": "x", "at": "2099-01-01T00:00:00Z", "rework_rounds": "lots"}\nnot json\n')
     assert "Risparmio netto" in wr.report(record_file=rf, now=datetime(2099, 1, 2, tzinfo=UTC))
+
+
+def test_spec_256_report_has_no_first_pass_rate_without_judged_records(tmp_path: Path) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    wr.record(task="r1", kind="review", worker="flash-high", rework_rounds=2, record_file=rf)
+    text = wr.report(record_file=rf)
+    assert "prima prova n/d" in text and "rilavorazioni 2," in text

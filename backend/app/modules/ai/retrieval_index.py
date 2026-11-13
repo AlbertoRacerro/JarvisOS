@@ -198,7 +198,7 @@ def _redact_hermes_memory(text: str) -> str:
 def _hermes_memory_file_documents(home: Path, *, now: datetime | None = None) -> list[IndexDocument]:
     """Read bounded Hermes built-in memories as operational context, never canonical state.
 
-    Hermes 0.21.4 stores entries in memories/{MEMORY,USER}.md separated by ``\\n§\\n``.
+    Hermes 0.23.0 stores entries in memories/{MEMORY,USER}.md separated by ``\\n§\\n``.
     The separate state.db session/message store remains owned by Hermes session_search.
     """
     now = now or datetime.now(UTC)

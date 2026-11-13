@@ -1092,13 +1092,14 @@ def report(days: int = 7, record_file: Path | None = None, records: list[dict[st
     lines: list[str] = []
     for m_name, group in grouped.items():
         total = len(group)
-        passes = sum(1 for r in group if r.get("ci_first_pass") == "pass")
-        pass_rate = pct(passes / total) if total > 0 else "0%"
+        judged = [r for r in group if r.get("ci_first_pass") in ("pass", "fail")]
+        passes = sum(1 for r in judged if r.get("ci_first_pass") == "pass")
+        pass_rate = pct(passes / len(judged)) if judged else "n/d"
         p0 = sum(_record_findings_all(r)[0] for r in group)
         p1 = sum(_record_findings_all(r)[1] for r in group)
         p2 = sum(_record_findings_all(r)[2] for r in group)
         p3 = sum(_record_findings_all(r)[3] for r in group)
-        rework = sum(_rework_score(r) - sum(_record_findings_all(r)[:2]) for r in group)
+        rework = round(sum(_rework_score(r) - sum(_record_findings_all(r)[:2]) for r in group))
         escalations = sum(1 for r in group if r.get("escalated"))
         w_key = group[0].get("worker")
         w_tag = f" ({w_key})" if w_key and w_key != m_name else ""
