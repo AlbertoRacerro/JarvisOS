@@ -47,7 +47,7 @@ if cfg.get("plant"):
 if cfg.get("write", True):
     Path("tracked.txt").write_text("changed\\n")
     Path("new.txt").write_text("brand new\\n")
-print(cfg["run_out"]); sys.stderr.write("worker stderr\\n"); sys.exit(cfg["exit"])
+print(cfg["run_out"]); sys.stderr.write(cfg.get("stderr", "worker stderr\\n")); sys.exit(cfg["exit"])
 """
 
 
@@ -98,6 +98,10 @@ class Env:
         assert json.loads(path.read_text()) == result
         return result  # type: ignore[no-any-return]
 
+    def clean(self) -> None:
+        git(self.wt, "reset", "--hard", "HEAD")
+        git(self.wt, "clean", "-fd")
+
     def invoked(self) -> bool:
         return self.log.exists()
 
@@ -133,57 +137,135 @@ def test_success_argv_evidence_and_diff(env: Env, monkeypatch: pytest.MonkeyPatc
 def test_non_json_transcript_and_failure_evidence(env: Env) -> None:
     env.set(run_out="plain text", exit=1)
     result = env.run()
-    assert result["status"] == "failed" and result["exit_code"] == 1 and result["reason"] == "stream_status_missing"
-    assert result["failure_class"] == "harness"
+    assert result["status"] == "failed" and result["exit_code"] == 1 and result["reason"] == "exit_code_1"
+    assert result["failure_class"] == "model_or_unknown"
     assert (env.evidence / "transcript.txt").read_text().strip() == "plain text"
     assert (env.evidence / "stderr.txt").exists() and "+brand new" in (env.evidence / "diff.patch").read_text()
 
 
-def test_credentials_are_stripped(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sandboxed_full_permissions_and_stripped_credentials(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
     for key in ("GH_TOKEN", "GITHUB_TOKEN", "GH_FOO", "GIT_FOO", "SSH_AUTH_SOCK"):
         monkeypatch.setenv(key, "secret")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/home/x/.gitconfig")
     monkeypatch.setenv("GH_CONFIG_DIR", "/home/x/.config/gh")
-    assert env.run()["status"] == "succeeded"
-    seen = json.loads(env.log.read_text())["env"]
-    gh_config = Path(seen["GH_CONFIG_DIR"])
+    result = env.run()
+    assert result["status"] == "succeeded"
+    seen = json.loads(env.log.read_text())
+    argv = seen["argv"]
+    assert "--dangerously-skip-permissions" in argv
+    assert "--sandbox" in argv
+    assert "--mode" in argv and argv[argv.index("--mode") + 1] == "accept-edits"
+    env_vars = seen["env"]
+    gh_config = Path(env_vars["GH_CONFIG_DIR"])
     assert gh_config.parent == env.evidence and gh_config.is_dir() and not any(gh_config.iterdir())
-    assert seen["GIT_CONFIG_NOSYSTEM"] == "1"
-    assert seen["GH_TOKEN"] is seen["GITHUB_TOKEN"] is seen["GH_FOO"] is seen["GIT_FOO"] is seen["SSH_AUTH_SOCK"] is None
-    assert seen["GIT_CONFIG_GLOBAL"] == "/dev/null" and seen["GIT_TERMINAL_PROMPT"] == "0"
+    assert env_vars["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env_vars["GH_TOKEN"] is env_vars["GITHUB_TOKEN"] is env_vars["GH_FOO"] is env_vars["GIT_FOO"] is env_vars["SSH_AUTH_SOCK"] is None
+    assert env_vars["GIT_CONFIG_GLOBAL"] == "/dev/null" and env_vars["GIT_TERMINAL_PROMPT"] == "0"
 
 
-def test_not_sandbox(env: Env) -> None:
+def test_not_sandbox_refusal(env: Env) -> None:
     refused(env.run(sandbox=False), "not_sandbox")
     assert not env.invoked()
 
 
-def test_denied_action_is_harness_failure(env: Env) -> None:
+@pytest.mark.parametrize("write", [False, True])
+def test_permission_denials_classified_as_harness(env: Env, write: bool) -> None:
     env.set(run_out=json.dumps({"status": "SUCCESS", "response": "", "denied_actions": [{"action": "command"}]}),
-            write=False)
+            write=write)
     result = env.run()
     assert result["status"] == "failed" and result["failure_class"] == "harness"
     assert result["reason"] == "permission_denied: command"
 
 
-def test_error_status_is_harness_failure(env: Env) -> None:
-    env.set(run_out=json.dumps({"status": "ERROR", "response": "done"}))
+@pytest.mark.parametrize("status_val", ["ERROR", "FAILED"])
+def test_stream_error_status_classified_as_harness(env: Env, status_val: str) -> None:
+    env.set(run_out=json.dumps({"status": status_val, "response": "done"}))
     result = env.run()
     assert result["status"] == "failed" and result["failure_class"] == "harness"
-    assert result["reason"] == "stream_status_ERROR"
+    assert result["reason"] == f"stream_status_{status_val}"
 
 
-def test_empty_response_and_diff_is_harness_failure(env: Env) -> None:
-    env.set(run_out=json.dumps({"status": "SUCCESS", "response": "  \n"}), write=False)
+@pytest.mark.parametrize("write", [False, True])
+@pytest.mark.parametrize("response_val", ["", "  \n", "\t"])
+def test_empty_model_response_classified_as_harness(env: Env, write: bool, response_val: str) -> None:
+    env.set(run_out=json.dumps({"status": "SUCCESS", "response": response_val}), write=write)
     result = env.run()
     assert result["status"] == "failed" and result["failure_class"] == "harness"
-    assert result["reason"] == "empty_result" and result["diff_bytes"] == 0
+    assert result["reason"] == "empty_result"
+    if write:
+        assert result["diff_bytes"] > 0
+    else:
+        assert result["diff_bytes"] == 0
 
 
-def test_empty_response_with_diff_succeeds(env: Env) -> None:
-    env.set(run_out=json.dumps({"status": "SUCCESS", "response": ""}))
+def test_review_task_without_diff_succeeds(env: Env) -> None:
+    env.set(run_out=json.dumps({"status": "SUCCESS", "response": "Code review passed: no changes required."}), write=False)
     result = env.run()
-    assert result["status"] == "succeeded" and result["diff_bytes"] > 0
+    assert result["status"] == "succeeded" and result["reason"] is None and result["failure_class"] is None
+    assert result["diff_bytes"] == 0
+    assert (env.evidence / "diff.patch").read_text() == ""
+    assert json.loads((env.evidence / "transcript.json").read_text())["response"] == "Code review passed: no changes required."
+
+
+def test_unparsed_plain_text_output_not_empty_result(env: Env) -> None:
+    # Zero-exit non-JSON plain text succeeds without diff
+    env.set(run_out="Plain text code review: LGTM.\n", exit=0, write=False)
+    result = env.run()
+    assert result["status"] == "succeeded" and result["exit_code"] == 0
+    assert result["reason"] is None and result["failure_class"] is None
+    assert (env.evidence / "transcript.txt").read_text().strip() == "Plain text code review: LGTM."
+    assert result["diff_bytes"] == 0
+
+    # Zero-exit non-JSON plain text succeeds with diff
+    env.clean()
+    env.set(run_out="Applied plain text edits successfully.\n", exit=0, write=True)
+    result = env.run()
+    assert result["status"] == "succeeded" and result["exit_code"] == 0
+    assert result["reason"] is None and result["failure_class"] is None
+    assert (env.evidence / "transcript.txt").read_text().strip() == "Applied plain text edits successfully."
+    assert result["diff_bytes"] > 0
+
+    # Nonzero exit fails without being overridden by empty_result or stream_status_missing
+    env.clean()
+    env.set(run_out="Plain text output from a failing command.\n", exit=1, write=False)
+    result = env.run()
+    assert result["status"] == "failed" and result["exit_code"] == 1
+    assert result["reason"] == "exit_code_1"
+    assert result["failure_class"] == "model_or_unknown"
+
+    # Zero-exit empty plain text fails as empty_result regardless of diff
+    env.clean()
+    env.set(run_out="   \n", exit=0, write=False)
+    result = env.run()
+    assert result["status"] == "failed" and result["exit_code"] == 0
+    assert result["reason"] == "empty_result" and result["failure_class"] == "harness"
+
+    env.clean()
+    env.set(run_out="   \n", exit=0, write=True)
+    result = env.run()
+    assert result["status"] == "failed" and result["exit_code"] == 0
+    assert result["reason"] == "empty_result" and result["failure_class"] == "harness"
+    assert result["diff_bytes"] > 0
+
+    # Zero-exit plain text with runner error in stderr fails
+    env.clean()
+    env.set(run_out="Some plain text\n", exit=0, write=False,
+            stderr='log\nAGY_ERROR: {"status": "RESOURCE_EXHAUSTED", "error_code": 429}\n')
+    result = env.run()
+    assert result["status"] == "failed"
+    assert result["reason"] == "runner_provider_quota"
+    assert result["failure_class"] == "provider_quota"
+
+
+def test_json_success_with_runner_error_fails(env: Env) -> None:
+    env.set(run_out=json.dumps({"status": "SUCCESS", "response": "Review completed: all checks passed."}),
+            exit=0,
+            write=False,
+            stderr='worker stderr\nAGY_ERROR: {"status": "RESOURCE_EXHAUSTED", "error_code": 429}\n')
+    result = env.run()
+    assert result["status"] == "failed" and result["exit_code"] == 0
+    assert result["reason"] == "runner_provider_quota"
+    assert result["failure_class"] == "provider_quota"
 
 
 def test_default_evidence_dirs_are_unique_in_same_second(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -366,13 +448,22 @@ def test_prepare_login_links_gemini_and_refuses_missing_or_conflicting_home(env:
 @pytest.mark.parametrize(("status", "reason", "stderr", "expected"), [
     ("succeeded", None, "", None),
     ("timeout", "exceeded 930s", "", "harness"),
+    ("failed", "empty_result", "", "harness"),
+    ("failed", "permission_denied: command", "", "harness"),
+    ("failed", "permission_denied: edit_file, bash", "", "harness"),
+    ("failed", "stream_status_ERROR", "", "harness"),
+    ("failed", "stream_status_FAILED", "", "harness"),
+    ("failed", "stream_status_missing", "", "harness"),
+    ("failed", "timeout", "", "harness"),
     ("failed", "spawn_failed: no such file", "", "harness"),
+    ("failed", "git_metadata_modified", "", "policy"),
+    ("failed", "exit_code_1", "plain failure", "model_or_unknown"),
+    ("failed", "exit_code_3", 'AGY_ERROR: {"status": "RESOURCE_EXHAUSTED", "error_code": 429}', "provider_quota"),
     ("failed", "exit_code_3", 'AGY_ERROR: {"status": "DEADLINE_EXCEEDED", "reason": "print_timeout", '
                               '"short_error": "print timeout after 30m0s"}', "harness"),
-    ("failed", "exit_code_3", 'AGY_ERROR: {"status": "RESOURCE_EXHAUSTED", "error_code": 429}', "provider_quota"),
     ("failed", "exit_code_3", 'AGY_ERROR: {"status": "UNAUTHENTICATED", "error_code": 401}', "harness"),
-    ("failed", "exit_code_1", "plain failure", "model_or_unknown"),
-    ("failed", "git_metadata_modified", "", "policy"),
+    ("failed", "runner_provider_quota", "", "provider_quota"),
+    ("failed", "runner_turn_time_limit", "", "harness"),
 ])
-def test_failure_class_separates_harness_from_model(status, reason, stderr, expected):
+def test_failure_class_mapping_all_guards(status: str, reason: str | None, stderr: str, expected: str | None) -> None:
     assert worker.failure_class(status, reason, stderr) == expected
