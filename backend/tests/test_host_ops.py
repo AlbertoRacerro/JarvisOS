@@ -13,7 +13,7 @@ import sys
 import tarfile
 import threading
 import time
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1791,6 +1791,267 @@ def test_release_operation_receipts_before_restart(host, monkeypatch):
     assert installed == [SHA] and receipt["outcome"] == "ok"
     assert ex.restart_requested
     assert h.load_receipt(paths, req["id"])[0]
+
+
+def test_parse_systemd_ts():
+    assert h.parse_systemd_ts("Thu 2026-11-13 07:10:00 UTC") == datetime(2026, 11, 13, 7, 10, 0, tzinfo=UTC)
+    assert h.parse_systemd_ts("2026-11-13 07:10:00 UTC") == datetime(2026, 11, 13, 7, 10, 0, tzinfo=UTC)
+    assert h.parse_systemd_ts("2026-11-13 07:10:00") == datetime(2026, 11, 13, 7, 10, 0, tzinfo=UTC)
+    assert h.parse_systemd_ts("1731481800") == datetime.fromtimestamp(1731481800, tz=UTC)
+    assert h.parse_systemd_ts("") is None
+    assert h.parse_systemd_ts("not a timestamp") is None
+
+
+def test_install_release_persists_pending_marker(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    mock_install(monkeypatch, release_archive())
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    h.install_release(paths, SHA, now=t0)
+
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert marker is not None
+    assert marker["previous_sha"] is None
+    assert marker["candidate_sha"] == SHA
+    assert marker["request_id"] is None
+    assert marker["attempts"] == 0
+    assert marker["watcher_active"] is False
+    assert marker["created_at"] == "2026-11-13T10:00:00Z"
+    assert marker["deadline"] == "2026-11-13T10:10:00Z"
+
+    # Upgrade to candidate B with watcher and request_id
+    candidate_b = "b" * 40
+    mock_install(monkeypatch, release_archive(), status="ahead")
+    t1 = datetime(2026, 11, 13, 11, 0, 0, tzinfo=UTC)
+    h.install_release(paths, candidate_b, request_id="1" * 32, watcher_active=True, now=t1)
+
+    marker_b = h.load_release_pending(paths)
+    assert marker_b is not None
+    assert marker_b["previous_sha"] == SHA
+    assert marker_b["candidate_sha"] == candidate_b
+    assert marker_b["request_id"] == "1" * 32
+    assert marker_b["attempts"] == 0
+    assert marker_b["watcher_active"] is True
+    assert marker_b["created_at"] == "2026-11-13T11:00:00Z"
+    assert marker_b["deadline"] == "2026-11-13T11:10:00Z"
+
+
+def test_install_release_failure_does_not_persist_pending_marker(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    rules = [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "backend"}]}}]
+    mock_install(monkeypatch, release_archive(), rules=rules, checks=[])
+
+    with pytest.raises(h.Refused, match="required check 'backend' is missing"):
+        h.install_release(paths, SHA)
+    assert not paths.release_pending.exists()
+
+
+def test_op_release_install_passes_request_id_and_watcher_state(host, monkeypatch):
+    paths, ex, _ = host
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["release.install"]["trust_master"] = True
+    paths.policy.write_text(json.dumps(policy))
+
+    installed_info = {}
+
+    def fake_install(p, sha, *, request_id=None, watcher_active=False, now=None):
+        installed_info.update({"sha": sha, "request_id": request_id, "watcher_active": watcher_active})
+
+    monkeypatch.setattr(h, "install_release", fake_install)
+    ex.run = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", "")
+
+    req, receipt = request(host, "release.install", {"sha": SHA})
+    assert receipt["outcome"] == "ok"
+    assert installed_info["sha"] == SHA
+    assert installed_info["request_id"] == req["id"]
+    assert installed_info["watcher_active"] is True
+
+
+def test_confirm_release_without_watcher(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False, now=t0)
+    assert paths.release_pending.is_file()
+
+    # One complete healthy step confirms the release
+    assert ex.step() == 0
+    assert not paths.release_pending.exists()
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == SHA
+    assert history[0]["status"] == "confirmed"
+    assert history[0]["confirmed_at"] == "2026-11-13T10:00:00Z"
+
+
+def test_confirm_release_with_watcher_requires_60s_healthy(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=True, now=t0)
+
+    # Step 1 at t=0: watcher active, but 0s elapsed -> not confirmed yet
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+    # Step 2 at t=30s: 30s elapsed -> not confirmed yet
+    current_time[0] = t0 + timedelta(seconds=30)
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+    # Step 3 at t=65s: >= 60s elapsed with no restarts -> confirmed!
+    current_time[0] = t0 + timedelta(seconds=65)
+    ex.step()
+    assert not paths.release_pending.exists()
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == SHA
+    assert history[0]["status"] == "confirmed"
+    assert history[0]["confirmed_at"] == "2026-11-13T10:01:05Z"
+
+
+def test_confirm_release_watcher_restarts_resets_60s_timer(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=True, now=t0)
+
+    watcher_restarts = [0]
+
+    def run(argv, **kw):
+        if "jarvisos-relay-watch.service" in argv:
+            return subprocess.CompletedProcess(argv, 0, f"ActiveState=active\nNRestarts={watcher_restarts[0]}\n", "")
+        return subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", "")
+
+    ex.run = run
+
+    # Step 1 at t=0
+    ex.step()
+    assert paths.release_pending.is_file()
+
+    # Watcher restarts at t=40s
+    current_time[0] = t0 + timedelta(seconds=40)
+    watcher_restarts[0] = 1
+    ex.step()
+    assert paths.release_pending.is_file()
+
+    # Step at t=65s (only 25s since restart at t=40) -> not confirmed
+    current_time[0] = t0 + timedelta(seconds=65)
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+    # Step at t=105s (65s since restart at t=40) -> confirmed!
+    current_time[0] = t0 + timedelta(seconds=105)
+    ex.step()
+    assert not paths.release_pending.exists()
+    assert len(h.read_release_history(paths)) == 1
+
+
+def test_confirm_release_watcher_inactive_fails_confirmation(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=True, now=t0)
+
+    ex.run = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "ActiveState=failed\n", "")
+
+    current_time[0] = t0 + timedelta(seconds=100)
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+
+def test_confirm_release_heartbeat_problem_fails_confirmation(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False, now=t0)
+
+    # Missing signing key -> heartbeat problem
+    paths.key.unlink()
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+
+def test_confirm_release_version_mismatch_fails_confirmation(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    candidate_b = "b" * 40
+    ex._version = SHA  # Running SHA, but candidate is SHA_B
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=candidate_b,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False, now=t0)
+
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+
+def test_confirm_release_deadline_expired_fails_confirmation(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    ex._version = SHA
+    # Deadline in the past
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 - timedelta(seconds=1)),
+                            request_id="req1", attempts=0, watcher_active=False, now=t0 - timedelta(minutes=10))
+
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+
+def test_confirm_release_systemd_active_enter_timestamp(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=True, now=t0)
+
+    def run(argv, **kw):
+        if "jarvisos-relay-watch.service" in argv:
+            return subprocess.CompletedProcess(argv, 0, "ActiveState=active\nActiveEnterTimestamp=Fri 2026-11-13 10:00:00 UTC\n", "")
+        return subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", "")
+
+    ex.run = run
+
+    # At 10:00:30 UTC: only 30s since ActiveEnterTimestamp -> not confirmed
+    current_time[0] = t0 + timedelta(seconds=30)
+    ex.step()
+    assert paths.release_pending.is_file()
+
+    # At 10:01:05 UTC: 65s since ActiveEnterTimestamp -> confirmed!
+    current_time[0] = t0 + timedelta(seconds=65)
+    ex.step()
+    assert not paths.release_pending.exists()
+    assert len(h.read_release_history(paths)) == 1
 
 
 def test_journal_does_not_leak_descriptors(host):
