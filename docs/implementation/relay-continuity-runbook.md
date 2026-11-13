@@ -175,7 +175,7 @@ The maintainer then exits the REPL: the owner starts only once the coordinator l
 Description=JarvisOS supervised mission owner (spec 201)
 [Service]
 WorkingDirectory=%h/src/JarvisOS
-ExecStart=%h/.local/bin/jarvis-sandbox python3 scripts/relay_continuity.py serve --interval 60
+ExecStart=%h/.local/bin/jarvis-sandbox python3 %h/.local/share/jarvisos/hostops/current/scripts/relay_continuity.py serve --interval 60
 KillMode=process
 Restart=on-failure
 RestartPreventExitStatus=2 3

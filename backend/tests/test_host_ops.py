@@ -4429,3 +4429,219 @@ def test_pin_guard_restore_failure_preserves_old_aside(tmp_path, monkeypatch):
     # Candidate tmp_guard was cleaned up
     cand_tmps = [p for p in paths.install.glob(".guard-*") if ".guard-old-" not in p.name]
     assert len(cand_tmps) == 0
+
+
+# ---------------------------------------------------------------------------
+# Spec 262 Scope Item 4: Owner from release
+# ---------------------------------------------------------------------------
+
+
+def test_unit_templates_contains_mission_owner():
+    assert "jarvisos-mission-owner" in h.UNIT_TEMPLATES
+    template = h.UNIT_TEMPLATES["jarvisos-mission-owner"]
+    assert "WorkingDirectory=%h/src/JarvisOS" in template
+    assert "%h/.local/share/jarvisos/hostops/current/scripts/relay_continuity.py serve --interval 60" in template
+    assert "jarvisos-mission-owner" in h.DEFAULT_POLICY["ops"]["service.install"]["templates"]
+    assert h.DEFAULT_POLICY["ops"]["service.control"]["actions"] == {"jarvisos-mission-owner.service": ["start"]}
+
+
+def test_publish_release_creates_readonly_scripts_and_symlink(tmp_path):
+    paths = h.Paths(tmp_path)
+    sha = "b" * 40
+    scripts = paths.install / "releases" / sha / "scripts"
+    scripts.mkdir(parents=True)
+    exe_file = scripts / "script_exec.py"
+    exe_file.write_text("#!/usr/bin/env python3\nprint('hello')\n")
+    exe_file.chmod(0o755)
+    doc_file = scripts / "script_doc.py"
+    doc_file.write_text("# just docs\n")
+    doc_file.chmod(0o644)
+
+    published_release = h.publish_release(paths, sha)
+    assert published_release == paths.published / "releases" / sha
+    assert (paths.published / "releases" / sha / "scripts" / "script_exec.py").is_file()
+    assert (paths.published / "releases" / sha / "scripts" / "script_doc.py").is_file()
+
+    # Files are read-only: no write bits
+    assert not (paths.published / "releases" / sha / "scripts" / "script_exec.py").stat().st_mode & 0o222
+    assert not (paths.published / "releases" / sha / "scripts" / "script_doc.py").stat().st_mode & 0o222
+    # Executable bit preserved
+    assert (paths.published / "releases" / sha / "scripts" / "script_exec.py").stat().st_mode & 0o111
+    assert not (paths.published / "releases" / sha / "scripts" / "script_doc.py").stat().st_mode & 0o111
+
+    # Current symlink points to releases/sha
+    current = paths.published / "current"
+    assert current.is_symlink()
+    assert current.resolve() == (paths.published / "releases" / sha).resolve()
+
+
+def test_return_published_release_switches_symlink(tmp_path):
+    paths = h.Paths(tmp_path)
+    sha1 = "1" * 40
+    sha2 = "2" * 40
+    for s in (sha1, sha2):
+        d = paths.install / "releases" / s / "scripts"
+        d.mkdir(parents=True)
+        (d / "host_ops.py").write_text("# code\n")
+        h.publish_release(paths, s)
+
+    assert paths.published / "current"
+    assert (paths.published / "current").resolve().name == sha2
+
+    assert h.return_published_release(paths, sha1)
+    assert (paths.published / "current").resolve().name == sha1
+
+
+def test_confirm_release_starts_owner_and_confirms_when_owner_reports_sha(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False,
+                            owner_active=True, now=t0)
+    assert paths.release_pending.is_file()
+
+    # Step 1: executor healthy, starts owner
+    ex.step()
+    # Marker was updated with owner_started=True, but pending marker remains because owner hasn't reported yet
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert marker.get("owner_started") is True
+    # Verify systemctl start jarvisos-mission-owner.service was called
+    start_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(start_calls) >= 1
+
+    # Owner reports release SHA in its serve state
+    paths.owner_serve_state.parent.mkdir(parents=True, exist_ok=True)
+    paths.owner_serve_state.write_text(json.dumps({"release_sha": SHA, "release_updated_at": h.iso(t0)}))
+
+    # Step 2: executor checks owner serve state and confirms
+    ex.step()
+    assert not paths.release_pending.exists()
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == SHA
+    assert history[0]["status"] == "confirmed"
+    assert "owner_reported_at" in history[0]
+
+
+def test_confirm_release_owner_timeout_returns_published_link_and_restarts_owner(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    prev_sha = "9" * 40
+    # Set up published releases for prev_sha and SHA
+    for s in (prev_sha, SHA):
+        d = paths.install / "releases" / s / "scripts"
+        d.mkdir(parents=True)
+        (d / "host_ops.py").write_text("# code\n")
+        h.publish_release(paths, s)
+
+    assert (paths.published / "current").resolve().name == SHA
+
+    h.write_release_pending(paths, previous_sha=prev_sha, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False,
+                            owner_active=True, now=t0)
+
+    # Step 1 at t=0: starts owner
+    ex.step()
+    assert paths.release_pending.is_file()
+
+    # Advance past deadline without owner reporting SHA
+    current_time[0] = t0 + timedelta(minutes=11)
+    calls.clear()
+
+    # Step 2 past deadline: timeout return!
+    ex.step()
+    assert not paths.release_pending.exists()
+    # Published current returned to previous release
+    assert (paths.published / "current").resolve().name == prev_sha
+    # Owner was started again on previous release
+    restart_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(restart_calls) >= 1
+    # History records refusal
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == SHA
+    assert history[0]["status"] == "refused"
+    assert "owner release sha not reported within deadline" in history[0]["reason"]
+    assert history[0]["notified"] is True
+
+
+def test_release_install_refusal_restarts_owner(host):
+    paths, ex, calls = host
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["release.install"]["trust_master"] = False
+    paths.policy.write_text(json.dumps(policy))
+
+    # Request submitted by owner
+    req = h.make_request("release.install", {"sha": SHA}, None, "relay-continuity:owner", ex.now())
+    h.submit(paths, req)
+    calls.clear()
+    ex.step()
+
+    receipt, _ = h.load_receipt(paths, req["id"])
+    assert receipt["outcome"] == "refused"
+    # Executor started owner on current release
+    start_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(start_calls) >= 1
+
+
+def test_release_install_failure_restarts_owner(host, monkeypatch):
+    paths, ex, calls = host
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["release.install"]["trust_master"] = True
+    paths.policy.write_text(json.dumps(policy))
+
+    def fail_install(*args, **kw):
+        raise TypeError("simulated install error")
+
+    monkeypatch.setattr(h, "install_release", fail_install)
+
+    req = h.make_request("release.install", {"sha": SHA}, None, "relay-continuity:owner", ex.now())
+    h.submit(paths, req)
+    calls.clear()
+    ex.step()
+
+    receipt, _ = h.load_receipt(paths, req["id"])
+    assert receipt["outcome"] == "failed"
+    # Executor started owner on current release
+    start_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(start_calls) >= 1
+
+
+def test_return_release_returns_published_link_and_starts_owner(tmp_path):
+    paths = h.Paths(tmp_path)
+    prev_sha = "8" * 40
+    cand_sha = "9" * 40
+    for s in (prev_sha, cand_sha):
+        d = paths.install / "releases" / s / "scripts"
+        d.mkdir(parents=True)
+        (d / "host_ops.py").write_text("# code\n")
+        h.publish_release(paths, s)
+
+    assert (paths.published / "current").resolve().name == cand_sha
+
+    marker = {
+        "candidate_sha": cand_sha,
+        "previous_sha": prev_sha,
+        "deadline": h.iso(datetime.now(UTC) + timedelta(minutes=10)),
+        "owner_active": True,
+        "watcher_active": False,
+    }
+
+    calls = []
+    def run(argv, **kw):
+        calls.append((argv, kw))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    assert h.return_release(paths, marker=marker, reason="crash loop", run=run)
+    assert (paths.published / "current").resolve().name == prev_sha
+    start_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(start_calls) >= 1

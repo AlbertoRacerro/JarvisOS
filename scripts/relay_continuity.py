@@ -3450,6 +3450,73 @@ def repo_root() -> Path:
     return Path(out.strip()).parent if code == 0 and out.strip() else Path.cwd()
 
 
+def release_sha() -> str | None:
+    env_sha = os.environ.get("JARVISOS_RELEASE_SHA")
+    if env_sha and host_ops.SHA_RE.fullmatch(env_sha):
+        return env_sha
+    try:
+        here = Path(__file__).resolve().parent.parent.name
+        return here if host_ops.SHA_RE.fullmatch(here) else None
+    except Exception:
+        return None
+
+
+def check_and_request_release_update(
+    repo: Path,
+    root: Path,
+    *,
+    log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
+    run: Runner = devctx.run,
+    now: Callable[[], datetime] = now_utc,
+    paths: host_ops.Paths | None = None,
+    current_sha: str | None = None,
+) -> bool:
+    """At a task boundary, request release.install for origin/master if it is newer than the owner's
+    own release and has green required checks. Returns True if an install was requested and the owner
+    should exit 0 without taking another task."""
+    owner_sha = current_sha if current_sha is not None else release_sha()
+    if not owner_sha:
+        return False
+
+    run(["git", "fetch", "-q", "origin", "master"], cwd=repo, timeout=60)
+    code, out = run(["git", "rev-parse", "--verify", "origin/master"], cwd=repo)
+    if code != 0 or not out.strip():
+        return False
+    candidate_sha = out.strip()
+    if candidate_sha == owner_sha:
+        return False
+
+    code, _ = run(["git", "merge-base", "--is-ancestor", owner_sha, candidate_sha], cwd=repo)
+    is_newer = (code == 0 and candidate_sha != owner_sha)
+    if not is_newer:
+        try:
+            status = host_ops._gh([f"repos/{host_ops.REPO}/compare/{owner_sha}...{candidate_sha}", "--jq", ".status"]).strip()
+            if status == "ahead":
+                is_newer = True
+        except Exception:
+            is_newer = False
+
+    if not is_newer:
+        return False
+
+    problem = host_ops.required_checks_problem(candidate_sha)
+    if problem is not None:
+        log(f"owner: candidate {candidate_sha[:12]} checks not green: {problem}")
+        return False
+
+    target_paths = paths or host_ops.Paths(Path.home())
+    req = host_ops.make_request(
+        op="release.install",
+        args={"sha": candidate_sha},
+        sha=candidate_sha,
+        requester="relay-continuity:owner",
+        now=now(),
+    )
+    req_id = host_ops.submit(target_paths, req)
+    log(f"owner: requested release.install for {candidate_sha[:12]} (request {req_id[:8]})")
+    return True
+
+
 def permissions_digest(path: Path) -> str | None:
     """Digest of the authority-bearing Relay permission settings. Relay rewrites `model` whenever `--model`
     is passed; a model choice grants no authority, so it is excluded. An unreadable file digests as such."""
@@ -4216,6 +4283,15 @@ def command_serve(args: argparse.Namespace) -> int:
                  "JARVISOS_MISSION_PROFILE": "1", "RELAY_CLAUDE_REAL_BIN": claude,
                  "PATH": str(mission_bin) + os.pathsep + os.environ["PATH"]}
     serve_store = Store(root / "serve")
+    curr_sha = release_sha()
+    try:
+        serve_state = serve_store.load()
+    except StateCorrupt:
+        serve_state = default_state()
+    if curr_sha:
+        serve_state["release_sha"] = curr_sha
+        serve_state["release_updated_at"] = iso(now_utc())
+        serve_store.save(serve_state, now_utc())
 
     def log(msg: str) -> None:
         print(f"{iso(now_utc())} {msg}", file=sys.stderr, flush=True)
@@ -4231,6 +4307,9 @@ def command_serve(args: argparse.Namespace) -> int:
     try:
         while not stop["flag"] and not (root / "STOP").exists():
             _reap_zombies()  # adopted durable wrappers also finish while the owner is idle
+            if check_and_request_release_update(repo, root, log=log):
+                log("owner: release install requested; stopping at task boundary without taking a new task")
+                return 0
             outcome = serve_step(root, factory, conflicts=lambda: live_conflicts(repo, {os.getpid()}), log=log)
             if outcome == "empty":
                 outcome = roadmap_step(root, repo, fingerprint=lambda: remote_fingerprint(repo),

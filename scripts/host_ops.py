@@ -169,6 +169,13 @@ class Paths:
     def allowed_signers(self) -> Path:
         return self.published / "allowed_signers"
 
+    @property
+    def owner_serve_state(self) -> Path:
+        continuity_dir = os.environ.get("RELAY_CONTINUITY_DIR")
+        if continuity_dir:
+            return Path(continuity_dir).expanduser() / "serve" / "state.json"
+        return self.home / "jarvis-control" / "work" / "continuity" / "serve" / "state.json"
+
 
 # ---------------------------------------------------------------------------
 # Filesystem access that never follows a symlink planted in the agent-writable spool
@@ -522,6 +529,12 @@ UNIT_TEMPLATES = {
         "[Service]\nWorkingDirectory=%h/src/JarvisOS\n"
         "ExecStart=/usr/bin/python3 -I %h/.local/share/jarvisos-hostops/current/scripts/relay_continuity.py watch --digest-hours 2\n"
         "Restart=on-failure\nRestartPreventExitStatus=2 3\nRestartSec=60\n"
+        "[Install]\nWantedBy=default.target\n"),
+    "jarvisos-mission-owner": (
+        "[Unit]\nDescription=JarvisOS supervised mission owner (spec 201)\n"
+        "[Service]\nWorkingDirectory=%h/src/JarvisOS\n"
+        "ExecStart=%h/.local/bin/jarvis-sandbox python3 %h/.local/share/jarvisos/hostops/current/scripts/relay_continuity.py serve --interval 60\n"
+        "KillMode=process\nRestart=on-failure\nRestartPreventExitStatus=2 3\nRestartSec=120\n"
         "[Install]\nWantedBy=default.target\n"),
 }
 
@@ -2033,6 +2046,57 @@ def parse_systemd_ts(val: str) -> datetime | None:
     return None
 
 
+def publish_release(paths: Paths, sha: str) -> Path:
+    source_scripts = paths.install / "releases" / sha / "scripts"
+    if not source_scripts.is_dir():
+        raise Refused(f"installed release scripts missing for {sha}")
+    pub_releases = paths.published / "releases"
+    pub_releases.mkdir(parents=True, exist_ok=True)
+    target_release = pub_releases / sha
+
+    if not target_release.exists():
+        with tempfile.TemporaryDirectory(dir=pub_releases, prefix=".publish-") as tmp:
+            stage_dir = Path(tmp) / sha
+            stage_scripts = stage_dir / "scripts"
+            shutil.copytree(source_scripts, stage_scripts, symlinks=True)
+            for root, dirs, files in os.walk(stage_dir):
+                for f in files:
+                    p = Path(root) / f
+                    mode = p.stat().st_mode
+                    p.chmod(0o555 if mode & 0o111 else 0o444)
+                for d in dirs:
+                    (Path(root) / d).chmod(0o755)
+            stage_dir.chmod(0o755)
+            os.rename(stage_dir, target_release)
+
+    tmp_link = paths.published / f".current.{secrets.token_hex(4)}"
+    try:
+        os.symlink(f"releases/{sha}", tmp_link)
+        os.replace(tmp_link, paths.published / "current")
+    finally:
+        tmp_link.unlink(missing_ok=True)
+    return target_release
+
+
+def return_published_release(paths: Paths, previous_sha: str) -> bool:
+    target_release = paths.published / "releases" / previous_sha
+    if not target_release.is_dir():
+        if (paths.install / "releases" / previous_sha / "scripts").is_dir():
+            try:
+                publish_release(paths, previous_sha)
+                return True
+            except Exception:  # noqa: BLE001
+                return False
+        return False
+    tmp_link = paths.published / f".current.{secrets.token_hex(4)}"
+    try:
+        os.symlink(f"releases/{previous_sha}", tmp_link)
+        os.replace(tmp_link, paths.published / "current")
+        return True
+    finally:
+        tmp_link.unlink(missing_ok=True)
+
+
 def write_release_pending(
     paths: Paths,
     *,
@@ -2042,6 +2106,7 @@ def write_release_pending(
     request_id: str | None,
     attempts: int = 0,
     watcher_active: bool = False,
+    owner_active: bool = False,
     now: datetime | None = None,
     kind: str | None = None,
 ) -> dict[str, Any]:
@@ -2055,6 +2120,8 @@ def write_release_pending(
         "watcher_active": bool(watcher_active),
         "created_at": iso(ts),
     }
+    if owner_active:
+        marker["owner_active"] = True
     if kind is not None:
         marker["kind"] = kind
     state_fd = open_dir(paths.state, create=True)
@@ -2173,12 +2240,24 @@ def return_release(
         finally:
             tmp_link.unlink(missing_ok=True)
 
+    # Return published current back to previous release if available
+    if not is_return_marker and previous_sha:
+        return_published_release(paths, previous_sha)
+
     # Restore watcher if it was active
     if marker and marker.get("watcher_active"):
         unit = "jarvisos-relay-watch.service"
         try:
             run(["systemctl", "--user", "restart", unit], timeout=60)
         except Exception:  # noqa: BLE001, S110
+            pass
+
+    # Start owner on previous release if it was active
+    if marker and marker.get("owner_active"):
+        owner_unit = "jarvisos-mission-owner.service"
+        try:
+            run(["systemctl", "--user", "start", owner_unit], timeout=60)
+        except Exception:  # noqa: BLE001
             pass
 
     # Notification
@@ -2569,6 +2648,9 @@ class Executor:
                 outcome, error = "failed", f"executor error {type(exc).__name__}"
             unlink_at(rfd, cancel)
             self._finish(request, outcome, detail, error, started=now, policy_sha=policy_sha, request_raw=raw)
+            if request.get("op") == "release.install" and outcome in ("refused", "failed"):
+                if request.get("requester") == "relay-continuity:owner" or (request.get("args") or {}).get("owner_active") is True:
+                    self._start_owner()
             self.restart_requested = ctx.restart_required
             ifd = self._state_fd("inflight")
             try:
@@ -2599,6 +2681,15 @@ class Executor:
         self._append_journal({"id": request["id"], "op": request.get("op"), "outcome": outcome,
                               "finished_at": receipt["finished_at"], "sha": request.get("sha")})
         self.log(f"hostops: {request['id'][:8]} {request.get('op')} {outcome}" + (f" ({error})" if error else ""))
+
+    def _start_owner(self) -> None:
+        unit = "jarvisos-mission-owner.service"
+        try:
+            proc = self.run(["systemctl", "--user", "start", unit], timeout=60)
+            if proc.returncode != 0:
+                self.log(f"hostops: owner start returned {proc.returncode}")
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"hostops: owner start failed: {exc}")
 
     def _publish(self, request_id: str, data: bytes, signature: bytes) -> None:
         fd = open_dir(self.paths.receipts, create=True)
@@ -2654,13 +2745,14 @@ class Executor:
                     os.close(state_fd)
                 return True
 
-        deadline_str = marker.get("deadline")
-        if deadline_str:
-            deadline_dt = parse_ts(deadline_str)
-            if deadline_dt and self.now() > deadline_dt:
-                self.log(f"hostops: candidate {candidate} confirmation deadline expired")
-                self._record_unhealthy(marker, reason="deadline expired")
-                return False
+        if not marker.get("owner_active") or not marker.get("owner_started"):
+            deadline_str = marker.get("deadline")
+            if deadline_str:
+                deadline_dt = parse_ts(deadline_str)
+                if deadline_dt and self.now() > deadline_dt:
+                    self.log(f"hostops: candidate {candidate} confirmation deadline expired")
+                    self._record_unhealthy(marker, reason="deadline expired")
+                    return False
 
         try:
             load_policy(self.paths)
@@ -2761,6 +2853,61 @@ class Executor:
             if enter_ts is not None and (self.now() - enter_ts).total_seconds() < 60:
                 return False
 
+        if marker.get("owner_active"):
+            if not marker.get("owner_started"):
+                self._start_owner()
+                marker["owner_started"] = True
+                marker["owner_started_at"] = iso(self.now())
+                state_fd = open_dir(self.paths.state, create=True)
+                try:
+                    write_at(state_fd, "release-pending.json", canonical(marker))
+                finally:
+                    os.close(state_fd)
+
+            owner_reported = False
+            state_path = self.paths.owner_serve_state
+            if state_path.is_file():
+                try:
+                    s_data = json.loads(state_path.read_text(encoding="utf-8"))
+                    if isinstance(s_data, dict) and s_data.get("release_sha") == candidate:
+                        owner_reported = True
+                except (OSError, json.JSONDecodeError):
+                    pass
+
+            if not owner_reported:
+                deadline_str = marker.get("deadline")
+                deadline_dt = parse_ts(deadline_str) if deadline_str else None
+                if deadline_dt and self.now() > deadline_dt:
+                    prev_sha = marker.get("previous_sha")
+                    if prev_sha:
+                        return_published_release(self.paths, prev_sha)
+                    self._start_owner()
+                    notified = notify_return(
+                        self.paths, candidate, "owner release sha not reported within deadline",
+                        post=self.post, kind="owner_timeout"
+                    )
+                    entry = dict(marker)
+                    entry.update({
+                        "status": "refused",
+                        "reason": "owner release sha not reported within deadline",
+                        "returned_at": iso(self.now()),
+                        "notified": notified,
+                    })
+                    state_fd = open_dir(self.paths.state, create=True)
+                    try:
+                        with open(self.paths.release_history, "a", encoding="utf-8") as handle:
+                            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+                            handle.flush()
+                            os.fsync(handle.fileno())
+                        unlink_at(state_fd, "release-pending.json")
+                    finally:
+                        os.close(state_fd)
+                    self.log(f"hostops: owner release sha not reported within deadline for {candidate}")
+                    return False
+                return False
+
+            marker["owner_reported_at"] = iso(self.now())
+
         entry = dict(marker)
         entry["status"] = "confirmed"
         entry["confirmed_at"] = iso(self.now())
@@ -2829,7 +2976,7 @@ DEFAULT_POLICY: dict[str, Any] = {
                                      "jarvisos-hostops.service", "agent-relay.service"]},
         "service.control": {"units": ["jarvisos-relay-watch.service", "jarvisos-mission-owner.service"],
                             "actions": OWNER_ACTIONS},
-        "service.install": {"templates": ["jarvisos-relay-watch"]},
+        "service.install": {"templates": ["jarvisos-relay-watch", "jarvisos-mission-owner"]},
         "wsl.probe": {},
         "wsl.handoff": {"dir": "/mnt/c/Users/user/JarvisOS-print", "open": True, "max_bytes": 200 << 20,
                         "extensions": [".3mf", ".stl", ".step", ".glb", ".png", ".pdf"]},
@@ -3070,7 +3217,7 @@ def _verify_existing_release(release: Path, stage: Path) -> None:
 
 
 def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
-                    watcher_active: bool = False, now: datetime | None = None) -> None:
+                    watcher_active: bool = False, owner_active: bool = False, now: datetime | None = None) -> None:
     if os.environ.get("JARVIS_SANDBOX") or socket.gethostname() == "jarvis-sandbox":
         raise Refused("installation is host-only")
     if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
@@ -3154,6 +3301,14 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
     source_sha = installed or sha
     _pin_guard(paths, source_dir, source_sha)
 
+    if installed and (paths.install / "releases" / installed / "scripts").is_dir():
+        if not (paths.published / "releases" / installed).is_dir():
+            try:
+                publish_release(paths, installed)
+            except Exception:  # noqa: BLE001
+                pass
+    publish_release(paths, sha)
+
     ts = now or now_utc()
     deadline = (pending.get("deadline") if pending and pending.get("candidate_sha") == sha
                 else iso(ts + timedelta(minutes=10)))
@@ -3162,10 +3317,12 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
     p_req = (request_id or (pending.get("request_id") if pending and pending.get("candidate_sha") == sha else None))
     p_attempts = (pending.get("attempts", 0) if pending and pending.get("candidate_sha") == sha else 0)
     p_watch = bool(watcher_active or (pending and pending.get("watcher_active")))
+    p_owner = bool(owner_active or (pending and pending.get("owner_active")))
 
     write_release_pending(paths, previous_sha=p_prev, candidate_sha=sha,
                           deadline=deadline, request_id=p_req,
-                          attempts=p_attempts, watcher_active=p_watch, now=ts)
+                          attempts=p_attempts, watcher_active=p_watch,
+                          owner_active=p_owner, now=ts)
     tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
     try:
         os.symlink(release, tmp_link)
@@ -3181,8 +3338,14 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
         raise Refused("release.install requires trust_master: true in the host policy")
     unit = "jarvisos-relay-watch.service"
     watcher_active = _unit_state(ctx, unit).get("ActiveState") == "active"
-    install_release(ctx.paths, args["sha"], request_id=ctx.request.get("id"),
-                    watcher_active=watcher_active, now=ctx.now())
+    owner_active = (ctx.request.get("requester") == "relay-continuity:owner"
+                    or (ctx.request.get("args") or {}).get("owner_active") is True)
+    kwargs: dict[str, Any] = {"request_id": ctx.request.get("id"),
+                              "watcher_active": watcher_active,
+                              "now": ctx.now()}
+    if owner_active:
+        kwargs["owner_active"] = True
+    install_release(ctx.paths, args["sha"], **kwargs)
     ctx.restart_required = True
     if watcher_active and _systemctl(ctx, "restart", unit).returncode:
         raise Failed("watcher restart failed")
