@@ -149,6 +149,7 @@ class Limits:
     max_reset_ahead: timedelta = timedelta(days=8)
     min_free_percent: float = 25.0
     reap_grace: float = 5.0  # seconds a leftover process gets to exit on SIGTERM before SIGKILL
+    turn_wall: float = 3600.0  # seconds RelayAdapter.finish waits before terminating the process group
 
 
 def now_utc() -> datetime:
@@ -1292,6 +1293,8 @@ def no_terminal_evidence(report: TurnReport, turn_dir: Path, diagnostics: str) -
     text = "\n".join(t for t in texts if t)
     if text and classify_text(text, None) == "auth":
         report.outcome, report.detail = "auth", f"{report.detail}; runner reported an authentication failure"
+    elif "wall limit" in text.lower():
+        report.detail = f"{report.detail}; {diagnostics.strip()}"
     return report
 
 
@@ -1906,10 +1909,16 @@ class RunResult:
 
 
 class RelayAdapter:
-    def __init__(self, repo: Path, binary: str = "agent-relay", env: dict[str, str] | None = None):
+    def __init__(self, repo: Path, binary: str = "agent-relay", env: dict[str, str] | None = None,
+                 turn_wall: float = Limits.turn_wall, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], None] = time.sleep, killpg: Callable[[int, int], None] = os.killpg):
         self.repo = repo
         self.binary = binary
         self.env = env  # extra environment for launched runs (the sandboxed mission profile); None: inherited
+        self.turn_wall = turn_wall
+        self.clock = clock
+        self.sleep = sleep
+        self.killpg = killpg
         self._outputs: dict[int, tuple[Any, Any]] = {}
         self._argon_leases: dict[int, Any] = {}
 
@@ -1999,22 +2008,91 @@ class RelayAdapter:
         if lease:
             lease.close()
 
-    def finish(self, proc: subprocess.Popen) -> RunResult:
-        proc.wait()
-        files = self._outputs.pop(id(proc))
+    def _proc_is_running(self, proc: Any) -> bool:
+        if hasattr(proc, "poll"):
+            try:
+                return proc.poll() is None
+            except Exception:  # noqa: BLE001
+                return False
+        return False
+
+    def finish(self, proc: subprocess.Popen, timeout: float | None = None) -> RunResult:
+        wall_limit = self.turn_wall if timeout is None else timeout
+        start = self.clock()
+        timed_out = False
+        if self.clock is time.monotonic and self.sleep is time.sleep and hasattr(proc, "wait"):
+            try:
+                proc.wait(timeout=max(0.0, wall_limit))
+            except (subprocess.TimeoutExpired, TimeoutError):
+                timed_out = True
+        else:
+            while True:
+                if not self._proc_is_running(proc):
+                    break
+                if self.clock() - start >= wall_limit:
+                    timed_out = True
+                    break
+                self.sleep(min(1.0, max(0.01, wall_limit - (self.clock() - start))))
+
+        if timed_out:
+            pgid = getattr(proc, "pid", None)
+            if pgid:
+                try:
+                    self.killpg(pgid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            term_start = self.clock()
+            if self.clock is time.monotonic and self.sleep is time.sleep and hasattr(proc, "wait"):
+                try:
+                    proc.wait(timeout=30.0)
+                except (subprocess.TimeoutExpired, TimeoutError):
+                    pass
+            else:
+                while self._proc_is_running(proc) and self.clock() - term_start < 30.0:
+                    self.sleep(min(1.0, max(0.01, 30.0 - (self.clock() - term_start))))
+            if self._proc_is_running(proc) and pgid:
+                try:
+                    self.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            if hasattr(proc, "wait"):
+                try:
+                    if self.clock is time.monotonic and self.sleep is time.sleep:
+                        proc.wait(timeout=1.0)
+                    else:
+                        proc.wait()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        files = self._outputs.pop(id(proc), None)
         texts = []
-        for handle in files:
-            handle.seek(0)
-            texts.append(handle.read())
-            handle.close()
-        out, err = texts
+        if files:
+            for handle in files:
+                try:
+                    handle.seek(0)
+                    texts.append(handle.read())
+                    handle.close()
+                except Exception:  # noqa: BLE001
+                    texts.append("")
+        out, err = texts if len(texts) == 2 else ("", "")
         diagnostics = (err or "")[-8192:]
+        session_id = None
+        errors: list[str] = []
         try:
             data = json.loads(out)
+            session_id = data.get("session_id")
             errors = [str(data.get(k)) for k in ("run_error", "error", "stop_reason") if data.get(k)]
-            return RunResult(data.get("session_id"), proc.returncode, True, "\n".join([diagnostics, *errors]))
         except (json.JSONDecodeError, TypeError, AttributeError):
-            return RunResult(None, proc.returncode, False, diagnostics)
+            pass
+
+        if timed_out:
+            wall_diag = f"turn wall limit ({int(wall_limit)}s) exceeded"
+            diagnostics = f"{diagnostics}\n{wall_diag}".strip() if diagnostics else wall_diag
+            return RunResult(session_id, getattr(proc, "returncode", None), False, diagnostics)
+
+        if session_id is not None or errors:
+            return RunResult(session_id, getattr(proc, "returncode", None), True, "\n".join([diagnostics, *errors]))
+        return RunResult(None, getattr(proc, "returncode", None), False, diagnostics)
 
     def sessions_dir(self) -> Path:
         return self.repo / ".agent-relay" / "sessions"
@@ -2947,6 +3025,14 @@ def session_context_block(
     return text_block, journal_fields
 
 
+def default_reachable(host: str = "github.com", port: int = 443, timeout: float = 5.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 @dataclass
 class Host:
     relay: Any
@@ -2955,7 +3041,7 @@ class Host:
     fingerprint: Callable[[], str] = lambda: ""
     conflicts: Callable[[set[int]], list[str]] = lambda own: []
     pid_alive: Callable[[int, int | None], bool] = lambda pid, start: devctx.pid_start(pid) == start and start is not None
-    ledger: Callable[[str, str], None] = lambda kind, text: None
+    ledger: Callable[[str, str], Any] = lambda kind, text: None
     permissions_digest: Callable[[], str | None] = lambda: None
     log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True)
     probe: Callable[[ToolCall], tuple[str, str] | None] = lambda call: None
@@ -2965,6 +3051,8 @@ class Host:
     session_context: Callable[[str | None], tuple[str, dict[str, Any]]] | None = None
     job_status: Callable[[str], dict[str, Any] | None] | None = None  # spec 267: None when unregistered
     pr_ci_status: Callable[[int, str], dict[str, Any] | None] | None = None  # spec 267: check results for (pr, head_sha)
+    reachable: Callable[[], bool] = default_reachable
+    read_ledger: Callable[[], list[dict[str, Any]]] | None = None
 
 
 class Supervisor:
@@ -2998,11 +3086,26 @@ class Supervisor:
         except Exception as exc:  # noqa: BLE001 - notification can never interrupt supervision
             self.host.log(f"notify: internal error {type(exc).__name__}")
 
-    def record(self, kind: str, text: str) -> None:
+    def record(self, kind: str, text: str) -> str | None:
         try:
-            self.host.ledger(kind, text)
+            return self.host.ledger(kind, text)
         except Exception as exc:  # noqa: BLE001
             self.host.log(f"ledger: append failed {type(exc).__name__}")
+            return None
+
+    def _read_ledger(self) -> list[dict[str, Any]]:
+        if getattr(self.host, "read_ledger", None) is not None:
+            try:
+                return self.host.read_ledger() or []
+            except Exception:  # noqa: BLE001
+                return []
+        try:
+            repo = getattr(getattr(self.host, "relay", None), "repo", None)
+            if repo:
+                return devctx.read_ledger(devctx.default_env(repo))
+        except Exception:  # noqa: BLE001
+            pass
+        return []
 
     def stop_requested(self) -> bool:
         return self.signalled or self.store.stop_path.exists()
@@ -3764,6 +3867,20 @@ class Supervisor:
             self.state["phase"] = "waiting"
             self.save()
             return "waiting"
+        reachable_fn = getattr(self.host, "reachable", None) or default_reachable
+        try:
+            reachable = bool(reachable_fn())
+        except Exception:  # noqa: BLE001
+            reachable = False
+        if not reachable:
+            if not getattr(self, "_network_outage", False):
+                self._network_outage = True
+                self.record("finding", "relay-continuity: pre-launch probe failed (github.com:443 unreachable); waiting for network")
+            self.host.log("pre-launch network probe failed (github.com:443 unreachable); waiting")
+            self.state["phase"] = "waiting"
+            self.save()
+            return "waiting"
+        self._network_outage = False
         digest = self.host.permissions_digest()
         if digest != self.state.get("permissions_digest"):
             return self.hold("permissions_changed")
@@ -3771,6 +3888,18 @@ class Supervisor:
         self.attempts += 1
         nonce = f"rc-{now.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}"
         text = prompt.replace("{nonce}", nonce)
+        if agent not in NATIVE_AGENTS:
+            limit_min = int(self.limits.turn_wall // 60)
+            wall_sentence = f"Your turn has a hard limit of {limit_min} minutes."
+            if f"hard limit of {limit_min} minutes" not in text:
+                attempt_hdr = f"[relay-continuity attempt {nonce}]"
+                resume_hdr = f"[relay-continuity resume {nonce}]"
+                if attempt_hdr in text:
+                    text = text.replace(attempt_hdr, f"{attempt_hdr}\n{wall_sentence}", 1)
+                elif resume_hdr in text:
+                    text = text.replace(resume_hdr, f"{resume_hdr}\n{wall_sentence}", 1)
+                else:
+                    text = f"{text}\n\n{wall_sentence}"
         # A takeover starts a new native provider context; the task and durable chain carry recovery.
         # A Claude -> Codex takeover must start a new native Codex context. Relay's --continue otherwise
         # revives its prior thread, which reached 1.5-2.7M input tokens in the measured roadmap cycles.
@@ -3853,7 +3982,10 @@ class Supervisor:
         pending["pid_start"] = devctx.pid_start(pending["pid"]) if pending["pid"] else None
         self.save()
         try:
-            result = self.host.relay.finish(proc)
+            try:
+                result = self.host.relay.finish(proc, timeout=getattr(self.limits, "turn_wall", None))
+            except TypeError:
+                result = self.host.relay.finish(proc)
             reaped = self._reap()
         finally:
             self.host.relay.release_turn(proc)
@@ -3898,8 +4030,9 @@ class Supervisor:
             return result
         turn = last_turn_dir(self.host.relay.sessions_dir() / session_id)
         report = classify_turn(turn, diagnostics=diagnostics) if turn else TurnReport(
-            outcome="crash", agent=pending["agent"], detail="session without turns", no_evidence=True,
-            turn_id=f"{session_id}/none")
+            outcome="crash", agent=pending["agent"],
+            detail=f"session without turns ({diagnostics.strip()})" if diagnostics else "session without turns",
+            no_evidence=True, turn_id=f"{session_id}/none")
         report.agent = pending["agent"]
         report.reaped = reaped
         self.state["head_session"] = session_id
@@ -4187,8 +4320,10 @@ def make_host(repo: Path, relay_env: dict[str, str] | None = None) -> Host:
     env = devctx.default_env(repo)
     author = f"relay-continuity pid {os.getpid()}"
 
-    def ledger(kind: str, text: str) -> None:
-        devctx.append_entry(env, devctx.make_entry(env, kind, text, refs={"spec": "195"}, author=author))
+    def ledger(kind: str, text: str) -> str | None:
+        entry = devctx.make_entry(env, kind, text, refs={"spec": "195"}, author=author)
+        devctx.append_entry(env, entry)
+        return entry.get("id")
 
     def permissions() -> str | None:
         return permissions_digest(repo / ".agent-relay" / "permissions.toml")
@@ -4202,7 +4337,9 @@ def make_host(repo: Path, relay_env: dict[str, str] | None = None) -> Host:
                     control_root(), env, authority, log=lambda msg: print(msg, file=sys.stderr, flush=True)
                 ),
                 job_status=lambda jid: relay_jobs.load(jid),
-                pr_ci_status=lambda pr, sha: default_pr_ci_status(repo, pr, sha))
+                pr_ci_status=lambda pr, sha: default_pr_ci_status(repo, pr, sha),
+                reachable=default_reachable,
+                read_ledger=lambda: devctx.read_ledger(env))
 
 
 # ---------------------------------------------------------------------------

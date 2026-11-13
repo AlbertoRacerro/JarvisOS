@@ -186,7 +186,8 @@ class Env:
             ledger=lambda kind, text: self.ledger.append((kind, text)), permissions_digest=lambda: self.perm["v"],
             log=self.logs.append,
             job_status=lambda jid: self.jobs.get(jid),
-            pr_ci_status=lambda pr, sha: self.ci.get((pr, sha)))
+            pr_ci_status=lambda pr, sha: self.ci.get((pr, sha)),
+            reachable=lambda: True)
         self.limits = limits or rc.Limits()
         self.sender = sender if sender is not None else self._send
 
@@ -5335,3 +5336,130 @@ def test_validate_state_spec_267_fields() -> None:
     }
     assert rc.validate_state(valid_wait) is None
 
+
+# ---------------------------------------------------------------------------
+# Spec 268: Bounded turns and provider failure handling
+
+
+def test_relay_turn_wall_limit_terminates_process_group_and_settles(tmp_path: Path) -> None:
+    """Criterion 1: Fake Relay turn running past wall limit is terminated with process group,
+    reaped, settled as not successful with wall limit named in report, and leaves cooldowns unchanged."""
+    signals_sent: list[tuple[int, int]] = []
+    fake_pid = 42424
+
+    class HungProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.returncode = None
+            self.alive = True
+
+        def poll(self) -> int | None:
+            return None if self.alive else self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode or 0
+
+    hung = HungProc(fake_pid)
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        signals_sent.append((pgid, sig))
+        if sig == signal.SIGKILL:
+            hung.alive = False
+            hung.returncode = -signal.SIGKILL
+        elif sig == signal.SIGTERM:
+            pass  # simulate hanging on SIGTERM
+
+    sim_time = [0.0]
+
+    def fake_clock() -> float:
+        return sim_time[0]
+
+    def fake_sleep(duration: float) -> None:
+        sim_time[0] += duration
+
+    adapter = rc.RelayAdapter(
+        tmp_path,
+        turn_wall=10.0,
+        clock=fake_clock,
+        sleep=fake_sleep,
+        killpg=fake_killpg,
+    )
+    result = adapter.finish(hung)
+    assert not result.raw_ok
+    assert "turn wall limit (10s) exceeded" in result.diagnostics
+    assert (fake_pid, signal.SIGTERM) in signals_sent
+    assert (fake_pid, signal.SIGKILL) in signals_sent
+
+    # Integration with Supervisor: verify settlement as unsuccessful, naming limit in report, cooldowns unchanged
+    env = Env(tmp_path)
+    env.host.relay.turn_wall = 10.0
+    env.host.relay.clock = fake_clock
+    env.host.relay.sleep = fake_sleep
+    env.host.relay.killpg = fake_killpg
+    hung2 = HungProc(fake_pid)
+    launches: list[str] = []
+
+    def hung_start(agent: str, parent: str | None, text: str, turns: int, **kw: Any) -> Any:
+        launches.append(text)
+        return hung2
+
+    def hung_finish(proc: Any, timeout: float | None = None) -> rc.RunResult:
+        return adapter.finish(hung2)
+
+    env.relay.start = hung_start
+    env.relay.finish = hung_finish
+    sid = "20261018-000001-bbbbbb"
+    t_dir = env.relay.sessions_dir() / sid / "turns" / "turn-001"
+    t_dir.mkdir(parents=True)
+    (t_dir / "state.json").write_text(json.dumps({"agent_key": "claude"}))
+    (t_dir / "output.jsonl").write_text("")
+    (t_dir / "prompt.md").write_text(f"## Task\n[relay-continuity attempt {env.store.root.name}]\ntask")
+
+    env.relay.find_by_nonce = lambda nonce, since: sid
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.perm["v"]
+    report = sup._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert isinstance(report, rc.TurnReport)
+    assert report.outcome != "success"
+    assert "turn wall limit" in report.detail.lower()
+    assert sup.state["cooldowns"] == {}
+    assert "Your turn has a hard limit of 60 minutes." in launches[0]
+
+
+def test_pre_launch_reachable_probe_waiting_and_single_ledger_finding(tmp_path: Path) -> None:
+    """Criterion 2: Failing Host.reachable makes _launch return 'waiting' with attempts, pending,
+    counters and cooldowns unchanged and nothing passed to relay.start; repeated failing probes write
+    one ledger finding; once probe succeeds launch proceeds."""
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    reachable_status = [False]
+    env.host.reachable = lambda: reachable_status[0]
+
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.perm["v"]
+    # First failing probe
+    res1 = sup._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert res1 == "waiting"
+    assert sup.attempts == 0
+    assert sup.state["pending"] is None
+    assert sup.state["cooldowns"] == {}
+    assert sup.state["counters"]["consecutive_failures"] == 0
+    assert len(env.relay.launches) == 0
+    findings1 = [t for k, t in env.ledger if k == "finding" and "probe failed" in t]
+    assert len(findings1) == 1
+
+    # Second failing probe (repeated failure during outage)
+    res2 = sup._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert res2 == "waiting"
+    assert sup.attempts == 0
+    assert sup.state["pending"] is None
+    assert len(env.relay.launches) == 0
+    # Exactly one ledger finding per outage
+    findings2 = [t for k, t in env.ledger if k == "finding" and "probe failed" in t]
+    assert len(findings2) == 1
+
+    # Network recovers: probe succeeds
+    reachable_status[0] = True
+    res3 = sup._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert res3 != "waiting"
+    assert sup.attempts == 1
+    assert len(env.relay.launches) == 1
