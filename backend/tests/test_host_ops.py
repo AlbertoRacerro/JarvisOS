@@ -4645,3 +4645,222 @@ def test_return_release_returns_published_link_and_starts_owner(tmp_path):
     assert (paths.published / "current").resolve().name == prev_sha
     start_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
     assert len(start_calls) >= 1
+
+
+def test_install_release_failure_after_publication_restores_links(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    sha_prev = "8" * 40
+    sha_cand = "9" * 40
+
+    # Set up previous installed release
+    d_prev = paths.install / "releases" / sha_prev / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# code\n")
+    h.publish_release(paths, sha_prev)
+    tmp_link = paths.install / ".current.prev"
+    os.symlink(paths.install / "releases" / sha_prev, tmp_link)
+    os.replace(tmp_link, paths.install / "current")
+    (paths.guard / "RELEASE").parent.mkdir(parents=True, exist_ok=True)
+    (paths.guard / "RELEASE").write_text(f"{sha_prev}\n", encoding="utf-8")
+
+    assert (paths.published / "current").resolve().name == sha_prev
+    assert (paths.install / "current").resolve().name == sha_prev
+
+    rules = [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "backend"}]}}]
+    checks = [{"name": "backend", "status": "completed", "conclusion": "success", "id": 1, "completed_at": "2026-01-01T00:00:00Z"}]
+    mock_install(monkeypatch, release_archive(), rules=rules, checks=checks)
+
+    # Simulate failure during install/current switch (after publication stage has populated files)
+    def fail_switch(p, sha):
+        raise OSError("simulated disk error during link switch")
+
+    monkeypatch.setattr(h, "switch_install_release", fail_switch)
+
+    with pytest.raises(OSError, match="simulated disk error"):
+        h.install_release(paths, sha_cand)
+
+    # Links must be restored to sha_prev; neither may point to sha_cand
+    assert (paths.published / "current").resolve().name == sha_prev
+    assert (paths.install / "current").resolve().name == sha_prev
+    assert not paths.release_pending.exists()
+
+
+def test_op_release_install_watcher_restart_failure_restores_published_link_and_restarts_owner(host, monkeypatch):
+    paths, ex, calls = host
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["release.install"]["trust_master"] = True
+    paths.policy.write_text(json.dumps(policy))
+
+    sha_prev = "8" * 40
+    sha_cand = "9" * 40
+
+    # Set up previous release
+    d_prev = paths.install / "releases" / sha_prev / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# code\n")
+    h.publish_release(paths, sha_prev)
+    tmp_link = paths.install / ".current.prev"
+    os.symlink(paths.install / "releases" / sha_prev, tmp_link)
+    os.replace(tmp_link, paths.install / "current")
+
+    # Mock install_release to simulate successful install (switching published & install to candidate)
+    def mock_install_fn(p, sha, **kw):
+        d_cand = p.install / "releases" / sha / "scripts"
+        d_cand.mkdir(parents=True, exist_ok=True)
+        (d_cand / "host_ops.py").write_text("# cand\n")
+        h.publish_release(p, sha)
+        t_link = p.install / ".current.cand"
+        os.symlink(d_cand.parent, t_link)
+        os.replace(t_link, p.install / "current")
+
+    monkeypatch.setattr(h, "install_release", mock_install_fn)
+
+    # Systemctl returns 1 on watcher restart, 0 on other commands
+    def custom_run(argv, **kw):
+        calls.append((argv, kw))
+        return subprocess.CompletedProcess(
+            argv, 1 if "restart" in argv and "jarvisos-relay-watch.service" in argv else 0,
+            "ActiveState=active\n", ""
+        )
+
+    ex.run = custom_run
+
+    req = h.make_request("release.install", {"sha": sha_cand}, None, "relay-continuity:owner", ex.now())
+    h.submit(paths, req)
+    calls.clear()
+    ex.step()
+
+    receipt, _ = h.load_receipt(paths, req["id"])
+    assert receipt["outcome"] == "failed"
+    assert "watcher restart failed" in str(receipt.get("error"))
+
+    # Published current was restored to previous release (owner never runs candidate on failed install)
+    assert (paths.published / "current").resolve().name == sha_prev
+    # Executor restart requested so candidate can fail health check under guard
+    assert ex.restart_requested
+
+    # Owner was restarted on previous release
+    start_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(start_calls) >= 1
+
+
+def test_maybe_confirm_release_stale_matching_sha_does_not_confirm(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False,
+                            owner_active=True, now=t0)
+
+    # Old state file from previous attempt has updated_at before owner_started_at
+    paths.owner_serve_state.parent.mkdir(parents=True, exist_ok=True)
+    paths.owner_serve_state.write_text(json.dumps({
+        "release_sha": SHA,
+        "release_updated_at": h.iso(t0 - timedelta(seconds=10)),
+    }))
+
+    # Step: starts owner, but stale state must not confirm
+    ex.step()
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert marker.get("owner_started") is True
+    assert "owner_reported_at" not in marker
+    assert len(h.read_release_history(paths)) == 0
+
+
+def test_maybe_confirm_release_fresh_report_confirms(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False,
+                            owner_active=True, now=t0)
+
+    # Step 1: starts owner
+    ex.step()
+    assert paths.release_pending.is_file()
+
+    # Owner reports after owner_started_at
+    paths.owner_serve_state.parent.mkdir(parents=True, exist_ok=True)
+    paths.owner_serve_state.write_text(json.dumps({
+        "release_sha": SHA,
+        "release_updated_at": h.iso(t0 + timedelta(seconds=2)),
+    }))
+
+    # Step 2: fresh report confirms release
+    ex.step()
+    assert not paths.release_pending.exists()
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == SHA
+    assert history[0]["status"] == "confirmed"
+
+
+def test_maybe_confirm_release_malformed_owner_state_does_not_confirm(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False,
+                            owner_active=True, now=t0)
+    paths.owner_serve_state.parent.mkdir(parents=True, exist_ok=True)
+
+    # Case 1: unparseable JSON
+    paths.owner_serve_state.write_text("{bad json: not parsed")
+    ex.step()
+    assert paths.release_pending.is_file()
+
+    # Case 2: missing release_updated_at
+    paths.owner_serve_state.write_text(json.dumps({"release_sha": SHA}))
+    ex.step()
+    assert paths.release_pending.is_file()
+
+    # Case 3: malformed / unparseable timestamp
+    paths.owner_serve_state.write_text(json.dumps({
+        "release_sha": SHA,
+        "release_updated_at": "not-a-valid-iso-timestamp",
+    }))
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+
+def test_maybe_confirm_release_owner_start_failure_does_not_mark_started_or_confirm(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False,
+                            owner_active=True, now=t0)
+
+    # Owner start fails (returncode != 0)
+    ex.run = lambda argv, **kw: subprocess.CompletedProcess(
+        argv, 1 if "start" in argv and "jarvisos-mission-owner.service" in argv else 0, "", ""
+    )
+
+    # Even if owner_serve_state has a matching fresh timestamp
+    paths.owner_serve_state.parent.mkdir(parents=True, exist_ok=True)
+    paths.owner_serve_state.write_text(json.dumps({
+        "release_sha": SHA,
+        "release_updated_at": h.iso(t0 + timedelta(seconds=2)),
+    }))
+
+    ex.step()
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    # Must NOT assume start success: owner_started is not marked True
+    assert marker.get("owner_started") is not True
+    assert "owner_started_at" not in marker
+    assert len(h.read_release_history(paths)) == 0

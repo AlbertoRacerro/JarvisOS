@@ -2046,7 +2046,31 @@ def parse_systemd_ts(val: str) -> datetime | None:
     return None
 
 
-def publish_release(paths: Paths, sha: str) -> Path:
+def switch_published_release(paths: Paths, sha: str) -> None:
+    pub_release_dir = paths.published / "releases" / sha
+    if not pub_release_dir.is_dir():
+        raise Refused(f"published release directory missing for {sha}")
+    tmp_link = paths.published / f".current.{secrets.token_hex(4)}"
+    try:
+        os.symlink(f"releases/{sha}", tmp_link)
+        os.replace(tmp_link, paths.published / "current")
+    finally:
+        tmp_link.unlink(missing_ok=True)
+
+
+def switch_install_release(paths: Paths, sha: str) -> None:
+    release_dir = paths.install / "releases" / sha
+    if not release_dir.is_dir():
+        raise Refused(f"install release directory missing for {sha}")
+    tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
+    try:
+        os.symlink(release_dir, tmp_link)
+        os.replace(tmp_link, paths.install / "current")
+    finally:
+        tmp_link.unlink(missing_ok=True)
+
+
+def publish_release(paths: Paths, sha: str, *, switch_current: bool = True) -> Path:
     source_scripts = paths.install / "releases" / sha / "scripts"
     if not source_scripts.is_dir():
         raise Refused(f"installed release scripts missing for {sha}")
@@ -2069,12 +2093,8 @@ def publish_release(paths: Paths, sha: str) -> Path:
             stage_dir.chmod(0o755)
             os.rename(stage_dir, target_release)
 
-    tmp_link = paths.published / f".current.{secrets.token_hex(4)}"
-    try:
-        os.symlink(f"releases/{sha}", tmp_link)
-        os.replace(tmp_link, paths.published / "current")
-    finally:
-        tmp_link.unlink(missing_ok=True)
+    if switch_current:
+        switch_published_release(paths, sha)
     return target_release
 
 
@@ -2083,18 +2103,33 @@ def return_published_release(paths: Paths, previous_sha: str) -> bool:
     if not target_release.is_dir():
         if (paths.install / "releases" / previous_sha / "scripts").is_dir():
             try:
-                publish_release(paths, previous_sha)
+                publish_release(paths, previous_sha, switch_current=True)
                 return True
             except Exception:  # noqa: BLE001
                 return False
         return False
-    tmp_link = paths.published / f".current.{secrets.token_hex(4)}"
     try:
-        os.symlink(f"releases/{previous_sha}", tmp_link)
-        os.replace(tmp_link, paths.published / "current")
+        switch_published_release(paths, previous_sha)
         return True
-    finally:
-        tmp_link.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def restore_release_links(paths: Paths, previous_sha: str | None) -> None:
+    if previous_sha and (paths.install / "releases" / previous_sha).is_dir():
+        try:
+            switch_install_release(paths, previous_sha)
+        except Exception:  # noqa: BLE001
+            (paths.install / "current").unlink(missing_ok=True)
+    else:
+        (paths.install / "current").unlink(missing_ok=True)
+
+    if previous_sha:
+        ok = return_published_release(paths, previous_sha)
+        if not ok:
+            (paths.published / "current").unlink(missing_ok=True)
+    else:
+        (paths.published / "current").unlink(missing_ok=True)
 
 
 def write_release_pending(
@@ -2232,17 +2267,8 @@ def return_release(
             pass
 
     # Move current back to previous release if available (keep current where it is when kind == "return")
-    if not is_return_marker and previous_sha and (paths.install / "releases" / previous_sha).is_dir():
-        tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
-        try:
-            os.symlink(paths.install / "releases" / previous_sha, tmp_link)
-            os.replace(tmp_link, paths.install / "current")
-        finally:
-            tmp_link.unlink(missing_ok=True)
-
-    # Return published current back to previous release if available
-    if not is_return_marker and previous_sha:
-        return_published_release(paths, previous_sha)
+    if not is_return_marker:
+        restore_release_links(paths, previous_sha)
 
     # Restore watcher if it was active
     if marker and marker.get("watcher_active"):
@@ -2649,7 +2675,67 @@ class Executor:
             unlink_at(rfd, cancel)
             self._finish(request, outcome, detail, error, started=now, policy_sha=policy_sha, request_raw=raw)
             if request.get("op") == "release.install" and outcome in ("refused", "failed"):
+                candidate = (request.get("args") or {}).get("sha") or request.get("sha")
+                pub_curr = self.paths.published / "current"
+                if pub_curr.is_symlink() or pub_curr.exists():
+                    try:
+                        if pub_curr.resolve().name == candidate:
+                            prev = None
+                            if (self.paths.guard / "RELEASE").is_file():
+                                try:
+                                    g_sha = (self.paths.guard / "RELEASE").read_text(encoding="utf-8").strip()
+                                    if SHA_RE.fullmatch(g_sha) and g_sha != candidate:
+                                        prev = g_sha
+                                except OSError:
+                                    pass
+                            if prev:
+                                return_published_release(self.paths, prev)
+                            else:
+                                pub_curr.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+                if not ctx.restart_required:
+                    inst_curr = self.paths.install / "current"
+                    if inst_curr.is_symlink() or inst_curr.exists():
+                        try:
+                            if inst_curr.resolve().name == candidate:
+                                prev = None
+                                if (self.paths.guard / "RELEASE").is_file():
+                                    try:
+                                        g_sha = (self.paths.guard / "RELEASE").read_text(encoding="utf-8").strip()
+                                        if SHA_RE.fullmatch(g_sha) and g_sha != candidate:
+                                            prev = g_sha
+                                    except OSError:
+                                        pass
+                                restore_release_links(self.paths, prev)
+                        except OSError:
+                            pass
+                    if self.paths.release_pending.exists():
+                        try:
+                            p_marker = load_release_pending(self.paths)
+                            if p_marker and p_marker.get("candidate_sha") == candidate:
+                                self.paths.release_pending.unlink(missing_ok=True)
+                        except MalformedPendingRelease:
+                            _quarantine_pending_marker(self.paths)
+
                 if request.get("requester") == "relay-continuity:owner" or (request.get("args") or {}).get("owner_active") is True:
+                    if not (self.paths.published / "current").exists():
+                        inst = None
+                        if (self.paths.install / "current").exists():
+                            try:
+                                inst = (self.paths.install / "current").resolve().name
+                            except OSError:
+                                pass
+                        if not inst and (self.paths.guard / "RELEASE").is_file():
+                            try:
+                                g_sha = (self.paths.guard / "RELEASE").read_text(encoding="utf-8").strip()
+                                if SHA_RE.fullmatch(g_sha):
+                                    inst = g_sha
+                            except OSError:
+                                pass
+                        if inst:
+                            return_published_release(self.paths, inst)
                     self._start_owner()
             self.restart_requested = ctx.restart_required
             ifd = self._state_fd("inflight")
@@ -2682,14 +2768,51 @@ class Executor:
                               "finished_at": receipt["finished_at"], "sha": request.get("sha")})
         self.log(f"hostops: {request['id'][:8]} {request.get('op')} {outcome}" + (f" ({error})" if error else ""))
 
-    def _start_owner(self) -> None:
+    def _start_owner(self) -> bool:
         unit = "jarvisos-mission-owner.service"
         try:
             proc = self.run(["systemctl", "--user", "start", unit], timeout=60)
             if proc.returncode != 0:
                 self.log(f"hostops: owner start returned {proc.returncode}")
+                return False
+            return True
         except Exception as exc:  # noqa: BLE001
             self.log(f"hostops: owner start failed: {exc}")
+            return False
+
+    def _handle_owner_timeout(self, marker: dict[str, Any], candidate: str) -> None:
+        prev_sha = marker.get("previous_sha")
+        if not prev_sha and (self.paths.guard / "RELEASE").is_file():
+            try:
+                g_sha = (self.paths.guard / "RELEASE").read_text(encoding="utf-8").strip()
+                if SHA_RE.fullmatch(g_sha) and g_sha != candidate:
+                    prev_sha = g_sha
+            except OSError:
+                pass
+        if prev_sha:
+            return_published_release(self.paths, prev_sha)
+        self._start_owner()
+        notified = notify_return(
+            self.paths, candidate, "owner release sha not reported within deadline",
+            post=self.post, kind="owner_timeout"
+        )
+        entry = dict(marker)
+        entry.update({
+            "status": "refused",
+            "reason": "owner release sha not reported within deadline",
+            "returned_at": iso(self.now()),
+            "notified": notified,
+        })
+        state_fd = open_dir(self.paths.state, create=True)
+        try:
+            with open(self.paths.release_history, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            unlink_at(state_fd, "release-pending.json")
+        finally:
+            os.close(state_fd)
+        self.log(f"hostops: owner release sha not reported within deadline for {candidate}")
 
     def _publish(self, request_id: str, data: bytes, signature: bytes) -> None:
         fd = open_dir(self.paths.receipts, create=True)
@@ -2745,7 +2868,7 @@ class Executor:
                     os.close(state_fd)
                 return True
 
-        if not marker.get("owner_active") or not marker.get("owner_started"):
+        if not marker.get("owner_active"):
             deadline_str = marker.get("deadline")
             if deadline_str:
                 deadline_dt = parse_ts(deadline_str)
@@ -2855,9 +2978,16 @@ class Executor:
 
         if marker.get("owner_active"):
             if not marker.get("owner_started"):
-                self._start_owner()
+                t_before = self.now()
+                if not self._start_owner():
+                    self.log(f"hostops: candidate {candidate} owner start failed")
+                    deadline_str = marker.get("deadline")
+                    deadline_dt = parse_ts(deadline_str) if deadline_str else None
+                    if deadline_dt and self.now() > deadline_dt:
+                        self._handle_owner_timeout(marker, candidate)
+                    return False
                 marker["owner_started"] = True
-                marker["owner_started_at"] = iso(self.now())
+                marker["owner_started_at"] = iso(t_before)
                 state_fd = open_dir(self.paths.state, create=True)
                 try:
                     write_at(state_fd, "release-pending.json", canonical(marker))
@@ -2870,7 +3000,10 @@ class Executor:
                 try:
                     s_data = json.loads(state_path.read_text(encoding="utf-8"))
                     if isinstance(s_data, dict) and s_data.get("release_sha") == candidate:
-                        owner_reported = True
+                        started_at = parse_ts(marker.get("owner_started_at"))
+                        updated_at = parse_ts(s_data.get("release_updated_at"))
+                        if started_at is not None and updated_at is not None and updated_at >= started_at:
+                            owner_reported = True
                 except (OSError, json.JSONDecodeError):
                     pass
 
@@ -2878,31 +3011,7 @@ class Executor:
                 deadline_str = marker.get("deadline")
                 deadline_dt = parse_ts(deadline_str) if deadline_str else None
                 if deadline_dt and self.now() > deadline_dt:
-                    prev_sha = marker.get("previous_sha")
-                    if prev_sha:
-                        return_published_release(self.paths, prev_sha)
-                    self._start_owner()
-                    notified = notify_return(
-                        self.paths, candidate, "owner release sha not reported within deadline",
-                        post=self.post, kind="owner_timeout"
-                    )
-                    entry = dict(marker)
-                    entry.update({
-                        "status": "refused",
-                        "reason": "owner release sha not reported within deadline",
-                        "returned_at": iso(self.now()),
-                        "notified": notified,
-                    })
-                    state_fd = open_dir(self.paths.state, create=True)
-                    try:
-                        with open(self.paths.release_history, "a", encoding="utf-8") as handle:
-                            handle.write(json.dumps(entry, sort_keys=True) + "\n")
-                            handle.flush()
-                            os.fsync(handle.fileno())
-                        unlink_at(state_fd, "release-pending.json")
-                    finally:
-                        os.close(state_fd)
-                    self.log(f"hostops: owner release sha not reported within deadline for {candidate}")
+                    self._handle_owner_timeout(marker, candidate)
                     return False
                 return False
 
@@ -3301,13 +3410,21 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
     source_sha = installed or sha
     _pin_guard(paths, source_dir, source_sha)
 
+    # Ensure installed release is published
     if installed and (paths.install / "releases" / installed / "scripts").is_dir():
         if not (paths.published / "releases" / installed).is_dir():
             try:
-                publish_release(paths, installed)
+                publish_release(paths, installed, switch_current=False)
             except Exception:  # noqa: BLE001
                 pass
-    publish_release(paths, sha)
+        if not (paths.published / "current").exists():
+            try:
+                switch_published_release(paths, installed)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Stage files for candidate under published/releases/sha without switching published/current
+    publish_release(paths, sha, switch_current=False)
 
     ts = now or now_utc()
     deadline = (pending.get("deadline") if pending and pending.get("candidate_sha") == sha
@@ -3319,16 +3436,33 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
     p_watch = bool(watcher_active or (pending and pending.get("watcher_active")))
     p_owner = bool(owner_active or (pending and pending.get("owner_active")))
 
-    write_release_pending(paths, previous_sha=p_prev, candidate_sha=sha,
-                          deadline=deadline, request_id=p_req,
-                          attempts=p_attempts, watcher_active=p_watch,
-                          owner_active=p_owner, now=ts)
-    tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
+    pending_written = False
+    install_switched = False
+    published_switched = False
     try:
-        os.symlink(release, tmp_link)
-        os.replace(tmp_link, paths.install / "current")
-    finally:
-        tmp_link.unlink(missing_ok=True)
+        write_release_pending(paths, previous_sha=p_prev, candidate_sha=sha,
+                              deadline=deadline, request_id=p_req,
+                              attempts=p_attempts, watcher_active=p_watch,
+                              owner_active=p_owner, now=ts)
+        pending_written = True
+
+        switch_install_release(paths, sha)
+        install_switched = True
+
+        switch_published_release(paths, sha)
+        published_switched = True
+    except BaseException:
+        if install_switched or published_switched:
+            restore_release_links(paths, p_prev)
+        elif p_prev and (paths.published / "current").exists():
+            try:
+                if (paths.published / "current").resolve().name != p_prev:
+                    restore_release_links(paths, p_prev)
+            except OSError:
+                restore_release_links(paths, p_prev)
+        if pending_written:
+            paths.release_pending.unlink(missing_ok=True)
+        raise
 
 
 def op_release_install(ctx: Context) -> dict[str, Any]:
@@ -3345,10 +3479,26 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
                               "now": ctx.now()}
     if owner_active:
         kwargs["owner_active"] = True
+
+    current_link = ctx.paths.install / "current"
+    installed_before = None
+    if current_link.is_symlink() or current_link.exists():
+        try:
+            installed_before = current_link.resolve().name
+        except OSError:
+            installed_before = None
+
     install_release(ctx.paths, args["sha"], **kwargs)
     ctx.restart_required = True
     if watcher_active and _systemctl(ctx, "restart", unit).returncode:
+        # If watcher restart failed, the install request failed.
+        # Published current must be restored to previous release before owner starts.
+        if installed_before:
+            return_published_release(ctx.paths, installed_before)
+        else:
+            (ctx.paths.published / "current").unlink(missing_ok=True)
         raise Failed("watcher restart failed")
+
     return {"sha": args["sha"], "executor_restart": True}
 
 
