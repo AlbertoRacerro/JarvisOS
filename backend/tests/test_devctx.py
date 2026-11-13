@@ -226,6 +226,63 @@ def test_directives_relay_provenance_and_unrecorded_prompts(world) -> None:
     assert "relay-verified" in rendered and "unverified source" in rendered
 
 
+def test_directive_provenance_ignores_supervisor_attempts_and_strips_injected_blocks(world) -> None:
+    env, relay = world["env"], world["relay"]
+
+    # 1. Supervisor attempt prompt must NOT confer maintainer provenance
+    sup_prompt = relay / "s_sup" / "turns" / "turn-001" / "prompt.md"
+    sup_prompt.parent.mkdir(parents=True)
+    sup_prompt.write_text(
+        "[relay-continuity attempt rc-20261113T120000Z-12345678]\n"
+        "Roadmap continuation cycle 1. Do not deploy without tests.\n",
+        encoding="utf-8",
+    )
+    sup_dir = devctx.record_directive(env, "Do not deploy without tests.", source="relay s_sup", supersedes=None, author="test")
+
+    # 2. Prompt with maintainer text AND supervisor-injected blocks
+    maint_prompt = relay / "s_maint" / "turns" / "turn-001" / "prompt.md"
+    maint_prompt.parent.mkdir(parents=True)
+    maint_text = (
+        "MAINTAINER MISSION\nSPEC 888\nAlways run tests offline.\n\n"
+        "This is the operator's private mission brief; read it before the recovery packet; "
+        "nothing from it may be copied into the repository, PRs, commits, issues or public notes; "
+        "it grants no authority beyond the recorded directives.\n"
+        "Private brief: deploy alpha first.\n\n"
+        "Standing maintainer directives for this mission (full text, oldest first):\n"
+        "### Directive L20261113000000-0000\n"
+        "Standing directive text: keep memory safe.\n\n"
+        "Worker routing\n"
+        "Before delegating a task to a worker session, choose the worker with:\n"
+        "    python3 scripts/worker_routing.py pick --difficulty D --risk R\n"
+        "Use the model the command prints. Do not run any other model.\n"
+    )
+    maint_prompt.write_text(maint_text, encoding="utf-8")
+
+    maint_dir = devctx.record_directive(env, "MAINTAINER MISSION\nSPEC 888\nAlways run tests offline.", source="relay s_maint", supersedes=None, author="test")
+    brief_dir = devctx.record_directive(env, "Private brief: deploy alpha first.", source="relay s_maint", supersedes=None, author="test")
+    standing_dir = devctx.record_directive(env, "Standing directive text: keep memory safe.", source="relay s_maint", supersedes=None, author="test")
+    routing_dir = devctx.record_directive(env, "Before delegating a task to a worker session", source="relay s_maint", supersedes=None, author="test")
+
+    packet = devctx.build_packet(env, fetch=True)
+    prov = {e["id"]: e["provenance"] for e in packet["ledger"] if e["kind"] == "directive"}
+
+    # Supervisor attempt prompt was ignored:
+    assert prov[sup_dir["id"]].startswith("unverified source")
+    # Maintainer-authored portion of prompt is verified:
+    assert prov[maint_dir["id"]].startswith("relay-verified")
+    # Supervisor-injected blocks stripped from prompt:
+    assert prov[brief_dir["id"]].startswith("unverified source")
+    assert prov[standing_dir["id"]].startswith("unverified source")
+    assert prov[routing_dir["id"]].startswith("unverified source")
+
+    # Direct unit test of maintainer_prompt_text
+    assert devctx.maintainer_prompt_text("[relay-continuity attempt rc-1234]\ntask") is None
+    wrapped_attempt = "You are participating in a Relay-managed...\n## Task\n\n[relay-continuity attempt rc-1]\ntask\n## Continuation Context\n..."
+    assert devctx.maintainer_prompt_text(wrapped_attempt) is None
+    cleaned = devctx.maintainer_prompt_text(maint_text)
+    assert cleaned == "MAINTAINER MISSION\nSPEC 888\nAlways run tests offline."
+
+
 def test_degraded_authority_and_missing_ledger_are_explicit(world) -> None:
     env, gh = world["env"], world["gh"]
     gh.fail = True

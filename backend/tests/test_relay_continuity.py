@@ -120,11 +120,12 @@ class FakeRelay(rc.RelayAdapter):
     def limits(self) -> dict[str, Any] | None:
         return self.readings() if callable(self.readings) else self.readings
 
-    def start(self, agent: str, parent: str, task: str, turns: int) -> FakeProc:
+    def start(self, agent: str, parent: str, task: str, turns: int,
+              resume: str | None = None, **kwargs: Any) -> FakeProc:
         if not self.script:
             raise AssertionError("unexpected Relay invocation")
         self.launches.append({"agent": agent, "parent": parent, "task": task, "turns": turns,
-                              "at": self.clock.now() if self.clock else None})
+                              "resume": resume, "at": self.clock.now() if self.clock else None, **kwargs})
         step = self.script.pop(0)
         self._current = (step, agent, task)
         return FakeProc(None)
@@ -4042,6 +4043,55 @@ def test_resumed_same_agent_turn_skips_session_context(tmp_path: Path) -> None:
     assert launch_events[0]["directives"] == []
 
 
+def test_native_retry_resuming_conversation_skips_session_context(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Private brief for native agent.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("argon", SUCCESS)])
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    calls: list[str | None] = []
+
+    def mock_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        calls.append(authority)
+        return rc.session_context_block(control, dev_env, authority)
+
+    env.host.session_context = mock_context
+    sup = env.supervisor()
+    sup.state["head_session"] = "20261018-000001-bbbbbb"
+    sup.state["agent"] = "argon"
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.save()
+
+    # Create previous native turn output with conversation_id
+    turn_dir = env.relay.sessions_dir() / "20261018-000001-bbbbbb" / "turns" / "turn-001"
+    turn_dir.mkdir(parents=True)
+    (turn_dir / "output.jsonl").write_text(
+        json.dumps({"event": "init", "conversation_id": "5b934b69-1847-40af-93ec-eefda93178a5", "init": {"model": "argon"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    report = rc.TurnReport(
+        turn_id="20261018-000001-bbbbbb/turn-001",
+        outcome="transient",
+        agent="argon",
+        detail="network blip",
+    )
+    sup._launch("argon", "retry turn {nonce}", report)
+    # Native retry resumes the same conversation, so session_context must NOT be attached:
+    assert calls == []
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER not in launched_task
+    assert env.relay.launches[0]["resume"] == "5b934b69-1847-40af-93ec-eefda93178a5"
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert launch_events[0]["resume"] == "5b934b69-1847-40af-93ec-eefda93178a5"
+    assert launch_events[0]["brief"] is None
+    assert launch_events[0]["directives"] == []
+
+
 def test_agent_switch_with_non_null_parent_attaches_block(tmp_path: Path) -> None:
     brief_file = tmp_path / "operator_brief.md"
     brief_file.write_text("Operator brief on switch.", encoding="utf-8")
@@ -4180,8 +4230,8 @@ def test_directives_authority_superseded_mismatch_and_cap(tmp_path: Path) -> Non
     pos_d5 = text.index(f"Directive {e5['id']} not attached")
     assert pos_d2 < pos_d4 < pos_d5
 
-    # Cap exceeded test: add a large directive D6 (23,900 bytes) so total exceeds 24,000 bytes
-    e6 = rc.devctx.record_directive(dev_env, "X" * 23_900, source=None, supersedes=None, author="maintainer")
+    # Cap exceeded test: add a large directive D6 (23,950 bytes) so total exceeds 24,000 bytes
+    e6 = rc.devctx.record_directive(dev_env, "X" * 23_950, source=None, supersedes=None, author="maintainer")
     text_capped, fields_capped = rc.session_context_block(control, dev_env, e2["id"])
     # Newest (D6) fits, older (D2, D4, D5) are omitted for length
     assert f"### Directive {e6['id']}" in text_capped
@@ -4189,6 +4239,31 @@ def test_directives_authority_superseded_mismatch_and_cap(tmp_path: Path) -> Non
     assert f"{e2['id']}, {e4['id']}, {e5['id']}" in text_capped
     assert "(devctx.py show <id>)" in text_capped
     assert fields_capped["directives"] == [e6["id"]]
+
+
+def test_directives_body_limit_24000_and_24001_bytes(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+
+    # 1. Exactly 24,000 bytes directive body: MUST be attached (heading not counted against limit)
+    exact_text = "E" * 24_000
+    e_exact = rc.devctx.record_directive(dev_env, exact_text, source=None, supersedes=None, author="maintainer")
+    text_exact, fields_exact = rc.session_context_block(control, dev_env, e_exact["id"])
+    assert fields_exact["directives"] == [e_exact["id"]]
+    assert f"### Directive {e_exact['id']}\n{exact_text}" in text_exact
+    assert "Older standing directives omitted for length:" not in text_exact
+
+    # 2. 24,001 bytes directive body: exceeds limit, MUST NOT be attached and must be explicitly omitted
+    over_text = "O" * 24_001
+    e_over = rc.devctx.record_directive(dev_env, over_text, source=None, supersedes=None, author="maintainer")
+    text_over, fields_over = rc.session_context_block(control, dev_env, e_over["id"])
+    assert fields_over["directives"] == []
+    assert f"### Directive {e_over['id']}" not in text_over
+    assert "Older standing directives omitted for length:" in text_over
+    assert e_over["id"] in text_over
 
 
 def test_directives_authority_not_found(tmp_path: Path) -> None:

@@ -2602,27 +2602,33 @@ def session_context_block(
                 expected_sha = d_info.get("sha256")
                 path = Path(raw_path) if raw_path else None
                 if path is None or not path.exists():
+                    missing_msg = f"Directive {d_id} not attached: file missing"
                     candidates.append({
                         "id": d_id,
-                        "text": f"Directive {d_id} not attached: file missing",
+                        "text": missing_msg,
                         "attached": False,
+                        "body_bytes": len(missing_msg.encode("utf-8")),
                     })
                 else:
                     try:
                         content_bytes = path.read_bytes()
                     except OSError:
+                        missing_msg = f"Directive {d_id} not attached: file missing"
                         candidates.append({
                             "id": d_id,
-                            "text": f"Directive {d_id} not attached: file missing",
+                            "text": missing_msg,
                             "attached": False,
+                            "body_bytes": len(missing_msg.encode("utf-8")),
                         })
                     else:
                         actual_sha = hashlib.sha256(content_bytes).hexdigest()
                         if actual_sha != expected_sha:
+                            tampered_msg = f"Directive {d_id} not attached: file modified after recording"
                             candidates.append({
                                 "id": d_id,
-                                "text": f"Directive {d_id} not attached: file modified after recording",
+                                "text": tampered_msg,
                                 "attached": False,
+                                "body_bytes": len(tampered_msg.encode("utf-8")),
                             })
                         else:
                             d_text = content_bytes.decode(encoding="utf-8", errors="replace").strip()
@@ -2630,6 +2636,7 @@ def session_context_block(
                                 "id": d_id,
                                 "text": f"### Directive {d_id}\n{d_text}",
                                 "attached": True,
+                                "body_bytes": len(d_text.encode("utf-8")),
                             })
 
             if candidates:
@@ -2637,10 +2644,11 @@ def session_context_block(
                 kept_rev: list[dict[str, Any]] = []
                 omitted_rev: list[str] = []
                 for c in reversed(candidates):
-                    c_bytes = len(c["text"].encode("utf-8"))
-                    if not omitted_rev and total_bytes + c_bytes <= DIRECTIVES_MAX_BYTES:
+                    # Count directive body against the limit, excluding the heading (spec 264)
+                    body_bytes = c["body_bytes"]
+                    if not omitted_rev and total_bytes + body_bytes <= DIRECTIVES_MAX_BYTES:
                         kept_rev.append(c)
-                        total_bytes += c_bytes
+                        total_bytes += body_bytes
                     else:
                         omitted_rev.append(c["id"])
 
@@ -3259,10 +3267,6 @@ class Supervisor:
         # A Claude -> Codex takeover must start a new native Codex context. Relay's --continue otherwise
         # revives its prior thread, which reached 1.5-2.7M input tokens in the measured roadmap cycles.
         # The recovery prompt and mission task carry the handoff; the supervisor keeps its own exact chain.
-        parent = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
-                  or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
-                  else self.state["head_session"])
-        fresh = parent is None or self.state.get("agent") != agent
         # A native agent retried after its own unsuccessful turn resumes that agy conversation (its full context and
         # scratch artifacts, which the retained stream does not carry); a new task or another agent starts fresh.
         resume = None
@@ -3273,6 +3277,10 @@ class Supervisor:
                 resume = relay_argon.conversation_of(self.host.relay.sessions_dir() / session_id / "turns" / turn_name)
             except Exception:  # noqa: BLE001 - resuming is an optimisation; the turn launches fresh without it
                 resume = None
+        parent = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
+                  or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
+                  else self.state["head_session"])
+        fresh = resume is None and (parent is None or self.state.get("agent") != agent)
         pending = {"nonce": nonce, "agent": agent, "parent": parent, "started_at": iso(now),
                    "pid": None, "pid_start": None, "fingerprint": self.host.fingerprint(), "attempt": self.attempts}
         if (rec := self.state.get("mission")) is not None and self.mission is not None:
