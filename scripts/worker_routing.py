@@ -106,16 +106,21 @@ class Model:
 # Capability is provisional and per effort, never per brand (spec 255, directive L20261109084309-afcd): until
 # measured, Flash and Argon at high take tier 3. Effort follows the task: the smallest adequate tier is chosen first.
 # agy keys are agy_worker.py aliases.
+# Hydrogen costs about 2.2x Flash in quota (directive L20261113192444-38eb): at equal tier and pool the ordering falls
+# back to table index, so it comes after Flash until cost per accepted task is measured.
 MODELS: tuple[Model, ...] = (
     Model("luna", "codex", "gpt-6-luna", "codex", 1, 1),
     Model("flash", "agy", "gemini-3.8-flash-low", "gemini", 1, 1),
+    Model("hydrogen-low", "agy", "gemini-4-hydrogen-low", "gemini", 1, 2),
     Model("copilot-auto", "copilot", "auto", "copilot", 1, 1),
     Model("haiku", "claude", "claude-haiku-5-5", "claude", 1, 2),
     Model("flash-medium", "agy", "gemini-3.8-flash-medium", "gemini", 2, 2),
+    Model("hydrogen-medium", "agy", "gemini-4-hydrogen-medium", "gemini", 2, 4),
     Model("argon-medium", "agy", "gemini-4-argon-medium", "argon", 2, 3),
     Model("terra", "codex", "gpt-6.1-terra", "codex", 2, 3),
     Model("sonnet", "claude", "claude-sonnet-5-5", "claude", 2, 5),
     Model("flash-high", "agy", "gemini-3.8-flash-high", "gemini", 3, 3),
+    Model("hydrogen-high", "agy", "gemini-4-hydrogen-high", "gemini", 3, 6),
     Model("argon-high", "agy", "gemini-4-argon-high", "argon", 3, 5),
     Model("agy-sonnet", "agy", "claude-sonnet-5-5-high", "agy3p", 3, 6),
     Model("agy-opus", "agy", "claude-opus-5-5-high", "agy3p", 3, 8),
