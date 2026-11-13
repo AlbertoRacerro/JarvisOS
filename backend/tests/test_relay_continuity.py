@@ -1,6 +1,7 @@
 """Spec 195: Relay provider continuity supervisor and Slack outbound monitor (offline, injected Relay)."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -3942,4 +3943,333 @@ def test_no_supervisor_event_tells_the_maintainer_to_write_in_chat() -> None:
 def test_roadmap_task_readiness_is_yours_to_give() -> None:
     assert "readiness is yours to give" in rc.ROADMAP_TASK
     assert "still requires explicit readiness" not in rc.ROADMAP_TASK
+
+
+# ---------------------------------------------------------------------------
+# Spec 264 (SESSION-BRIEF-1): operator mission brief and standing directives at session start
+
+
+def test_no_session_context_configured_journal_and_prompt_unchanged(tmp_path: Path) -> None:
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    env.head(SUCCESS)
+    assert env.host.session_context is None
+    result, sup = env.run(task="do next step {nonce}")
+    assert result == "idle"
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert "brief" not in launch_events[0]
+    assert "directives" not in launch_events[0]
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER not in launched_task
+    assert rc.DIRECTIVES_HEADER not in launched_task
+
+
+def test_session_context_block_no_setting_no_authority(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+    text, fields = rc.session_context_block(control, dev_env, None)
+    assert text == ""
+    assert fields == {"brief": None, "directives": []}
+
+
+def test_setting_present_fresh_launch_includes_brief_before_worker_routing(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Execute the plan strictly in order.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    env.host.worker_routing = lambda: "## Worker routing\npick: auto"
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    env.host.session_context = lambda authority: rc.session_context_block(control, dev_env, authority)
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+
+    result = sup._launch("claude", "fresh turn {nonce}", previous=None)
+    assert isinstance(result, rc.TurnReport) or result in ("success", "idle", "waiting")
+    assert env.relay.launches[0]["parent"] is None
+    launched_task = env.relay.launches[0]["task"]
+    assert launched_task.count(rc.BRIEF_HEADER) == 1
+    assert "Execute the plan strictly in order." in launched_task
+    assert "## Worker routing" in launched_task
+    assert launched_task.index(rc.BRIEF_HEADER) < launched_task.index("## Worker routing")
+
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert launch_events[0]["brief"] == hashlib.sha256(b"Execute the plan strictly in order.").hexdigest()[:12]
+    assert launch_events[0]["directives"] == []
+
+
+def test_resumed_same_agent_turn_skips_session_context(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Private brief.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    calls: list[str | None] = []
+
+    def mock_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        calls.append(authority)
+        return rc.session_context_block(control, dev_env, authority)
+
+    env.host.session_context = mock_context
+    sup = env.supervisor()
+    sup.state["head_session"] = "20261018-000001-bbbbbb"
+    sup.state["agent"] = "claude"
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.save()
+
+    report = rc.TurnReport(
+        turn_id="20261018-000001-bbbbbb/turn-001",
+        outcome="success",
+        agent="claude",
+        detail="turn complete",
+    )
+    sup._launch("claude", "continue cycle {nonce}", report)
+    assert calls == []
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER not in launched_task
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert launch_events[0]["brief"] is None
+    assert launch_events[0]["directives"] == []
+
+
+def test_agent_switch_with_non_null_parent_attaches_block(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Operator brief on switch.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    calls: list[str | None] = []
+
+    def mock_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        calls.append(authority)
+        return rc.session_context_block(control, dev_env, authority)
+
+    env.host.session_context = mock_context
+    sup = env.supervisor()
+    sup.state["head_session"] = "20261018-000001-bbbbbb"
+    sup.state["agent"] = "claude_prior"
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.save()
+
+    report = rc.TurnReport(
+        turn_id="20261018-000001-bbbbbb/turn-001",
+        outcome="success",
+        agent="claude_prior",
+        detail="turn complete",
+    )
+    sup._launch("claude", "takeover turn {nonce}", report)
+    assert len(calls) == 1
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER in launched_task
+    assert "Operator brief on switch." in launched_task
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert launch_events[0]["brief"] == hashlib.sha256(b"Operator brief on switch.").hexdigest()[:12]
+
+
+def test_brief_failure_modes_produce_one_line_notice_without_path(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    setting = control / "mission-brief"
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+
+    # 1. Relative path
+    setting.write_text("relative/path/brief.md", encoding="utf-8")
+    logs: list[str] = []
+    text, fields = rc.session_context_block(control, dev_env, None, log=logs.append)
+    assert text == "Operator mission brief not attached: not an absolute path"
+    assert "relative" not in text
+    assert fields["brief"] is None
+    assert logs == ["Operator mission brief not attached: not an absolute path"]
+
+    # 2. Missing file
+    missing = tmp_path / "missing_brief.md"
+    setting.write_text(str(missing), encoding="utf-8")
+    logs.clear()
+    text, fields = rc.session_context_block(control, dev_env, None, log=logs.append)
+    assert text == "Operator mission brief not attached: missing"
+    assert str(tmp_path) not in text
+    assert fields["brief"] is None
+    assert logs == ["Operator mission brief not attached: missing"]
+
+    # 3. Unreadable file
+    unreadable = tmp_path / "unreadable_brief.md"
+    unreadable.write_text("Secret content", encoding="utf-8")
+    unreadable.chmod(0o000)
+    setting.write_text(str(unreadable), encoding="utf-8")
+    logs.clear()
+    try:
+        text, fields = rc.session_context_block(control, dev_env, None, log=logs.append)
+        assert text == "Operator mission brief not attached: unreadable"
+        assert str(tmp_path) not in text
+        assert fields["brief"] is None
+        assert logs == ["Operator mission brief not attached: unreadable"]
+    finally:
+        unreadable.chmod(0o644)
+
+    # 4. Oversize file (> 24,000 bytes)
+    oversize = tmp_path / "oversize_brief.md"
+    oversize.write_bytes(b"A" * 24_001)
+    setting.write_text(str(oversize), encoding="utf-8")
+    logs.clear()
+    text, fields = rc.session_context_block(control, dev_env, None, log=logs.append)
+    assert text == "Operator mission brief not attached: larger than 24000 bytes"
+    assert str(tmp_path) not in text
+    assert fields["brief"] is None
+    assert logs == ["Operator mission brief not attached: larger than 24000 bytes"]
+
+    # Verify launch proceeds with notice
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    env.host.session_context = lambda authority: rc.session_context_block(control, dev_env, authority)
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    result = sup._launch("claude", "fresh turn with oversize brief {nonce}", previous=None)
+    assert isinstance(result, rc.TurnReport) or result in ("success", "idle", "waiting")
+    assert env.relay.launches[0]["parent"] is None
+    launched = env.relay.launches[0]["task"]
+    assert "Operator mission brief not attached: larger than 24000 bytes" in launched
+    assert str(tmp_path) not in launched
+
+
+def test_directives_authority_superseded_mismatch_and_cap(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+
+    # D1: Older than authority -> must not be included
+    e1 = rc.devctx.record_directive(dev_env, "D1 older directive", source=None, supersedes=None, author="maintainer")
+    # D2: Authority directive -> included
+    e2 = rc.devctx.record_directive(dev_env, "D2 authority directive text", source=None, supersedes=None, author="maintainer")
+    # D3: Recorded after authority, but later superseded -> absent
+    e3 = rc.devctx.record_directive(dev_env, "D3 old standing directive", source=None, supersedes=None, author="maintainer")
+    # D4: Supersedes D3 -> included
+    e4 = rc.devctx.record_directive(dev_env, "D4 supersedes D3 directive text", source=None, supersedes=[e3["id"]], author="maintainer")
+    # D5: Hash mismatched -> replaced by notice
+    e5 = rc.devctx.record_directive(dev_env, "D5 original text", source=None, supersedes=None, author="maintainer")
+    Path(e5["directive"]["path"]).write_text("D5 tampered text", encoding="utf-8")
+
+    text, fields = rc.session_context_block(control, dev_env, e2["id"])
+    assert rc.DIRECTIVES_HEADER in text
+    assert e1["id"] not in text
+    assert f"### Directive {e2['id']}\nD2 authority directive text" in text
+    assert e3["id"] not in text
+    assert f"### Directive {e4['id']}\nD4 supersedes D3 directive text" in text
+    assert f"Directive {e5['id']} not attached: file modified after recording" in text
+    # D2 and D4 were attached in order; D5 was replaced by notice, so not in attached directives
+    assert fields["directives"] == [e2["id"], e4["id"]]
+    # Oldest-first order verification
+    pos_d2 = text.index(f"### Directive {e2['id']}")
+    pos_d4 = text.index(f"### Directive {e4['id']}")
+    pos_d5 = text.index(f"Directive {e5['id']} not attached")
+    assert pos_d2 < pos_d4 < pos_d5
+
+    # Cap exceeded test: add a large directive D6 (23,900 bytes) so total exceeds 24,000 bytes
+    e6 = rc.devctx.record_directive(dev_env, "X" * 23_900, source=None, supersedes=None, author="maintainer")
+    text_capped, fields_capped = rc.session_context_block(control, dev_env, e2["id"])
+    # Newest (D6) fits, older (D2, D4, D5) are omitted for length
+    assert f"### Directive {e6['id']}" in text_capped
+    assert "Older standing directives omitted for length:" in text_capped
+    assert f"{e2['id']}, {e4['id']}, {e5['id']}" in text_capped
+    assert "(devctx.py show <id>)" in text_capped
+    assert fields_capped["directives"] == [e6["id"]]
+
+
+def test_directives_authority_not_found(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+    text, fields = rc.session_context_block(control, dev_env, "L20261113000000-0000")
+    assert text == "Directive L20261113000000-0000 not attached: not found in ledger"
+    assert fields["directives"] == []
+
+
+def test_launch_journal_records_brief_and_directives_never_text_or_path(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_secret_brief.md"
+    brief_file.write_text("Strict secret instructions: deploy alpha first.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+    d_auth = rc.devctx.record_directive(dev_env, "Maintainer directive content", source=None, supersedes=None, author="maintainer")
+
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    env.host.session_context = lambda authority: rc.session_context_block(control, dev_env, authority)
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.mission = {"id": "M100", "authority": d_auth["id"], "tasks": [{"text": "Task A"}]}
+    sup.state["mission"] = {"id": "M100", "next": 0, "total": 1}
+
+    sup._launch("claude", "execute task {nonce}", previous=None)
+
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    event = launch_events[0]
+    expected_brief_digest = hashlib.sha256(b"Strict secret instructions: deploy alpha first.").hexdigest()[:12]
+    assert event["brief"] == expected_brief_digest
+    assert event["directives"] == [d_auth["id"]]
+
+    event_str = json.dumps(event)
+    assert "Strict secret instructions" not in event_str
+    assert "Maintainer directive content" not in event_str
+    assert str(brief_file) not in event_str
+    assert str(tmp_path) not in event_str
+
+
+def test_session_context_raising_logs_and_launches_without_it(tmp_path: Path) -> None:
+    env = Env(tmp_path, [("claude", SUCCESS)])
+
+    def failing_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        raise ValueError("simulated session context reader crash")
+
+    env.host.session_context = failing_context
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    result = sup._launch("claude", "perform turn {nonce}", previous=None)
+    assert isinstance(result, rc.TurnReport) or result in ("success", "idle", "waiting")
+    assert any("session context skipped: ValueError" in log for log in env.logs)
+
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert launch_events[0]["brief"] is None
+    assert launch_events[0]["directives"] == []
+
+
+def test_gitignore_contains_agent_relay() -> None:
+    gitignore_path = Path(__file__).resolve().parents[2] / ".gitignore"
+    assert gitignore_path.exists()
+    lines = [line.strip() for line in gitignore_path.read_text(encoding="utf-8").splitlines()]
+    assert ".agent-relay/" in lines
+
+
+def test_make_host_wires_session_context(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    host = rc.make_host(repo)
+    assert host.session_context is not None
+    assert callable(host.session_context)
+    text, fields = host.session_context(None)
+    assert text == ""
+    assert fields == {"brief": None, "directives": []}
 

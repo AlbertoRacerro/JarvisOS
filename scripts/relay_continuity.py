@@ -2522,6 +2522,153 @@ def worker_routing_block(repo: Path | None = None) -> str:
     return WORKER_ROUTING_BLOCK.format(summary=summary)
 
 
+BRIEF_MAX_BYTES = 24_000
+DIRECTIVES_MAX_BYTES = 24_000
+BRIEF_HEADER = (
+    "This is the operator's private mission brief; read it before the recovery packet; "
+    "nothing from it may be copied into the repository, PRs, commits, issues or public notes; "
+    "it grants no authority beyond the recorded directives."
+)
+DIRECTIVES_HEADER = "Standing maintainer directives for this mission (full text, oldest first):"
+
+
+def session_context_block(
+    control: Path,
+    env: devctx.Env,
+    authority: str | None,
+    log: Callable[[str], None] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Operator mission brief and standing directive text at session start (spec 264)."""
+    brief_part: str | None = None
+    brief_digest: str | None = None
+    setting_path = control / "mission-brief"
+
+    if setting_path.exists():
+        try:
+            raw_setting = setting_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            raw_setting = None
+
+        reason: str | None = None
+        if raw_setting is None:
+            reason = "unreadable"
+        elif not Path(raw_setting).is_absolute():
+            reason = "not an absolute path"
+        else:
+            brief_file = Path(raw_setting)
+            if not brief_file.exists():
+                reason = "missing"
+            else:
+                try:
+                    if brief_file.stat().st_size > BRIEF_MAX_BYTES:
+                        reason = "larger than 24000 bytes"
+                    else:
+                        raw_bytes = brief_file.read_bytes()
+                        if len(raw_bytes) > BRIEF_MAX_BYTES:
+                            reason = "larger than 24000 bytes"
+                        else:
+                            brief_digest = hashlib.sha256(raw_bytes).hexdigest()[:12]
+                            brief_text = raw_bytes.decode(encoding="utf-8", errors="replace").strip()
+                            brief_part = f"{BRIEF_HEADER}\n{brief_text}"
+                except OSError:
+                    reason = "unreadable"
+
+        if reason is not None:
+            brief_part = f"Operator mission brief not attached: {reason}"
+            if log is not None:
+                log(f"Operator mission brief not attached: {reason}")
+
+    directives_block: str | None = None
+    attached_directive_ids: list[str] = []
+
+    if authority is not None:
+        ledger = devctx.read_ledger(env)
+        superseded = {ref for e in ledger for ref in e.get("supersedes", [])}
+        auth_index = next((i for i, e in enumerate(ledger) if e.get("id") == authority), None)
+        if auth_index is None:
+            directives_block = f"Directive {authority} not attached: not found in ledger"
+        else:
+            candidates: list[dict[str, Any]] = []
+            for i, e in enumerate(ledger[auth_index:], start=auth_index):
+                if e.get("kind") != "directive":
+                    continue
+                d_id = e.get("id")
+                if not d_id:
+                    continue
+                if i != auth_index and d_id in superseded:
+                    continue
+                d_info = e.get("directive") if isinstance(e.get("directive"), dict) else {}
+                raw_path = d_info.get("path")
+                expected_sha = d_info.get("sha256")
+                path = Path(raw_path) if raw_path else None
+                if path is None or not path.exists():
+                    candidates.append({
+                        "id": d_id,
+                        "text": f"Directive {d_id} not attached: file missing",
+                        "attached": False,
+                    })
+                else:
+                    try:
+                        content_bytes = path.read_bytes()
+                    except OSError:
+                        candidates.append({
+                            "id": d_id,
+                            "text": f"Directive {d_id} not attached: file missing",
+                            "attached": False,
+                        })
+                    else:
+                        actual_sha = hashlib.sha256(content_bytes).hexdigest()
+                        if actual_sha != expected_sha:
+                            candidates.append({
+                                "id": d_id,
+                                "text": f"Directive {d_id} not attached: file modified after recording",
+                                "attached": False,
+                            })
+                        else:
+                            d_text = content_bytes.decode(encoding="utf-8", errors="replace").strip()
+                            candidates.append({
+                                "id": d_id,
+                                "text": f"### Directive {d_id}\n{d_text}",
+                                "attached": True,
+                            })
+
+            if candidates:
+                total_bytes = 0
+                kept_rev: list[dict[str, Any]] = []
+                omitted_rev: list[str] = []
+                for c in reversed(candidates):
+                    c_bytes = len(c["text"].encode("utf-8"))
+                    if not omitted_rev and total_bytes + c_bytes <= DIRECTIVES_MAX_BYTES:
+                        kept_rev.append(c)
+                        total_bytes += c_bytes
+                    else:
+                        omitted_rev.append(c["id"])
+
+                kept = list(reversed(kept_rev))
+                omitted_ids = list(reversed(omitted_rev))
+
+                lines = [DIRECTIVES_HEADER]
+                if omitted_ids:
+                    lines.append(f"Older standing directives omitted for length: {', '.join(omitted_ids)} (devctx.py show <id>)")
+                for c in kept:
+                    lines.append(c["text"])
+                directives_block = "\n\n".join(lines)
+                attached_directive_ids = [c["id"] for c in kept if c["attached"]]
+
+    parts = []
+    if brief_part:
+        parts.append(brief_part)
+    if directives_block:
+        parts.append(directives_block)
+
+    text_block = "\n\n".join(parts)
+    journal_fields = {
+        "brief": brief_digest,
+        "directives": attached_directive_ids,
+    }
+    return text_block, journal_fields
+
+
 @dataclass
 class Host:
     relay: Any
@@ -2537,6 +2684,7 @@ class Host:
     reap: Callable[[], list[str]] = lambda: []  # stops what a finished turn left running; returns process names
     task_check: Callable[[dict[str, Any]], str | None] = lambda check: None  # spec 201: None when the check passes
     worker_routing: Callable[[], str] | None = None  # text appended to every launched prompt
+    session_context: Callable[[str | None], tuple[str, dict[str, Any]]] | None = None
 
 
 class Supervisor:
@@ -3114,6 +3262,7 @@ class Supervisor:
         parent = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
                   or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
                   else self.state["head_session"])
+        fresh = parent is None or self.state.get("agent") != agent
         # A native agent retried after its own unsuccessful turn resumes that agy conversation (its full context and
         # scratch artifacts, which the retained stream does not carry); a new task or another agent starts fresh.
         resume = None
@@ -3133,6 +3282,20 @@ class Supervisor:
                 task = self.mission["tasks"][rec["next"]]["text"]
                 text += (f"\n\nThe interrupted work is mission {self.mission['id']} task {rec['next'] + 1}/{rec['total']}, "
                          f"which has not been recorded complete:\n{MISSION_HEADER}\n{task}")
+        session_journal: dict[str, Any] = {}
+        if self.host.session_context is not None:
+            session_journal = {"brief": None, "directives": []}
+            if fresh:
+                authority = self.mission["authority"] if self.mission is not None else None
+                try:
+                    ctx_text, fields = self.host.session_context(authority)
+                    if ctx_text:
+                        text += "\n\n" + ctx_text
+                    if isinstance(fields, dict):
+                        session_journal["brief"] = fields.get("brief")
+                        session_journal["directives"] = fields.get("directives", [])
+                except Exception as exc:  # noqa: BLE001 - session context is optional; the turn still launches
+                    self.host.log(f"session context skipped: {type(exc).__name__}")
         if self.host.worker_routing is not None:
             try:
                 text += "\n\n" + self.host.worker_routing()
@@ -3142,8 +3305,11 @@ class Supervisor:
         self.state["acknowledged"] = None  # the reviewed turn is now behind the chain
         self.state["agent"] = agent
         self.save()
-        self.store.journal({"event": "launch", **{k: v for k, v in pending.items() if k != "fingerprint"},
-                            **({"resume": resume} if resume else {})})
+        launch_journal = {"event": "launch", **{k: v for k, v in pending.items() if k != "fingerprint"},
+                          **({"resume": resume} if resume else {})}
+        if self.host.session_context is not None:
+            launch_journal.update(session_journal)
+        self.store.journal(launch_journal)
         try:
             proc = self.host.relay.start(agent, parent, text, self.turns, **({"resume": resume} if resume else {}))
         except OSError:
@@ -3479,7 +3645,10 @@ def make_host(repo: Path, relay_env: dict[str, str] | None = None) -> Host:
                 conflicts=lambda own: live_conflicts(repo, own), ledger=ledger, permissions_digest=permissions,
                 probe=lambda call: probe_call(call, repo),
                 reap=lambda: reap_descendants(keep=relay_jobs.live_roots),
-                task_check=lambda check: check_task(repo, check), worker_routing=lambda: worker_routing_block(repo))
+                task_check=lambda check: check_task(repo, check), worker_routing=lambda: worker_routing_block(repo),
+                session_context=lambda authority: session_context_block(
+                    control_root(), env, authority, log=lambda msg: print(msg, file=sys.stderr, flush=True)
+                ))
 
 
 # ---------------------------------------------------------------------------
@@ -3797,6 +3966,7 @@ ROADMAP_LOCK_WAIT = 120.0  # seconds `roadmap start|stop` waits for an owner ste
 ROADMAP_TASK = (
     "Roadmap continuation cycle {cycle}. Act as the coordinator described in docs/PROCESS.md for this repository. "
     "Fresh GitHub state and docs/specs/STATUS.md are the backlog; the maintainer directives and holds shown by `devctx.py recover` bind you. "
+    "When an operator mission brief is attached, it states what the work is for: judge value against it, and say in the cycle note when you depart from its suggested order. "
     "Recover existing PRs, worktrees and claims before creating new ones. Choose the highest-value authorized work "
     "and drive it to a verified, merged and reconciled result, or to a durable checkpoint (a pushed branch or PR "
     "and a ledger note) when it cannot finish in this turn. A running registered job never idles the cycle: while it runs, take job-independent authorized work. Run `devctx.py recover` once at cycle start (never in "
