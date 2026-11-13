@@ -54,6 +54,8 @@ def space(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     ("1. opzione A 2. opzione B", "inline options on single line starting with number"),
     ("Quale approccio?\n1. Prima opzione\n2. Seconda opzione e 3. Terza opzione", "inline option in option line"),
     ("Quale scelta?\n1. Prima/2. Seconda\n2. Terza", "inline option after slash in option line"),
+    ("Scegli? 1. Approva\n1. Rimanda\n2. Annulla", "one inline alternative in prompt line"),
+    ("Quale scelta?\n1. A, 2)B\n2. C", "unspaced inline paren option in option line"),
     ("Quale approccio?\n2. Parte da due\n3. Seconda", "starts at 2"),
     ("Quale approccio?\n1. Prima\n3. Salta il due", "skips 2"),
     ("Quale approccio?\n1. A\n2. B\n3. C\n4. D\n5. E", "exceeds 4 options"),
@@ -99,6 +101,23 @@ def test_inline_alternatives_after_separators_rejected_without_ledger_write(spac
     assert env.ledger.read_bytes() == ledger_before
     entries = devctx.read_ledger(env)
     assert len(entries) == 1 and entries[0]["kind"] == "note"
+
+
+@pytest.mark.parametrize("prompt", [
+    "Dal 2026-11-13. Come procediamo?",
+    "La quota torna alle 16:07. Come procediamo?",
+    "Serve Python 3.12. Come procediamo?",
+])
+def test_dates_times_and_versions_in_prompt_are_not_inline_options(prompt):
+    devctx.validate_question(f"{prompt}\n1. Procedi\n2. Rimanda")
+
+
+def test_legacy_question_with_one_inline_alternative_has_no_choices():
+    entry = {"id": "L1", "kind": "question", "ts": "2026-11-13T00:00:00Z",
+             "text": "Scegli:\n1. Approva ora 2. Rimanda a domani"}
+    [question] = ro.parse_open_questions([entry])
+    assert question["options"] == []
+    assert "Rimanda a domani" in question["prompt"]
 
 
 def test_structured_new_question_accepted(space, capsys):

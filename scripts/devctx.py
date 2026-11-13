@@ -810,7 +810,38 @@ def render(packet: dict[str, Any], budget: int = DEFAULT_BUDGET_CHARS) -> str:
 # CLI
 
 
-_INLINE_OPTION_RE = re.compile(r"(?:^|[\s,(;:—/|\\–\[\]\)-])(?:\d+[.)]|\(\d+\))\s+\S")
+# Punctuation right after a digit is a date, time or version ("2026-11-13.", "16:07."), not an option separator.
+_SEP_CHARS = r"(?:\s|(?<!\d)[,(;:—/|\\–\[\]\)\-?!])"
+_CONJ = r"\b(?:e|o|and|or|oppure)\b"
+_SEP = rf"(?:^|{_SEP_CHARS}|{_CONJ})"
+
+_INLINE_OPTION_PATTERN = (
+    rf"{_SEP}\s*(?:"
+    r"(?:\d+[)\]]|\(\d+\)|\[\d+\])(?:\s*\S)"
+    r"|"
+    r"\d+\.(?:\s+\S|[a-zA-Z])"
+    r")"
+)
+_INLINE_OPTION_RE = re.compile(_INLINE_OPTION_PATTERN)
+
+_PROMPT_END_SEP = r"(?:^|(?<!\d)[?!:;—/|\\–\-])"
+_PROMPT_EMBEDDED_RE = re.compile(
+    rf"{_PROMPT_END_SEP}\s*(?:"
+    r"(?:\d+[.)\]]|\(\d+\)|\[\d+\])(?:\s*\S|[a-zA-Z])"
+    r")"
+)
+
+
+def has_inline_alternatives_in_body(body: str) -> bool:
+    """Return True if an option body contains embedded/inline alternatives."""
+    return bool(_INLINE_OPTION_RE.search(body))
+
+
+def has_inline_alternatives_in_prompt(line: str) -> bool:
+    """Return True if a prompt line contains embedded/inline alternatives."""
+    if _PROMPT_EMBEDDED_RE.search(line):
+        return True
+    return len(_INLINE_OPTION_RE.findall(line)) >= 2
 
 
 def validate_question(text: str) -> None:
@@ -836,7 +867,7 @@ def validate_question(text: str) -> None:
                     f"question options must be sequentially numbered starting at 1 (expected {expected}, got {num}). "
                     "Format: 2 to 4 separate option lines like '1. Option — conseguenza: ...'"
                 )
-            if _INLINE_OPTION_RE.search(body):
+            if has_inline_alternatives_in_body(body):
                 raise ValueError(
                     "inline alternatives are not allowed; each option must be on its own separate line. "
                     "Format: 2 to 4 separate option lines like '1. Option — conseguenza: ...'"
@@ -848,8 +879,7 @@ def validate_question(text: str) -> None:
                     "question options must be at the end of the text, one line per option. "
                     "Format: short prompt followed by 2 to 4 separate sequential numbered option lines"
                 )
-            inline_matches = _INLINE_OPTION_RE.findall(line)
-            if len(inline_matches) >= 2:
+            if has_inline_alternatives_in_prompt(line):
                 raise ValueError(
                     "inline alternatives are not allowed; options must be on separate sequential lines. "
                     "Format: short prompt followed by 2 to 4 separate lines like '1. Option — conseguenza: ...'"
