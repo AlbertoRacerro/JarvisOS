@@ -114,7 +114,11 @@ def test_inline_alternatives_after_separators_rejected_without_ledger_write(spac
     "Rif. [1] e [2]: come procedere?",
 ])
 def test_dates_times_and_versions_in_prompt_are_not_inline_options(prompt):
-    devctx.validate_question(f"{prompt}\n1. Procedi\n2. Rimanda")
+    text = f"{prompt}\n1. Procedi\n2. Rimanda"
+    devctx.validate_question(text)
+    [question] = ro.parse_open_questions([{"id": "L1", "kind": "question", "ts": "2026-11-13T00:00:00Z", "text": text}])
+    assert question["prompt"] == prompt
+    assert [o["label"] for o in question["options"]] == ["Procedi", "Rimanda"]
 
 
 def test_legacy_question_with_one_inline_alternative_has_no_choices():

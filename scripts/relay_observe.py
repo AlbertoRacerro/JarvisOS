@@ -212,7 +212,7 @@ def parse_open_questions(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
             line_str = line.strip()
             if not line_str:
                 continue
-            match = re.match(r"^\s*(\d+)[.)]\s*(.+?)\s*$", line)
+            match = re.match(r"^\s*(\d+)[.)]\s+(.+?)\s*$", line)
             if not match:
                 if not options:
                     if devctx.has_inline_alternatives_in_prompt(line_str):
