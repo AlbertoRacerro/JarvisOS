@@ -2496,8 +2496,8 @@ def install_release(paths: Paths, sha: str) -> None:
         if not release.exists():
             os.rename(stage, release)
         else:
-            _preflight_release(release, paths)
             _verify_existing_release(release, stage)
+            _preflight_release(release, paths)
     tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
     os.symlink(release, tmp_link)
     os.replace(tmp_link, paths.install / "current")

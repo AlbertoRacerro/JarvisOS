@@ -1415,35 +1415,46 @@ def test_install_release_reinstall_damaged_existing_release_refused(tmp_path, mo
     mock_install(monkeypatch, release_archive(), status="ahead")
     monkeypatch.setattr(h, "_run_preflight", lambda argv, timeout=60: subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), ""))
 
-    with pytest.raises(h.Refused, match="release missing worker_routing.py"):
+    preflighted = []
+
+    def record_preflight(argv, timeout=60):
+        preflighted.append(argv[2])
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), "")
+
+    monkeypatch.setattr(h, "_run_preflight", record_preflight)
+
+    # The damaged existing release is refused by verification before any of its code runs
+    with pytest.raises(h.Refused, match="existing release"):
         h.install_release(paths, candidate_sha)
     assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+    assert not any(str(paths.install / "releases" / candidate_sha) in arg for arg in preflighted)
 
-    # Add worker_routing.py, but make preflight fail on candidate release
+    # Same manifest but different content: still refused before preflight
     (cand_dir / "worker_routing.py").write_text("# candidate")
+    (cand_dir / "relay_argon.py").write_text("# candidate")
+    with pytest.raises(h.Refused, match="existing release"):
+        h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+    assert not any(str(paths.install / "releases" / candidate_sha) in arg for arg in preflighted)
 
+    # Existing release matches the candidate archive
+    for name in ("host_ops.py", "relay_continuity.py", "relay_argon.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+        target = cand_dir / name
+        target.write_bytes(b"# release\n")
+        target.chmod(0o644)
+
+    # A matching existing release still has to pass its own preflight
     def run_preflight_fail_on_candidate(argv, timeout=60):
         if str(paths.install / "releases" / candidate_sha) in argv[2]:
             return subprocess.CompletedProcess(argv, 1, "", "candidate preflight failed: broken release\n")
         return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), "")
 
     monkeypatch.setattr(h, "_run_preflight", run_preflight_fail_on_candidate)
-
     with pytest.raises(h.Refused, match="candidate preflight failed: broken release"):
         h.install_release(paths, candidate_sha)
     assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
 
-    # When candidate passes preflight, but manifest/content differs: refused
     monkeypatch.setattr(h, "_run_preflight", lambda argv, timeout=60: subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), ""))
-    with pytest.raises(h.Refused, match="existing release"):
-        h.install_release(paths, candidate_sha)
-    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
-
-    # When candidate release directory matches candidate archive, reinstall succeeds
-    for name in ("host_ops.py", "relay_continuity.py", "relay_argon.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
-        target = cand_dir / name
-        target.write_bytes(b"# release\n")
-        target.chmod(0o644)
     h.install_release(paths, candidate_sha)
     assert (paths.install / "current").resolve() == paths.install / "releases" / candidate_sha
 
