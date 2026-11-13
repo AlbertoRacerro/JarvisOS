@@ -121,10 +121,10 @@ TURN_USAGE_CAP_TOKENS = 2_000_000  # spec 267: cumulative usage cap above which 
 MIN_CHECKPOINT_INTERVAL_SECONDS = 60  # spec 267: minimum seconds between bare checkpoints
 
 JOB_WAIT_LINE_RE = re.compile(r"^JOB-WAIT:\s*(j-\d{8}T\d{6}Z-[0-9a-f]{6})\s*$")
-CI_WAIT_LINE_RE = re.compile(r"^CI-WAIT:\s*(\d+)@([0-9a-f]{40})\s*$")
+CI_WAIT_LINE_RE = re.compile(r"^CI-WAIT:\s*([1-9]\d*)@([0-9a-f]{40})\s*$")
 FORBIDDEN_WAIT_CHARS = frozenset("`$;|><&()")
 CI_SUCCESS_CONCLUSIONS = frozenset(("success", "neutral", "skipped"))
-CI_FAILURE_CONCLUSIONS = frozenset(("failure", "timed_out", "action_required", "cancelled"))
+CI_FAILURE_CONCLUSIONS = frozenset(("failure", "timed_out", "action_required", "cancelled", "error"))
 SPEC_ID_RE = re.compile(r"\d{3}[a-z]?")
 SANDBOX_HOSTNAME = "jarvis-sandbox"
 LEGACY_MARKERS = ("jarvis-control/autopilot/run.sh", "jarvis-control/autopilot/watchdog.sh",
@@ -2310,7 +2310,7 @@ def default_pr_ci_status(repo: Path, pr_number: int, expected_head: str, run: Ru
                 continue
             name = str(c.get("name") or c.get("context") or "")
             status = str(c.get("status") or c.get("state") or "").lower()
-            conclusion = str(c.get("conclusion") or "").lower()
+            conclusion = str(c.get("conclusion") or c.get("state") or "").lower()
             checks.append({"name": name, "status": status, "conclusion": conclusion})
     except (json.JSONDecodeError, KeyError, TypeError):
         return {"unreadable": True}
@@ -3787,10 +3787,9 @@ class Supervisor:
         force_fresh = self.state.pop("force_fresh_context", False)
         turn_dir = last_turn_dir(self.host.relay.sessions_dir() / self.state["head_session"]) if self.state.get("head_session") else None
         tokens = turn_context_tokens(turn_dir)
-        resumes = self.state.get("resumes", 0)
         parent = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
                   or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
-                  or force_fresh or resumes >= MAX_SESSION_RESUMES
+                  or force_fresh
                   or (tokens is not None and tokens > TURN_USAGE_CAP_TOKENS)
                   else self.state["head_session"])
         if parent is None:

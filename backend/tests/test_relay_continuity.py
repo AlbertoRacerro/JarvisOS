@@ -4565,12 +4565,15 @@ def test_wait_parsing_strict_and_deduplicated() -> None:
         "CI-WAIT: 42@0123456789abcdef0123456789abcdef01234567 | cat\n"  # shell pipe: rejected
         "CI-WAIT: 42@shortsha\n"  # short sha: rejected
         "CI-WAIT: https://github.com/org/repo/pull/42\n"  # url: rejected
+        "CI-WAIT: 0@0123456789abcdef0123456789abcdef01234567\n"  # pr 0: rejected
         "JOB-WAIT: \n"  # empty: rejected
         "CI-WAIT: \n"  # empty: rejected
     )
     jobs, ci_waits = rc.parse_wait_directives(text)
     assert jobs == ["j-20261113T120000Z-111111", "j-20261113T120000Z-222222"]
     assert ci_waits == [(42, "0123456789abcdef0123456789abcdef01234567")]
+    _, zero_waits = rc.parse_wait_directives("CI-WAIT: 0@0123456789abcdef0123456789abcdef01234567")
+    assert zero_waits == []
 
 
 def test_job_wait_satisfaction_and_resume_prompt(tmp_path: Path) -> None:
@@ -4888,8 +4891,9 @@ def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> No
     mission4 = mission_def("consecutive resumes")
     start_mission(env4, mission4)
     env4.jobs[jid] = {"status": "succeeded"}
-    # 4 consecutive resumes with same parent, then 5th must have parent = None
+    # 5 "continue"+JOB-WAIT turns then propose_done
     env4.relay.script = [
+        ("claude", SUCCESS, "continue", msg, 100_000),
         ("claude", SUCCESS, "continue", msg, 100_000),
         ("claude", SUCCESS, "continue", msg, 100_000),
         ("claude", SUCCESS, "continue", msg, 100_000),
@@ -4898,10 +4902,11 @@ def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> No
     ]
     result4, sup4 = run_mission(env4, mission4)
     assert result4 == "idle"
-    assert env4.relay.launches[1]["parent"] is not None  # resume 1
-    assert env4.relay.launches[2]["parent"] is not None  # resume 2
-    assert env4.relay.launches[3]["parent"] is not None  # resume 3
-    assert env4.relay.launches[4]["parent"] is None      # resume 4 was reached, 5th launch has parent = None!
+    for i in range(1, 5):
+        assert env4.relay.launches[i]["parent"] is not None
+        assert env4.relay.launches[i]["task"].startswith("[relay-continuity resume")
+    assert env4.relay.launches[5]["parent"] is None
+    assert "[Durable handoff summary]" in env4.relay.launches[5]["task"]
 
 
 def test_provider_change_and_native_agents_force_fresh_context(tmp_path: Path) -> None:
@@ -5128,6 +5133,71 @@ def test_default_pr_ci_status_ruleset_and_fallback(tmp_path: Path) -> None:
 
     res_pf = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_pr_fail)
     assert res_pf == {"unreadable": True}
+
+
+def test_status_context_ci_checks(tmp_path: Path) -> None:
+    head = "a" * 40
+
+    def make_mock(rollup: list[dict[str, Any]]) -> rc.Runner:
+        pr_json = json.dumps({
+            "state": "OPEN",
+            "headRefOid": head,
+            "baseRefName": "main",
+            "statusCheckRollup": rollup,
+        })
+        ruleset_json = json.dumps([
+            {
+                "type": "required_status_checks",
+                "parameters": {
+                    "required_status_checks": [
+                        {"context": "ci/jenkins"},
+                    ]
+                },
+            },
+        ])
+
+        def mock_run(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return 0, pr_json
+            if cmd[:4] == ["gh", "api", "repos/:owner/:repo/rules/branches/main"]:
+                return 0, ruleset_json
+            return 1, "not found"
+
+        return mock_run
+
+    # 1. Success case: SUCCESS state maps to completed success
+    runner_success = make_mock([{"context": "ci/jenkins", "state": "SUCCESS"}])
+    res_success = rc.default_pr_ci_status(tmp_path, 42, head, run=runner_success)
+    assert not res_success.get("unreadable")
+    assert res_success["checks"] == [{"name": "ci/jenkins", "status": "success", "conclusion": "success"}]
+    assert rc.evaluate_pr_ci(res_success, head, 0.0) == ("completed", "success")
+
+    # 2. Failure case: FAILURE state maps to failure
+    runner_failure = make_mock([{"context": "ci/jenkins", "state": "FAILURE"}])
+    res_failure = rc.default_pr_ci_status(tmp_path, 42, head, run=runner_failure)
+    assert not res_failure.get("unreadable")
+    assert res_failure["checks"] == [{"name": "ci/jenkins", "status": "failure", "conclusion": "failure"}]
+    assert rc.evaluate_pr_ci(res_failure, head, 0.0) == ("immediate_wake", "check_failed")
+
+    # 3. Error case: ERROR state maps to failure (error in CI_FAILURE_CONCLUSIONS)
+    runner_error = make_mock([{"context": "ci/jenkins", "state": "ERROR"}])
+    res_error = rc.default_pr_ci_status(tmp_path, 42, head, run=runner_error)
+    assert not res_error.get("unreadable")
+    assert res_error["checks"] == [{"name": "ci/jenkins", "status": "error", "conclusion": "error"}]
+    assert rc.evaluate_pr_ci(res_error, head, 0.0) == ("immediate_wake", "check_failed")
+
+    # 4. Pending cases: PENDING / EXPECTED state stays pending
+    runner_pending = make_mock([{"context": "ci/jenkins", "state": "PENDING"}])
+    res_pending = rc.default_pr_ci_status(tmp_path, 42, head, run=runner_pending)
+    assert not res_pending.get("unreadable")
+    assert res_pending["checks"] == [{"name": "ci/jenkins", "status": "pending", "conclusion": "pending"}]
+    assert rc.evaluate_pr_ci(res_pending, head, 0.0) == ("pending", "in_progress")
+
+    runner_expected = make_mock([{"context": "ci/jenkins", "state": "EXPECTED"}])
+    res_expected = rc.default_pr_ci_status(tmp_path, 42, head, run=runner_expected)
+    assert not res_expected.get("unreadable")
+    assert res_expected["checks"] == [{"name": "ci/jenkins", "status": "expected", "conclusion": "expected"}]
+    assert rc.evaluate_pr_ci(res_expected, head, 0.0) == ("pending", "in_progress")
 
 
 def test_evaluate_pr_ci_acceptance_criteria() -> None:
