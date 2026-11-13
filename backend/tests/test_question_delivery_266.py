@@ -53,6 +53,7 @@ def space(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     ("Quale approccio preferisci? 1) opzione A 2) opzione B", "inline paren options on single line"),
     ("1. opzione A 2. opzione B", "inline options on single line starting with number"),
     ("Quale approccio?\n1. Prima opzione\n2. Seconda opzione e 3. Terza opzione", "inline option in option line"),
+    ("Quale scelta?\n1. Prima/2. Seconda\n2. Terza", "inline option after slash in option line"),
     ("Quale approccio?\n2. Parte da due\n3. Seconda", "starts at 2"),
     ("Quale approccio?\n1. Prima\n3. Salta il due", "skips 2"),
     ("Quale approccio?\n1. A\n2. B\n3. C\n4. D\n5. E", "exceeds 4 options"),
@@ -72,6 +73,27 @@ def test_malformed_new_questions_rejected_without_ledger_write(space, capsys, ba
     assert "devctx:" in captured.err
     # Actionable explanation of required format
     assert "option" in captured.err.lower()
+
+    # Ledger must not have mutated
+    assert env.ledger.read_bytes() == ledger_before
+    entries = devctx.read_ledger(env)
+    assert len(entries) == 1 and entries[0]["kind"] == "note"
+
+
+@pytest.mark.parametrize("sep", ["/", ":", "|", ";", ",", "-", "—", "–", "\\"])
+def test_inline_alternatives_after_separators_rejected_without_ledger_write(space, capsys, sep):
+    _root, repo = space
+    env = devctx.default_env(repo)
+    devctx.append_entry(env, devctx.make_entry(env, "note", "pre-existing note"))
+    ledger_before = env.ledger.read_bytes()
+
+    bad_text = f"Quale scelta?\n1. Prima{sep}2. Seconda\n2. Terza"
+    exit_code = devctx.main(["--repo", str(repo), "note", "question", bad_text])
+    assert exit_code == 2
+
+    captured = capsys.readouterr()
+    assert "devctx:" in captured.err
+    assert "inline alternatives" in captured.err.lower()
 
     # Ledger must not have mutated
     assert env.ledger.read_bytes() == ledger_before

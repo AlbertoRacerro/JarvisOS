@@ -810,6 +810,9 @@ def render(packet: dict[str, Any], budget: int = DEFAULT_BUDGET_CHARS) -> str:
 # CLI
 
 
+_INLINE_OPTION_RE = re.compile(r"(?:^|[\s,(;:—/|\\–\[\]\)-])(?:\d+[.)]|\(\d+\))\s+\S")
+
+
 def validate_question(text: str) -> None:
     """Validate a new structured maintainer question.
 
@@ -833,7 +836,7 @@ def validate_question(text: str) -> None:
                     f"question options must be sequentially numbered starting at 1 (expected {expected}, got {num}). "
                     "Format: 2 to 4 separate option lines like '1. Option — conseguenza: ...'"
                 )
-            if re.search(r"(?:^|[\s,(;—-])(?:\d+[.)]|\(\d+\))\s+\S", body):
+            if _INLINE_OPTION_RE.search(body):
                 raise ValueError(
                     "inline alternatives are not allowed; each option must be on its own separate line. "
                     "Format: 2 to 4 separate option lines like '1. Option — conseguenza: ...'"
@@ -845,7 +848,7 @@ def validate_question(text: str) -> None:
                     "question options must be at the end of the text, one line per option. "
                     "Format: short prompt followed by 2 to 4 separate sequential numbered option lines"
                 )
-            inline_matches = re.findall(r"(?:^|[\s,(;—-])(?:\d+[.)]|\(\d+\))\s+\S", line)
+            inline_matches = _INLINE_OPTION_RE.findall(line)
             if len(inline_matches) >= 2:
                 raise ValueError(
                     "inline alternatives are not allowed; options must be on separate sequential lines. "
