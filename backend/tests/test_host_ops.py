@@ -1124,13 +1124,15 @@ def release_archive(extra=()):
                    + [("repo/README.md", tarfile.REGTYPE), *extra])
 
 
-def mock_install(monkeypatch, data, status="ahead", rules=None, checks=None):
+def mock_install(monkeypatch, data, status="ahead", rules=None, checks=None, statuses=None):
     monkeypatch.delenv("JARVIS_SANDBOX", raising=False)
     monkeypatch.setattr(h.socket, "gethostname", lambda: "host")
     if rules is None:
         rules = [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "backend"}]}}]
     if checks is None:
         checks = [{"name": "backend", "status": "completed", "conclusion": "success", "id": 1, "completed_at": "2026-01-01T00:00:00Z"}]
+    if statuses is None:
+        statuses = []
 
     def gh(args, **kw):
         endpoint = args[0]
@@ -1142,6 +1144,10 @@ def mock_install(monkeypatch, data, status="ahead", rules=None, checks=None):
             if isinstance(checks, Exception):
                 raise checks
             return json.dumps({"check_runs": checks}) if isinstance(checks, (list, dict)) else str(checks)
+        if "statuses" in endpoint:
+            if isinstance(statuses, Exception):
+                raise statuses
+            return json.dumps(statuses) if isinstance(statuses, (list, dict)) else str(statuses)
         return status
 
     monkeypatch.setattr(h, "_gh", gh)
@@ -1330,6 +1336,8 @@ def test_install_release_candidate_behind_installed_refused(tmp_path, monkeypatc
             return json.dumps([{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "backend"}]}}])
         if "check-runs" in endpoint:
             return json.dumps({"check_runs": [{"name": "backend", "status": "completed", "conclusion": "success", "id": 1, "completed_at": "2026-01-01T00:00:00Z"}]})
+        if "statuses" in endpoint:
+            return "[]"
         return "behind"
 
     monkeypatch.delenv("JARVIS_SANDBOX", raising=False)
@@ -1387,6 +1395,258 @@ def test_preflight_cli_ok_and_unknown_op(tmp_path, capsys):
     assert "policy enables unknown operations" in err
     assert "nonexistent.op" in err
     assert not out
+
+
+def test_install_release_reinstall_damaged_existing_release_refused(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    old_sha = "1" * 40
+    candidate_sha = "2" * 40
+    (paths.install / "releases" / old_sha / "scripts").mkdir(parents=True)
+    for name in ("host_ops.py", "relay_continuity.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+        (paths.install / "releases" / old_sha / "scripts" / name).write_text("# old")
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    # Existing candidate release directory already on disk, but damaged (missing worker_routing.py)
+    cand_dir = paths.install / "releases" / candidate_sha / "scripts"
+    cand_dir.mkdir(parents=True)
+    for name in ("host_ops.py", "relay_continuity.py", "relay_jobs.py", "relay_observe.py", "devctx.py"):
+        (cand_dir / name).write_text("# candidate")
+
+    mock_install(monkeypatch, release_archive(), status="ahead")
+    monkeypatch.setattr(h, "_run_preflight", lambda argv, timeout=60: subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), ""))
+
+    with pytest.raises(h.Refused, match="release missing worker_routing.py"):
+        h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+
+    # Add worker_routing.py, but make preflight fail on candidate release
+    (cand_dir / "worker_routing.py").write_text("# candidate")
+
+    def run_preflight_fail_on_candidate(argv, timeout=60):
+        if str(paths.install / "releases" / candidate_sha) in argv[2]:
+            return subprocess.CompletedProcess(argv, 1, "", "candidate preflight failed: broken release\n")
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), "")
+
+    monkeypatch.setattr(h, "_run_preflight", run_preflight_fail_on_candidate)
+
+    with pytest.raises(h.Refused, match="candidate preflight failed: broken release"):
+        h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+
+    # When candidate passes preflight, reinstall succeeds
+    monkeypatch.setattr(h, "_run_preflight", lambda argv, timeout=60: subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), ""))
+    h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / candidate_sha
+
+
+def test_required_checks_problem_integration_id(monkeypatch):
+    rules = [
+        {
+            "type": "required_status_checks",
+            "parameters": {
+                "required_status_checks": [
+                    {"context": "backend", "integration_id": 15368},
+                ]
+            }
+        }
+    ]
+
+    def gh_factory(runs, statuses=None):
+        def gh(args, **kw):
+            endpoint = args[0]
+            if "rules/branches/" in endpoint:
+                return json.dumps(rules)
+            if "check-runs" in endpoint:
+                return json.dumps({"check_runs": runs})
+            if "statuses" in endpoint:
+                return json.dumps(statuses or [])
+            return "ahead"
+        return gh
+
+    # Check run from wrong app ID (e.g. 99999 instead of 15368) -> missing
+    runs_wrong_app = [
+        {"name": "backend", "status": "completed", "conclusion": "success", "id": 1, "app": {"id": 99999}}
+    ]
+    monkeypatch.setattr(h, "_gh", gh_factory(runs_wrong_app))
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' is missing" in prob
+
+    # Check run with no app dict -> missing
+    runs_no_app = [
+        {"name": "backend", "status": "completed", "conclusion": "success", "id": 1}
+    ]
+    monkeypatch.setattr(h, "_gh", gh_factory(runs_no_app))
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' is missing" in prob
+
+    # Successful run from app 99999 but failed run from required app 15368 -> failure
+    runs_mixed_apps = [
+        {"name": "backend", "status": "completed", "conclusion": "success", "id": 2, "app": {"id": 99999}},
+        {"name": "backend", "status": "completed", "conclusion": "failure", "id": 1, "app": {"id": 15368}},
+    ]
+    monkeypatch.setattr(h, "_gh", gh_factory(runs_mixed_apps))
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' did not succeed (failure)" in prob
+
+    # Successful run from required app 15368 -> OK
+    runs_correct_app = [
+        {"name": "backend", "status": "completed", "conclusion": "success", "id": 3, "app": {"id": 15368}}
+    ]
+    monkeypatch.setattr(h, "_gh", gh_factory(runs_correct_app))
+    assert h.required_checks_problem(SHA) is None
+
+
+def test_required_checks_problem_pending_rerun_and_monotonic_id(monkeypatch):
+    rules = [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "backend"}]}}]
+
+    def gh_factory(runs):
+        def gh(args, **kw):
+            endpoint = args[0]
+            if "rules/branches/" in endpoint:
+                return json.dumps(rules)
+            if "check-runs" in endpoint:
+                return json.dumps({"check_runs": runs})
+            if "statuses" in endpoint:
+                return "[]"
+            return "ahead"
+        return gh
+
+    # Older success (with timestamps), newer queued rerun (no timestamps) -> refuse (not completed)
+    runs_queued_rerun = [
+        {"name": "backend", "status": "completed", "conclusion": "success", "id": 1, "completed_at": "2026-01-01T12:05:00Z"},
+        {"name": "backend", "status": "queued", "conclusion": None, "id": 2},
+    ]
+    monkeypatch.setattr(h, "_gh", gh_factory(runs_queued_rerun))
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' is not completed (queued)" in prob
+
+    # Older success, newer in_progress rerun -> refuse
+    runs_in_progress_rerun = [
+        {"name": "backend", "status": "completed", "conclusion": "success", "id": 1, "completed_at": "2026-01-01T12:05:00Z"},
+        {"name": "backend", "status": "in_progress", "conclusion": None, "id": 2, "started_at": "2026-01-01T12:10:00Z"},
+    ]
+    monkeypatch.setattr(h, "_gh", gh_factory(runs_in_progress_rerun))
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' is not completed (in_progress)" in prob
+
+    # Monotonic ID selection: run id 2 completed with success wins over run id 1 with failure even if timestamps are inverted
+    runs_id_success = [
+        {"name": "backend", "status": "completed", "conclusion": "failure", "id": 1, "completed_at": "2026-01-01T12:10:00Z"},
+        {"name": "backend", "status": "completed", "conclusion": "success", "id": 2, "completed_at": "2026-01-01T12:00:00Z"},
+    ]
+    monkeypatch.setattr(h, "_gh", gh_factory(runs_id_success))
+    assert h.required_checks_problem(SHA) is None
+
+    # Monotonic ID selection: run id 2 completed with failure wins over run id 1 with success
+    runs_id_failure = [
+        {"name": "backend", "status": "completed", "conclusion": "success", "id": 1, "completed_at": "2026-01-01T12:10:00Z"},
+        {"name": "backend", "status": "completed", "conclusion": "failure", "id": 2, "completed_at": "2026-01-01T12:00:00Z"},
+    ]
+    monkeypatch.setattr(h, "_gh", gh_factory(runs_id_failure))
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' did not succeed (failure)" in prob
+
+
+def test_required_checks_problem_commit_statuses(monkeypatch):
+    rules = [{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "backend"}]}}]
+    check_runs = [{"name": "backend", "status": "completed", "conclusion": "success", "id": 1}]
+
+    def gh_factory(statuses):
+        def gh(args, **kw):
+            endpoint = args[0]
+            if "rules/branches/" in endpoint:
+                return json.dumps(rules)
+            if "check-runs" in endpoint:
+                return json.dumps({"check_runs": check_runs})
+            if "statuses" in endpoint:
+                if isinstance(statuses, Exception):
+                    raise statuses
+                return json.dumps(statuses)
+            return "ahead"
+        return gh
+
+    # Check run succeeded, but commit status failed -> refuse
+    statuses_failed = [{"id": 1, "context": "backend", "state": "failure"}]
+    monkeypatch.setattr(h, "_gh", gh_factory(statuses_failed))
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' commit status did not succeed (failure)" in prob
+
+    # Check run succeeded, but commit status pending -> refuse
+    statuses_pending = [{"id": 1, "context": "backend", "state": "pending"}]
+    monkeypatch.setattr(h, "_gh", gh_factory(statuses_pending))
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' commit status did not succeed (pending)" in prob
+
+    # Older commit status pending (id 1), latest commit status success (id 2) -> OK
+    statuses_resolved = [
+        {"id": 1, "context": "backend", "state": "pending"},
+        {"id": 2, "context": "backend", "state": "success"},
+    ]
+    monkeypatch.setattr(h, "_gh", gh_factory(statuses_resolved))
+    assert h.required_checks_problem(SHA) is None
+
+    # Older commit status success (id 1), latest commit status pending rerun (id 2) -> refuse
+    statuses_rerun_pending = [
+        {"id": 1, "context": "backend", "state": "success"},
+        {"id": 2, "context": "backend", "state": "pending"},
+    ]
+    monkeypatch.setattr(h, "_gh", gh_factory(statuses_rerun_pending))
+    prob = h.required_checks_problem(SHA)
+    assert prob and "required check 'backend' commit status did not succeed (pending)" in prob
+
+    # Commit statuses query fails -> unreadable commit statuses
+    monkeypatch.setattr(h, "_gh", gh_factory(RuntimeError("API error")))
+    prob = h.required_checks_problem(SHA)
+    assert prob and "unreadable commit statuses" in prob
+
+
+def test_install_release_unresolvable_current_refused(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    mock_install(monkeypatch, release_archive(), status="ahead")
+
+    # Case A: current is a broken symlink -> refuse
+    current = paths.install / "current"
+    paths.install.mkdir(parents=True, exist_ok=True)
+    current.symlink_to(paths.install / "releases" / ("9" * 40))
+    with pytest.raises(h.Refused, match="cannot resolve current release"):
+        h.install_release(paths, SHA)
+
+    # Case B: current resolves to a directory whose name is not a 40-char SHA -> refuse
+    current.unlink()
+    bad_dir = paths.install / "releases" / "not-a-sha"
+    bad_dir.mkdir(parents=True, exist_ok=True)
+    current.symlink_to(bad_dir)
+    with pytest.raises(h.Refused, match="current release is not a valid commit sha directory"):
+        h.install_release(paths, SHA)
+
+    # Case C: current is a regular file, not a directory -> refuse
+    current.unlink()
+    bad_file = paths.install / "releases" / ("f" * 40)
+    bad_file.write_text("file")
+    current.symlink_to(bad_file)
+    with pytest.raises(h.Refused, match="current release is not a valid commit sha directory"):
+        h.install_release(paths, SHA)
+
+    # Case D: Absence of current (first install) stays allowed
+    current.unlink()
+    assert not current.exists() and not current.is_symlink()
+    h.install_release(paths, SHA)
+    assert current.resolve() == paths.install / "releases" / SHA
+
+
+def test_install_refused_leaves_no_new_files(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    # Refused because commit is diverged from master
+    mock_install(monkeypatch, release_archive(), status="diverged")
+
+    rc = h.install(paths, SHA)
+    assert rc == 2
+    # Ensure config and policy directories/files were not created
+    assert not paths.config.exists()
+    assert not paths.policy.exists()
+    assert not paths.install.exists()
+    assert not (paths.home / ".local").exists()
+    assert not (paths.home / ".config").exists()
 
 
 def test_release_operation_receipts_before_restart(host, monkeypatch):

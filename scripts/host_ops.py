@@ -2238,6 +2238,15 @@ def _gh(args: list[str], timeout: float = 60) -> str:
     return proc.stdout
 
 
+def _item_id(item: dict[str, Any]) -> int:
+    val = item.get("id")
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return int(val)
+    if isinstance(val, str) and val.isdigit():
+        return int(val)
+    return 0
+
+
 def _parse_check_runs(raw: str) -> list[dict[str, Any]]:
     runs: list[dict[str, Any]] = []
     raw = raw.strip()
@@ -2261,6 +2270,30 @@ def _parse_check_runs(raw: str) -> list[dict[str, Any]]:
     return runs
 
 
+def _parse_statuses(raw: str) -> list[dict[str, Any]]:
+    statuses: list[dict[str, Any]] = []
+    raw = raw.strip()
+    if not raw:
+        return statuses
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(raw):
+        while idx < len(raw) and raw[idx].isspace():
+            idx += 1
+        if idx >= len(raw):
+            break
+        obj, end = decoder.raw_decode(raw, idx)
+        idx = end
+        if isinstance(obj, list):
+            statuses.extend(item for item in obj if isinstance(item, dict) and "context" in item and "state" in item)
+        elif isinstance(obj, dict):
+            if "context" in obj and "state" in obj:
+                statuses.append(obj)
+            elif isinstance(obj.get("statuses"), list):
+                statuses.extend(item for item in obj["statuses"] if isinstance(item, dict) and "context" in item and "state" in item)
+    return statuses
+
+
 def required_checks_problem(sha: str) -> str | None:
     if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
         return "invalid commit sha"
@@ -2272,7 +2305,7 @@ def required_checks_problem(sha: str) -> str | None:
     if not isinstance(rules, list):
         return "unreadable ruleset: rules response is not a list"
 
-    contexts: set[str] = set()
+    req_checks: set[tuple[str, int | None]] = set()
     for entry in rules:
         if isinstance(entry, dict) and entry.get("type") == "required_status_checks":
             params = entry.get("parameters")
@@ -2281,10 +2314,12 @@ def required_checks_problem(sha: str) -> str | None:
                 if isinstance(checks, list):
                     for check in checks:
                         if isinstance(check, dict) and isinstance(check.get("context"), str):
-                            contexts.add(check["context"])
+                            iid = check.get("integration_id")
+                            integration_id = int(iid) if (isinstance(iid, int) and not isinstance(iid, bool)) else None
+                            req_checks.add((check["context"], integration_id))
                         elif isinstance(check, str):
-                            contexts.add(check)
-    if not contexts:
+                            req_checks.add((check, None))
+    if not req_checks:
         return "empty ruleset: no required status checks found on master"
 
     try:
@@ -2293,29 +2328,61 @@ def required_checks_problem(sha: str) -> str | None:
     except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as exc:
         return f"unreadable check runs: {exc}"
 
-    for context in sorted(contexts):
-        matching = [r for r in check_runs if r.get("name") == context]
-        if not matching:
+    try:
+        raw_statuses = _gh([f"repos/{REPO}/commits/{sha}/statuses?per_page=100", "--paginate"])
+        commit_statuses = _parse_statuses(raw_statuses)
+    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as exc:
+        return f"unreadable commit statuses: {exc}"
+
+    for context, req_integration_id in sorted(req_checks, key=lambda c: (c[0], c[1] or -1)):
+        matching_runs = [
+            r for r in check_runs
+            if r.get("name") == context and (
+                req_integration_id is None
+                or (isinstance(r.get("app"), dict) and r["app"].get("id") == req_integration_id)
+            )
+        ]
+        if not matching_runs:
             return f"required check {context!r} is missing"
 
-        def _run_key(r: dict[str, Any]) -> tuple[str, int]:
-            ts = str(r.get("completed_at") or r.get("started_at") or "")
-            rid = int(r.get("id")) if isinstance(r.get("id"), (int, float)) else 0
-            return (ts, rid)
+        for r in matching_runs:
+            status = r.get("status")
+            if status != "completed":
+                return f"required check {context!r} is not completed ({status})"
 
-        latest = max(matching, key=_run_key)
-        status = latest.get("status")
+        latest = max(matching_runs, key=_item_id)
         conclusion = latest.get("conclusion")
-        if status != "completed":
-            return f"required check {context!r} is not completed ({status})"
         if conclusion != "success":
             return f"required check {context!r} did not succeed ({conclusion})"
+
+        matching_statuses = [s for s in commit_statuses if s.get("context") == context]
+        if matching_statuses:
+            latest_status = max(matching_statuses, key=_item_id)
+            state = latest_status.get("state")
+            if state != "success":
+                return f"required check {context!r} commit status did not succeed ({state})"
 
     return None
 
 
 def _run_preflight(argv: list[str], timeout: float = 60) -> subprocess.CompletedProcess:
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def _preflight_release(release_dir: Path, paths: Paths) -> None:
+    for name in ("host_ops.py", "relay_continuity.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+        if not (release_dir / "scripts" / name).is_file():
+            raise Refused(f"release missing {name}")
+    cmd = [sys.executable, "-I", str(release_dir / "scripts" / "host_ops.py"), "--home", str(paths.home), "preflight"]
+    try:
+        proc_pf = _run_preflight(cmd, timeout=60)
+    except subprocess.TimeoutExpired:
+        raise Refused("candidate preflight failed: timeout after 60s") from None
+    if proc_pf.returncode != 0:
+        stderr_text = proc_pf.stderr.decode() if isinstance(proc_pf.stderr, bytes) else (proc_pf.stderr or "")
+        lines = stderr_text.strip().splitlines()
+        first_line = lines[0].strip() if lines else f"exit code {proc_pf.returncode}"
+        raise Refused(f"candidate preflight failed: {first_line}")
 
 
 def install_release(paths: Paths, sha: str) -> None:
@@ -2331,13 +2398,15 @@ def install_release(paths: Paths, sha: str) -> None:
     current = paths.install / "current"
     if current.is_symlink() or current.exists():
         try:
-            installed = current.resolve().name
-        except OSError:
-            installed = ""
-        if SHA_RE.fullmatch(installed):
-            cmp_status = _gh([f"repos/{REPO}/compare/{installed}...{sha}", "--jq", ".status"]).strip()
-            if cmp_status not in ("ahead", "identical"):
-                raise Refused(f"candidate {sha} is not ahead or identical to installed {installed} ({cmp_status})")
+            resolved = current.resolve(strict=True)
+            installed = resolved.name
+        except OSError as exc:
+            raise Refused(f"cannot resolve current release: {exc}") from None
+        if not resolved.is_dir() or not SHA_RE.fullmatch(installed):
+            raise Refused(f"current release is not a valid commit sha directory ({installed!r})")
+        cmp_status = _gh([f"repos/{REPO}/compare/{installed}...{sha}", "--jq", ".status"]).strip()
+        if cmp_status not in ("ahead", "identical"):
+            raise Refused(f"candidate {sha} is not ahead or identical to installed {installed} ({cmp_status})")
     proc = subprocess.run(["gh", "api", f"repos/{REPO}/tarball/{sha}"],
                           capture_output=True, timeout=120, check=True)
     releases = paths.install / "releases"
@@ -2360,21 +2429,11 @@ def install_release(paths: Paths, sha: str) -> None:
                     with archive.extractfile(member) as source:
                         target.write_bytes(source.read())
                     target.chmod(0o755 if member.mode & 0o111 else 0o644)
-        for name in ("host_ops.py", "relay_continuity.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
-            if not (stage / "scripts" / name).is_file():
-                raise Refused(f"release missing {name}")
-        cmd = [sys.executable, "-I", str(stage / "scripts" / "host_ops.py"), "--home", str(paths.home), "preflight"]
-        try:
-            proc_pf = _run_preflight(cmd, timeout=60)
-        except subprocess.TimeoutExpired:
-            raise Refused("candidate preflight failed: timeout after 60s") from None
-        if proc_pf.returncode != 0:
-            stderr_text = proc_pf.stderr.decode() if isinstance(proc_pf.stderr, bytes) else (proc_pf.stderr or "")
-            lines = stderr_text.strip().splitlines()
-            first_line = lines[0].strip() if lines else f"exit code {proc_pf.returncode}"
-            raise Refused(f"candidate preflight failed: {first_line}")
+        _preflight_release(stage, paths)
         if not release.exists():
             os.rename(stage, release)
+        else:
+            _preflight_release(release, paths)
     tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
     os.symlink(release, tmp_link)
     os.replace(tmp_link, paths.install / "current")
@@ -2397,16 +2456,13 @@ OPERATIONS["release.install"] = op_release_install
 
 
 def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
-    paths.config.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(paths.config, 0o700)
-    if not paths.policy.exists():
-        paths.policy.write_text(json.dumps(DEFAULT_POLICY, indent=1, sort_keys=True) + "\n")
-        os.chmod(paths.policy, 0o600)
     try:
         install_release(paths, sha)
     except Refused as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    paths.config.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(paths.config, 0o700)
     if not paths.key.is_file():
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", SIGNER, "-f", str(paths.key)],
                        check=True, timeout=30)
@@ -2414,6 +2470,9 @@ def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
     paths.published.mkdir(parents=True, exist_ok=True)
     (paths.published / "allowed_signers").write_text(
         f'{SIGNER} namespaces="{SIG_NAMESPACE}" {public[0]} {public[1]}\n')
+    if not paths.policy.exists():
+        paths.policy.write_text(json.dumps(DEFAULT_POLICY, indent=1, sort_keys=True) + "\n")
+        os.chmod(paths.policy, 0o600)
     paths.units.mkdir(parents=True, exist_ok=True)
     (paths.units / UNIT).write_text(SERVICE_UNIT)
     (paths.units / "jarvisos-relay-watch.service").write_text(UNIT_TEMPLATES["jarvisos-relay-watch"])
@@ -2430,7 +2489,10 @@ def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
 
 def preflight(paths: Paths) -> int:
     try:
-        policy, _ = load_policy(paths)
+        if paths.policy.exists():
+            policy, _ = load_policy(paths)
+        else:
+            policy = DEFAULT_POLICY
         ops = policy.get("ops")
         if not isinstance(ops, dict):
             raise TypeError("policy ops must be a dict")
