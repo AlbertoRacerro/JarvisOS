@@ -1786,7 +1786,7 @@ def test_release_operation_receipts_before_restart(host, monkeypatch):
     policy["ops"]["release.install"]["trust_master"] = True
     paths.policy.write_text(json.dumps(policy))
     installed = []
-    monkeypatch.setattr(h, "install_release", lambda paths, sha: installed.append(sha))
+    monkeypatch.setattr(h, "install_release", lambda paths, sha, **kw: installed.append(sha))
     req, receipt = request(host, "release.install", {"sha": SHA})
     assert installed == [SHA] and receipt["outcome"] == "ok"
     assert ex.restart_requested
@@ -1797,9 +1797,14 @@ def test_parse_systemd_ts():
     assert h.parse_systemd_ts("Thu 2026-11-13 07:10:00 UTC") == datetime(2026, 11, 13, 7, 10, 0, tzinfo=UTC)
     assert h.parse_systemd_ts("2026-11-13 07:10:00 UTC") == datetime(2026, 11, 13, 7, 10, 0, tzinfo=UTC)
     assert h.parse_systemd_ts("2026-11-13 07:10:00") == datetime(2026, 11, 13, 7, 10, 0, tzinfo=UTC)
+    assert h.parse_systemd_ts("Fri 2026-11-13 08:10:00 CET") == datetime(2026, 11, 13, 7, 10, 0, tzinfo=UTC)
+    assert h.parse_systemd_ts("Fri 2026-11-13 09:10:00 CEST") == datetime(2026, 11, 13, 7, 10, 0, tzinfo=UTC)
+    assert h.parse_systemd_ts("Fri 2026-11-13 02:10:00 EST") == datetime(2026, 11, 13, 7, 10, 0, tzinfo=UTC)
+    assert h.parse_systemd_ts("Fri 2026-11-13 08:10:00 +0100") == datetime(2026, 11, 13, 7, 10, 0, tzinfo=UTC)
     assert h.parse_systemd_ts("1731481800") == datetime.fromtimestamp(1731481800, tz=UTC)
     assert h.parse_systemd_ts("") is None
     assert h.parse_systemd_ts("not a timestamp") is None
+    assert h.parse_systemd_ts("2026-11-13 07:10:00 UNKNOWN_TZ") is None
 
 
 def test_install_release_persists_pending_marker(tmp_path, monkeypatch):
@@ -1865,6 +1870,29 @@ def test_op_release_install_passes_request_id_and_watcher_state(host, monkeypatc
     assert installed_info["sha"] == SHA
     assert installed_info["request_id"] == req["id"]
     assert installed_info["watcher_active"] is True
+
+
+def test_op_release_install_no_retry_on_type_error(host, monkeypatch):
+    paths, ex, _ = host
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["release.install"]["trust_master"] = True
+    paths.policy.write_text(json.dumps(policy))
+
+    calls = 0
+
+    def fail_install(*args, **kw):
+        nonlocal calls
+        calls += 1
+        raise TypeError("intentional TypeError inside install_release")
+
+    monkeypatch.setattr(h, "install_release", fail_install)
+    ex.run = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", "")
+
+    req, receipt = request(host, "release.install", {"sha": SHA})
+    assert receipt["outcome"] == "failed"
+    assert "TypeError" in str(receipt.get("error"))
+    assert calls == 1
+    assert not ex.restart_requested
 
 
 def test_confirm_release_without_watcher(host):
@@ -2054,6 +2082,187 @@ def test_confirm_release_systemd_active_enter_timestamp(host):
     assert len(h.read_release_history(paths)) == 1
 
 
+def test_confirm_release_systemd_active_enter_timestamp_non_utc(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=True, now=t0)
+
+    # 10:00:00 UTC is 11:00:00 CET (UTC+1)
+    def run(argv, **kw):
+        if "jarvisos-relay-watch.service" in argv:
+            return subprocess.CompletedProcess(argv, 0, "ActiveState=active\nActiveEnterTimestamp=Fri 2026-11-13 11:00:00 CET\n", "")
+        return subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", "")
+
+    ex.run = run
+
+    # At 10:00:10 UTC (only 10s elapsed): must not confirm early
+    current_time[0] = t0 + timedelta(seconds=10)
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+    # At 10:00:30 UTC: only 30s elapsed -> not confirmed
+    current_time[0] = t0 + timedelta(seconds=30)
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+    # At 10:01:05 UTC: 65s since start -> confirmed!
+    current_time[0] = t0 + timedelta(seconds=65)
+    ex.step()
+    assert not paths.release_pending.exists()
+    assert len(h.read_release_history(paths)) == 1
+
+
+def test_confirm_release_watcher_inactive_then_active_resets_timer(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=True, now=t0)
+
+    watcher_state = ["active"]
+
+    def run(argv, **kw):
+        if "jarvisos-relay-watch.service" in argv:
+            return subprocess.CompletedProcess(argv, 0, f"ActiveState={watcher_state[0]}\n", "")
+        return subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", "")
+
+    ex.run = run
+
+    # Step 1 at t=0: active
+    ex.step()
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert marker.get("watcher_seen_at") == "2026-11-13T10:00:00Z"
+
+    # Step 2 at t=30s: watcher becomes inactive -> resets in-memory and durable marker
+    current_time[0] = t0 + timedelta(seconds=30)
+    watcher_state[0] = "inactive"
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert ex._watcher_seen_at is None
+    marker = h.load_release_pending(paths)
+    assert "watcher_seen_at" not in marker
+
+    # Step 3 at t=40s: watcher becomes active again -> new timer starts from t=40s
+    current_time[0] = t0 + timedelta(seconds=40)
+    watcher_state[0] = "active"
+    ex.step()
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert marker.get("watcher_seen_at") == "2026-11-13T10:00:40Z"
+
+    # Step 4 at t=65s: 65s since t=0, but only 25s since reactivation at t=40s -> must not confirm!
+    current_time[0] = t0 + timedelta(seconds=65)
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+    # Step 5 at t=105s: 65s since reactivation -> confirmed!
+    current_time[0] = t0 + timedelta(seconds=105)
+    ex.step()
+    assert not paths.release_pending.exists()
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == SHA
+
+
+def test_confirm_release_watcher_restart_after_60s_resets_timer(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=True, now=t0)
+
+    restarts = [0]
+
+    # ActiveEnterTimestamp left at t0 to ensure stale enter_ts does not bypass the reset
+    def run(argv, **kw):
+        if "jarvisos-relay-watch.service" in argv:
+            return subprocess.CompletedProcess(
+                argv, 0,
+                f"ActiveState=active\nNRestarts={restarts[0]}\nActiveEnterTimestamp=Fri 2026-11-13 10:00:00 UTC\n",
+                ""
+            )
+        return subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", "")
+
+    ex.run = run
+
+    # Step 1 at t=0
+    ex.step()
+    assert paths.release_pending.is_file()
+
+    # At t=65s, the 60s window elapsed, but watcher restarts right at t=65s!
+    current_time[0] = t0 + timedelta(seconds=65)
+    restarts[0] = 1
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+    marker = h.load_release_pending(paths)
+    assert marker.get("watcher_seen_at") == "2026-11-13T10:01:05Z"
+    assert marker.get("watcher_initial_restarts") == 1
+
+    # At t=70s (only 5s after restart): must not confirm early even with stale enter_ts
+    current_time[0] = t0 + timedelta(seconds=70)
+    ex.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+    # Simulate executor process restart: fresh Executor instance
+    ex2 = h.Executor(paths, run=run, now=lambda: current_time[0], version=SHA)
+    current_time[0] = t0 + timedelta(seconds=75)
+    ex2.step()
+    assert paths.release_pending.is_file()
+    assert len(h.read_release_history(paths)) == 0
+
+    # At t=126s (61s after restart at t=65s): confirmed!
+    current_time[0] = t0 + timedelta(seconds=126)
+    ex2.step()
+    assert not paths.release_pending.exists()
+    assert len(h.read_release_history(paths)) == 1
+
+
+def test_confirm_release_crash_recovery_window(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    ex._version = SHA
+    marker = h.write_release_pending(paths, previous_sha=None, candidate_sha=SHA,
+                                    deadline=h.iso(t0 + timedelta(minutes=10)),
+                                    request_id="req1", attempts=0, watcher_active=False, now=t0)
+    assert paths.release_pending.is_file()
+
+    # Simulate crash after release-history.jsonl was appended and fsynced,
+    # but before release-pending.json was unlinked
+    entry = dict(marker)
+    entry["status"] = "confirmed"
+    entry["confirmed_at"] = h.iso(t0)
+    with open(paths.release_history, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+    assert len(h.read_release_history(paths)) == 1
+    assert paths.release_pending.is_file()
+
+    # On next step, maybe_confirm_release detects the pending release is already in history,
+    # cleans up release-pending.json without duplicating the history record
+    ex.step()
+    assert not paths.release_pending.exists()
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+
+
 def test_journal_does_not_leak_descriptors(host):
     _, ex, _ = host
     before = len(os.listdir("/proc/self/fd"))
@@ -2157,7 +2366,7 @@ def test_release_restart_even_if_watcher_restart_fails(host, monkeypatch):
     policy = copy.deepcopy(h.DEFAULT_POLICY)
     policy["ops"]["release.install"]["trust_master"] = True
     paths.policy.write_text(json.dumps(policy))
-    monkeypatch.setattr(h, "install_release", lambda *args: None)
+    monkeypatch.setattr(h, "install_release", lambda *args, **kw: None)
     ex.run = lambda argv, **kw: subprocess.CompletedProcess(argv, int("restart" in argv), "ActiveState=active", "")
     assert request(host, "release.install", {"sha": SHA})[1]["outcome"] == "failed"
     assert ex.restart_requested

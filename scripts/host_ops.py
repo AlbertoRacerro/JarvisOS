@@ -46,7 +46,7 @@ import urllib.request
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1965,6 +1965,28 @@ def executor_version() -> str:
     return here if SHA_RE.fullmatch(here) else "uninstalled"
 
 
+TZ_OFFSETS: dict[str, int] = {
+    "UTC": 0,
+    "GMT": 0,
+    "Z": 0,
+    "CET": 3600,
+    "CEST": 7200,
+    "BST": 3600,
+    "EET": 7200,
+    "EEST": 10800,
+    "WET": 0,
+    "WEST": 3600,
+    "EST": -18000,
+    "EDT": -14400,
+    "CST": -21600,
+    "CDT": -18000,
+    "MST": -25200,
+    "MDT": -21600,
+    "PST": -28800,
+    "PDT": -25200,
+}
+
+
 def parse_systemd_ts(val: str) -> datetime | None:
     if not isinstance(val, str) or not val.strip():
         return None
@@ -1972,9 +1994,31 @@ def parse_systemd_ts(val: str) -> datetime | None:
     parts = val.split()
     if len(parts) >= 3 and len(parts[0]) == 3 and parts[0].isalpha():
         val = " ".join(parts[1:])
-    for fmt in ("%Y-%m-%d %H:%M:%S %Z", "%Y-%m-%d %H:%M:%S"):
+    tokens = val.split()
+    if len(tokens) >= 3:
+        tz_str = tokens[-1]
+        base = " ".join(tokens[:-1])
+        offset = None
+        if tz_str in TZ_OFFSETS:
+            offset = TZ_OFFSETS[tz_str]
+        elif hasattr(time, "tzname"):
+            if tz_str == time.tzname[0]:
+                offset = -time.timezone
+            elif time.daylight and len(time.tzname) > 1 and tz_str == time.tzname[1]:
+                offset = -getattr(time, "altzone", time.timezone)
+        if offset is not None:
+            for date_fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    dt = datetime.strptime(base, date_fmt)
+                    return dt.replace(tzinfo=timezone(timedelta(seconds=offset))).astimezone(UTC)
+                except ValueError:
+                    pass
+    for fmt in ("%Y-%m-%d %H:%M:%S %z", "%Y-%m-%d %H:%M:%S"):
         try:
-            return datetime.strptime(val, fmt).replace(tzinfo=UTC)
+            dt = datetime.strptime(val, fmt)
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
         except ValueError:
             pass
     if val.isdigit():
@@ -2259,6 +2303,19 @@ class Executor:
             return False
         if self.version != candidate:
             return False
+
+        # Crash recovery window: check if already confirmed in release_history
+        for h_entry in read_release_history(self.paths):
+            if (h_entry.get("status") == "confirmed"
+                    and h_entry.get("candidate_sha") == candidate
+                    and h_entry.get("created_at") == marker.get("created_at")):
+                state_fd = open_dir(self.paths.state, create=True)
+                try:
+                    unlink_at(state_fd, "release-pending.json")
+                finally:
+                    os.close(state_fd)
+                return True
+
         deadline_str = marker.get("deadline")
         if deadline_str:
             deadline_dt = parse_ts(deadline_str)
@@ -2284,36 +2341,71 @@ class Executor:
             state = _unit_state(self, unit)
             if state.get("ActiveState") != "active":
                 self._watcher_seen_at = None
+                if "watcher_seen_at" in marker:
+                    marker.pop("watcher_seen_at", None)
+                    state_fd = open_dir(self.paths.state, create=True)
+                    try:
+                        write_at(state_fd, "release-pending.json", canonical(marker))
+                    finally:
+                        os.close(state_fd)
                 return False
 
             raw_restarts = state.get("NRestarts", "0")
             current_restarts = int(raw_restarts) if raw_restarts.isdecimal() else 0
             if self._watcher_initial_restarts is None:
+                if (saved_restarts := marker.get("watcher_initial_restarts")) is not None:
+                    self._watcher_initial_restarts = int(saved_restarts)
+                else:
+                    self._watcher_initial_restarts = current_restarts
+                    marker["watcher_initial_restarts"] = current_restarts
+                    state_fd = open_dir(self.paths.state, create=True)
+                    try:
+                        write_at(state_fd, "release-pending.json", canonical(marker))
+                    finally:
+                        os.close(state_fd)
+
+            if current_restarts > self._watcher_initial_restarts:
                 self._watcher_initial_restarts = current_restarts
-            elif current_restarts > self._watcher_initial_restarts:
-                self._watcher_initial_restarts = current_restarts
+                marker["watcher_initial_restarts"] = current_restarts
                 self._watcher_seen_at = self.now()
+                marker["watcher_seen_at"] = iso(self.now())
+                state_fd = open_dir(self.paths.state, create=True)
+                try:
+                    write_at(state_fd, "release-pending.json", canonical(marker))
+                finally:
+                    os.close(state_fd)
                 return False
 
             enter_ts = parse_systemd_ts(state.get("ActiveEnterTimestamp", ""))
-            if enter_ts is not None:
-                if (self.now() - enter_ts).total_seconds() < 60:
+            marker_created = parse_ts(marker.get("created_at"))
+
+            if self._watcher_seen_at is None:
+                if saved_seen := parse_ts(marker.get("watcher_seen_at")):
+                    self._watcher_seen_at = saved_seen
+                elif (enter_ts is not None and marker_created is not None
+                      and enter_ts >= marker_created - timedelta(seconds=5)
+                      and enter_ts <= self.now()):
+                    self._watcher_seen_at = enter_ts
+                    marker["watcher_seen_at"] = iso(enter_ts)
+                    state_fd = open_dir(self.paths.state, create=True)
+                    try:
+                        write_at(state_fd, "release-pending.json", canonical(marker))
+                    finally:
+                        os.close(state_fd)
+                else:
+                    self._watcher_seen_at = self.now()
+                    marker["watcher_seen_at"] = iso(self.now())
+                    state_fd = open_dir(self.paths.state, create=True)
+                    try:
+                        write_at(state_fd, "release-pending.json", canonical(marker))
+                    finally:
+                        os.close(state_fd)
                     return False
-            else:
-                if self._watcher_seen_at is None:
-                    if saved_seen := parse_ts(marker.get("watcher_seen_at")):
-                        self._watcher_seen_at = saved_seen
-                    else:
-                        self._watcher_seen_at = self.now()
-                        marker["watcher_seen_at"] = iso(self.now())
-                        state_fd = open_dir(self.paths.state, create=True)
-                        try:
-                            write_at(state_fd, "release-pending.json", canonical(marker))
-                        finally:
-                            os.close(state_fd)
-                        return False
-                if (self.now() - self._watcher_seen_at).total_seconds() < 60:
-                    return False
+
+            if (self.now() - self._watcher_seen_at).total_seconds() < 60:
+                return False
+            if enter_ts is not None and (self.now() - enter_ts).total_seconds() < 60:
+                return False
 
         entry = dict(marker)
         entry["status"] = "confirmed"
@@ -2322,6 +2414,8 @@ class Executor:
         try:
             with open(self.paths.release_history, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
             unlink_at(state_fd, "release-pending.json")
         finally:
             os.close(state_fd)
@@ -2689,11 +2783,8 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
         raise Refused("release.install requires trust_master: true in the host policy")
     unit = "jarvisos-relay-watch.service"
     watcher_active = _unit_state(ctx, unit).get("ActiveState") == "active"
-    try:
-        install_release(ctx.paths, args["sha"], request_id=ctx.request.get("id"),
-                        watcher_active=watcher_active, now=ctx.now())
-    except TypeError:
-        install_release(ctx.paths, args["sha"])
+    install_release(ctx.paths, args["sha"], request_id=ctx.request.get("id"),
+                    watcher_active=watcher_active, now=ctx.now())
     ctx.restart_required = True
     if watcher_active and _systemctl(ctx, "restart", unit).returncode:
         raise Failed("watcher restart failed")
