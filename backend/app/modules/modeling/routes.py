@@ -2,6 +2,7 @@ import sqlite3
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.core.database import open_sqlite_connection
 from app.core.errors import WORKSPACE_NOT_FOUND_MESSAGE, workspace_not_found_http_error
 from app.modules.modeling.dossier_models import ModelDossierDetail, ModelDossierIndexItem
 from app.modules.modeling.model_dossier import get_model_dossier, list_model_dossier_index
@@ -46,6 +47,14 @@ from app.modules.modeling.service import (
     list_model_specs,
     list_requirements,
     list_simulation_runs,
+)
+from app.modules.project_knowledge.value_history import (
+    ValueComparisonRead,
+    ValueHistoryError,
+    ValueVersionChainRead,
+    compare_value_versions,
+    get_parameter_version_chain,
+    get_sim_result_value_version_chain,
 )
 
 router = APIRouter(tags=["modeling"])
@@ -158,6 +167,127 @@ def transition_parameter_endpoint(parameter_id: str, payload: ParameterLifecycle
         return transition_parameter(parameter_id, payload)
     except (ParameterLifecycleError, sqlite3.IntegrityError) as exc:
         raise _domain_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/parameters/{parameter_id}/history",
+    response_model=ValueVersionChainRead,
+)
+@router.get(
+    "/parameters/{parameter_id}/history",
+    response_model=ValueVersionChainRead,
+)
+def get_parameter_history_endpoint(
+    parameter_id: str,
+    workspace_id: str = "main",
+) -> ValueVersionChainRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return get_parameter_version_chain(connection, workspace_id, parameter_id)
+        except ValueHistoryError as exc:
+            status_code = 404 if "not_found" in exc.code else 400
+            raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": exc.message}) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/parameters/compare",
+    response_model=ValueComparisonRead,
+)
+def compare_parameters_endpoint(
+    workspace_id: str,
+    version_a: str,
+    version_b: str,
+) -> ValueComparisonRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return compare_value_versions(
+                connection,
+                workspace_id=workspace_id,
+                value_kind="parameter",
+                parameter_a_id=version_a,
+                parameter_b_id=version_b,
+            )
+        except ValueHistoryError as exc:
+            status_code = 404 if "not_found" in exc.code else 400
+            raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": exc.message}) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/values/compare",
+    response_model=ValueComparisonRead,
+)
+def compare_values_get_endpoint(
+    workspace_id: str,
+    value_kind: str | None = None,
+    value_id: str | None = None,
+    version_a: str | None = None,
+    version_b: str | None = None,
+    parameter_a_id: str | None = None,
+    parameter_b_id: str | None = None,
+) -> ValueComparisonRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return compare_value_versions(
+                connection,
+                workspace_id=workspace_id,
+                value_kind=value_kind,
+                value_id=value_id,
+                version_a=version_a,
+                version_b=version_b,
+                parameter_a_id=parameter_a_id,
+                parameter_b_id=parameter_b_id,
+            )
+        except ValueHistoryError as exc:
+            status_code = 404 if "not_found" in exc.code else 400
+            raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": exc.message}) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/result-values/{value_id}/history",
+    response_model=ValueVersionChainRead,
+)
+@router.get(
+    "/result-values/{value_id}/history",
+    response_model=ValueVersionChainRead,
+)
+def get_result_value_history_endpoint(
+    value_id: str,
+    workspace_id: str = "main",
+) -> ValueVersionChainRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return get_sim_result_value_version_chain(connection, workspace_id, value_id)
+        except ValueHistoryError as exc:
+            status_code = 404 if "not_found" in exc.code else 400
+            raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": exc.message}) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/result-values/{value_id}/compare",
+    response_model=ValueComparisonRead,
+)
+def compare_result_values_get_endpoint(
+    workspace_id: str,
+    value_id: str,
+    version_a: str,
+    version_b: str,
+) -> ValueComparisonRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return compare_value_versions(
+                connection,
+                workspace_id=workspace_id,
+                value_kind="simulation_result_value",
+                value_id=value_id,
+                version_a=version_a,
+                version_b=version_b,
+            )
+        except ValueHistoryError as exc:
+            status_code = 404 if "not_found" in exc.code else 400
+            raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": exc.message}) from exc
+
+
+
 
 
 @router.post("/workspaces/{workspace_id}/requirements", response_model=RequirementRead, status_code=201)

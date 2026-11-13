@@ -2,6 +2,7 @@ import sqlite3
 
 from fastapi import APIRouter, HTTPException
 
+from app.core.database import open_sqlite_connection
 from app.modules.memory.replacement import ParameterReplacementError
 from app.modules.modeling.parameter_lifecycle import ParameterLifecycleError
 from app.modules.modeling.project_knowledge_owner import ProjectKnowledgeOwnerError
@@ -51,6 +52,18 @@ from app.modules.project_knowledge.sim_results import (
     list_simulation_result_notifications,
     resolve_simulation_result_exception,
 )
+from app.modules.project_knowledge.value_history import (
+    RunInputsManifestRead,
+    ValueComparisonRead,
+    ValueComparisonRequest,
+    ValueHistoryError,
+    ValueVersionChainRead,
+    compare_value_versions,
+    get_parameter_version_chain,
+    get_run_inputs_manifest,
+    get_sim_result_value_version_chain,
+    get_value_version_chain,
+)
 
 router = APIRouter(prefix="/project-knowledge", tags=["project-knowledge"])
 
@@ -84,6 +97,9 @@ def _http_error(exc: Exception) -> HTTPException:
         "scalar_run_missing",
         "result_batch_not_found",
         "result_value_not_found",
+        "runner_simulation_run_not_found",
+        "run_not_found",
+        "result_value_version_not_found",
     }
     status_code = 409 if code in conflict_codes else 404 if code in missing_codes else 400
     if isinstance(exc, sqlite3.IntegrityError):
@@ -99,6 +115,7 @@ _DOMAIN_ERRORS = (
     ProjectKnowledgeOwnerError,
     ParameterLifecycleError,
     ParameterReplacementError,
+    ValueHistoryError,
     sqlite3.IntegrityError,
 )
 
@@ -251,3 +268,172 @@ def resolve_result_exception_endpoint(value_id: str, payload: SimulationResultRe
         return resolve_simulation_result_exception(value_id, payload)
     except _DOMAIN_ERRORS as exc:
         raise _http_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/runs/{run_id}/manifest",
+    response_model=RunInputsManifestRead,
+)
+@router.get(
+    "/workspaces/{workspace_id}/runs/{run_id}/values-used",
+    response_model=RunInputsManifestRead,
+)
+def get_run_inputs_manifest_endpoint(
+    workspace_id: str,
+    run_id: str,
+) -> RunInputsManifestRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return get_run_inputs_manifest(connection, workspace_id, run_id)
+        except _DOMAIN_ERRORS as exc:
+            raise _http_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/values/{value_kind}/{value_id}/history",
+    response_model=ValueVersionChainRead,
+)
+def get_value_history_endpoint(
+    workspace_id: str,
+    value_kind: str,
+    value_id: str,
+) -> ValueVersionChainRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return get_value_version_chain(connection, workspace_id, value_kind, value_id)
+        except _DOMAIN_ERRORS as exc:
+            raise _http_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/parameters/{parameter_id}/history",
+    response_model=ValueVersionChainRead,
+)
+def get_parameter_history_endpoint(
+    workspace_id: str,
+    parameter_id: str,
+) -> ValueVersionChainRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return get_parameter_version_chain(connection, workspace_id, parameter_id)
+        except _DOMAIN_ERRORS as exc:
+            raise _http_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/result-values/{value_id}/history",
+    response_model=ValueVersionChainRead,
+)
+@router.get(
+    "/result-values/{value_id}/history",
+    response_model=ValueVersionChainRead,
+)
+def get_result_value_history_endpoint(
+    value_id: str,
+    workspace_id: str = "main",
+) -> ValueVersionChainRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return get_sim_result_value_version_chain(connection, workspace_id, value_id)
+        except _DOMAIN_ERRORS as exc:
+            raise _http_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/values/compare",
+    response_model=ValueComparisonRead,
+)
+def compare_values_get_endpoint(
+    workspace_id: str,
+    value_kind: str | None = None,
+    value_id: str | None = None,
+    version_a: str | None = None,
+    version_b: str | None = None,
+    parameter_a_id: str | None = None,
+    parameter_b_id: str | None = None,
+) -> ValueComparisonRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return compare_value_versions(
+                connection,
+                workspace_id=workspace_id,
+                value_kind=value_kind,
+                value_id=value_id,
+                version_a=version_a,
+                version_b=version_b,
+                parameter_a_id=parameter_a_id,
+                parameter_b_id=parameter_b_id,
+            )
+        except _DOMAIN_ERRORS as exc:
+            raise _http_error(exc) from exc
+
+
+@router.post(
+    "/workspaces/{workspace_id}/values/compare",
+    response_model=ValueComparisonRead,
+)
+def compare_values_post_endpoint(
+    workspace_id: str,
+    payload: ValueComparisonRequest,
+) -> ValueComparisonRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return compare_value_versions(
+                connection,
+                workspace_id=workspace_id,
+                value_kind=payload.value_kind,
+                value_id=payload.value_id,
+                version_a=payload.version_a,
+                version_b=payload.version_b,
+                parameter_a_id=payload.parameter_a_id,
+                parameter_b_id=payload.parameter_b_id,
+            )
+        except _DOMAIN_ERRORS as exc:
+            raise _http_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/parameters/compare",
+    response_model=ValueComparisonRead,
+)
+def compare_parameters_get_endpoint(
+    workspace_id: str,
+    version_a: str,
+    version_b: str,
+) -> ValueComparisonRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return compare_value_versions(
+                connection,
+                workspace_id=workspace_id,
+                value_kind="parameter",
+                parameter_a_id=version_a,
+                parameter_b_id=version_b,
+            )
+        except _DOMAIN_ERRORS as exc:
+            raise _http_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/result-values/{value_id}/compare",
+    response_model=ValueComparisonRead,
+)
+def compare_result_values_get_endpoint(
+    workspace_id: str,
+    value_id: str,
+    version_a: str,
+    version_b: str,
+) -> ValueComparisonRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return compare_value_versions(
+                connection,
+                workspace_id=workspace_id,
+                value_kind="simulation_result_value",
+                value_id=value_id,
+                version_a=version_a,
+                version_b=version_b,
+            )
+        except _DOMAIN_ERRORS as exc:
+            raise _http_error(exc) from exc
+
