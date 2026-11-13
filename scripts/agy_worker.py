@@ -42,10 +42,13 @@ ARGON_MODEL = "gemini-4-argon-low"
 # Spec 255: effort follows the task tier, so every family has an alias per effort the router may pick. The two base
 # aliases keep their env overrides; the others are fixed ids. agy Sonnet and Opus run on the 3p buckets.
 FIXED_MODELS = {"flash-medium": "gemini-3.8-flash-medium", "flash-high": "gemini-3.8-flash-high",
+                "hydrogen-low": "gemini-4-hydrogen-low", "hydrogen-medium": "gemini-4-hydrogen-medium",
+                "hydrogen-high": "gemini-4-hydrogen-high",
                 "argon-medium": "gemini-4-argon-medium", "argon-high": "gemini-4-argon-high",
                 "agy-sonnet": "claude-sonnet-5-5-high", "agy-opus": "claude-opus-5-5-high"}
 GEMINI_BUCKETS = ("gemini-5h", "gemini-weekly")
-FAMILY_BUCKETS = {"flash": GEMINI_BUCKETS, "argon": (*GEMINI_BUCKETS, "gemini-argon-wtu-weekly"),
+FAMILY_BUCKETS = {"flash": GEMINI_BUCKETS, "hydrogen": GEMINI_BUCKETS,
+                  "argon": (*GEMINI_BUCKETS, "gemini-argon-wtu-weekly"),
                   "agy": ("3p-5h", "3p-weekly")}
 DEFAULT_TIMEOUT = 1800
 MAX_TIMEOUT = 6 * 3600
