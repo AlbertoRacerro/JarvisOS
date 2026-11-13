@@ -5,6 +5,7 @@ Runs one headless `agy` worker turn inside the certified sandbox, in a linked gi
 Git credentials removed from the child environment, behind an allowlist of models and a no-model-turn quota
 preflight (spec 217 probe). Evidence (transcript, diff against the starting HEAD, result.json) is written to an
 evidence directory. The wrapper writes no ledger entry and makes no commit: the coordinator reviews the diff.
+The worker has full CLI permissions only after the sandbox check passes.
 Stdlib only.
 """
 
@@ -15,6 +16,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import secrets
 import shutil
 import signal
 import socket
@@ -53,7 +55,7 @@ MAX_TASK_BYTES = 200 * 1024
 STRIPPED_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR", "GIT_CONFIG_GLOBAL", "SSH_AUTH_SOCK",
                 "GH_ENTERPRISE_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN")
 STRIPPED_PREFIXES = ("GH_", "GIT_")
-FORBIDDEN_FLAGS = ("--dangerously-skip-permissions", "--remote-control")
+FORBIDDEN_FLAGS = ("--remote-control",)
 
 
 class Refused(Exception):
@@ -216,8 +218,8 @@ def quota_preflight(agy: str, alias: str, env: dict[str, str]) -> list[dict[str,
 
 
 def run_argv(agy: str, task: str, model: str, timeout: int, resume: str | None = None) -> list[str]:
-    argv = [agy, "-p", task, "--model", model, "--output-format", "json", "--mode", "accept-edits", "--sandbox",
-            "--print-timeout", f"{timeout}s"]
+    argv = [agy, "-p", task, "--model", model, "--output-format", "json", "--mode", "accept-edits",
+            "--dangerously-skip-permissions", "--sandbox", "--print-timeout", f"{timeout}s"]
     if resume is not None:
         # Retry the same model in its own interrupted conversation (full context and scratch artifacts).
         if not relay_argon.CONVERSATION_RE.fullmatch(resume):
@@ -242,7 +244,7 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 
 def default_evidence_dir() -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return Path.home() / "jarvis-control" / "work" / "evidence" / f"agy-worker-{stamp}"
+    return Path.home() / "jarvis-control" / "work" / "evidence" / f"agy-worker-{stamp}-{secrets.token_hex(3)}"
 
 
 def execute(args: argparse.Namespace, sandbox_check: Callable[[], bool] | None = None) -> tuple[Path | None, dict[str, Any]]:
@@ -314,7 +316,8 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     if after != before:
         status, reason = "failed", "git_metadata_modified"
         result["git_metadata"] = {"before": before, "after": after}
-    if json_document(stdout) is not None:
+    document = json_document(stdout)
+    if document is not None:
         (evidence / "transcript.json").write_text(stdout, encoding="utf-8")
     else:
         (evidence / "transcript.txt").write_text(stdout, encoding="utf-8")
@@ -323,7 +326,19 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     if reason != "git_metadata_modified":  # never run git over planted config or hooks
         diff = collect_diff(worktree, result["start_head"])
         (evidence / "diff.patch").write_text(diff, encoding="utf-8")
-    document = json_document(stdout)
+    if reason != "git_metadata_modified" and status != "timeout" and not (reason or "").startswith("spawn_failed"):
+        if document is not None:
+            denied = document.get("denied_actions")
+            if isinstance(denied, list) and denied:
+                actions = ", ".join(str(item.get("action", item)) if isinstance(item, dict) else str(item)
+                                    for item in denied)
+                status, reason = "failed", f"permission_denied: {actions}"
+            elif document.get("status") != "SUCCESS":
+                status, reason = "failed", f"stream_status_{document.get('status') or 'missing'}"
+            elif not str(document.get("response") or "").strip() and not diff:
+                status, reason = "failed", "empty_result"
+        else:
+            status, reason = "failed", "empty_result" if not diff else "stream_status_missing"
     cid = document.get("conversation_id") if isinstance(document, dict) else None
     result.update(status=status, reason=reason, failure_class=failure_class(status, reason, stderr),
                   diff_bytes=len(diff.encode("utf-8")),
@@ -338,6 +353,8 @@ def failure_class(status: str, reason: str | None, stderr: str) -> str | None:
         return None
     if reason == "git_metadata_modified":
         return "policy"
+    if reason == "empty_result" or (reason or "").startswith(("permission_denied:", "stream_status_")):
+        return "harness"
     if status == "timeout" or (reason or "").startswith("spawn_failed"):
         return "harness"
     cause = relay_argon.harness_cause(relay_argon.native_error(stderr))
