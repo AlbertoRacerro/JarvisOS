@@ -2967,7 +2967,6 @@ class Host:
     pr_ci_status: Callable[[int, str], dict[str, Any] | None] | None = None  # spec 267: check results for (pr, head_sha)
 
 
-
 class _DecisionSnapshot:
     """A per-decision snapshot of provider quota readings so availability, headroom,
     and coordinator ranking evaluate against a single consistent observation per agent."""
@@ -3535,25 +3534,34 @@ class Supervisor:
         prev = self._snapshot
         self._snapshot = _DecisionSnapshot(self)
         try:
-            remaining = [a for a in PREFERRED_AGENTS if a != current]
-            rooms = {a: self.free_room(a) for a in remaining}
-            sorted_remaining = sorted(
-                remaining,
-                key=lambda a: ((0, -rooms[a]) if rooms[a] is not None else (1, 0.0)),
-            )
-            order = ([current] + sorted_remaining) if current in PREFERRED_AGENTS else sorted_remaining
             first_available = None
-            for agent in [*order, "codex"]:
-                if self.available(agent):
-                    first_available = first_available or agent
-                    if agent not in rooms:
-                        rooms[agent] = self.free_room(agent)
-                    room = rooms[agent]
-                    if room is not None and room < self.limits.min_free_percent:
-                        continue
-                    break
+            if current in PREFERRED_AGENTS and self.available(current):
+                first_available = current
+                room = self.free_room(current)
+                if room is None or room >= self.limits.min_free_percent:
+                    agent = current
+                else:
+                    agent = None
             else:
-                agent = first_available
+                agent = None
+
+            if agent is None:
+                remaining = [a for a in PREFERRED_AGENTS if a != current] if current in PREFERRED_AGENTS else list(PREFERRED_AGENTS)
+                rooms = {a: self.free_room(a) for a in remaining}
+                sorted_remaining = sorted(
+                    remaining,
+                    key=lambda a: ((0, -rooms[a]) if rooms[a] is not None else (1, 0.0)),
+                )
+                for candidate in [*sorted_remaining, "codex"]:
+                    if self.available(candidate):
+                        first_available = first_available or candidate
+                        room = rooms[candidate] if candidate in rooms else self.free_room(candidate)
+                        if room is not None and room < self.limits.min_free_percent:
+                            continue
+                        agent = candidate
+                        break
+                else:
+                    agent = first_available
             if agent is not None:
                 if agent != current:
                     now = self.host.now()

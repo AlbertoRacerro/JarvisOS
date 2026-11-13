@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from test_relay_continuity import T0, Env, _write_mission, mission_def, rc
+from test_relay_continuity import SUCCESS, T0, Env, _write_mission, mission_def, rc, reading
 
 ra = rc.relay_argon
 
@@ -401,29 +401,55 @@ def test_native_opus_runner_preflights_and_launches_the_same_model_family(tmp_pa
     assert rc.classify_turn(turn).outcome == "success"
 
 
-def test_completed_missions_rotate_preference_without_a_new_state_store(tmp_path):
+def test_completed_missions_sticky_coordinator_without_a_new_state_store(tmp_path):
     root = tmp_path / "control"
-    seen = []
+    env = Env(tmp_path, [("claude", SUCCESS, "propose_done")] * 4 + [("argon", stream(), "propose_done")])
+    env.relay.readings = {
+        "claude": reading("claude", 30, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+    }
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 30}]} if a in ("argon", "agy_opus") else None
+
+    def factory(store, m):
+        return rc.Supervisor(store, env.host, env.limits, sender=env.sender)
+
+    # Acceptance criterion 1: Four completed missions in a row, every agent available with room,
+    # all run on the same agent as the first (claude), and no provider_switched notification is sent.
     missions = [mission_def(f"cycle {i}", mid=f"m-20261018T08000{i}Z-aabbc{i}",
-                            submitted=T0 + timedelta(seconds=i)) for i in range(5)]
+                            submitted=T0 + timedelta(seconds=i)) for i in range(4)]
     for mission in missions:
         _write_mission(root, mission)
 
-    def factory(store, mission):
-        def run(_session):
-            state = store.load()
-            state["agent"] = state.get("agent") or "claude"
-            seen.append(state["agent"])
-            if len(seen) == 4:
-                state["agent"] = "codex"
-            state["mission"].update(next=1, done=[{"task": 0, "outcome": "verified"}], completed_at=rc.iso(T0))
-            store.save(state, T0)
-            return "idle"
-        return SimpleNamespace(run=run)
-
     for mission in missions:
-        assert rc.serve_step(root, factory, conflicts=lambda: [], now=lambda: T0) == f"ran:{mission['id']}:idle"
-    assert seen == ["claude", "claude", "claude", "claude", "claude"]
+        mid = mission["id"]
+        assert rc.serve_step(root, factory, conflicts=lambda: [], now=lambda: T0) == f"ran:{mid}:idle"
+
+    assert [launch["agent"] for launch in env.relay.launches] == ["claude", "claude", "claude", "claude"]
+    assert not any("switched coordinator" in text for _, text in env.ledger)
+    assert not any("cambiato assistente" in msg for msg in env.sent)
+
+    # Sticky to a non-claude agent: when the last completed agent is argon,
+    # the next mission is seeded with and stays on argon.
+    m_argon = mission_def("cycle argon", mid="m-20261018T080010Z-aabbc9", submitted=T0 + timedelta(seconds=10))
+    _write_mission(root, m_argon)
+    store_argon = rc.mission_store(root, m_argon["id"])
+    state_argon = rc.default_state()
+    state_argon.update({
+        "phase": "idle",
+        "agent": "argon",
+        "mission": {"id": m_argon["id"], "next": 1, "total": 1, "done": [{"task": 0, "outcome": "verified"}],
+                    "completed_at": rc.iso(T0 + timedelta(seconds=10))},
+    })
+    store_argon.save(state_argon, T0 + timedelta(seconds=10))
+
+    m_next = mission_def("cycle next", mid="m-20261018T080011Z-aabbca", submitted=T0 + timedelta(seconds=11))
+    _write_mission(root, m_next)
+
+    mid_next = m_next["id"]
+    assert rc.serve_step(root, factory, conflicts=lambda: [], now=lambda: T0 + timedelta(seconds=11)) == f"ran:{mid_next}:idle"
+    assert env.relay.launches[-1]["agent"] == "argon"
+    assert not any("switched coordinator" in text for _, text in env.ledger)
+    assert not any("cambiato assistente" in msg for msg in env.sent)
 
 
 def test_resume_preserves_the_selected_native_coordinator(tmp_path):

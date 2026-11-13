@@ -547,9 +547,9 @@ def test_choose_reads_quota_at_most_once_per_agent_per_choice(tmp_path: Path) ->
             super().__init__(*args, **kwargs)
             self.readings_by_agent: dict[str, int] = collections.defaultdict(int)
 
-        def free_room(self, agent: str) -> float | None:
+        def _raw_reading(self, agent: str) -> dict[str, Any] | None:
             self.readings_by_agent[agent] += 1
-            return super().free_room(agent)
+            return super()._raw_reading(agent)
 
     argon_reads: dict[str, int] = collections.defaultdict(int)
     limits_reads = 0
@@ -582,16 +582,13 @@ def test_choose_reads_quota_at_most_once_per_agent_per_choice(tmp_path: Path) ->
     sup = CountingSupervisor(env.store, env.host, env.limits, sender=env.sender)
     assert sup._choose("claude") == "codex"
     assert sup.readings_by_agent["claude"] == 1
-    assert sup.readings_by_agent["argon"] == 1
-    assert sup.readings_by_agent["agy_opus"] == 1
     assert sup.readings_by_agent["codex"] == 1
-    assert all(count <= 1 for count in sup.readings_by_agent.values())
     assert argon_reads["argon"] == 1
     assert argon_reads["agy_opus"] == 1
     assert limits_reads == 1
 
     # 2. When seeded agent (claude) has headroom, codex is never read,
-    # and preferred agents are read at most once.
+    # native agents are not probed, and healthy claude is kept directly.
     argon_reads.clear()
     limits_reads = 0
     sup2 = CountingSupervisor(env.store, env.host, env.limits, sender=env.sender)
@@ -602,9 +599,8 @@ def test_choose_reads_quota_at_most_once_per_agent_per_choice(tmp_path: Path) ->
     assert sup2._choose("claude") == "claude"
     assert sup2.readings_by_agent["claude"] == 1
     assert sup2.readings_by_agent["codex"] == 0
-    assert all(count <= 1 for count in sup2.readings_by_agent.values())
-    assert argon_reads["argon"] <= 1
-    assert argon_reads["agy_opus"] <= 1
+    assert argon_reads["argon"] == 0
+    assert argon_reads["agy_opus"] == 0
     assert limits_reads == 1
 
     # 3. Seeded with a non-preferred agent (codex): preferred agents are ordered by headroom,
@@ -621,11 +617,57 @@ def test_choose_reads_quota_at_most_once_per_agent_per_choice(tmp_path: Path) ->
 
     env.relay.argon_limits = lambda a: track_argon(a, base_argon3)
     assert sup3._choose("codex") == "argon"
-    assert sup3.readings_by_agent["argon"] == 1
+    assert sup3.readings_by_agent["claude"] == 1
     assert sup3.readings_by_agent["codex"] == 0
-    assert all(count <= 1 for count in sup3.readings_by_agent.values())
     assert argon_reads["argon"] == 1
     assert limits_reads == 1
+
+
+def test_choose_healthy_current_does_not_abort_on_raising_native_probe(tmp_path: Path) -> None:
+    # A healthy current coordinator is kept without probing remaining agents;
+    # a native probe that raises does not abort the decision.
+    env = Env(tmp_path, readings={"claude": reading("claude", 30, T0 + timedelta(days=5), T0)})
+    def probe_raises(_agent: str) -> Any:
+        raise RuntimeError("native quota probe failed")
+    env.relay.argon_limits = probe_raises
+    sup = env.supervisor()
+    assert sup._choose("claude") == "claude"
+
+
+def test_choose_snapshot_restore_on_return_and_raise(tmp_path: Path) -> None:
+    # Snapshot is restored to previous value (None) on normal return and on exceptions.
+    env = Env(tmp_path, readings={"claude": reading("claude", 90, T0 + timedelta(days=5), T0)})
+    argon_reads: list[str] = []
+    def probe(a: str) -> dict[str, Any] | None:
+        argon_reads.append(a)
+        return {"windows": [{"used_percent": 30 if a == "argon" else 80}]} if a in ("argon", "agy_opus") else None
+    env.relay.argon_limits = probe
+    sup = env.supervisor()
+
+    assert sup._snapshot is None
+    assert sup._choose("claude") == "argon"
+    # 1. sup._snapshot is None after _choose returns
+    assert sup._snapshot is None
+
+    # 2. A second _choose re-reads (no stale reading reused)
+    env.clock.sleep(150)
+    env.relay.readings = {"claude": reading("claude", 20, T0 + timedelta(days=5), T0)}
+    argon_reads_before = len(argon_reads)
+    assert sup._choose("claude") == "claude"
+    assert sup._snapshot is None
+    # Claude was healthy so remaining agents were not read again
+    assert len(argon_reads) == argon_reads_before
+
+    # 3. sup._snapshot is restored when _choose raises
+    def raising_probe(_a: str) -> Any:
+        raise RuntimeError("quota probe exploded")
+
+    env.clock.sleep(150)
+    env.relay.readings = {"claude": reading("claude", 90, T0 + timedelta(days=5), T0)}
+    env.relay.argon_limits = raising_probe
+    with pytest.raises(RuntimeError, match="quota probe exploded"):
+        sup._choose("claude")
+    assert sup._snapshot is None
 
 
 def test_choose_changing_readings_across_calls_exposes_double_read(tmp_path: Path) -> None:
@@ -697,16 +739,18 @@ def test_choose_changing_readings_across_calls_exposes_double_read(tmp_path: Pat
 
     assert sup2._choose("argon") == "argon"
     assert argon_reads["argon"] == 1
-    assert limits_reads == 1
+    assert limits_reads == 0
     assert "argon" not in sup2.state["cooldowns"]
 
     # 3. Seeded agent claude has room on call 1 (30% used), but low on call 2 (90% used).
-    # The snapshot ensures claude is kept and relay limits is read only once.
+    # Advancing the clock past the 2-minute limits cache during the read proves that
+    # the non-native snapshot branch in reading() prevents re-reading and keeps claude.
     limits_call_count = 0
 
     def limits_flip() -> dict[str, Any] | None:
         nonlocal limits_call_count
         limits_call_count += 1
+        env3.clock.sleep(150)
         return {
             "claude": reading("claude", 30 if limits_call_count == 1 else 90, T0 + timedelta(days=5), T0),
             "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
