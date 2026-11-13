@@ -3807,7 +3807,7 @@ ROADMAP_TASK = (
     "only when no authorized useful work remains across the relevant lanes. A human-dependent step blocks only "
     "its dependent work: record the question and continue safe disjoint authorized work under docs/PROCESS.md, "
     "including owed live activation and investigation/planning/readiness for the "
-    "maintainer's already-directed next goal. Planned product implementation still requires explicit readiness. "
+    "maintainer's already-directed next goal. Planned product implementation starts from `ready`; readiness is yours to give after your own critical review (docs/PROCESS.md section 3), and with nothing ready you prepare the next item of the directive. "
     "Apply only the maintainer interruption classes in docs/PROCESS.md; ordinary reversible technical decisions are yours."
 )
 
