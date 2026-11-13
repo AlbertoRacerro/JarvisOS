@@ -2043,6 +2043,7 @@ def write_release_pending(
     attempts: int = 0,
     watcher_active: bool = False,
     now: datetime | None = None,
+    kind: str | None = None,
 ) -> dict[str, Any]:
     ts = now or now_utc()
     marker = {
@@ -2054,6 +2055,8 @@ def write_release_pending(
         "watcher_active": bool(watcher_active),
         "created_at": iso(ts),
     }
+    if kind is not None:
+        marker["kind"] = kind
     state_fd = open_dir(paths.state, create=True)
     try:
         write_at(state_fd, "release-pending.json", canonical(marker))
@@ -2110,12 +2113,16 @@ def notify_return(
     reason: str,
     *,
     post: Callable[[str, bytes], int] | None = None,
+    kind: str | None = None,
 ) -> bool:
     for h_entry in read_release_history(paths):
         if h_entry.get("candidate_sha") == candidate_sha and h_entry.get("notified") is True:
             return False
     short_sha = candidate_sha[:8] if isinstance(candidate_sha, str) else "unknown"
-    text = f":warning: *host-ops* release {short_sha} failed: {reason}. Returned to previous release."
+    if kind == "return":
+        text = f":warning: *host-ops* returned release {short_sha} failed confirmation: {reason}."
+    else:
+        text = f":warning: *host-ops* release {short_sha} failed: {reason}. Returned to previous release."
     poster = post or webhook_poster(paths)
     try:
         status = poster(text, b"")
@@ -2137,6 +2144,7 @@ def return_release(
     current_time = now or now_utc()
     candidate_sha = marker.get("candidate_sha") if marker else None
     previous_sha = marker.get("previous_sha") if marker else None
+    is_return_marker = bool(marker and marker.get("kind") == "return")
 
     # Resolve candidate if not in marker
     if not candidate_sha:
@@ -2147,8 +2155,8 @@ def return_release(
             except OSError:
                 candidate_sha = None
 
-    # Resolve previous_sha if not in marker (e.g. from guard RELEASE file)
-    if not previous_sha and (paths.guard / "RELEASE").is_file():
+    # Resolve previous_sha if not in marker (e.g. from guard RELEASE file), but never for a return confirmation
+    if not is_return_marker and not previous_sha and (paths.guard / "RELEASE").is_file():
         try:
             pinned = (paths.guard / "RELEASE").read_text(encoding="utf-8").strip()
             if SHA_RE.fullmatch(pinned) and (paths.install / "releases" / pinned).is_dir():
@@ -2156,8 +2164,8 @@ def return_release(
         except OSError:
             pass
 
-    # Move current back to previous release if available
-    if previous_sha and (paths.install / "releases" / previous_sha).is_dir():
+    # Move current back to previous release if available (keep current where it is when kind == "return")
+    if not is_return_marker and previous_sha and (paths.install / "releases" / previous_sha).is_dir():
         tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
         os.symlink(paths.install / "releases" / previous_sha, tmp_link)
         os.replace(tmp_link, paths.install / "current")
@@ -2173,14 +2181,16 @@ def return_release(
     # Notification
     notified = False
     if candidate_sha:
-        notified = notify_return(paths, candidate_sha, reason, post=post)
+        notified = notify_return(paths, candidate_sha, reason, post=post,
+                                 kind=marker.get("kind") if marker else None)
 
-    # Append refusal to history
+    # Append refusal or return_unconfirmed to history
     entry = dict(marker) if marker else {}
+    status = "return_unconfirmed" if is_return_marker else "refused"
     entry.update({
         "candidate_sha": candidate_sha,
         "previous_sha": previous_sha,
-        "status": "refused",
+        "status": status,
         "reason": reason,
         "returned_at": iso(current_time),
         "notified": notified,
@@ -2200,18 +2210,18 @@ def return_release(
     else:
         paths.release_pending.unlink(missing_ok=True)
 
-    # Optionally set up confirmation for previous release
-    if confirm_previous and previous_sha:
+    # Optionally set up confirmation for previous release (never when returning a return)
+    if not is_return_marker and confirm_previous and previous_sha:
         deadline = iso(current_time + timedelta(minutes=10))
         write_release_pending(paths, previous_sha=None, candidate_sha=previous_sha,
                               deadline=deadline, request_id=None,
                               attempts=0, watcher_active=bool(marker and marker.get("watcher_active")),
-                              now=current_time)
+                              now=current_time, kind="return")
 
     return True
 
 
-def guard(
+def _guard_impl(
     paths: Paths,
     *,
     force_return: bool = False,
@@ -2222,7 +2232,23 @@ def guard(
 ) -> int:
     current_time = now or now_utc()
     if force_return:
-        return_release(paths, reason=reason or "manual return", post=post, run=run, now=current_time)
+        if not paths.release_pending.exists():
+            print("refusal: no release is pending", file=sys.stderr)
+            return 2
+        try:
+            marker = load_release_pending(paths)
+        except MalformedPendingRelease as exc:
+            return_release(paths, reason=f"corrupt pending marker: {exc}", post=post, run=run, now=current_time)
+            return 0
+        return_release(
+            paths,
+            marker=marker,
+            reason=reason or "manual return",
+            post=post,
+            run=run,
+            now=current_time,
+            confirm_previous=bool(marker and marker.get("previous_sha") and marker.get("kind") != "return"),
+        )
         return 0
 
     if not paths.release_pending.exists():
@@ -2237,6 +2263,19 @@ def guard(
     if marker is None:
         return 0
 
+    # If candidate recorded failure, perform return_release now
+    if unhealthy_reason := marker.get("unhealthy_reason"):
+        return_release(
+            paths,
+            marker=marker,
+            reason=str(unhealthy_reason),
+            post=post,
+            run=run,
+            now=current_time,
+            confirm_previous=bool(marker.get("previous_sha") and marker.get("kind") != "return"),
+        )
+        return 0
+
     # Increment attempts
     attempts = int(marker.get("attempts", 0)) + 1
     marker["attempts"] = attempts
@@ -2248,8 +2287,15 @@ def guard(
 
     # Start count check
     if attempts > 3:
-        return_release(paths, marker=marker, reason=f"start count exceeded ({attempts})",
-                       post=post, run=run, now=current_time, confirm_previous=bool(marker.get("previous_sha")))
+        return_release(
+            paths,
+            marker=marker,
+            reason=f"start count exceeded ({attempts})",
+            post=post,
+            run=run,
+            now=current_time,
+            confirm_previous=bool(marker.get("previous_sha") and marker.get("kind") != "return"),
+        )
         return 0
 
     # Deadline check
@@ -2257,25 +2303,63 @@ def guard(
     if deadline_str:
         deadline_dt = parse_ts(deadline_str)
         if deadline_dt and current_time > deadline_dt:
-            return_release(paths, marker=marker, reason="deadline expired",
-                           post=post, run=run, now=current_time, confirm_previous=bool(marker.get("previous_sha")))
+            return_release(
+                paths,
+                marker=marker,
+                reason="deadline expired",
+                post=post,
+                run=run,
+                now=current_time,
+                confirm_previous=bool(marker.get("previous_sha") and marker.get("kind") != "return"),
+            )
             return 0
 
     return 0
+
+
+def guard(
+    paths: Paths,
+    *,
+    force_return: bool = False,
+    reason: str | None = None,
+    post: Callable[[str, bytes], int] | None = None,
+    run: Callable[..., subprocess.CompletedProcess] = real_run,
+    now: datetime | None = None,
+) -> int:
+    try:
+        return _guard_impl(paths, force_return=force_return, reason=reason, post=post, run=run, now=now)
+    except Exception as exc:  # noqa: BLE001 - guard must never fail unit start
+        print(f"hostops: guard error {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return 0
 
 
 def _pin_guard(paths: Paths, source_dir: Path, source_sha: str) -> None:
     guard_dir = paths.guard
     paths.install.mkdir(parents=True, exist_ok=True)
     tmp_guard = paths.install / f".guard-{secrets.token_hex(4)}"
+    old_aside = paths.install / f".guard-old-{secrets.token_hex(4)}"
     shutil.copytree(source_dir, tmp_guard, symlinks=False)
     (tmp_guard / "RELEASE").write_text(f"{source_sha}\n", encoding="utf-8")
-    if guard_dir.exists():
-        if guard_dir.is_dir() and not guard_dir.is_symlink():
-            shutil.rmtree(guard_dir)
-        else:
-            guard_dir.unlink()
-    os.rename(tmp_guard, guard_dir)
+    has_old = False
+    if guard_dir.exists() or guard_dir.is_symlink():
+        os.rename(guard_dir, old_aside)
+        has_old = True
+    try:
+        os.rename(tmp_guard, guard_dir)
+    except BaseException:
+        if has_old and not guard_dir.exists():
+            try:
+                os.rename(old_aside, guard_dir)
+                has_old = False
+            except OSError:
+                pass
+        raise
+    finally:
+        if has_old and (old_aside.exists() or old_aside.is_symlink()):
+            if old_aside.is_dir() and not old_aside.is_symlink():
+                shutil.rmtree(old_aside, ignore_errors=True)
+            else:
+                old_aside.unlink(missing_ok=True)
 
 
 def read_release_history(paths: Paths) -> list[dict[str, Any]]:
@@ -2380,8 +2464,8 @@ class Executor:
                 marker = load_release_pending(self.paths)
             except MalformedPendingRelease as exc:
                 marker = None
-                problem = f"corrupt pending marker: {exc}"
-            self._return_release(marker, reason=f"unhealthy heartbeat: {problem}")
+                self.log(f"hostops: corrupt pending release state: {exc}")
+            self._record_unhealthy(marker, reason=f"unhealthy heartbeat: {problem}")
         if problem == "signing key missing":
             return 0
         rfd = open_dir(self.paths.requests, create=True)
@@ -2512,27 +2596,37 @@ class Executor:
         data, _, signature = stored.partition(b"\x00")
         self._publish(request_id, data, signature)
 
-    def _return_release(self, marker: dict[str, Any] | None, reason: str) -> None:
+    def _record_unhealthy(self, marker: dict[str, Any] | None, reason: str) -> None:
         self.restart_requested = True
-        return_release(self.paths, marker=marker, reason=reason, post=self.post, run=self.run, now=self.now(),
-                       confirm_previous=bool(marker and marker.get("previous_sha")))
+        if marker is not None:
+            marker["unhealthy_reason"] = reason
+            ts_str = iso(self.now())
+            marker["unhealthy_at"] = ts_str
+            marker["unhealthy_time"] = ts_str
+            state_fd = open_dir(self.paths.state, create=True)
+            try:
+                write_at(state_fd, "release-pending.json", canonical(marker))
+            finally:
+                os.close(state_fd)
+
+    _return_release = _record_unhealthy
 
     def maybe_confirm_release(self) -> bool:
         try:
             marker = load_release_pending(self.paths)
         except MalformedPendingRelease as exc:
             self.log(f"hostops: corrupt pending release state: {exc}")
-            self._return_release(None, reason=f"corrupt pending marker: {exc}")
+            self._record_unhealthy(None, reason=f"corrupt pending marker: {exc}")
             return False
         if marker is None:
             return False
         candidate = marker.get("candidate_sha")
         if not candidate or not SHA_RE.fullmatch(str(candidate)):
-            self._return_release(marker, reason="invalid candidate sha in pending marker")
+            self._record_unhealthy(marker, reason="invalid candidate sha in pending marker")
             return False
         if self.version != candidate:
             self.log(f"hostops: executor version {self.version} != candidate {candidate}")
-            self._return_release(marker, reason=f"version mismatch ({self.version} != {candidate})")
+            self._record_unhealthy(marker, reason=f"version mismatch ({self.version} != {candidate})")
             return False
 
         # Crash recovery window: check if already confirmed in release_history
@@ -2552,30 +2646,30 @@ class Executor:
             deadline_dt = parse_ts(deadline_str)
             if deadline_dt and self.now() > deadline_dt:
                 self.log(f"hostops: candidate {candidate} confirmation deadline expired")
-                self._return_release(marker, reason="deadline expired")
+                self._record_unhealthy(marker, reason="deadline expired")
                 return False
 
         try:
             load_policy(self.paths)
         except (OSError, ValueError, RuntimeError) as exc:
             self.log(f"hostops: policy unusable during confirmation: {exc}")
-            self._return_release(marker, reason=f"policy unusable: {exc}")
+            self._record_unhealthy(marker, reason=f"policy unusable: {exc}")
             return False
 
         beat = _heartbeat(self.paths)
         if not beat or beat.get("problem") is not None:
             prob = (beat or {}).get("problem") or "heartbeat missing"
             self.log(f"hostops: candidate {candidate} heartbeat unhealthy: {prob}")
-            self._return_release(marker, reason=f"unhealthy heartbeat: {prob}")
+            self._record_unhealthy(marker, reason=f"unhealthy heartbeat: {prob}")
             return False
         if beat.get("version") != candidate:
             self.log(f"hostops: heartbeat version {beat.get('version')} != candidate {candidate}")
-            self._return_release(marker, reason=f"heartbeat version mismatch ({beat.get('version')} != {candidate})")
+            self._record_unhealthy(marker, reason=f"heartbeat version mismatch ({beat.get('version')} != {candidate})")
             return False
         beat_at = parse_ts(beat.get("at"))
         if not beat_at or abs((self.now() - beat_at).total_seconds()) > 120:
             self.log(f"hostops: candidate {candidate} heartbeat stale")
-            self._return_release(marker, reason="heartbeat stale")
+            self._record_unhealthy(marker, reason="heartbeat stale")
             return False
 
         if marker.get("watcher_active"):
@@ -2584,7 +2678,7 @@ class Executor:
             active_state = state.get("ActiveState")
             if active_state in ("failed", "dead"):
                 self.log(f"hostops: candidate {candidate} watcher service failed ({active_state})")
-                self._return_release(marker, reason=f"watcher service failed ({active_state})")
+                self._record_unhealthy(marker, reason=f"watcher service failed ({active_state})")
                 return False
             if active_state != "active":
                 self._watcher_seen_at = None

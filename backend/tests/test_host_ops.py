@@ -2015,12 +2015,20 @@ def test_confirm_release_watcher_inactive_fails_confirmation(host):
 
     current_time[0] = t0 + timedelta(seconds=100)
     ex.step()
+    # Candidate records failure and requests restart only; current and history untouched
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert "watcher" in marker.get("unhealthy_reason", "")
+    assert ex.restart_requested is True
+    assert len(h.read_release_history(paths)) == 0
+
+    # Next start's guard() performs return
+    assert h.guard(paths, now=current_time[0]) == 0
     assert not paths.release_pending.exists()
     history = h.read_release_history(paths)
     assert len(history) == 1
     assert history[0]["status"] == "refused"
     assert "watcher" in history[0]["reason"]
-    assert ex.restart_requested is True
 
 
 def test_confirm_release_heartbeat_problem_fails_confirmation(host):
@@ -2035,12 +2043,18 @@ def test_confirm_release_heartbeat_problem_fails_confirmation(host):
     # Missing signing key -> heartbeat problem
     paths.key.unlink()
     ex.step()
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert "signing key missing" in marker.get("unhealthy_reason", "")
+    assert ex.restart_requested is True
+    assert len(h.read_release_history(paths)) == 0
+
+    assert h.guard(paths, now=t0) == 0
     assert not paths.release_pending.exists()
     history = h.read_release_history(paths)
     assert len(history) == 1
     assert history[0]["status"] == "refused"
     assert "signing key missing" in history[0]["reason"]
-    assert ex.restart_requested is True
 
 
 def test_confirm_release_version_mismatch_fails_confirmation(host):
@@ -2054,12 +2068,18 @@ def test_confirm_release_version_mismatch_fails_confirmation(host):
                             request_id="req1", attempts=0, watcher_active=False, now=t0)
 
     ex.step()
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert "version mismatch" in marker.get("unhealthy_reason", "")
+    assert ex.restart_requested is True
+    assert len(h.read_release_history(paths)) == 0
+
+    assert h.guard(paths, now=t0) == 0
     assert not paths.release_pending.exists()
     history = h.read_release_history(paths)
     assert len(history) == 1
     assert history[0]["status"] == "refused"
     assert "version mismatch" in history[0]["reason"]
-    assert ex.restart_requested is True
 
 
 def test_confirm_release_deadline_expired_fails_confirmation(host):
@@ -2073,12 +2093,18 @@ def test_confirm_release_deadline_expired_fails_confirmation(host):
                             request_id="req1", attempts=0, watcher_active=False, now=t0 - timedelta(minutes=10))
 
     ex.step()
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert "deadline expired" in marker.get("unhealthy_reason", "")
+    assert ex.restart_requested is True
+    assert len(h.read_release_history(paths)) == 0
+
+    assert h.guard(paths, now=t0) == 0
     assert not paths.release_pending.exists()
     history = h.read_release_history(paths)
     assert len(history) == 1
     assert history[0]["status"] == "refused"
     assert "deadline expired" in history[0]["reason"]
-    assert ex.restart_requested is True
 
 
 def test_confirm_release_systemd_active_enter_timestamp(host):
@@ -3808,8 +3834,16 @@ def test_maybe_confirm_release_malformed_pending_quarantines_and_returns(host):
 
     confirmed = ex.maybe_confirm_release()
     assert confirmed is False
-    assert not paths.release_pending.exists()
+    # Candidate requests restart only; does not quarantine or write history
+    assert paths.release_pending.exists()
     assert ex.restart_requested is True
+    assert len(notices) == 0
+    assert len(h.read_release_history(paths)) == 0
+
+    # Guard on next start handles corrupt marker
+    rc = h.guard(paths, post=lambda text, _: notices.append(text) or 200)
+    assert rc == 0
+    assert not paths.release_pending.exists()
 
     # Corrupt marker was quarantined
     quarantined = list(paths.state.glob("release-pending.corrupt.*"))
@@ -4041,7 +4075,7 @@ def test_install_release_pins_guard_copy(tmp_path, monkeypatch):
     assert (paths.guard / "RELEASE").read_text().strip() == sha_a
 
 
-def test_guard_cli_dispatch(tmp_path):
+def test_guard_cli_dispatch(tmp_path, capsys):
     paths = h.Paths(tmp_path)
     assert h.main(["--home", str(tmp_path), "guard"]) == 0
 
@@ -4053,6 +4087,17 @@ def test_guard_cli_dispatch(tmp_path):
     (paths.install / "current").symlink_to(paths.install / "releases" / candidate_sha)
     h._pin_guard(paths, paths.install / "releases" / old_sha, old_sha)
 
+    # Force return with no pending marker is refused and returns 2
+    rc = h.main(["--home", str(tmp_path), "guard", "--return", "--reason", "cli manual return"])
+    assert rc == 2
+    assert "refus" in capsys.readouterr().err.lower()
+    assert len(h.read_release_history(paths)) == 0
+
+    # With pending marker, force return succeeds
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    h.write_release_pending(paths, previous_sha=old_sha, candidate_sha=candidate_sha,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False, now=t0)
     rc = h.main(["--home", str(tmp_path), "guard", "--return", "--reason", "cli manual return"])
     assert rc == 0
     assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
@@ -4060,3 +4105,185 @@ def test_guard_cli_dispatch(tmp_path):
     assert len(history) == 1
     assert history[0]["status"] == "refused"
     assert history[0]["reason"] == "cli manual return"
+
+
+def test_candidate_unhealthy_records_reason_guard_returns(tmp_path):
+    paths = h.Paths(tmp_path)
+    old_sha = "1" * 40
+    candidate_sha = "2" * 40
+
+    old_scripts = paths.install / "releases" / old_sha / "scripts"
+    old_scripts.mkdir(parents=True)
+    (old_scripts / "host_ops.py").write_text("# old release\n")
+    cand_scripts = paths.install / "releases" / candidate_sha / "scripts"
+    cand_scripts.mkdir(parents=True)
+    (cand_scripts / "host_ops.py").write_text("# candidate release\n")
+
+    (paths.install / "current").symlink_to(paths.install / "releases" / candidate_sha)
+    h._pin_guard(paths, paths.install / "releases" / old_sha, old_sha)
+
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    h.write_release_pending(paths, previous_sha=old_sha, candidate_sha=candidate_sha,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False, now=t0)
+
+    # Candidate executor runs and finds itself unhealthy
+    ex = h.Executor(paths, now=lambda: t0)
+    ex._version = candidate_sha
+    paths.key.unlink(missing_ok=True)
+    ex.step()
+
+    # Candidate only recorded failure: marker carries reason, current unchanged
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert marker["unhealthy_reason"] == "unhealthy heartbeat: signing key missing"
+    assert (paths.install / "current").resolve() == paths.install / "releases" / candidate_sha
+    assert ex.restart_requested is True
+    assert len(h.read_release_history(paths)) == 0
+
+    # Then next start's guard() runs from previous copy
+    notices = []
+    rc = h.guard(paths, post=lambda text, _: notices.append(text) or 200, now=t0)
+    assert rc == 0
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+    assert len(notices) == 1
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["status"] == "refused"
+    assert history[0]["candidate_sha"] == candidate_sha
+    assert history[0]["previous_sha"] == old_sha
+    assert "signing key missing" in history[0]["reason"]
+    assert history[0]["notified"] is True
+
+
+def test_return_confirmation_failure_never_marks_previous_refused(tmp_path):
+    paths = h.Paths(tmp_path)
+    old_sha = "1" * 40
+    old_scripts = paths.install / "releases" / old_sha / "scripts"
+    old_scripts.mkdir(parents=True)
+    (old_scripts / "host_ops.py").write_text("# old release\n")
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    # Return pending marker with kind: "return"
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=old_sha,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id=None, attempts=0, watcher_active=False, now=t0, kind="return")
+
+    # If restored release fails confirmation
+    ex = h.Executor(paths, now=lambda: t0)
+    ex._version = old_sha
+    paths.key.unlink(missing_ok=True)
+    ex.step()
+
+    assert ex.restart_requested is True
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert marker.get("kind") == "return"
+    assert "unhealthy_reason" in marker
+
+    notices = []
+    rc = h.guard(paths, post=lambda text, _: notices.append(text) or 200, now=t0)
+    assert rc == 0
+    assert not paths.release_pending.exists()  # marker cleared!
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha  # current kept where it is!
+    assert len(notices) == 1  # notify once!
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["status"] == "return_unconfirmed"  # status return_unconfirmed, NEVER refused!
+    assert history[0]["candidate_sha"] == old_sha
+
+    # Verify history entry does not block candidate from being installed
+    for h_entry in h.read_release_history(paths):
+        assert h_entry.get("status") not in ("refused", "returned")
+
+
+def test_guard_never_fails_unit_start_on_injected_exception(tmp_path, monkeypatch, capsys):
+    paths = h.Paths(tmp_path)
+    some_sha = "3" * 40
+    (paths.install / "releases" / some_sha / "scripts").mkdir(parents=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / some_sha)
+
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    h.write_release_pending(paths, previous_sha=None, candidate_sha=some_sha,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id=None, attempts=0, watcher_active=False, now=t0)
+
+    # Injected exception inside guard
+    def fail(*_):
+        raise RuntimeError("simulated catastrophe")
+
+    monkeypatch.setattr(h, "load_release_pending", fail)
+
+    rc = h.guard(paths)
+    assert rc == 0  # must NEVER fail unit start
+    assert (paths.install / "current").resolve() == paths.install / "releases" / some_sha  # current stays as is
+    err = capsys.readouterr().err
+    assert "RuntimeError" in err
+    assert "simulated catastrophe" in err
+
+
+def test_pin_guard_atomic_and_contains_previous_release_without_candidate_code(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    sha_a = "a" * 40
+    sha_b = "b" * 40
+
+    def mock_archive_with_text(text: str) -> bytes:
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode="w:gz") as tar:
+            for name in ("host_ops.py", "relay_continuity.py", "relay_argon.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+                data = f'# {name}\nPAYLOAD = {text!r}\n'.encode() if name == "host_ops.py" else b"# script\n"
+                info = tarfile.TarInfo(f"repo/scripts/{name}")
+                info.type = tarfile.REGTYPE
+                info.size = len(data)
+                info.mode = 0o755
+                tar.addfile(info, io.BytesIO(data))
+        return out.getvalue()
+
+    # Install release A
+    mock_install(monkeypatch, mock_archive_with_text("CODE_A"))
+    h.install_release(paths, sha_a)
+    assert (paths.guard / "RELEASE").read_text().strip() == sha_a
+    assert "CODE_A" in (paths.guard / "scripts" / "host_ops.py").read_text()
+
+    # Confirm release A
+    paths.release_pending.unlink(missing_ok=True)
+
+    # Install release B (candidate)
+    mock_install(monkeypatch, mock_archive_with_text("CODE_B"), status="ahead")
+    h.install_release(paths, sha_b)
+
+    # guard/RELEASE must be previous sha (sha_a)
+    assert (paths.guard / "RELEASE").read_text().strip() == sha_a
+    # Guard copy has previous release code and NO candidate code
+    guard_code = (paths.guard / "scripts" / "host_ops.py").read_text()
+    assert "CODE_A" in guard_code
+    assert "CODE_B" not in guard_code
+
+    # Test atomic replacement of existing guard directory
+    tmp_source = tmp_path / "new_source"
+    tmp_source.mkdir()
+    (tmp_source / "marker.txt").write_text("hello\n")
+    h._pin_guard(paths, tmp_source, "c" * 40)
+    assert (paths.guard / "RELEASE").read_text().strip() == "c" * 40
+    assert (paths.guard / "marker.txt").read_text() == "hello\n"
+    assert len(list(paths.install.glob(".guard*"))) == 0
+
+
+def test_guard_return_without_pending_marker_refused(tmp_path, capsys):
+    paths = h.Paths(tmp_path)
+    confirmed_sha = "5" * 40
+    (paths.install / "releases" / confirmed_sha / "scripts").mkdir(parents=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / confirmed_sha)
+
+    assert not paths.release_pending.exists()
+
+    # guard --return without pending marker must print refusal and return 2
+    rc = h.guard(paths, force_return=True)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "refus" in err.lower()
+    # Confirmed release is NOT marked refused in history
+    assert len(h.read_release_history(paths)) == 0
+    # Current is untouched
+    assert (paths.install / "current").resolve() == paths.install / "releases" / confirmed_sha
