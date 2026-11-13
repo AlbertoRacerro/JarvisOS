@@ -336,11 +336,10 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
                 status, reason = "failed", f"permission_denied: {actions}"
             elif document.get("status") != "SUCCESS":
                 status, reason = "failed", f"stream_status_{document.get('status') or 'missing'}"
-            elif not str(document.get("response") or "").strip():
-                if status != "failed" and runner_cause is not None:
-                    status, reason = "failed", f"runner_{runner_cause[1]}"
-                elif status != "failed":
-                    status, reason = "failed", "empty_result"
+            elif status != "failed" and runner_cause is not None:
+                status, reason = "failed", f"runner_{runner_cause[1]}"
+            elif status != "failed" and not str(document.get("response") or "").strip():
+                status, reason = "failed", "empty_result"
         else:
             if status != "failed" and runner_cause is not None:
                 status, reason = "failed", f"runner_{runner_cause[1]}"

@@ -163,36 +163,9 @@ def test_sandboxed_full_permissions_and_stripped_credentials(env: Env, monkeypat
     assert env_vars["GIT_CONFIG_GLOBAL"] == "/dev/null" and env_vars["GIT_TERMINAL_PROMPT"] == "0"
 
 
-def test_credentials_are_stripped(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in ("GH_TOKEN", "GITHUB_TOKEN", "GH_FOO", "GIT_FOO", "SSH_AUTH_SOCK"):
-        monkeypatch.setenv(key, "secret")
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/home/x/.gitconfig")
-    monkeypatch.setenv("GH_CONFIG_DIR", "/home/x/.config/gh")
-    assert env.run()["status"] == "succeeded"
-    seen = json.loads(env.log.read_text())["env"]
-    gh_config = Path(seen["GH_CONFIG_DIR"])
-    assert gh_config.parent == env.evidence and gh_config.is_dir() and not any(gh_config.iterdir())
-    assert seen["GIT_CONFIG_NOSYSTEM"] == "1"
-    assert seen["GH_TOKEN"] is seen["GITHUB_TOKEN"] is seen["GH_FOO"] is seen["GIT_FOO"] is seen["SSH_AUTH_SOCK"] is None
-    assert seen["GIT_CONFIG_GLOBAL"] == "/dev/null" and seen["GIT_TERMINAL_PROMPT"] == "0"
-
-
-def test_not_sandbox(env: Env) -> None:
-    refused(env.run(sandbox=False), "not_sandbox")
-    assert not env.invoked()
-
-
 def test_not_sandbox_refusal(env: Env) -> None:
     refused(env.run(sandbox=False), "not_sandbox")
     assert not env.invoked()
-
-
-def test_denied_action_is_harness_failure(env: Env) -> None:
-    env.set(run_out=json.dumps({"status": "SUCCESS", "response": "", "denied_actions": [{"action": "command"}]}),
-            write=False)
-    result = env.run()
-    assert result["status"] == "failed" and result["failure_class"] == "harness"
-    assert result["reason"] == "permission_denied: command"
 
 
 @pytest.mark.parametrize("write", [False, True])
@@ -204,26 +177,12 @@ def test_permission_denials_classified_as_harness(env: Env, write: bool) -> None
     assert result["reason"] == "permission_denied: command"
 
 
-def test_error_status_is_harness_failure(env: Env) -> None:
-    env.set(run_out=json.dumps({"status": "ERROR", "response": "done"}))
-    result = env.run()
-    assert result["status"] == "failed" and result["failure_class"] == "harness"
-    assert result["reason"] == "stream_status_ERROR"
-
-
 @pytest.mark.parametrize("status_val", ["ERROR", "FAILED"])
 def test_stream_error_status_classified_as_harness(env: Env, status_val: str) -> None:
     env.set(run_out=json.dumps({"status": status_val, "response": "done"}))
     result = env.run()
     assert result["status"] == "failed" and result["failure_class"] == "harness"
     assert result["reason"] == f"stream_status_{status_val}"
-
-
-def test_empty_response_and_diff_is_harness_failure(env: Env) -> None:
-    env.set(run_out=json.dumps({"status": "SUCCESS", "response": "  \n"}), write=False)
-    result = env.run()
-    assert result["status"] == "failed" and result["failure_class"] == "harness"
-    assert result["reason"] == "empty_result" and result["diff_bytes"] == 0
 
 
 @pytest.mark.parametrize("write", [False, True])
@@ -294,6 +253,17 @@ def test_unparsed_plain_text_output_not_empty_result(env: Env) -> None:
             stderr='log\nAGY_ERROR: {"status": "RESOURCE_EXHAUSTED", "error_code": 429}\n')
     result = env.run()
     assert result["status"] == "failed"
+    assert result["reason"] == "runner_provider_quota"
+    assert result["failure_class"] == "provider_quota"
+
+
+def test_json_success_with_runner_error_fails(env: Env) -> None:
+    env.set(run_out=json.dumps({"status": "SUCCESS", "response": "Review completed: all checks passed."}),
+            exit=0,
+            write=False,
+            stderr='worker stderr\nAGY_ERROR: {"status": "RESOURCE_EXHAUSTED", "error_code": 429}\n')
+    result = env.run()
+    assert result["status"] == "failed" and result["exit_code"] == 0
     assert result["reason"] == "runner_provider_quota"
     assert result["failure_class"] == "provider_quota"
 
@@ -478,20 +448,6 @@ def test_prepare_login_links_gemini_and_refuses_missing_or_conflicting_home(env:
 @pytest.mark.parametrize(("status", "reason", "stderr", "expected"), [
     ("succeeded", None, "", None),
     ("timeout", "exceeded 930s", "", "harness"),
-    ("failed", "spawn_failed: no such file", "", "harness"),
-    ("failed", "exit_code_3", 'AGY_ERROR: {"status": "DEADLINE_EXCEEDED", "reason": "print_timeout", '
-                              '"short_error": "print timeout after 30m0s"}', "harness"),
-    ("failed", "exit_code_3", 'AGY_ERROR: {"status": "RESOURCE_EXHAUSTED", "error_code": 429}', "provider_quota"),
-    ("failed", "exit_code_3", 'AGY_ERROR: {"status": "UNAUTHENTICATED", "error_code": 401}', "harness"),
-    ("failed", "exit_code_1", "plain failure", "model_or_unknown"),
-    ("failed", "git_metadata_modified", "", "policy"),
-])
-def test_failure_class_separates_harness_from_model(status: str, reason: str | None, stderr: str, expected: str | None) -> None:
-    assert worker.failure_class(status, reason, stderr) == expected
-
-
-@pytest.mark.parametrize(("status", "reason", "stderr", "expected"), [
-    ("succeeded", None, "", None),
     ("failed", "empty_result", "", "harness"),
     ("failed", "permission_denied: command", "", "harness"),
     ("failed", "permission_denied: edit_file, bash", "", "harness"),
