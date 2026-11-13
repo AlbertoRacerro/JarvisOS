@@ -811,25 +811,17 @@ def render(packet: dict[str, Any], budget: int = DEFAULT_BUDGET_CHARS) -> str:
 
 
 # Punctuation right after a digit is a date, time or version ("2026-11-13.", "16:07."), not an option separator.
-_SEP_CHARS = r"(?:\s|(?<!\d)[,(;:—/|\\–\[\]\)\-?!])"
+_SEP_CHARS = r"(?:\s|(?<!\d)[,(;:—/|\\–\)\-?!])"
 _CONJ = r"\b(?:e|o|and|or|oppure)\b"
 _SEP = rf"(?:^|{_SEP_CHARS}|{_CONJ})"
 
-_INLINE_OPTION_PATTERN = (
-    rf"{_SEP}\s*(?:"
-    r"(?:\d+[)\]]|\(\d+\)|\[\d+\])(?:\s*\S)"
-    r"|"
-    r"\d+\.(?:\s+\S|[a-zA-Z])"
-    r")"
-)
-_INLINE_OPTION_RE = re.compile(_INLINE_OPTION_PATTERN)
+# An option marker: "2)", "(2)" or "2." followed by text. A dot needs a space or a letter after it, so decimals,
+# versions and times ("3.12", "10.30") are not markers; "[1]" is a citation, not a marker.
+_MARKER = r"(?:(?:\d+\)|\(\d+\))\s*\S|\d+\.(?:\s+\S|[a-zA-Z]))"
+_INLINE_OPTION_RE = re.compile(rf"{_SEP}\s*{_MARKER}")
 
 _PROMPT_END_SEP = r"(?:^|(?<!\d)[?!:;—/|\\–\-])"
-_PROMPT_EMBEDDED_RE = re.compile(
-    rf"{_PROMPT_END_SEP}\s*(?:"
-    r"(?:\d+[.)\]]|\(\d+\)|\[\d+\])(?:\s*\S|[a-zA-Z])"
-    r")"
-)
+_PROMPT_EMBEDDED_RE = re.compile(rf"{_PROMPT_END_SEP}\s*{_MARKER}")
 
 
 def has_inline_alternatives_in_body(body: str) -> bool:

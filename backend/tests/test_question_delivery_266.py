@@ -107,6 +107,11 @@ def test_inline_alternatives_after_separators_rejected_without_ledger_write(spac
     "Dal 2026-11-13. Come procediamo?",
     "La quota torna alle 16:07. Come procediamo?",
     "Serve Python 3.12. Come procediamo?",
+    "3.12 è compatibile? Procediamo?",
+    "Versione: 2.1 rilasciata. Procediamo?",
+    "Orario: 10.30 è confermato?",
+    "Nota: [1] è verificato. Procediamo?",
+    "Rif. [1] e [2]: come procedere?",
 ])
 def test_dates_times_and_versions_in_prompt_are_not_inline_options(prompt):
     devctx.validate_question(f"{prompt}\n1. Procedi\n2. Rimanda")
