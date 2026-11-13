@@ -2385,6 +2385,69 @@ def _preflight_release(release_dir: Path, paths: Paths) -> None:
         raise Refused(f"candidate preflight failed: {first_line}")
 
 
+def _scan_release_tree(root: Path) -> tuple[dict[Path, int], set[Path]]:
+    if not root.is_dir() or root.is_symlink():
+        raise Refused(f"release path is not a directory: {root.name}")
+    files: dict[Path, int] = {}
+    directories: set[Path] = set()
+
+    def walk(current: Path, rel: Path) -> None:
+        try:
+            entries = list(os.scandir(current))
+        except OSError as exc:
+            raise Refused(f"unreadable release directory: {exc}") from None
+        for entry in sorted(entries, key=lambda e: e.name):
+            child_rel = rel / entry.name if rel != Path(".") else Path(entry.name)
+            try:
+                st = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise Refused(f"cannot stat release member {child_rel}: {exc}") from None
+            mode = st.st_mode
+            if stat.S_ISLNK(mode):
+                raise Refused(f"unsafe release member: {child_rel}")
+            if stat.S_ISDIR(mode):
+                directories.add(child_rel)
+                walk(Path(entry.path), child_rel)
+            elif stat.S_ISREG(mode):
+                files[child_rel] = mode & 0o777
+            else:
+                raise Refused(f"unsafe release member: {child_rel}")
+
+    walk(root, Path("."))
+    return files, directories
+
+
+def _verify_existing_release(release: Path, stage: Path) -> None:
+    stage_files, stage_dirs = _scan_release_tree(stage)
+    release_files, release_dirs = _scan_release_tree(release)
+
+    if stage_dirs != release_dirs:
+        extra_dirs = release_dirs - stage_dirs
+        missing_dirs = stage_dirs - release_dirs
+        if extra_dirs:
+            raise Refused(f"existing release has extra directory: {sorted(extra_dirs, key=str)[0]}")
+        raise Refused(f"existing release missing directory: {sorted(missing_dirs, key=str)[0]}")
+
+    if set(stage_files) != set(release_files):
+        extra_files = set(release_files) - set(stage_files)
+        missing_files = set(stage_files) - set(release_files)
+        if extra_files:
+            raise Refused(f"existing release has extra file: {sorted(extra_files, key=str)[0]}")
+        raise Refused(f"existing release missing file: {sorted(missing_files, key=str)[0]}")
+
+    for rel_path, stage_mode in sorted(stage_files.items(), key=lambda item: str(item[0])):
+        release_mode = release_files[rel_path]
+        if release_mode != stage_mode:
+            raise Refused(f"existing release file mode mismatch for {rel_path} ({oct(release_mode)} != {oct(stage_mode)})")
+        try:
+            rel_bytes = (release / rel_path).read_bytes()
+            stage_bytes = (stage / rel_path).read_bytes()
+        except OSError as exc:
+            raise Refused(f"cannot read release file {rel_path}: {exc}") from None
+        if rel_bytes != stage_bytes:
+            raise Refused(f"existing release content mismatch for {rel_path}")
+
+
 def install_release(paths: Paths, sha: str) -> None:
     if os.environ.get("JARVIS_SANDBOX") or socket.gethostname() == "jarvis-sandbox":
         raise Refused("installation is host-only")
@@ -2434,6 +2497,7 @@ def install_release(paths: Paths, sha: str) -> None:
             os.rename(stage, release)
         else:
             _preflight_release(release, paths)
+            _verify_existing_release(release, stage)
     tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
     os.symlink(release, tmp_link)
     os.replace(tmp_link, paths.install / "current")

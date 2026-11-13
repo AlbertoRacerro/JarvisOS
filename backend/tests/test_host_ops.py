@@ -1433,8 +1433,128 @@ def test_install_release_reinstall_damaged_existing_release_refused(tmp_path, mo
         h.install_release(paths, candidate_sha)
     assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
 
-    # When candidate passes preflight, reinstall succeeds
+    # When candidate passes preflight, but manifest/content differs: refused
     monkeypatch.setattr(h, "_run_preflight", lambda argv, timeout=60: subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), ""))
+    with pytest.raises(h.Refused, match="existing release"):
+        h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+
+    # When candidate release directory matches candidate archive, reinstall succeeds
+    for name in ("host_ops.py", "relay_continuity.py", "relay_argon.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+        target = cand_dir / name
+        target.write_bytes(b"# release\n")
+        target.chmod(0o644)
+    h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / candidate_sha
+
+
+def test_install_release_reinstall_modified_content_refused(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    old_sha = "1" * 40
+    candidate_sha = "2" * 40
+    (paths.install / "releases" / old_sha / "scripts").mkdir(parents=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    mock_install(monkeypatch, release_archive(), status="ahead")
+    monkeypatch.setattr(h, "_run_preflight", lambda argv, timeout=60: subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), ""))
+
+    # First install creates valid releases/candidate_sha
+    h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / candidate_sha
+
+    # Tamper with content of one script in the existing release
+    target = paths.install / "releases" / candidate_sha / "scripts" / "relay_jobs.py"
+    target.write_bytes(b"# tampered content\n")
+
+    # Point current back to old_sha to prove it fails closed without switching current
+    (paths.install / "current").unlink()
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    with pytest.raises(h.Refused, match=r"existing release content mismatch for scripts/relay_jobs\.py"):
+        h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+
+
+def test_install_release_reinstall_extra_file_refused(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    old_sha = "1" * 40
+    candidate_sha = "2" * 40
+    (paths.install / "releases" / old_sha / "scripts").mkdir(parents=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    mock_install(monkeypatch, release_archive(), status="ahead")
+    monkeypatch.setattr(h, "_run_preflight", lambda argv, timeout=60: subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), ""))
+
+    # First install
+    h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / candidate_sha
+
+    # Add extra script file in existing release
+    extra_script = paths.install / "releases" / candidate_sha / "scripts" / "backdoor.py"
+    extra_script.write_bytes(b"# backdoor\n")
+
+    (paths.install / "current").unlink()
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    with pytest.raises(h.Refused, match=r"existing release has extra file: scripts/backdoor\.py"):
+        h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+
+    # Remove extra script, add extra file at release root
+    extra_script.unlink()
+    extra_root = paths.install / "releases" / candidate_sha / "evil.sh"
+    extra_root.write_bytes(b"#!/bin/sh\n")
+
+    with pytest.raises(h.Refused, match=r"existing release has extra file: evil\.sh"):
+        h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+
+
+def test_install_release_reinstall_mode_mismatch_refused(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    old_sha = "1" * 40
+    candidate_sha = "2" * 40
+    (paths.install / "releases" / old_sha / "scripts").mkdir(parents=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    mock_install(monkeypatch, release_archive(), status="ahead")
+    monkeypatch.setattr(h, "_run_preflight", lambda argv, timeout=60: subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), ""))
+
+    # First install
+    h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / candidate_sha
+
+    # Mode mismatch on script: chmod 0o755 when candidate extracted as 0o644
+    target = paths.install / "releases" / candidate_sha / "scripts" / "host_ops.py"
+    target.chmod(0o755)
+
+    (paths.install / "current").unlink()
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    with pytest.raises(h.Refused, match=r"existing release file mode mismatch for scripts/host_ops\.py"):
+        h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / old_sha
+
+
+def test_install_release_reinstall_identical_release_succeeds(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    old_sha = "1" * 40
+    candidate_sha = "2" * 40
+    (paths.install / "releases" / old_sha / "scripts").mkdir(parents=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    mock_install(monkeypatch, release_archive(), status="ahead")
+    monkeypatch.setattr(h, "_run_preflight", lambda argv, timeout=60: subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), ""))
+
+    # First install
+    h.install_release(paths, candidate_sha)
+    assert (paths.install / "current").resolve() == paths.install / "releases" / candidate_sha
+
+    # Symlink current back to old_sha
+    (paths.install / "current").unlink()
+    (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
+
+    # Identical reinstall succeeds and updates current
     h.install_release(paths, candidate_sha)
     assert (paths.install / "current").resolve() == paths.install / "releases" / candidate_sha
 
