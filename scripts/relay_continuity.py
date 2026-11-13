@@ -1949,7 +1949,8 @@ class RelayAdapter:
             env = {**os.environ, **(self.env or {})}
             relay_argon.model_for(agent, env)
             reading = relay_argon.read_quota(binary, env, agent=agent)
-            result = {"windows": [{"used_percent": 100 * (1 - b["remaining_fraction"]),
+            result = {"as_of": iso(now_utc()),
+                      "windows": [{"used_percent": 100 * (1 - b["remaining_fraction"]),
                                    "resets_at": b.get("reset_time"), "disabled": b.get("disabled", False)}
                                   for b in reading]}
         except relay_argon.Refused:
@@ -3205,7 +3206,43 @@ class Supervisor:
                     return False
             else:
                 until = parse_ts(cooldown.get("until"))
-                if until is None or now < until:
+                if until is not None and now < until:
+                    if source in ("limits", "message"):
+                        counters = self.state["counters"]
+                        if counters.get(f"reading_clear_{agent}", 0) == 0:
+                            since = parse_ts(cooldown.get("since"))
+                            if since is not None:
+                                if agent in NATIVE_AGENTS:
+                                    native = self.host.relay.argon_limits(agent)
+                                    if isinstance(native, dict):
+                                        as_of = parse_ts(native.get("as_of"))
+                                        windows = native.get("windows")
+                                        room = (isinstance(windows, list) and len(windows) > 0 and
+                                                all(isinstance(w, dict) and not w.get("disabled") and
+                                                    isinstance(w.get("used_percent"), (int, float)) and
+                                                    not isinstance(w.get("used_percent"), bool) and
+                                                    w["used_percent"] < 100 for w in windows))
+                                        if as_of is not None and as_of > since and room:
+                                            self.state["cooldowns"].pop(agent, None)
+                                            counters[f"reading_clear_{agent}"] = 1
+                                            self.record("finding", f"relay-continuity: cleared {source} cooldown for {agent} via fresh limits reading")
+                                            return True
+                                else:
+                                    entry = self.reading(agent)
+                                    if entry is not None and (as_of := parse_ts(entry.get("as_of"))) is not None and as_of <= since:
+                                        self._reading = None
+                                        self._reading_at = None
+                                        entry = self.reading(agent)
+                                    if entry is not None:
+                                        as_of = parse_ts(entry.get("as_of"))
+                                        room = (self.exhausted_until(agent) is False)
+                                        if as_of is not None and as_of > since and room:
+                                            self.state["cooldowns"].pop(agent, None)
+                                            counters[f"reading_clear_{agent}"] = 1
+                                            self.record("finding", f"relay-continuity: cleared {source} cooldown for {agent} via fresh limits reading")
+                                            return True
+                    return False
+                if until is None:
                     return False
         if agent in NATIVE_AGENTS:
             native = self.host.relay.argon_limits(agent)
@@ -3477,6 +3514,7 @@ class Supervisor:
             counters.update({"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0})
             counters.pop(f"estimated_{failed_agent}", None)
             counters.pop(f"transient_{failed_agent}", None)
+            counters.pop(f"reading_clear_{failed_agent}", None)
             self.state["spend_caps"].pop(failed_agent, None)
             self.state["waiting_since"] = None
             if task is None and self.mission is not None:

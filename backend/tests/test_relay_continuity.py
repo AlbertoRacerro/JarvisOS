@@ -5581,3 +5581,148 @@ def test_clearing_auth_cooldown_by_decision_or_release(tmp_path: Path, monkeypat
     sup2 = env.supervisor()
     sup2.state = env.store.load()
     assert "claude" not in sup2.state["cooldowns"]
+
+
+def test_fresh_reading_ends_limits_or_message_cooldown_for_relay_and_native(tmp_path: Path) -> None:
+    """Criterion 5: A future 'limits' or 'message' cooldown with a fresh reading showing room and
+    newer than 'since' makes the agent available and drops the cooldown, for a Relay agent and for a native agent."""
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    cooldown_since = T0 - timedelta(minutes=10)
+    cooldown_until = T0 + timedelta(hours=4)
+    as_of = T0 - timedelta(minutes=5)
+
+    # 1. Relay agent with limits cooldown
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.readings = lambda: {
+        "claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of),
+        "codex": reading("codex", 10.0, T0 + timedelta(days=1), as_of),
+    }
+    assert sup.available("claude")
+    assert "claude" not in sup.state["cooldowns"]
+    assert sup.state["counters"]["reading_clear_claude"] == 1
+    findings = [t for k, t in env.ledger if k == "finding" and "cleared limits cooldown for claude" in t]
+    assert len(findings) == 1
+
+    # 2. Relay agent with message cooldown
+    sup.state["cooldowns"]["codex"] = {
+        "until": rc.iso(cooldown_until), "source": "message", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    assert sup.available("codex")
+    assert "codex" not in sup.state["cooldowns"]
+    assert sup.state["counters"]["reading_clear_codex"] == 1
+
+    # 3. Native agent with limits cooldown
+    sup.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.argon_limits = lambda agent: {
+        "as_of": rc.iso(as_of),
+        "windows": [{"used_percent": 15.0, "disabled": False, "resets_at": rc.iso(T0 + timedelta(days=1))}],
+    } if agent == "argon" else None
+    assert sup.available("argon")
+    assert "argon" not in sup.state["cooldowns"]
+    assert sup.state["counters"]["reading_clear_argon"] == 1
+
+
+def test_reading_clear_only_once_until_successful_turn(tmp_path: Path) -> None:
+    """Criterion 6: After a reading clear, a new quota failure records a cooldown that a further reading with
+    room does not clear until a successful turn resets the counter."""
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    cooldown_since = T0 - timedelta(minutes=10)
+    cooldown_until = T0 + timedelta(hours=4)
+    as_of = T0 - timedelta(minutes=5)
+
+    # First clear succeeds
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.readings = lambda: {"claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of)}
+    assert sup.available("claude")
+    assert "claude" not in sup.state["cooldowns"]
+    assert sup.state["counters"]["reading_clear_claude"] == 1
+
+    # New quota failure occurs
+    report_quota = rc.TurnReport(outcome="quota", agent="claude", detail="hit usage limit", reset_at=rc.iso(cooldown_until))
+    sup.set_cooldown("claude", report_quota)
+    assert "claude" in sup.state["cooldowns"]
+
+    # Even with fresh reading with room, second clear does NOT happen
+    as_of2 = T0 - timedelta(minutes=2)
+    env.relay.readings = lambda: {"claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of2)}
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+    # A successful turn resets the counter
+    success_report = rc.TurnReport(outcome="success", agent="claude", detail="result ok")
+    sup._decide(success_report, None)
+    assert "reading_clear_claude" not in sup.state["counters"]
+
+    # Now a third quota cooldown CAN be cleared by a reading with room
+    cooldown_since3 = T0
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since3),
+    }
+    as_of3 = T0 + timedelta(minutes=1)
+    env.clock.sleep(120)
+    sup._reading = None
+    env.relay.readings = lambda: {"claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of3)}
+    assert sup.available("claude")
+    assert "claude" not in sup.state["cooldowns"]
+    assert sup.state["counters"]["reading_clear_claude"] == 1
+
+
+def test_reading_clear_boundaries_estimate_manual_stale_missing_unparseable_exhausted(tmp_path: Path) -> None:
+    """Criterion 7: estimate and manual cooldowns are not cleared by a reading with room;
+    stale, missing, unparseable and exhausted readings leave limits and message cooldowns intact."""
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    cooldown_since = T0 - timedelta(minutes=10)
+    cooldown_until = T0 + timedelta(hours=4)
+    as_of = T0 - timedelta(minutes=5)
+    def good_readings() -> dict[str, Any]:
+        return {"claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of)}
+
+    # 1. estimate cooldown not cleared
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "estimate", "reason": "transient", "since": rc.iso(cooldown_since),
+    }
+    env.relay.readings = good_readings
+    assert not sup.available("claude")
+    assert sup.state["cooldowns"]["claude"]["source"] == "estimate"
+
+    # 2. manual cooldown not cleared
+    sup.state["cooldowns"]["claude"] = {
+        "until": None, "source": "manual", "reason": "spend_limit", "since": rc.iso(cooldown_since),
+    }
+    assert not sup.available("claude")
+    assert sup.state["cooldowns"]["claude"]["source"] == "manual"
+
+    # 3. stale reading (as_of <= since) leaves limits cooldown intact
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    stale_as_of = cooldown_since - timedelta(minutes=1)
+    env.relay.readings = lambda: {"claude": reading("claude", 5.0, T0 + timedelta(days=1), stale_as_of)}
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+    # 4. missing reading leaves limits cooldown intact
+    env.relay.readings = lambda: {}
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+    # 5. unparseable reading leaves limits cooldown intact
+    env.relay.readings = lambda: {"claude": {"status": "error", "windows": "bad"}}
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+    # 6. exhausted reading (>= 99.5% used) leaves limits cooldown intact
+    env.relay.readings = lambda: {"claude": reading("claude", 100.0, T0 + timedelta(hours=2), as_of)}
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+
