@@ -152,8 +152,13 @@ class FakeRelay(rc.RelayAdapter):
         status = reported[0] if reported else "propose_done"
         last_msg = reported[1] if len(reported) > 1 else None
         tokens = reported[2] if len(reported) > 2 else None
-        write_turn(self.sessions_dir() / sid, events, agent=agent, prompt=relay_prompt(task),
-                   status=status, last_message=last_msg, context_used_tokens=tokens)
+        turn = write_turn(self.sessions_dir() / sid, events, agent=agent, prompt=relay_prompt(task),
+                          status=status, last_message=last_msg, context_used_tokens=tokens)
+        if agent in rc.NATIVE_AGENTS and not (turn / "native-result.json").exists():
+            (turn / "native-result.json").write_text(
+                json.dumps({"schema": "argon-coordinator.v1", "launched": True, "exit_code": 0, "quota": [], "reason": None,
+                            "model": rc.relay_argon.MODEL})
+            )
         return rc.RunResult(sid, 0, True)
 
 
@@ -4617,6 +4622,7 @@ def test_ci_wait_satisfaction_and_unrelated_ci_ignored(tmp_path: Path) -> None:
     env.ci[(99, "9999999999999999999999999999999999999999")] = {
         "observed_head": "9999999999999999999999999999999999999999",
         "state": "open",
+        "required_checks": ["backend"],
         "checks": [{"name": "backend", "status": "completed", "conclusion": "success"}],
     }
 
@@ -4626,11 +4632,13 @@ def test_ci_wait_satisfaction_and_unrelated_ci_ignored(tmp_path: Path) -> None:
                 return {
                     "observed_head": head_sha,
                     "state": "open",
+                    "required_checks": ["backend"],
                     "checks": [{"name": "backend", "status": "completed", "conclusion": "success"}],
                 }
             return {
                 "observed_head": head_sha,
                 "state": "open",
+                "required_checks": ["backend"],
                 "checks": [{"name": "backend", "status": "in_progress", "conclusion": ""}],
             }
         return env.ci.get((pr, sha))
@@ -4662,6 +4670,7 @@ def test_pr_head_change_or_closure_wakes_immediately_with_uncertainty(tmp_path: 
     env_a.ci[(42, head_sha)] = {
         "observed_head": "2222222222222222222222222222222222222222",  # advanced!
         "state": "open",
+        "required_checks": ["backend"],
         "checks": [{"name": "backend", "status": "in_progress", "conclusion": ""}],
     }
     msg_a = f"RELAY_STATUS continue\nJOB-WAIT: j-20261113T120000Z-111111\nCI-WAIT: 42@{head_sha}"
@@ -4684,6 +4693,7 @@ def test_pr_head_change_or_closure_wakes_immediately_with_uncertainty(tmp_path: 
     env_b.ci[(42, head_sha)] = {
         "observed_head": head_sha,
         "state": "closed",
+        "required_checks": ["backend"],
         "checks": [],
     }
     msg_b = f"RELAY_STATUS continue\nCI-WAIT: 42@{head_sha}"
@@ -4754,6 +4764,7 @@ def test_no_checks_or_unreadable_ci_fails_closed(tmp_path: Path) -> None:
     env_a.ci[(42, head_sha)] = {
         "observed_head": head_sha,
         "state": "open",
+        "required_checks": ["backend"],
         "checks": [],
     }
     msg_a = f"RELAY_STATUS continue\nCI-WAIT: 42@{head_sha}"
@@ -4824,7 +4835,7 @@ def test_bare_checkpoint_enforces_minimum_interval(tmp_path: Path) -> None:
     result, sup = run_mission(env, mission)
     assert result == "idle"
     # Bare continue turn must sleep MIN_CHECKPOINT_INTERVAL_SECONDS (60s) before relaunch
-    assert any(s >= 60.0 for s in env.clock.slept)
+    assert sum(env.clock.slept) >= rc.MIN_CHECKPOINT_INTERVAL_SECONDS
 
 
 def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> None:
@@ -4906,13 +4917,16 @@ def test_provider_change_and_native_agents_force_fresh_context(tmp_path: Path) -
     env1.head(SUCCESS, agent="claude")
     sup1 = env1.supervisor()
     sup1.mission = mission1
-    sup1.state["mission"] = {"id": mission1["id"], "next": 0, "total": 1, "done": []}
+    sup1.state = env1.store.load()
+    sup1.state["head_session"] = HEAD
+    sup1.state["agent"] = "claude"
     sup1.state["cooldowns"]["claude"] = {"until": rc.iso(env1.clock.now() + timedelta(hours=2)), "reason": "quota"}
+    sup1.save()
     turn_dir = env1.relay.sessions_dir() / HEAD / "turns" / "turn-001"
     (turn_dir / "last-message.txt").write_text(msg, encoding="utf-8")
     (turn_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
     env1.relay.script = [("codex", CODEX_SUCCESS, "propose_done")]
-    result1, _ = env1.run(HEAD)
+    result1 = sup1.run(HEAD)
     assert result1 == "idle"
     assert env1.relay.launches[0]["agent"] == "codex"
     assert env1.relay.launches[0]["parent"] is None
@@ -4922,16 +4936,38 @@ def test_provider_change_and_native_agents_force_fresh_context(tmp_path: Path) -
     mission2 = mission_def("native agent")
     start_mission(env2, mission2)
     env2.jobs[jid] = {"status": "succeeded"}
-    env2.head(SUCCESS, agent="argon")
-    sup2 = env2.supervisor()
-    sup2.mission = mission2
-    sup2.state["agent"] = "argon"
-    sup2.state["mission"] = {"id": mission2["id"], "next": 0, "total": 1, "done": []}
+    env2.relay.argon_limits = lambda agent: {"windows": [{"used_percent": 10}]} if agent == "argon" else None
+
+    ra = rc.relay_argon
+    argon_ev = [
+        {"event": "init", "conversation_id": "c1", "init": {"model": ra.MODEL}},
+        {"event": "step_update", "step_update": {"step_index": 2, "state": "ACTIVE", "conversation_id": "c1",
+         "step_type": "tool", "tool_name": "read_file", "tool_info": {"parameters": {"Path": "/tmp/test"}}}},
+        {"event": "step_update", "step_update": {"step_index": 2, "state": "DONE", "conversation_id": "c1",
+         "step_type": "tool", "tool_name": "read_file", "tool_info": {"parameters": {"Path": "/tmp/test"}}}},
+        {"event": "result", "result": {"conversation_id": "c1", "status": "SUCCESS", "response": msg}},
+    ]
+    meta = {"schema": "argon-coordinator.v1", "launched": True, "exit_code": 0, "quota": [], "reason": None, "model": ra.MODEL}
+
     turn_dir2 = env2.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    turn_dir2.mkdir(parents=True, exist_ok=True)
     (turn_dir2 / "last-message.txt").write_text(msg, encoding="utf-8")
     (turn_dir2 / "state.json").write_text(json.dumps({"agent_key": "argon", "status": "continue"}))
-    env2.relay.script = [("argon", SUCCESS, "propose_done")]
-    result2, _ = env2.run(HEAD)
+    (turn_dir2 / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in argon_ev))
+    (turn_dir2 / "native-result.json").write_text(json.dumps(meta))
+    pin_to_t0(turn_dir2)
+
+    sup2 = env2.supervisor()
+    sup2.mission = mission2
+    sup2.state = env2.store.load()
+    sup2.state["head_session"] = HEAD
+    sup2.state["agent"] = "argon"
+    sup2.save()
+    env2.relay.script = [("argon", argon_ev, "propose_done")]
+    result2 = sup2.run(HEAD)
+    assert result2 == "idle"
+    assert len(env2.relay.launches) == 1
+    assert env2.relay.launches[0]["agent"] == "argon"
     assert env2.relay.launches[0]["parent"] is None
 
 
@@ -5018,4 +5054,180 @@ def test_side_effect_holds_preempt_external_waits(tmp_path: Path) -> None:
     assert sup_b.state["hold"]["reason"] == "effects_uncertain"
     assert sup_b.state["wait"] is None
 
+
+def test_default_pr_ci_status_ruleset_and_fallback(tmp_path: Path) -> None:
+    head = "a" * 40
+    pr_json = json.dumps({
+        "state": "OPEN",
+        "headRefOid": head,
+        "baseRefName": "main",
+        "statusCheckRollup": [
+            {"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"name": "test", "status": "IN_PROGRESS", "conclusion": ""},
+        ],
+    })
+
+    # Case 1: ruleset provides required checks
+    ruleset_json = json.dumps([
+        {
+            "type": "required_status_checks",
+            "parameters": {
+                "required_status_checks": [
+                    {"context": "build"},
+                    "test",
+                ],
+            },
+        },
+    ])
+
+    def mock_run_ruleset(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return 0, pr_json
+        if cmd[:4] == ["gh", "api", "repos/:owner/:repo/rules/branches/main"]:
+            return 0, ruleset_json
+        return 1, "not found"
+
+    res = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_ruleset)
+    assert not res.get("unreadable")
+    assert res["required_checks"] == ["build", "test"]
+    assert res["observed_head"] == head
+    assert res["base_ref"] == "main"
+
+    # Case 2: ruleset fails, branch protection fallback provides required checks
+    prot_json = json.dumps({
+        "contexts": ["lint"],
+        "checks": [{"context": "backend"}],
+        "enforcement_level": "non_admins",
+    })
+
+    def mock_run_fallback(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return 0, pr_json
+        if cmd[:4] == ["gh", "api", "repos/:owner/:repo/rules/branches/main"]:
+            return 1, "404 Not Found"
+        if cmd[:4] == ["gh", "api", "repos/:owner/:repo/branches/main/protection/required_status_checks"]:
+            return 0, prot_json
+        return 1, "not found"
+
+    res_fb = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_fallback)
+    assert not res_fb.get("unreadable")
+    assert res_fb["required_checks"] == ["backend", "lint"]
+
+    # Case 3: both surfaces fail or yield empty required checks -> fails closed
+    def mock_run_fail_closed(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return 0, pr_json
+        return 1, "404 Not Found"
+
+    res_fc = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_fail_closed)
+    assert res_fc == {"unreadable": True}
+
+    # Case 4: PR view fails -> fails closed
+    def mock_run_pr_fail(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+        return 1, "error"
+
+    res_pf = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_pr_fail)
+    assert res_pf == {"unreadable": True}
+
+
+def test_evaluate_pr_ci_acceptance_criteria() -> None:
+    head = "a" * 40
+    # 1. unreadable input
+    assert rc.evaluate_pr_ci({"unreadable": True}, head, 0.0) == ("unreadable", "remote_unreadable")
+    assert rc.evaluate_pr_ci({}, head, 0.0) == ("unreadable", "remote_unreadable")
+    # missing or empty required_checks fails closed
+    empty_req = {"observed_head": head, "state": "open", "required_checks": [], "checks": []}
+    assert rc.evaluate_pr_ci(empty_req, head, 0.0) == ("unreadable", "remote_unreadable")
+
+    # 2. head changed -> immediate wake
+    info_changed = {"observed_head": "b" * 40, "state": "open", "required_checks": ["backend"], "checks": []}
+    assert rc.evaluate_pr_ci(info_changed, head, 0.0) == ("immediate_wake", "head_changed")
+
+    # 3. PR closed / merged -> immediate wake
+    info_closed = {"observed_head": head, "state": "closed", "required_checks": ["backend"], "checks": []}
+    assert rc.evaluate_pr_ci(info_closed, head, 0.0) == ("immediate_wake", "pr_closed")
+    info_merged = {"observed_head": head, "state": "merged", "required_checks": ["backend"], "checks": []}
+    assert rc.evaluate_pr_ci(info_merged, head, 0.0) == ("immediate_wake", "pr_closed")
+
+    # 4. Immediate wake on required check failure
+    info_failed = {
+        "observed_head": head,
+        "state": "open",
+        "required_checks": ["backend", "frontend"],
+        "checks": [
+            {"name": "backend", "status": "completed", "conclusion": "failure"},
+            {"name": "frontend", "status": "in_progress", "conclusion": ""},
+        ],
+    }
+    assert rc.evaluate_pr_ci(info_failed, head, 0.0) == ("immediate_wake", "check_failed")
+
+    # 5. Non-required check failure does not fail if required checks pass
+    info_non_req_failed = {
+        "observed_head": head,
+        "state": "open",
+        "required_checks": ["backend"],
+        "checks": [
+            {"name": "backend", "status": "completed", "conclusion": "success"},
+            {"name": "optional_check", "status": "completed", "conclusion": "failure"},
+        ],
+    }
+    assert rc.evaluate_pr_ci(info_non_req_failed, head, 0.0) == ("completed", "success")
+
+    # 6. Zero checks reported rule: 120s threshold
+    info_zero = {"observed_head": head, "state": "open", "required_checks": ["backend"], "checks": []}
+    assert rc.evaluate_pr_ci(info_zero, head, 60.0) == ("pending", "no_checks_reported")
+    assert rc.evaluate_pr_ci(info_zero, head, 120.0) == ("immediate_wake", "no_checks_reported")
+    assert rc.evaluate_pr_ci(info_zero, head, 150.0) == ("immediate_wake", "no_checks_reported")
+
+    # 7. In progress pending
+    info_running = {
+        "observed_head": head,
+        "state": "open",
+        "required_checks": ["backend"],
+        "checks": [{"name": "backend", "status": "in_progress", "conclusion": ""}],
+    }
+    assert rc.evaluate_pr_ci(info_running, head, 60.0) == ("pending", "in_progress")
+
+
+def test_validate_state_spec_267_fields() -> None:
+    state = rc.default_state()
+    assert rc.validate_state(state) is None
+
+    # resumes validation
+    bad_resumes = {**state, "resumes": -1}
+    assert rc.validate_state(bad_resumes) == "bad resumes"
+    bad_resumes_bool = {**state, "resumes": True}
+    assert rc.validate_state(bad_resumes_bool) == "bad resumes"
+    valid_resumes = {**state, "resumes": 3}
+    assert rc.validate_state(valid_resumes) is None
+
+    # last_checkpoint_at validation
+    bad_cp = {**state, "last_checkpoint_at": "not-a-timestamp"}
+    assert rc.validate_state(bad_cp) == "bad last_checkpoint_at"
+    valid_cp = {**state, "last_checkpoint_at": rc.iso(T0)}
+    assert rc.validate_state(valid_cp) is None
+
+    # wait validation
+    bad_wait_empty = {**state, "wait": {"jobs": [], "ci": [], "started_at": rc.iso(T0)}}
+    assert rc.validate_state(bad_wait_empty) == "bad wait record"
+    bad_wait_job = {**state, "wait": {"jobs": ["invalid_job_id"], "ci": [], "started_at": rc.iso(T0)}}
+    assert rc.validate_state(bad_wait_job) == "bad wait record"
+    bad_wait_ci_sha = {**state, "wait": {"jobs": [], "ci": [{"pr": 1, "sha": "short"}], "started_at": rc.iso(T0)}}
+    assert rc.validate_state(bad_wait_ci_sha) == "bad wait record"
+    bad_wait_ci_pr = {**state, "wait": {"jobs": [], "ci": [{"pr": 0, "sha": "a" * 40}], "started_at": rc.iso(T0)}}
+    assert rc.validate_state(bad_wait_ci_pr) == "bad wait record"
+    bad_wait_ts = {**state, "wait": {"jobs": ["j-20261113T120000Z-111111"], "ci": [], "started_at": "bogus"}}
+    assert rc.validate_state(bad_wait_ts) == "bad wait record"
+
+    valid_wait = {
+        **state,
+        "wait": {
+            "jobs": ["j-20261113T120000Z-111111"],
+            "ci": [{"pr": 42, "sha": "a" * 40}],
+            "started_at": rc.iso(T0),
+            "last_job_poll": rc.iso(T0),
+            "last_ci_poll": None,
+        },
+    }
+    assert rc.validate_state(valid_wait) is None
 

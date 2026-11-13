@@ -1396,10 +1396,39 @@ def validate_state(data: dict[str, Any]) -> str | None:
         return "bad diagnostic attempt"
     if not isinstance(data.get("diagnostics", []), list):
         return "bad type for diagnostics"
+    resumes = data.get("resumes")
+    if isinstance(resumes, bool) or not isinstance(resumes, int) or resumes < 0:
+        return "bad resumes"
+    last_cp = data.get("last_checkpoint_at")
+    if last_cp is not None and (not isinstance(last_cp, str) or parse_ts(last_cp) is None):
+        return "bad last_checkpoint_at"
     wait = data.get("wait")
-    if wait is not None and (not isinstance(wait, dict) or not isinstance(wait.get("jobs"), list)
-                             or not isinstance(wait.get("ci"), list)):
-        return "bad wait record"
+    if wait is not None:
+        if not isinstance(wait, dict):
+            return "bad wait record"
+        jobs = wait.get("jobs")
+        ci = wait.get("ci")
+        if not isinstance(jobs, list) or not isinstance(ci, list) or (not jobs and not ci):
+            return "bad wait record"
+        if any(not isinstance(j, str) or not JOB_WAIT_LINE_RE.match(f"JOB-WAIT: {j}") for j in jobs):
+            return "bad wait record"
+        for item in ci:
+            if not isinstance(item, dict):
+                return "bad wait record"
+            pr = item.get("pr")
+            sha = item.get("sha")
+            if isinstance(pr, bool) or not isinstance(pr, int) or pr <= 0:
+                return "bad wait record"
+            if not isinstance(sha, str) or len(sha) != 40 or not CI_WAIT_LINE_RE.match(f"CI-WAIT: {pr}@{sha}"):
+                return "bad wait record"
+        if not isinstance(wait.get("started_at"), str) or parse_ts(wait.get("started_at")) is None:
+            return "bad wait record"
+        if wait.get("last_job_poll") is not None and (not isinstance(wait.get("last_job_poll"), str)
+                                                      or parse_ts(wait.get("last_job_poll")) is None):
+            return "bad wait record"
+        if wait.get("last_ci_poll") is not None and (not isinstance(wait.get("last_ci_poll"), str)
+                                                     or parse_ts(wait.get("last_ci_poll")) is None):
+            return "bad wait record"
     # Optional (spec 201): present only in a mission's own store.
     mission = data.get("mission")
     if mission is not None and (not isinstance(mission, dict) or not isinstance(mission.get("id"), str)
@@ -2265,8 +2294,8 @@ def turn_context_tokens(turn_dir: Path | None) -> int | None:
 
 
 def default_pr_ci_status(repo: Path, pr_number: int, expected_head: str, run: Runner = devctx.run) -> dict[str, Any]:
-    """Query GitHub CLI for PR state and status checks."""
-    code, out = run(["gh", "pr", "view", str(pr_number), "--json", "state,headRefOid,statusCheckRollup"],
+    """Query GitHub CLI for PR state, required status checks, and check run outcomes."""
+    code, out = run(["gh", "pr", "view", str(pr_number), "--json", "state,headRefOid,baseRefName,statusCheckRollup"],
                     cwd=repo, timeout=30)
     if code != 0:
         return {"unreadable": True}
@@ -2274,45 +2303,148 @@ def default_pr_ci_status(repo: Path, pr_number: int, expected_head: str, run: Ru
         data = json.loads(out)
         observed_head = str(data.get("headRefOid") or "")
         state = str(data.get("state") or "OPEN").lower()
+        base_ref = str(data.get("baseRefName") or "master").strip() or "master"
         checks = []
         for c in data.get("statusCheckRollup") or []:
+            if not isinstance(c, dict):
+                continue
             name = str(c.get("name") or c.get("context") or "")
             status = str(c.get("status") or c.get("state") or "").lower()
             conclusion = str(c.get("conclusion") or "").lower()
             checks.append({"name": name, "status": status, "conclusion": conclusion})
-        return {"observed_head": observed_head, "state": state, "checks": checks}
     except (json.JSONDecodeError, KeyError, TypeError):
         return {"unreadable": True}
+
+    required: set[str] = set()
+    saw_required_checks = False
+
+    r_code, r_out = run(["gh", "api", f"repos/:owner/:repo/rules/branches/{base_ref}"], cwd=repo, timeout=30)
+    if r_code == 0:
+        try:
+            rules = json.loads(r_out)
+            if isinstance(rules, list):
+                for rule in rules:
+                    if isinstance(rule, dict) and rule.get("type") == "required_status_checks":
+                        params = rule.get("parameters")
+                        if isinstance(params, dict):
+                            raw_checks = params.get("required_status_checks")
+                            if isinstance(raw_checks, list):
+                                for rc in raw_checks:
+                                    if isinstance(rc, dict) and isinstance(rc.get("context"), str):
+                                        required.add(rc["context"])
+                                    elif isinstance(rc, str):
+                                        required.add(rc)
+                                saw_required_checks = True
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+
+    if not saw_required_checks:
+        p_code, p_out = run(["gh", "api", f"repos/:owner/:repo/branches/{base_ref}/protection/required_status_checks"],
+                            cwd=repo, timeout=30)
+        if p_code == 0:
+            try:
+                prot = json.loads(p_out)
+                if isinstance(prot, dict):
+                    raw_contexts = prot.get("contexts")
+                    if isinstance(raw_contexts, list):
+                        for ctx in raw_contexts:
+                            if isinstance(ctx, str):
+                                required.add(ctx)
+                    raw_checks = prot.get("checks")
+                    if isinstance(raw_checks, list):
+                        for chk in raw_checks:
+                            if isinstance(chk, dict) and isinstance(chk.get("context"), str):
+                                required.add(chk["context"])
+                    if required or prot.get("enforcement_level") not in (None, "off"):
+                        saw_required_checks = True
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+
+    if not required:
+        return {"unreadable": True}
+
+    return {
+        "observed_head": observed_head,
+        "state": state,
+        "base_ref": base_ref,
+        "required_checks": sorted(required),
+        "checks": checks,
+    }
 
 
 def evaluate_pr_ci(ci_info: dict[str, Any], expected_head: str, elapsed_wait: float) -> tuple[str, str]:
     """Evaluate PR status and required checks against acceptance criteria.
     Returns (status_type, detail) where status_type is 'immediate_wake', 'completed', 'pending', or 'unreadable'."""
-    if ci_info.get("unreadable"):
+    if not isinstance(ci_info, dict) or ci_info.get("unreadable"):
         return "unreadable", "remote_unreadable"
+
     observed_head = ci_info.get("observed_head")
     if observed_head and observed_head != expected_head:
         return "immediate_wake", "head_changed"
+
     pr_state = str(ci_info.get("state") or "").lower()
     if pr_state in ("closed", "merged"):
         return "immediate_wake", "pr_closed"
-    checks = ci_info.get("checks", [])
+
+    required_checks = ci_info.get("required_checks")
+    if not isinstance(required_checks, (list, tuple, set)) or not required_checks:
+        return "unreadable", "remote_unreadable"
+
+    checks = ci_info.get("checks")
+    if not isinstance(checks, list):
+        return "unreadable", "remote_unreadable"
+
     if not checks:
         if elapsed_wait >= 120.0:
             return "immediate_wake", "no_checks_reported"
         return "pending", "no_checks_reported"
+
+    check_map: dict[str, dict[str, Any]] = {}
     for c in checks:
-        conclusion = str(c.get("conclusion") or "").lower()
-        if conclusion in CI_FAILURE_CONCLUSIONS:
-            return "immediate_wake", "check_failed"
-    for c in checks:
+        if isinstance(c, dict) and "name" in c:
+            check_map[str(c["name"])] = c
+
+    for req_name in required_checks:
+        c = check_map.get(req_name)
+        if c is not None:
+            conclusion = str(c.get("conclusion") or "").lower()
+            if conclusion in CI_FAILURE_CONCLUSIONS:
+                return "immediate_wake", "check_failed"
+
+    all_completed_success = True
+    for req_name in required_checks:
+        c = check_map.get(req_name)
+        if c is None:
+            all_completed_success = False
+            break
         status = str(c.get("status") or "").lower()
         conclusion = str(c.get("conclusion") or "").lower()
         if status not in ("completed", "complete", "done", "success"):
-            return "pending", "in_progress"
+            all_completed_success = False
+            break
         if conclusion not in CI_SUCCESS_CONCLUSIONS:
-            return "pending", "in_progress"
-    return "completed", "success"
+            all_completed_success = False
+            break
+
+    if all_completed_success:
+        return "completed", "success"
+
+    reported_required = [req for req in required_checks if req in check_map]
+    if not reported_required and elapsed_wait >= 120.0:
+        return "immediate_wake", "no_checks_reported"
+
+    return "pending", "in_progress"
+
+
+def job_record_status(job: dict[str, Any]) -> str:
+    """Determine effective status of a job record: terminal status is final; real processes
+    are checked against the process table; uninstrumented mock/record statuses are respected."""
+    status = str(job.get("status") or "")
+    if status in relay_jobs.TERMINAL:
+        return status
+    if "wrapper" in job or "wrapper_pid" in job:
+        return relay_jobs.effective_status(job)
+    return status or "unknown"
 
 
 def _unwrap(command: str) -> str:
@@ -3142,9 +3274,6 @@ class Supervisor:
                 return new_report
             report = new_report
         while True:
-            if self.stop_requested():
-                self.state["phase"] = "stopped"
-                return "signal" if self.signalled else "stopped"
             self.state["last_outcome"] = report.outcome
             self.state["agent"] = report.agent or self.state.get("agent") or PREFERRED
             self.deciding = report.turn_id
@@ -3152,6 +3281,9 @@ class Supervisor:
             acknowledged = None
             if isinstance(decision, str):
                 return decision
+            if self.stop_requested():
+                self.state["phase"] = "stopped"
+                return "signal" if self.signalled else "stopped"
             agent, prompt = decision
             task = None
             new_report = self._launch(agent, prompt, report)
@@ -3188,6 +3320,8 @@ class Supervisor:
             # like any interrupted operation, before anything is advanced or completed.
             parked: list[ToolCall] = []
             if "gate" not in waive:
+                if (reason := gate(report)) is not None:
+                    return self.hold(reason, None, report.turn_id)
                 _verdicts, parked = self._settle_external(report)
                 if parked:
                     self._park(report, parked)
@@ -3210,11 +3344,8 @@ class Supervisor:
             jobs, ci_waits = parse_wait_directives(reply)
 
             if status == "continue" and (jobs or ci_waits):
-                if "gate" not in waive:
-                    if (reason := gate(report)) is not None:
-                        return self.hold(reason, None, report.turn_id)
-                    if parked:
-                        return self.hold("effects_uncertain", None, report.turn_id)
+                if "gate" not in waive and parked:
+                    return self.hold("effects_uncertain", None, report.turn_id)
                 wait = {
                     "jobs": jobs,
                     "ci": [{"pr": pr, "sha": sha} for pr, sha in ci_waits],
@@ -3442,6 +3573,8 @@ class Supervisor:
                 lines.append(f"- JOB {j}: {st}")
             elif reason == "satisfied":
                 lines.append(f"- JOB {j}: {st or 'succeeded'}")
+            elif reason in ("wait_timeout", "remote_unreadable"):
+                lines.append(f"- JOB {j}: {reason} (uncertain)")
             else:
                 lines.append(f"- JOB {j}: uncertain")
 
@@ -3453,15 +3586,9 @@ class Supervisor:
                     lines.append(f"- CI PR #{item['pr']}@{item['sha']}: failure")
                 else:
                     lines.append(f"- CI PR #{item['pr']}@{item['sha']}: {reason} (uncertain)")
-            elif st == "success":
+            elif st == "success" or reason == "satisfied":
                 lines.append(f"- CI PR #{item['pr']}@{item['sha']}: success")
-            elif reason == "satisfied":
-                lines.append(f"- CI PR #{item['pr']}@{item['sha']}: success")
-            elif reason == "head_changed":
-                lines.append(f"- CI PR #{item['pr']}@{item['sha']}: head_changed (uncertain)")
-            elif reason == "pr_closed":
-                lines.append(f"- CI PR #{item['pr']}@{item['sha']}: pr_closed (uncertain)")
-            elif reason in ("no_checks_reported", "remote_unreadable", "wait_timeout"):
+            elif reason in ("wait_timeout", "remote_unreadable"):
                 lines.append(f"- CI PR #{item['pr']}@{item['sha']}: {reason} (uncertain)")
             else:
                 lines.append(f"- CI PR #{item['pr']}@{item['sha']}: uncertain")
@@ -3543,7 +3670,7 @@ class Supervisor:
                     job = self._get_job(job_id)
                     if job is None:
                         return self._wake_wait("unregistered_job", wait, report, job_statuses, ci_statuses, failed_job=job_id)
-                    st = relay_jobs.effective_status(job)
+                    st = job_record_status(job)
                     job_statuses[job_id] = st
 
             ci_poll_needed = bool(ci_items and any(ci_statuses.get(f"{item['pr']}@{item['sha']}") != "success" for item in ci_items))
@@ -3674,7 +3801,7 @@ class Supervisor:
         if (rec := self.state.get("mission")) is not None and self.mission is not None:
             # Every launch until the task completes (recoveries and failovers included) serves that task.
             pending["task"] = rec["next"]
-            if MISSION_HEADER not in text:
+            if MISSION_HEADER not in text and not text.startswith("[relay-continuity resume "):
                 task = self.mission["tasks"][rec["next"]]["text"]
                 text += (f"\n\nThe interrupted work is mission {self.mission['id']} task {rec['next'] + 1}/{rec['total']}, "
                          f"which has not been recorded complete:\n{MISSION_HEADER}\n{task}")
@@ -3845,13 +3972,12 @@ class Supervisor:
             if counts[str(index)] >= MAX_TASK_CHECKPOINTS:
                 return self.hold("task_checkpoint_limit", pending.get("attempt"), report.turn_id)
 
-            last_cp = parse_ts(self.state.get("last_checkpoint_at") or rec.get("last_checkpoint_at"))
+            last_cp = parse_ts(self.state.get("last_checkpoint_at") or rec.get("last_checkpoint_at") or pending.get("started_at"))
             now = self.host.now()
             if last_cp is not None:
                 elapsed = (now - last_cp).total_seconds()
-                if elapsed < MIN_CHECKPOINT_INTERVAL_SECONDS:
-                    if self._sleep(MIN_CHECKPOINT_INTERVAL_SECONDS - elapsed):
-                        return "signal" if self.signalled else "stopped"
+                if elapsed < MIN_CHECKPOINT_INTERVAL_SECONDS and self._sleep(MIN_CHECKPOINT_INTERVAL_SECONDS - elapsed):
+                    return "signal" if self.signalled else "stopped"
             now_iso = iso(self.host.now())
             rec["last_checkpoint_at"] = now_iso
             self.state["last_checkpoint_at"] = now_iso
