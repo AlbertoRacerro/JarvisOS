@@ -116,6 +116,11 @@ class FakeRelay(rc.RelayAdapter):
         self.readings = readings
         self.clock: Clock | None = None
         (repo / ".agent-relay" / "sessions").mkdir(parents=True, exist_ok=True)
+        self._conv_store = repo / ".agent-relay" / "conversations"
+        self._conv_store.mkdir(parents=True, exist_ok=True)
+
+    def conversation_store(self) -> Path:
+        return self._conv_store
 
     def limits(self) -> dict[str, Any] | None:
         return self.readings() if callable(self.readings) else self.readings
@@ -4068,10 +4073,13 @@ def test_native_retry_resuming_conversation_skips_session_context(tmp_path: Path
     # Create previous native turn output with conversation_id
     turn_dir = env.relay.sessions_dir() / "20261018-000001-bbbbbb" / "turns" / "turn-001"
     turn_dir.mkdir(parents=True)
+    cid = "5b934b69-1847-40af-93ec-eefda93178a5"
     (turn_dir / "output.jsonl").write_text(
-        json.dumps({"event": "init", "conversation_id": "5b934b69-1847-40af-93ec-eefda93178a5", "init": {"model": "argon"}}) + "\n",
+        json.dumps({"event": "init", "conversation_id": cid, "init": {"model": "argon"}}) + "\n",
         encoding="utf-8",
     )
+    # Store file exists and is within cap: conversation is resumable
+    (env.relay.conversation_store() / f"{cid}.db").write_bytes(b"x" * 1024)
 
     report = rc.TurnReport(
         turn_id="20261018-000001-bbbbbb/turn-001",
@@ -4084,12 +4092,122 @@ def test_native_retry_resuming_conversation_skips_session_context(tmp_path: Path
     assert calls == []
     launched_task = env.relay.launches[0]["task"]
     assert rc.BRIEF_HEADER not in launched_task
-    assert env.relay.launches[0]["resume"] == "5b934b69-1847-40af-93ec-eefda93178a5"
+    assert env.relay.launches[0]["resume"] == cid
     launch_events = [j for j in journal(env) if j.get("event") == "launch"]
     assert len(launch_events) == 1
-    assert launch_events[0]["resume"] == "5b934b69-1847-40af-93ec-eefda93178a5"
+    assert launch_events[0]["resume"] == cid
     assert launch_events[0]["brief"] is None
     assert launch_events[0]["directives"] == []
+
+
+def test_native_retry_missing_conversation_store_attaches_session_context(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Private brief for native agent.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("argon", SUCCESS)])
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    calls: list[str | None] = []
+
+    def mock_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        calls.append(authority)
+        return rc.session_context_block(control, dev_env, authority)
+
+    env.host.session_context = mock_context
+    sup = env.supervisor()
+    sup.state["head_session"] = "20261018-000001-bbbbbb"
+    sup.state["agent"] = "argon"
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.save()
+
+    # Create previous native turn output with conversation_id, but NO store file
+    turn_dir = env.relay.sessions_dir() / "20261018-000001-bbbbbb" / "turns" / "turn-001"
+    turn_dir.mkdir(parents=True)
+    cid = "5b934b69-1847-40af-93ec-eefda93178a5"
+    (turn_dir / "output.jsonl").write_text(
+        json.dumps({"event": "init", "conversation_id": cid, "init": {"model": "argon"}}) + "\n",
+        encoding="utf-8",
+    )
+    # Notice: env.relay.conversation_store() / f"{cid}.db" does NOT exist (missing store)
+
+    report = rc.TurnReport(
+        turn_id="20261018-000001-bbbbbb/turn-001",
+        outcome="transient",
+        agent="argon",
+        detail="network blip",
+    )
+    sup._launch("argon", "retry turn {nonce}", report)
+    # Missing store causes runner rejection -> fresh context actually starts -> session_context MUST be attached:
+    assert len(calls) == 1
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER in launched_task
+    assert "Private brief for native agent." in launched_task
+    assert env.relay.launches[0]["resume"] is None
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert "resume" not in launch_events[0] or launch_events[0]["resume"] is None
+    assert launch_events[0]["brief"] is not None
+    # Verify logs do NOT leak brief content
+    assert any("native conversation store missing; starting fresh context" in line for line in env.logs)
+    assert not any("Private brief for native agent." in line for line in env.logs)
+
+
+def test_native_retry_oversize_conversation_store_attaches_session_context(tmp_path: Path) -> None:
+    brief_file = tmp_path / "operator_brief.md"
+    brief_file.write_text("Private brief for native agent.", encoding="utf-8")
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    (control / "mission-brief").write_text(str(brief_file), encoding="utf-8")
+
+    env = Env(tmp_path, [("argon", SUCCESS)])
+    dev_env = rc.devctx.Env(repo=env.repo, control=control, relay_sessions=None)
+    calls: list[str | None] = []
+
+    def mock_context(authority: str | None) -> tuple[str, dict[str, Any]]:
+        calls.append(authority)
+        return rc.session_context_block(control, dev_env, authority)
+
+    env.host.session_context = mock_context
+    sup = env.supervisor()
+    sup.state["head_session"] = "20261018-000001-bbbbbb"
+    sup.state["agent"] = "argon"
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    sup.save()
+
+    # Create previous native turn output with conversation_id
+    turn_dir = env.relay.sessions_dir() / "20261018-000001-bbbbbb" / "turns" / "turn-001"
+    turn_dir.mkdir(parents=True)
+    cid = "5b934b69-1847-40af-93ec-eefda93178a5"
+    (turn_dir / "output.jsonl").write_text(
+        json.dumps({"event": "init", "conversation_id": cid, "init": {"model": "argon"}}) + "\n",
+        encoding="utf-8",
+    )
+    # Store file exists but is oversize (> RESUME_MAX_BYTES)
+    with (env.relay.conversation_store() / f"{cid}.db").open("wb") as handle:
+        handle.truncate(rc.relay_argon.RESUME_MAX_BYTES + 1)
+
+    report = rc.TurnReport(
+        turn_id="20261018-000001-bbbbbb/turn-001",
+        outcome="transient",
+        agent="argon",
+        detail="network blip",
+    )
+    sup._launch("argon", "retry turn {nonce}", report)
+    # Oversize store causes runner rejection -> fresh context actually starts -> session_context MUST be attached:
+    assert len(calls) == 1
+    launched_task = env.relay.launches[0]["task"]
+    assert rc.BRIEF_HEADER in launched_task
+    assert "Private brief for native agent." in launched_task
+    assert env.relay.launches[0]["resume"] is None
+    launch_events = [j for j in journal(env) if j.get("event") == "launch"]
+    assert len(launch_events) == 1
+    assert "resume" not in launch_events[0] or launch_events[0]["resume"] is None
+    assert launch_events[0]["brief"] is not None
+    # Verify logs do NOT leak brief content
+    assert any("oversize" in line and "starting fresh context" in line for line in env.logs)
+    assert not any("Private brief for native agent." in line for line in env.logs)
 
 
 def test_agent_switch_with_non_null_parent_attaches_block(tmp_path: Path) -> None:
@@ -4262,8 +4380,67 @@ def test_directives_body_limit_24000_and_24001_bytes(tmp_path: Path) -> None:
     text_over, fields_over = rc.session_context_block(control, dev_env, e_over["id"])
     assert fields_over["directives"] == []
     assert f"### Directive {e_over['id']}" not in text_over
-    assert "Older standing directives omitted for length:" in text_over
+    assert "Standing directives omitted for length:" in text_over
+    assert "Older standing directives omitted for length:" not in text_over
     assert e_over["id"] in text_over
+
+
+def test_oversize_newest_directive_preserves_earlier_authority_directive(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+
+    # D1 is short mission authority directive (fits well within 24,000 bytes)
+    e1 = rc.devctx.record_directive(dev_env, "D1 authority short directive text", source=None, supersedes=None, author="maintainer")
+    # D2 is newest directive, exceeds 24,000 bytes (e.g. 24,500 bytes)
+    e2 = rc.devctx.record_directive(dev_env, "Y" * 24_500, source=None, supersedes=None, author="maintainer")
+
+    text, fields = rc.session_context_block(control, dev_env, e1["id"])
+    # Earlier short mission authority directive MUST NOT be suppressed by oversize newest directive:
+    assert fields["directives"] == [e1["id"]]
+    assert f"### Directive {e1['id']}\nD1 authority short directive text" in text
+    assert f"### Directive {e2['id']}" not in text
+
+    # Omission notice must be accurate: D2 is newer than kept directives, so not labeled as "Older":
+    assert "Newer standing directives omitted for length:" in text
+    assert e2["id"] in text
+    assert "Older standing directives omitted for length:" not in text
+
+
+def test_multiple_directives_older_and_newer_omission_notices(tmp_path: Path) -> None:
+    control = tmp_path / "control"
+    control.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    dev_env = rc.devctx.Env(repo=repo, control=control, relay_sessions=None)
+
+    # D1 (authority): 50 bytes
+    e1 = rc.devctx.record_directive(dev_env, "D1 " + "1" * 47, source=None, supersedes=None, author="maintainer")
+    # D2: 100 bytes
+    e2 = rc.devctx.record_directive(dev_env, "D2 " + "2" * 97, source=None, supersedes=None, author="maintainer")
+    # D3: 23,900 bytes
+    e3 = rc.devctx.record_directive(dev_env, "D3 " + "3" * 23_897, source=None, supersedes=None, author="maintainer")
+    # D4: 25,000 bytes (oversize newest)
+    e4 = rc.devctx.record_directive(dev_env, "D4 " + "4" * 24_997, source=None, supersedes=None, author="maintainer")
+
+    text, fields = rc.session_context_block(control, dev_env, e1["id"])
+    # D4 (>24k) is oversize omitted.
+    # D3 (23,900) fits.
+    # D2 (100) fits (23,900 + 100 = 24,000 <= 24,000).
+    # D1 (50) exceeds remaining capacity (24,000 + 50 > 24,000), so older omitted.
+    assert fields["directives"] == [e2["id"], e3["id"]]
+    assert f"### Directive {e2['id']}" in text
+    assert f"### Directive {e3['id']}" in text
+    assert f"### Directive {e1['id']}" not in text
+    assert f"### Directive {e4['id']}" not in text
+
+    # Both accurate omission notices must be recorded:
+    assert "Newer standing directives omitted for length:" in text
+    assert e4["id"] in text
+    assert "Older standing directives omitted for length:" in text
+    assert e1["id"] in text
 
 
 def test_directives_authority_not_found(tmp_path: Path) -> None:

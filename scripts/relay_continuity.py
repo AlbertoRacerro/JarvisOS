@@ -1863,6 +1863,9 @@ class RelayAdapter:
         self._outputs: dict[int, tuple[Any, Any]] = {}
         self._argon_leases: dict[int, Any] = {}
 
+    def conversation_store(self) -> Path:
+        return relay_argon.conversation_store()
+
     def limits(self) -> dict[str, Any] | None:
         try:
             proc = subprocess.run([self.binary, "--json", "limits", "--refresh"], capture_output=True, text=True,
@@ -2608,6 +2611,7 @@ def session_context_block(
                         "text": missing_msg,
                         "attached": False,
                         "body_bytes": len(missing_msg.encode("utf-8")),
+                        "index": i,
                     })
                 else:
                     try:
@@ -2619,6 +2623,7 @@ def session_context_block(
                             "text": missing_msg,
                             "attached": False,
                             "body_bytes": len(missing_msg.encode("utf-8")),
+                            "index": i,
                         })
                     else:
                         actual_sha = hashlib.sha256(content_bytes).hexdigest()
@@ -2629,6 +2634,7 @@ def session_context_block(
                                 "text": tampered_msg,
                                 "attached": False,
                                 "body_bytes": len(tampered_msg.encode("utf-8")),
+                                "index": i,
                             })
                         else:
                             d_text = content_bytes.decode(encoding="utf-8", errors="replace").strip()
@@ -2637,27 +2643,39 @@ def session_context_block(
                                 "text": f"### Directive {d_id}\n{d_text}",
                                 "attached": True,
                                 "body_bytes": len(d_text.encode("utf-8")),
+                                "index": i,
                             })
 
             if candidates:
                 total_bytes = 0
                 kept_rev: list[dict[str, Any]] = []
-                omitted_rev: list[str] = []
+                cap_reached = False
+                older_omitted_rev: list[str] = []
+                oversize_omitted_rev: list[str] = []
                 for c in reversed(candidates):
                     # Count directive body against the limit, excluding the heading (spec 264)
                     body_bytes = c["body_bytes"]
-                    if not omitted_rev and total_bytes + body_bytes <= DIRECTIVES_MAX_BYTES:
+                    if body_bytes > DIRECTIVES_MAX_BYTES:
+                        oversize_omitted_rev.append(c["id"])
+                    elif not cap_reached and total_bytes + body_bytes <= DIRECTIVES_MAX_BYTES:
                         kept_rev.append(c)
                         total_bytes += body_bytes
                     else:
-                        omitted_rev.append(c["id"])
+                        cap_reached = True
+                        older_omitted_rev.append(c["id"])
 
                 kept = list(reversed(kept_rev))
-                omitted_ids = list(reversed(omitted_rev))
+                older_omitted = list(reversed(older_omitted_rev))
+                oversize_omitted = list(reversed(oversize_omitted_rev))
 
                 lines = [DIRECTIVES_HEADER]
-                if omitted_ids:
-                    lines.append(f"Older standing directives omitted for length: {', '.join(omitted_ids)} (devctx.py show <id>)")
+                if oversize_omitted:
+                    if kept:
+                        lines.append(f"Newer standing directives omitted for length: {', '.join(oversize_omitted)} (devctx.py show <id>)")
+                    else:
+                        lines.append(f"Standing directives omitted for length: {', '.join(oversize_omitted)} (devctx.py show <id>)")
+                if older_omitted:
+                    lines.append(f"Older standing directives omitted for length: {', '.join(older_omitted)} (devctx.py show <id>)")
                 for c in kept:
                     lines.append(c["text"])
                 directives_block = "\n\n".join(lines)
@@ -3274,7 +3292,16 @@ class Supervisor:
                 and previous.outcome != "success" and previous.turn_id:
             try:
                 session_id, _, turn_name = previous.turn_id.partition("/")  # "<session>/<turn>"
-                resume = relay_argon.conversation_of(self.host.relay.sessions_dir() / session_id / "turns" / turn_name)
+                candidate = relay_argon.conversation_of(self.host.relay.sessions_dir() / session_id / "turns" / turn_name)
+                if candidate is not None:
+                    # Resume only what prepare_resume will accept; otherwise this turn needs the session context.
+                    size = (self.host.relay.conversation_store() / f"{candidate}.db").stat().st_size
+                    if size > relay_argon.RESUME_MAX_BYTES:
+                        self.host.log(f"native conversation {candidate} oversize ({size} bytes); starting fresh context")
+                    else:
+                        resume = candidate
+            except OSError:
+                self.host.log("native conversation store missing; starting fresh context")
             except Exception:  # noqa: BLE001 - resuming is an optimisation; the turn launches fresh without it
                 resume = None
         parent = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS

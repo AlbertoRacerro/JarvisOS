@@ -593,21 +593,21 @@ def maintainer_prompt_text(raw_text: str) -> str | None:
 
     # Strip supervisor-injected brief block
     text = re.sub(
-        r"(?:^|\n\n)(?:This is the operator's private mission brief;[^\n]*|Operator mission brief not attached:[^\n]*)"
-        r"(?:\n[\s\S]*?)?(?=\n\n(?:Standing maintainer directives for this mission|Directive \S+ not attached:|Worker routing\nBefore delegating)|\Z)",
+        r"(?:^|\n+)(?:This is the operator's private mission brief;[^\n]*|Operator mission brief not attached:[^\n]*)"
+        r"(?:\n[\s\S]*?)?(?=\n+(?:Standing maintainer directives for this mission|Directive \S+ not attached:|(?:## )?Worker routing(?:\n|\Z))|\Z)",
         "",
         text,
     )
     # Strip supervisor-injected standing directives block
     text = re.sub(
-        r"(?:^|\n\n)(?:Standing maintainer directives for this mission \(full text, oldest first\):|Directive \S+ not attached:[^\n]*)"
-        r"(?:\n[\s\S]*?)?(?=\n\n(?:Worker routing\nBefore delegating)|\Z)",
+        r"(?:^|\n+)(?:Standing maintainer directives for this mission \(full text, oldest first\):|Directive \S+ not attached:[^\n]*)"
+        r"(?:\n[\s\S]*?)?(?=\n+(?:## )?Worker routing(?:\n|\Z)|\Z)",
         "",
         text,
     )
     # Strip supervisor-injected worker routing block
     text = re.sub(
-        r"(?:^|\n\n)Worker routing\nBefore delegating a task to a worker session[\s\S]*?(?=\Z)",
+        r"(?:^|\n+)(?:## )?Worker routing(?:\n[\s\S]*)?\Z",
         "",
         text,
     )

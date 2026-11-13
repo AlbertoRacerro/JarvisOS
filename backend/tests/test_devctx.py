@@ -283,6 +283,42 @@ def test_directive_provenance_ignores_supervisor_attempts_and_strips_injected_bl
     assert cleaned == "MAINTAINER MISSION\nSPEC 888\nAlways run tests offline."
 
 
+def test_directive_provenance_actual_worker_routing_block_shape_is_unverified(world) -> None:
+    env, relay = world["env"], world["relay"]
+    maint_prompt = relay / "s_actual" / "turns" / "turn-001" / "prompt.md"
+    maint_prompt.parent.mkdir(parents=True)
+
+    actual_routing_block = (
+        "Worker routing\n"
+        "worker quota: unreadable\n"
+        "Classify each delegable task by difficulty and risk, run `python3 scripts/worker_routing.py pick --difficulty D --risk R`, and delegate implementation to the returned worker. The launch line runs the worker as a durable registered job that outlives the coordinator turn, and a later turn collects it with `relay_jobs.py list`. Coordinators plan, review and integrate; do not implement delegable work yourself unless pick returns no_worker.\n"
+        "Risk is the harm if the worker is wrong: low docs/tests/UI copy; medium feature code covered by tests; high security, auth, egress, migrations/data loss, supervisor/relay/sandbox code, irreversible operations. Review the returned worker's diff as `pick` requires."
+    )
+    prompt_text = (
+        "MAINTAINER SPECIFIC TASK\nSPEC 264\nDo not break backwards compatibility.\n\n"
+        + actual_routing_block
+    )
+    maint_prompt.write_text(prompt_text, encoding="utf-8")
+
+    maint_dir = devctx.record_directive(env, "MAINTAINER SPECIFIC TASK\nSPEC 264\nDo not break backwards compatibility.", source="relay s_actual", supersedes=None, author="maintainer")
+    risk_sentence = "Risk is the harm if the worker is wrong: low docs/tests/UI copy; medium feature code covered by tests; high security, auth, egress, migrations/data loss, supervisor/relay/sandbox code, irreversible operations. Review the returned worker's diff as `pick` requires."
+    routing_dir1 = devctx.record_directive(env, risk_sentence, source="relay s_actual", supersedes=None, author="someone")
+    routing_dir2 = devctx.record_directive(env, "Classify each delegable task by difficulty and risk", source="relay s_actual", supersedes=None, author="someone")
+
+    packet = devctx.build_packet(env, fetch=True)
+    prov = {e["id"]: e["provenance"] for e in packet["ledger"] if e["kind"] == "directive"}
+
+    # Maintainer portion is relay-verified
+    assert prov[maint_dir["id"]].startswith("relay-verified")
+    # Sentences from actual generated WORKER_ROUTING_BLOCK must NOT be marked relay-verified
+    assert prov[routing_dir1["id"]].startswith("unverified source")
+    assert prov[routing_dir2["id"]].startswith("unverified source")
+
+    # Direct unit test of maintainer_prompt_text with actual generated shape
+    cleaned = devctx.maintainer_prompt_text(prompt_text)
+    assert cleaned == "MAINTAINER SPECIFIC TASK\nSPEC 264\nDo not break backwards compatibility."
+
+
 def test_degraded_authority_and_missing_ledger_are_explicit(world) -> None:
     env, gh = world["env"], world["gh"]
     gh.fail = True
