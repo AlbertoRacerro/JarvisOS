@@ -2,7 +2,7 @@
 
 Status: planned (draft for review; not ready)
 Depends on: none (the approved [248](248-design-value-path.md) contract binds through Authority; slice A landed as
-[253](253-sim-results-requirement-verification.md))
+253)
 
 ## Goal
 
@@ -17,7 +17,7 @@ risk drops to medium, and the spec records that decision before it becomes `read
 ## Authority
 
 Maintainer answer `L20261106093156-1712` approves the binding contract in [248](248-design-value-path.md), with the slice
-order A, then B and C. Slice A is merged (253) and slice C is drafted ([257](257-precheck-dof.md)). This spec is a draft
+order A, then B and C. Slice A is merged (253) and slice C is merged (257). This spec is a draft
 written as readiness work. It becomes `ready` only after its own review, as 248 requires.
 
 ## Why

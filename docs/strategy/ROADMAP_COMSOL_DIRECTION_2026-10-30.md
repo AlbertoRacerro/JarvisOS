@@ -139,7 +139,7 @@ not permission to build a larger system than the accepted slice needs.
 
 | Request | Canonical owner | Next acceptance work before implementation |
 | --- | --- | --- |
-| Bubu readable pointing, current component facts, examples and measured quality | [231](../specs/231-bubu-navigation-legibility.md) | Bounded accepted contract; obtain before/after local-model and clean-profile browser evidence, then live final test. No routing change. |
+| Bubu readable pointing, current component facts, examples and measured quality | 231 | Bounded accepted contract; obtain before/after local-model and clean-profile browser evidence, then live final test. No routing change. |
 | General legibility, stage help, empty states and deterministic “Where am I?” | 232 | Audit actual remaining friction after merged 229/230; accept the smallest existing-surface slice, preserve navigation and visible scientific limits. |
 | W1: CFD 3D and honest full-object symmetry display | 233 | Freeze exported field/domain provenance, units, coordinate frame and symmetry applicability; specify scalar versus vector reflection and probe provenance. Never mirror a non-symmetric solution or label reconstruction as newly computed data. Bound artifact size and browser performance using a real retained run. |
 | W2: parametric feature history | 234 | Freeze version/parameter ownership, deterministic regeneration, failure atomicity and existing geometry compatibility; no second geometry authority. Decompose the first useful sequence before expanding the operation catalogue. |
