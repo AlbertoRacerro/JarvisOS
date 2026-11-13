@@ -207,22 +207,33 @@ def parse_open_questions(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         prompt_lines = []
         options = []
+        misleading = False
         for line in str(entry.get("text") or "").splitlines():
-            match = re.match(r"^\s*(\d+)[.)]\s*(.+?)\s*$", line)
-            if not match:
-                if not options and line.strip():
-                    prompt_lines.append(line.strip())
+            line_str = line.strip()
+            if not line_str:
                 continue
-            body = match.group(2)
+            match = re.match(r"^\s*(\d+)[.)]\s+(.+?)\s*$", line)
+            if not match:
+                if not options:
+                    if devctx.has_inline_alternatives_in_prompt(line_str):
+                        misleading = True
+                    prompt_lines.append(line_str)
+                else:
+                    misleading = True
+                continue
+            body = match.group(2).strip()
+            if devctx.has_inline_alternatives_in_body(body):
+                misleading = True
             recommended = bool(re.match(r"^\((?:consigliata|recommended)\)\s*", body, re.IGNORECASE))
             body = re.sub(r"^\((?:consigliata|recommended)\)\s*", "", body, flags=re.IGNORECASE)
             parts = re.split(r"\s+—\s+|\s+(?:--|-)\s+(?=(?:conseguenza|consequence)\s*:)", body, maxsplit=1, flags=re.IGNORECASE)
             consequence = re.sub(r"^(?:conseguenza|consequence)\s*:\s*", "", parts[1], flags=re.IGNORECASE) if len(parts) > 1 else ""
             options.append({"index": int(match.group(1)), "label": clean(parts[0], 200),
                             "recommended": recommended, "consequence": clean(consequence, 240)})
-        if not options:
-            continue
-        result.append({"id": qid, "at": entry.get("ts"), "prompt": clean(" ".join(prompt_lines), 300),
+        if misleading:
+            options = []
+        prompt = clean(" ".join(prompt_lines), 300) if options else clean(str(entry.get("text") or ""), 300)
+        result.append({"id": qid, "at": entry.get("ts"), "prompt": prompt or "",
                        "options": options})
     return result
 
@@ -230,7 +241,7 @@ def parse_open_questions(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def question_text(question: dict[str, Any]) -> str:
     """The same bounded question and choices exposed to the Jarvis UI, in ledger order."""
     lines = [question.get("prompt") or "Domanda per te:"]
-    for option in question["options"]:
+    for option in question.get("options") or []:
         label = option.get("label") or "opzione"
         mark = " (consigliata)" if option.get("recommended") else ""
         consequence = option.get("consequence") or "non specificata"

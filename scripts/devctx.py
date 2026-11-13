@@ -810,6 +810,86 @@ def render(packet: dict[str, Any], budget: int = DEFAULT_BUDGET_CHARS) -> str:
 # CLI
 
 
+# Punctuation right after a digit is a date, time or version ("2026-11-13.", "16:07."), not an option separator.
+_SEP_CHARS = r"(?:\s|(?<!\d)[,(;:—/|\\–\)\-?!])"
+_CONJ = r"\b(?:e|o|and|or|oppure)\b"
+_SEP = rf"(?:^|{_SEP_CHARS}|{_CONJ})"
+
+# An option marker: "2)", "(2)" or "2." followed by text. A dot needs a space or a letter after it, so decimals,
+# versions and times ("3.12", "10.30") are not markers; "[1]" is a citation, not a marker.
+_MARKER = r"(?:(?:\d+\)|\(\d+\))\s*\S|\d+\.(?:\s+\S|[a-zA-Z]))"
+_INLINE_OPTION_RE = re.compile(rf"{_SEP}\s*{_MARKER}")
+
+_PROMPT_END_SEP = r"(?:^|(?<!\d)[?!:;—/|\\–\-])"
+_PROMPT_EMBEDDED_RE = re.compile(rf"{_PROMPT_END_SEP}\s*{_MARKER}")
+
+
+def has_inline_alternatives_in_body(body: str) -> bool:
+    """Return True if an option body contains embedded/inline alternatives."""
+    return bool(_INLINE_OPTION_RE.search(body))
+
+
+def has_inline_alternatives_in_prompt(line: str) -> bool:
+    """Return True if a prompt line contains embedded/inline alternatives."""
+    if _PROMPT_EMBEDDED_RE.search(line):
+        return True
+    return len(_INLINE_OPTION_RE.findall(line)) >= 2
+
+
+def validate_question(text: str) -> None:
+    """Validate a new structured maintainer question.
+
+    Must contain 2 to 4 separate sequential numbered option lines (1. ... to 4. ...).
+    Inline alternatives are rejected.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("question text is empty; format requires 2 to 4 separate sequential numbered option lines")
+    options: list[int] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.match(r"^(\d+)[.)]\s+(.+)$", line)
+        if match:
+            num = int(match.group(1))
+            body = match.group(2).strip()
+            expected = len(options) + 1
+            if num != expected:
+                raise ValueError(
+                    f"question options must be sequentially numbered starting at 1 (expected {expected}, got {num}). "
+                    "Format: 2 to 4 separate option lines like '1. Option — conseguenza: ...'"
+                )
+            if has_inline_alternatives_in_body(body):
+                raise ValueError(
+                    "inline alternatives are not allowed; each option must be on its own separate line. "
+                    "Format: 2 to 4 separate option lines like '1. Option — conseguenza: ...'"
+                )
+            options.append(num)
+        else:
+            if options:
+                raise ValueError(
+                    "question options must be at the end of the text, one line per option. "
+                    "Format: short prompt followed by 2 to 4 separate sequential numbered option lines"
+                )
+            if has_inline_alternatives_in_prompt(line):
+                raise ValueError(
+                    "inline alternatives are not allowed; options must be on separate sequential lines. "
+                    "Format: short prompt followed by 2 to 4 separate lines like '1. Option — conseguenza: ...'"
+                )
+
+    if len(options) < 2:
+        raise ValueError(
+            f"question requires 2 to 4 separate sequential numbered option lines (found {len(options)}); "
+            "inline alternatives are not allowed. "
+            "Format: short prompt followed by 2 to 4 lines like '1. (consigliata) Option — conseguenza: ...'"
+        )
+    if len(options) > 4:
+        raise ValueError(
+            f"question requires 2 to 4 separate sequential numbered option lines (found {len(options)}, maximum is 4). "
+            "Format: short prompt followed by 2 to 4 lines like '1. (consigliata) Option — conseguenza: ...'"
+        )
+
+
 def command_note(env: Env, args: argparse.Namespace) -> None:
     refs = {"pr": args.pr, "sha": args.sha, "branch": args.branch, "worktree": args.worktree,
             "lane": args.lane, "spec": args.spec, "paths": args.path, "evidence": args.evidence}
@@ -820,6 +900,8 @@ def command_note(env: Env, args: argparse.Namespace) -> None:
             raise ValueError(f"claim holder pid {pid} is not running")
         claim = {"expires": iso(env.now + timedelta(hours=args.ttl_hours)), "pid": pid,
                  "pid_start": pid_start(pid) if pid else None}
+    if args.kind == "question":
+        validate_question(args.text)
     entry = make_entry(env, args.kind, args.text, status=args.status, refs=refs, supersedes=args.supersedes,
                        conflicts=args.conflicts, claim=claim)
     append_entry(env, entry)
