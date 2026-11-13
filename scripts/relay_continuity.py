@@ -2301,7 +2301,14 @@ def default_pr_ci_status(repo: Path, pr_number: int, expected_head: str, run: Ru
         return {"unreadable": True}
     try:
         data = json.loads(out)
-        observed_head = str(data.get("headRefOid") or "")
+        if not isinstance(data, dict):
+            return {"unreadable": True}
+        raw_head = data.get("headRefOid")
+        if not isinstance(raw_head, str):
+            return {"unreadable": True}
+        observed_head = raw_head.strip()
+        if not observed_head:
+            return {"unreadable": True}
         state = str(data.get("state") or "OPEN").lower()
         base_ref = str(data.get("baseRefName") or "master").strip() or "master"
         checks = []
@@ -2312,7 +2319,7 @@ def default_pr_ci_status(repo: Path, pr_number: int, expected_head: str, run: Ru
             status = str(c.get("status") or c.get("state") or "").lower()
             conclusion = str(c.get("conclusion") or c.get("state") or "").lower()
             checks.append({"name": name, "status": status, "conclusion": conclusion})
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
         return {"unreadable": True}
 
     required: set[str] = set()
@@ -2379,7 +2386,10 @@ def evaluate_pr_ci(ci_info: dict[str, Any], expected_head: str, elapsed_wait: fl
         return "unreadable", "remote_unreadable"
 
     observed_head = ci_info.get("observed_head")
-    if observed_head and observed_head != expected_head:
+    if not isinstance(observed_head, str) or not observed_head.strip():
+        return "unreadable", "remote_unreadable"
+    observed_head = observed_head.strip()
+    if observed_head != expected_head:
         return "immediate_wake", "head_changed"
 
     pr_state = str(ci_info.get("state") or "").lower()

@@ -4660,6 +4660,7 @@ def test_ci_wait_satisfaction_and_unrelated_ci_ignored(tmp_path: Path) -> None:
     assert l2["parent"] is not None
     assert "External wait satisfied:" in l2["task"]
     assert f"- CI PR #42@{head_sha}: success" in l2["task"]
+    assert sum(env.clock.slept) >= rc.CI_POLL_INTERVAL_SECONDS
 
 
 def test_pr_head_change_or_closure_wakes_immediately_with_uncertainty(tmp_path: Path) -> None:
@@ -5134,6 +5135,25 @@ def test_default_pr_ci_status_ruleset_and_fallback(tmp_path: Path) -> None:
     res_pf = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_pr_fail)
     assert res_pf == {"unreadable": True}
 
+    # Case 5: PR view JSON has no headRefOid -> fails closed
+    pr_json_no_head = json.dumps({
+        "state": "OPEN",
+        "baseRefName": "main",
+        "statusCheckRollup": [
+            {"name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        ],
+    })
+
+    def mock_run_no_head(cmd: list[str], **kwargs: Any) -> tuple[int, str]:
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return 0, pr_json_no_head
+        if cmd[:4] == ["gh", "api", "repos/:owner/:repo/rules/branches/main"]:
+            return 0, ruleset_json
+        return 1, "not found"
+
+    res_nh = rc.default_pr_ci_status(tmp_path, 42, head, run=mock_run_no_head)
+    assert res_nh == {"unreadable": True}
+
 
 def test_status_context_ci_checks(tmp_path: Path) -> None:
     head = "a" * 40
@@ -5208,6 +5228,20 @@ def test_evaluate_pr_ci_acceptance_criteria() -> None:
     # missing or empty required_checks fails closed
     empty_req = {"observed_head": head, "state": "open", "required_checks": [], "checks": []}
     assert rc.evaluate_pr_ci(empty_req, head, 0.0) == ("unreadable", "remote_unreadable")
+    # missing or empty observed_head fails closed
+    info_no_head = {
+        "state": "open",
+        "required_checks": ["backend"],
+        "checks": [{"name": "backend", "status": "completed", "conclusion": "success"}],
+    }
+    assert rc.evaluate_pr_ci(info_no_head, head, 0.0) == ("unreadable", "remote_unreadable")
+    info_empty_head = {
+        "observed_head": "",
+        "state": "open",
+        "required_checks": ["backend"],
+        "checks": [{"name": "backend", "status": "completed", "conclusion": "success"}],
+    }
+    assert rc.evaluate_pr_ci(info_empty_head, head, 0.0) == ("unreadable", "remote_unreadable")
 
     # 2. head changed -> immediate wake
     info_changed = {"observed_head": "b" * 40, "state": "open", "required_checks": ["backend"], "checks": []}
