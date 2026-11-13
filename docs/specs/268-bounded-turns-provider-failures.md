@@ -1,40 +1,94 @@
 # 268 — Bounded turns and provider failure handling
 
-Status: draft
+Status: ready
 Depends on: 267
 
 ## Goal
 
-Coordinator turns and provider recovery are bounded by deterministic limits and fail-closed handling. Relay-managed turns enforce a per-turn wall limit rather than waiting indefinitely in `RelayAdapter.finish`. Before launching any turn, a single bounded network reachability probe avoids burning launches and transient retry counters across configured providers during general connectivity outages. When a provider fails authentication, the supervisor records a question to the maintainer once instead of looping through exponential estimate cooldowns. When a fresh limits reading confirms quota headroom, contradictory `limits` and `message` cooldowns are cleared immediately while non-quota `estimate` and manual cooldowns are preserved.
+Coordinator turns and provider recovery are bounded by deterministic limits and fail-closed handling. A Relay-managed
+turn has a wall limit instead of an unbounded wait in `RelayAdapter.finish`. Before a launch, one bounded reachability
+probe keeps a general network outage from burning a launch and a transient strike on every provider. An
+authentication failure excludes that provider and asks the maintainer once, instead of backing off and retrying for
+hours. A fresh limits reading that shows quota headroom ends a recorded `limits` or `message` cooldown early (F3),
+once, while `estimate`, `manual` and `auth` cooldowns are untouched by readings.
 
 ## Why
 
-Supervisor execution stalls when external processes hang or when network outages exhaust retry circuits across all providers. Authentication and sign-in failures require maintainer credential intervention rather than automated retry loops. Quota recovery should be recognized as soon as validated readings confirm headroom, avoiding hours of idle waiting while keeping backoff discipline for non-quota failures.
+Supervisor item S7 (with defect F3) of the maintainer's current directive order. A hung external process stalls the
+owner indefinitely; a network outage costs one launch and one cooldown per provider; a sign-in failure is a
+credential problem only the maintainer can fix, so retrying it wastes hours without telling him; a quota reset the
+maintainer made early is ignored until the recorded window ends or he stops the owner to run
+`release --clear-cooldown`.
 
-## Code facts checked on `origin/master` at `358cad3c`
+## Code facts checked on `origin/master` at `4637bce1`
 
-- `RelayAdapter.finish` in `scripts/relay_continuity.py` uses a bare `proc.wait()` without a timeout; only native runs via `scripts/relay_argon.py` enforce `TURN_TIMEOUT` (3600s).
-- `Supervisor._launch` performs conflict, permissions, and session setup before launching, but executes no reachability probe; a network outage burns coordinator launches across providers, classifying each as `transient`.
-- `classify_text` and `_runner_auth_diagnostic` classify authentication errors as `outcome == "auth"`, but `Supervisor.set_cooldown` falls back to the `else` branch, setting an `estimate` cooldown with exponential backoff (`recheck * 2 ** strikes`) that retries for hours instead of asking the maintainer.
-- `Supervisor.available` returns `False` immediately when an unexpired cooldown exists in state, without checking `exhausted_until(agent)` or native windows; an early quota reset is ignored until the recorded window expires or `release --clear-cooldown` is invoked manually.
-- Cooldowns with source `estimate` (transient outages, crashes) and `manual` (spend limits) represent non-quota conditions and must remain unaffected by limits readings.
+- `RelayAdapter.finish` (`scripts/relay_continuity.py`) is a bare `proc.wait()`. `RelayAdapter.start` launches with
+  `start_new_session=True`, so each turn is its own process group. Only native turns
+  (`scripts/relay_argon.py`, `TURN_TIMEOUT = 3600`) have a limit, and the native prompt states it.
+- Measured on this repository's 270 retained Relay turns (`.agent-relay/sessions/*/turns/*`, prompt mtime to last
+  file mtime): p95 1380 s, p99 1810 s, max 2552 s. None exceeded 2700 s.
+- `Supervisor._launch` checks `host.conflicts` (returns `"waiting"` without writing `pending`) and
+  `host.permissions_digest`, then increments `attempts`, writes `pending` and starts the turn. It runs no
+  reachability check. `"waiting"` ends `run`, and the owner decides again on its next step.
+- `Host` is the injectable boundary (`reap`, `probe`, `conflicts`, `ledger`, ...); tests replace its callables.
+- `classify_text` returns `"auth"` on HTTP 401/403 or `AUTH_RE`; `no_terminal_evidence` and the native preflight
+  classify (`login_state_missing`, `login_path_conflict`, `agy_missing`, `not_sandbox`) also produce `"auth"`.
+  `set_cooldown` sends `"auth"` to its `else` branch: an `estimate` cooldown of `recheck * 2 ** strikes` (30 min up to
+  `recheck_cap` 4 h), with a `provider_exhausted` notification and a ledger `finding`, never a question. The hold
+  reason `auth_failure` exists in `HOLD_REASONS` but nothing raises it.
+- The `retry_same` path keeps short same-agent retries for `transient` outcomes with `harness_cause` in
+  `SAME_AGENT_CAUSES` (`provider_network`, `provider_auth_blip`); it never sees `"auth"`.
+- `Supervisor.available` returns `False` for any cooldown whose `until` is `None` or in the future, before any
+  reading. Only after expiry does it consult `exhausted_until` (Relay readings, `reading_freshness` 15 min,
+  `max_reset_ahead`) or `argon_limits` (native, 30 s cache). `exhausted_until` returns `False` only when every window
+  is usable and below 99.5 % used.
+- `set_cooldown` already keeps a cooldown whose `until` is `None` (a manual cap) until `release --clear-cooldown`.
+- Maintainer answers are ledger `decision` entries written by `relay_observe.record_answer` with text
+  `Maintainer answer to question <id> (via <source>): <answer>` and `supersedes=[<id>]`.
 
 ## Scope
 
 In scope:
 
-- Enforce a per-turn wall clock timeout in `RelayAdapter.finish` (default 3600 seconds, matching native coordinator turn budget). When the limit is exceeded, terminate the process hierarchy, reap surviving processes via `Host.reap()`, and return a timed-out run result settled as a failure without blocking supervisor execution.
-- Add a single bounded read-only reachability probe before launching any coordinator turn in `Supervisor._launch` (host-level network check with a bounded timeout <= 10s). If the probe fails, defer launching, enter a waiting state, and avoid incrementing transient strikes or setting provider cooldowns.
-- Handle `outcome == "auth"` by recording a maintainer question once in the ledger (`devctx.py note question` with numbered options adhering to `docs/PROCESS.md`), suppressing retries for that provider until credentials are updated or released.
-- In `Supervisor.available`, when an active cooldown has source `limits` or `message`, take a fresh limits reading (`exhausted_until(agent)` or native limits). If the reading returns `False` (fresh reading with valid headroom and no exhausted window), clear the cooldown and treat the agent as available.
-- Retain existing cooldown behavior for `source == "estimate"` and `source == "manual"`; missing, stale, or ambiguous quota readings never clear cooldowns.
+1. **Turn wall limit.** `RelayAdapter.finish` waits at most `Limits.turn_wall` (default 3600 s, comfortably above
+   the measured maximum). On expiry it sends SIGTERM to the turn's process group, waits up to 30 s, then SIGKILL, and
+   returns a `RunResult` whose diagnostics name the wall limit. The turn then goes through the normal `_reap` and
+   `_settle` path: it is never `success`, its in-flight effects are listed as INTERRUPTED like any interrupted turn,
+   and it sets no provider cooldown (a hung turn is not evidence about the provider). The task text of a Relay turn
+   states the limit in one sentence, as the native prompt does.
+2. **Pre-launch reachability probe.** A new `Host.reachable` callable (default: TCP connect to `github.com:443`
+   with a 5 s timeout; the coordinator needs GitHub for any work, so this adds no new destination) is called in
+   `_launch` after the conflict check and before `attempts`, `pending` or any launch. When it fails, `_launch` logs,
+   sets phase `waiting`, saves and returns `"waiting"`: no attempt, no strike, no cooldown, no notification per
+   probe. A ledger `finding` is written once per outage (on the first failed probe after a successful one), not per
+   probe. The existing `max_wait` bound and owner scheduling stay the outer limit.
+3. **Auth failure asks once.** For `outcome == "auth"`, `set_cooldown` records a cooldown with `until: None`,
+   `source: "auth"`, and the id of one ledger `question` it writes at that moment, in the format of
+   `docs/PROCESS.md` "Question format" (Italian, 2 numbered options, recommended first, each on its own line):
+   `1.` the maintainer has restored access for that agent, retry it; `2.` keep the agent excluded until he releases
+   it. The question names the agent and the classified detail, never credential values or paths. While that
+   cooldown exists no further question is written for that agent (restarts and repeated decisions included).
+4. **Clearing an auth cooldown.** In `available`, a cooldown with `source: "auth"` is cleared only by (a) an
+   accepted `decision` superseding its question id whose answer, after the `: ` separator, begins with `1`, or
+   (b) `release --clear-cooldown <agent>` (unchanged). Any other answer leaves the agent excluded. A limits reading
+   never clears it.
+5. **Fresh reading ends a quota cooldown (F3).** In `available`, when an unexpired cooldown has source `limits` or
+   `message`, take a reading (`exhausted_until` for Relay agents, `argon_limits` for native ones). Clear the cooldown
+   and return `True` only when the reading shows room (`exhausted_until(agent) is False`, or a native reading with no
+   disabled window and every window below 100 %), the reading is newer than the cooldown's `since`, and no earlier
+   reading-clear happened for this agent since its last successful turn. Record the clear in state
+   (`counters["reading_clear_<agent>"]`, reset on success like the existing strike counters) and with one ledger
+   `finding`. A second quota failure after a reading-clear therefore keeps its cooldown to the recorded reset: a
+   reading that disagrees with the provider's own failure costs at most one launch.
 
 Out of scope (binding non-goals):
 
-- No automated credential refresh, token rotation, or secret modification (credential management remains exclusively with the maintainer).
-- No new external network infrastructure, daemon processes, or third-party libraries.
-- No changes to frozen conformance tests (`backend/tests/**/test_*_conformance.py`).
-- No changes to worker routing policies, task validation contracts, or git promotion rules.
+- No credential refresh, token rotation, login automation or secret handling: credentials remain the maintainer's.
+- No new dependency, daemon, endpoint or destination; the probe uses the standard library.
+- No change to `estimate` or `manual` cooldown behaviour, `retry_same`, the native runner's own `TURN_TIMEOUT`,
+  worker routing, task contracts or promotion rules.
+- No change to frozen conformance tests (`backend/tests/**/test_*_conformance.py`).
+- No change to what a stop request does: `stop` still never kills a running turn; only the wall limit does.
 
 ## Files likely touched
 
@@ -43,31 +97,43 @@ Out of scope (binding non-goals):
 
 ## Design constraints
 
-- Questions to the maintainer must follow the format defined in `docs/PROCESS.md` (at least 2 numbered option lines starting with `1.` or `1)`).
-- Reachability checks must be strictly read-only, fast (timeout <= 10s), mockable offline via `Host`, and fail-safe.
-- Process termination on wall limit expiry must ensure clean process group teardown; surviving child processes must be stopped via `Host.reap()` before settling.
-- Quota cooldown clearing requires a fresh, validated reading adhering to `reading_freshness` and `max_reset_ahead`; stale or missing readings do not alter state.
-- Offline tests must use fake providers and clocks; no paid providers or external network access.
+- Rebase on the merged implementation of 267 (it edits the same file); keep 267's wait/resume path intact.
+- The wall limit is measured with a monotonic clock in the adapter and is injectable for tests; tests never sleep
+  for real minutes.
+- Process-group termination uses the group created by `start_new_session=True`; a group that is already gone is not
+  an error. `_reap` still runs afterwards and a surviving process still blocks the next launch as today.
+- The probe is read-only, at most 5 s, injectable through `Host`, and an exception counts as unreachable.
+- The auth question goes through `Supervisor.record` (the ledger callable), so a ledger failure is logged and never
+  crashes supervision; if no question id could be recorded, the cooldown still has `until: None` and
+  `release --clear-cooldown` remains the way out.
+- Cooldown clearing by reading requires the existing freshness and plausibility checks; a missing, stale,
+  unparseable or ambiguous reading changes nothing.
 
 ## Acceptance criteria
 
-1. In offline tests, a mocked coordinator turn that hangs past the per-turn wall limit is terminated, reaped, and settled as a timed-out turn without blocking supervisor progress.
-2. In offline tests, when the pre-launch reachability probe fails, `Supervisor._launch` suspends launch, leaves provider cooldowns and transient strike counters unchanged, and resumes once reachability returns.
-3. In offline tests, a turn with `outcome == "auth"` produces a single structured maintainer question with valid numbered option lines, marks the provider unavailable without exponential estimate retries, and avoids duplicate questions on subsequent polls.
-4. In offline tests, an agent with an active future cooldown of source `limits` or `message` becomes `available` immediately when a fresh limits reading confirms headroom (`exhausted_until` returns `False`), dropping the cooldown.
-5. In offline tests, an agent with an active cooldown of source `estimate` or `manual` is not cleared by a fresh quota reading showing headroom.
-6. A stale, missing, or unparseable limits reading leaves existing `limits` and `message` cooldowns intact.
+1. A fake Relay turn that runs past an injected wall limit is terminated with its process group, reaped, settled as
+   not successful with the wall limit named in the report, and leaves `state["cooldowns"]` unchanged.
+2. A failing `Host.reachable` makes `_launch` return `"waiting"` with `attempts`, `pending`, every `transient_*` and
+   `estimated_*` counter and `state["cooldowns"]` unchanged and nothing passed to `relay.start`; repeated failing
+   probes write one ledger finding; once the probe succeeds the launch proceeds.
+3. An `"auth"` outcome writes exactly one ledger `question` whose text `relay_observe.parse_open_questions` accepts
+   with two options, records a cooldown with `until: None` and `source: "auth"`, and no further question or retry
+   follows on later decisions, restarts or polls.
+4. A maintainer answer `1` to that question makes the agent available again; answer `2` or any other text leaves it
+   excluded; `release --clear-cooldown` still clears it; a limits reading with room does not.
+5. A future `limits` or `message` cooldown with a fresh reading showing room and newer than `since` makes the agent
+   available and drops the cooldown, for a Relay agent and for a native agent.
+6. After such a clear, a new quota failure records a cooldown that a further reading with room does not clear until
+   a successful turn resets the counter.
+7. `estimate` and `manual` cooldowns are not cleared by a reading with room; stale, missing, unparseable and
+   `exhausted` readings leave `limits` and `message` cooldowns intact.
 
 ## Required tests
 
-- Focused offline supervisor tests in `backend/tests/test_relay_continuity.py`:
-  - `test_relay_finish_enforces_per_turn_wall_limit_and_reaps`: verify process termination, timeout return result, and settled report.
-  - `test_pre_launch_reachability_probe_defers_without_burning_providers`: verify that network unreachable suspends launch without incrementing transient strikes or setting cooldowns.
-  - `test_auth_failure_asks_maintainer_once_and_avoids_estimate_retries`: verify ledger question formatting, provider suppression, and absence of retry loops.
-  - `test_fresh_limits_reading_clears_limits_and_message_cooldown`: verify that a cooldown with source `limits` or `message` is cleared when a fresh reading returns `False`.
-  - `test_fresh_limits_reading_preserves_estimate_and_manual_cooldown`: verify that `source in ("estimate", "manual")` cooldowns remain in effect despite fresh readings.
-- Exact-head CI, severe diff review, and independent second-session diff review prior to implementation merge (supervisor control flow).
+Focused offline tests in `backend/tests/test_relay_continuity.py`, one or more per acceptance criterion, with fake
+processes, fake clocks and fake readings only. The existing `test_relay_continuity.py` suite must stay green in CI.
 
 ## Definition of done
 
-The acceptance criteria hold and the required evidence is recorded on the implementation PR. The registry reflects the implementation state.
+The acceptance criteria hold; exact-head CI is green; a severe review and an independent second-session full-diff
+review (supervisor code, high risk) pass on the implementation PR; the registry row is set accordingly.
