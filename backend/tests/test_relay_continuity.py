@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import runpy
+import secrets
 import shutil
 import signal
 import subprocess
@@ -585,7 +586,7 @@ def test_auth_failure_disables_only_that_provider_and_unknown_failure_retries(
     assert [launch["agent"] for launch in env.relay.launches] == agents
     if agents == ["codex"]:
         cooldown = sup.state["cooldowns"]["claude"]
-        assert cooldown["reason"] == "auth" and rc.parse_ts(cooldown["until"]) == T0 + timedelta(minutes=30)
+        assert cooldown["reason"] == "auth" and cooldown["until"] is None and cooldown["source"] == "auth"
         assert any("Un assistente non è disponibile" in e for e in env.events())
 
 
@@ -5463,3 +5464,120 @@ def test_pre_launch_reachable_probe_waiting_and_single_ledger_finding(tmp_path: 
     assert res3 != "waiting"
     assert sup.attempts == 1
     assert len(env.relay.launches) == 1
+
+
+def test_auth_failure_writes_single_question_with_two_options_and_cooldown_until_none(tmp_path: Path) -> None:
+    """Criterion 3: An 'auth' outcome writes exactly one ledger question whose text
+    parse_open_questions accepts with two options, records a cooldown with until: None and source: 'auth',
+    and no further question or retry follows on later decisions, restarts or polls."""
+    obs_spec = importlib.util.spec_from_file_location("relay_observe", SCRIPT.parent / "relay_observe.py")
+    assert obs_spec and obs_spec.loader
+    obs = importlib.util.module_from_spec(obs_spec)
+    obs_spec.loader.exec_module(obs)
+
+    env = Env(tmp_path, [("any", SUCCESS)])
+    entries: list[dict[str, Any]] = []
+
+    def fake_ledger(kind: str, text: str) -> str:
+        qid = f"L{env.clock.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(2)}"
+        entry = {"id": qid, "kind": kind, "text": text, "ts": rc.iso(env.clock.now())}
+        entries.append(entry)
+        env.ledger.append((kind, text))
+        return qid
+
+    env.host.ledger = fake_ledger
+    env.host.read_ledger = lambda: list(entries)
+
+    events = [claude_result("Invalid API key · Please run /login", error=True, status=401)]
+    env.head(events)
+    result, sup = env.run()
+    assert result == "idle"
+
+    cooldown = sup.state["cooldowns"]["claude"]
+    assert cooldown["reason"] == "auth"
+    assert cooldown["until"] is None
+    assert cooldown["source"] == "auth"
+    qid = cooldown["question"]
+    assert qid is not None
+
+    # Check the question with parse_open_questions
+    q_entries = [e for e in entries if e["kind"] == "question" and e["id"] == qid]
+    assert len(q_entries) == 1
+    parsed = obs.parse_open_questions(q_entries)
+    assert len(parsed) == 1
+    opts = parsed[0]["options"]
+    assert len(opts) == 2
+    assert opts[0]["index"] == 1
+    assert opts[0]["recommended"] is True
+    assert opts[1]["index"] == 2
+    assert opts[1]["recommended"] is False
+
+    # Deduplication: later decision/set_cooldown produces no new question
+    rep = rc.TurnReport(outcome="auth", agent="claude", detail="unauthorized", turn_id="t1")
+    sup.set_cooldown("claude", rep)
+    assert len([e for e in entries if e["kind"] == "question"]) == 1
+
+    # Restart produces no new question and no retry of claude
+    sup2 = rc.Supervisor(env.store, env.host, env.limits)
+    sup2.state = env.store.load()
+    assert not sup2.available("claude")
+    assert len([e for e in entries if e["kind"] == "question"]) == 1
+
+
+def test_clearing_auth_cooldown_by_decision_or_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Criterion 4: Maintainer answer 1 to that question makes agent available again; answer 2 or other text
+    leaves it excluded; release --clear-cooldown clears it; limits reading with room does not."""
+    env = Env(tmp_path)
+    qid = "L20261018080000-q001"
+    sup = env.supervisor()
+    sup.state["cooldowns"]["claude"] = {
+        "until": None, "source": "auth", "reason": "auth", "since": rc.iso(T0), "turn": "turn-1", "question": qid,
+    }
+    env.store.save(sup.state, T0)
+
+    # 1. Limits reading with room does NOT clear auth cooldown
+    env.relay.readings = room(env, "claude")
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+    # 2. Answer 2 leaves it excluded
+    ledger_entries = [
+        {"id": "L20261018080500-d001", "kind": "decision", "status": "accepted",
+         "text": f"Maintainer answer to question {qid} (via slack): 2 - Mantieni escluso",
+         "supersedes": [qid]},
+    ]
+    env.host.read_ledger = lambda: list(ledger_entries)
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+    # 3. Answer with other text leaves it excluded
+    ledger_entries = [
+        {"id": "L20261018080500-d001", "kind": "decision", "status": "accepted",
+         "text": f"Maintainer answer to question {qid} (via slack): altro - non so",
+         "supersedes": [qid]},
+    ]
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+    # 4. Answer 1 clears cooldown and makes agent available
+    ledger_entries = [
+        {"id": "L20261018080500-d002", "kind": "decision", "status": "accepted",
+         "text": f"Maintainer answer to question {qid} (via slack): 1 - Ho ripristinato l'accesso",
+         "supersedes": [qid]},
+    ]
+    assert sup.available("claude")
+    assert "claude" not in sup.state["cooldowns"]
+
+    # 5. release --clear-cooldown claude clears it
+    sup.state["cooldowns"]["claude"] = {
+        "until": None, "source": "auth", "reason": "auth", "since": rc.iso(T0), "turn": "turn-1", "question": qid,
+    }
+    env.store.save(sup.state, T0)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(env.store.root))
+    monkeypatch.setattr(rc, "make_host", lambda repo: env.host)
+    monkeypatch.setattr(rc, "repo_root", lambda: env.repo)
+    env.host.read_ledger = lambda: []  # no decision
+    assert rc.main(["release", "--clear-cooldown", "claude", "--note", "manual clear"]) == 0
+    sup2 = env.supervisor()
+    sup2.state = env.store.load()
+    assert "claude" not in sup2.state["cooldowns"]

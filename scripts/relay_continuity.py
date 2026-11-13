@@ -1556,7 +1556,7 @@ FIELD_RULES: dict[str, Callable[[str], bool]] = {
     "claude_until": lambda v: v in ("none", "manual") or bool(re.fullmatch(ISO_RE, v)),
     "codex_until": lambda v: v in ("none", "manual") or bool(re.fullmatch(ISO_RE, v)),
     "argon_until": lambda v: v in ("none", "manual") or bool(re.fullmatch(ISO_RE, v)),
-    "reset_source": lambda v: v in ("limits", "message", "estimate", "manual"),
+    "reset_source": lambda v: v in ("limits", "message", "estimate", "manual", "auth"),
     "attempt": lambda v: bool(re.fullmatch(r"\d{1,4}", v)),
     "attempts": lambda v: bool(re.fullmatch(r"\d{1,6}", v)),
     "holds": lambda v: bool(re.fullmatch(r"\d{1,6}", v)),
@@ -3185,9 +3185,28 @@ class Supervisor:
         now = self.host.now()
         cooldown = self.state["cooldowns"].get(agent)
         if cooldown:
-            until = parse_ts(cooldown.get("until"))
-            if until is None or now < until:
-                return False
+            source = cooldown.get("source")
+            if source == "auth":
+                qid = cooldown.get("question")
+                cleared = False
+                if qid:
+                    for entry in reversed(self._read_ledger()):
+                        if entry.get("kind") == "decision" and entry.get("status") == "accepted" and qid in (entry.get("supersedes") or []):
+                            text = str(entry.get("text") or "")
+                            if ": " in text:
+                                _, ans = text.split(": ", 1)
+                                if ans.strip().startswith("1"):
+                                    cleared = True
+                            break
+                if cleared:
+                    self.state["cooldowns"].pop(agent, None)
+                    cooldown = None
+                else:
+                    return False
+            else:
+                until = parse_ts(cooldown.get("until"))
+                if until is None or now < until:
+                    return False
         if agent in NATIVE_AGENTS:
             native = self.host.relay.argon_limits(agent)
             if native is None:
@@ -3249,7 +3268,24 @@ class Supervisor:
         if report.spend_cap:
             caps[agent] = {"turn": report.turn_id, "at": iso(now)}
         counters = self.state["counters"]
-        if report.outcome == "spend_limit":
+        if report.outcome == "auth":
+            until, source = None, "auth"
+            detail = report.detail or "autenticazione non valida"
+            detail = re.sub(r"/(?:[a-zA-Z0-9_.-]+/)+[a-zA-Z0-9_.-]+", "[path]", detail)
+            q_text = (
+                f"Autenticazione fallita per l'agente {agent} ({detail}). Come procedere?\n"
+                f"1. (consigliata) Accesso ripristinato per {agent}, riprova — conseguenza: riprova l'agente al prossimo turno\n"
+                f"2. Mantieni {agent} escluso — conseguenza: l'agente resta escluso fino al comando release"
+            )
+            qid = self.record("question", q_text)
+            self.state["cooldowns"][agent] = {
+                "until": None, "source": "auth", "reason": report.outcome,
+                "since": iso(now), "turn": report.turn_id, "question": qid,
+            }
+            self.notify("provider_exhausted", dedupe_key=f"exhausted|{agent}|auth", agent=agent,
+                        outcome=report.outcome, reset_at="manual", reset_source=source)
+            return
+        elif report.outcome == "spend_limit":
             until, source = None, "manual"
         elif report.outcome == "transient":
             # An outage: back off this agent briefly (the other one may still be reachable).
