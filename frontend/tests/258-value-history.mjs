@@ -71,6 +71,7 @@ for (const pattern of [
   'aria-label="Exception red dot"',
   "Compare versions",
   "Compare",
+  'aria-label="Value comparison result"',
   "Runs used",
   "Requirement checks",
   "No runs used this version",

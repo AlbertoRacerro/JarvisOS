@@ -331,7 +331,7 @@ export default function ValueHistoryModal({ workspaceId, target, onClose }: Prop
                   )}
 
                   {comparison && (
-                    <div
+                    <section
                       className="value-comparison-details"
                       aria-label="Value comparison result"
                       style={{
@@ -486,7 +486,7 @@ export default function ValueHistoryModal({ workspaceId, target, onClose }: Prop
                           </tr>
                         </tbody>
                       </table>
-                    </div>
+                    </section>
                   )}
                 </>
               )}

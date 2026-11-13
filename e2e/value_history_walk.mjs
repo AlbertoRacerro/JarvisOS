@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Spec 258: clean-profile walk for value history: which value versions a run used,
-// newer version exists marker, version history chain, and comparing two versions.
+// newer version exists marker, version history chain, comparing two versions, and
+// simulation result value history.
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { openSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -41,14 +42,98 @@ const env = {
 };
 const log = openSync(join(evidence, 'backend.log'), 'w');
 
-// Initialize database with a fake AI job row so parameter replacement proposal can succeed
-const init = spawnSync(python, ['-c', [
-  'from app.core.database import initialize_database, open_sqlite_connection',
-  'from app.modules.events.service import utc_now',
-  'initialize_database()',
-  "with open_sqlite_connection() as k: k.execute(\"INSERT INTO ai_jobs (id, created_at, status, task_kind, route_reason_json) VALUES ('walk-seed-job', ?, 'succeeded', 'walk_seed', '{}')\", (utc_now(),)); k.commit()"
-].join('\n')], { cwd: backend, env, encoding: 'utf8' });
+// Seed calculation model and run via internal runner service (offline test runner),
+// following the sibling walk e2e/sim_results_requirement_verification_walk.mjs.
+// Direct INSERT INTO ai_jobs is omitted because parameter replacement uses the public
+// parameter proposal and promote-replacement routes which do not require an ai_job row.
+const seedScript = `
+import json
+from app.core.bootstrap import initialize_storage
+from app.core.database import open_sqlite_connection
+from app.modules.runner.models import ModelImplementationCreate, RunnerJobCreate
+from app.modules.runner.service import (
+    create_model_implementation,
+    create_runner_job,
+    run_runner_job,
+)
 
+initialize_storage(seed_default=True)
+
+ws_id = "val-hist-proof"
+now = "2026-11-13T00:00:00+00:00"
+with open_sqlite_connection() as conn:
+    conn.execute(
+        "INSERT INTO workspaces (id, name, slug, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)",
+        (ws_id, "Value History Proof", "val-hist-proof", now, now),
+    )
+    conn.execute(
+        """
+        INSERT INTO parameters (
+            id, workspace_id, name, value, unit, value_status, status, origin,
+            created_at, updated_at, lifecycle_state
+        ) VALUES ('param-length-v0', ?, 'tube_length', '10.0', 'm', 'accepted', 'accepted', 'user', ?, ?, 'active')
+        """,
+        (ws_id, now, now),
+    )
+    conn.execute(
+        """
+        INSERT INTO model_specs (
+            id, workspace_id, title, engineering_question, status, maturity_status, schema_version, created_at, updated_at
+        ) VALUES ('spec-sizing', ?, 'Tube Sizing Calculation', 'Demonstrate run value history tracking.', 'active', 'draft', 1, ?, ?)
+        """,
+        (ws_id, now, now),
+    )
+    conn.commit()
+
+v2_contract = {
+    "schema_version": 2,
+    "evaluation_mode": "forward",
+    "variables": [
+        {
+            "name": "tube_length",
+            "label": "Tube Length",
+            "unit": "m",
+            "physical_dimension": "length",
+            "required": True,
+            "category": "design",
+            "description": "Canonical tube length parameter",
+        }
+    ],
+}
+script = '''import json
+with open('result.json', 'w', encoding='utf-8') as f:
+    json.dump({'outputs': {'area': {'value': 31.4, 'unit': 'm^2', 'quantity': 'area', 'conditions': {'regime': 'nominal'}}}}, f)
+'''
+impl = create_model_implementation(
+    ws_id,
+    ModelImplementationCreate(
+        model_spec_id='spec-sizing',
+        version_label='impl-v2',
+        implementation_kind='calc_v0',
+        script_text=script,
+        input_contract=v2_contract,
+    ),
+)
+job = create_runner_job(
+    ws_id,
+    RunnerJobCreate(
+        model_version_id=impl.id,
+        run_label='Tube Sizing Calculation',
+        input_set={
+            'tube_length': {
+                'value': 10.0,
+                'unit': 'm',
+                'source_parameter_id': 'param-length-v0',
+                'source_parameter_updated_at': now,
+            }
+        },
+    ),
+)
+run_res = run_runner_job(job.runner_job.id)
+assert run_res.error is None
+`;
+
+const init = spawnSync(python, ['-c', seedScript], { cwd: backend, env, encoding: 'utf8' });
 if (init.status !== 0) throw Error(`database initialization failed: ${init.stderr}`);
 
 const server = spawn(python, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)], { cwd: backend, env, stdio: ['ignore', log, log] });
@@ -75,76 +160,28 @@ try {
     return r.json();
   };
 
-  // 1. Seed workspace through public API routes
-  const ws = await post('/workspaces', { name: 'Value History Proof', slug: 'val-hist-proof' });
-
-  // 2. Create canonical parameter
-  const oldParam = await post(`/workspaces/${ws.id}/parameters`, {
-    name: 'tube_length',
-    value: '10.0',
-    unit: 'm',
-    value_status: 'accepted',
-    status: 'accepted'
-  });
-
-  // 3. Create model spec and implementation with schema v2 input contract
-  const spec = await post(`/workspaces/${ws.id}/model-specs`, {
-    title: 'Tube Sizing Calculation',
-    engineering_question: 'Demonstrate run value history tracking.'
-  });
-
-  const script = "import json\nwith open('result.json', 'w') as f:\n    json.dump({'outputs': {'area': {'value': 31.4, 'unit': 'm^2', 'quantity': 'area'}}}, f)";
-  const impl = await post(`/workspaces/${ws.id}/model-implementations`, {
-    model_spec_id: spec.id,
-    version_label: 'impl-v2',
-    implementation_kind: 'calc_v0',
-    script_text: script,
-    input_contract: {
-      schema_version: 2,
-      evaluation_mode: 'forward',
-      variables: [
-        {
-          name: 'tube_length',
-          label: 'Tube Length',
-          unit: 'm',
-          physical_dimension: 'length',
-          required: true,
-          category: 'design',
-          description: 'Canonical tube length parameter'
-        }
-      ]
-    }
-  });
-
-  // 4. Create runner job linking tube_length to oldParam
-  const job = await post(`/workspaces/${ws.id}/runner-jobs`, {
-    model_version_id: impl.id,
-    input_set: {
-      tube_length: {
-        value: 10.0,
-        unit: 'm',
-        source_parameter_id: oldParam.id,
-        source_parameter_updated_at: oldParam.updated_at
-      }
-    }
-  });
-
-  // 5. Run the job to record simulation run with linked parameter
-  await post(`/runner-jobs/${job.runner_job.id}/run`, {});
-
-  // 6. Supersede oldParam with a new version
-  const replacement = await post('/memory/proposals', {
-    workspace_id: ws.id,
-    record_kind: 'parameter',
+  // Supersede param-length-v0 with a new version through public API routes
+  const replacement = await post('/workspaces/val-hist-proof/parameters', {
     name: 'tube_length',
     value: '15.0',
     unit: 'm',
-    supersedes_parameter_id: oldParam.id,
-    source_ai_job_id: 'walk-seed-job'
+    status: 'proposed',
+    supersedes_parameter_id: 'param-length-v0'
   });
   await post(`/memory/parameter/${replacement.id}/promote-replacement`, {});
 
-  // 7. Launch browser walk from / with visible controls
+  // Confirm exception on the ingested simulation result value through public API route
+  const batches = await (await fetch(base + '/project-knowledge/workspaces/val-hist-proof/result-batches')).json();
+  if (batches.length > 0 && batches[0].values.length > 0) {
+    const areaValue = batches[0].values.find(v => v.output_name === 'area') ?? batches[0].values[0];
+    await post(`/project-knowledge/result-values/${areaValue.id}/resolve`, {
+      workspace_id: 'val-hist-proof',
+      action: 'confirm',
+      reason: 'Engineering review accepted calculated area'
+    });
+  }
+
+  // Launch browser walk from / with visible controls
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
   const page = await context.newPage();
@@ -191,9 +228,11 @@ try {
 
   const historyDialog = page.getByRole('dialog', { name: 'Value history' });
   await historyDialog.waitFor();
+  await historyDialog.getByText('Parameter History').waitFor();
+  await historyDialog.getByText('tube_length').waitFor();
   await historyDialog.getByText('Version chain').waitFor();
-  await historyDialog.getByText('Version 0').waitFor();
-  await historyDialog.getByText('Version 1').waitFor();
+  await historyDialog.getByText('Version 0', { exact: true }).waitFor();
+  await historyDialog.getByText('Version 1', { exact: true }).waitFor();
 
   await page.screenshot({ path: join(evidence, 'version-chain.png') });
   summary.screenshots.push('version-chain.png');
@@ -206,8 +245,8 @@ try {
 
   const comparison = historyDialog.getByRole('region', { name: 'Value comparison result' });
   await comparison.waitFor();
-  await comparison.getByText('Runs used').waitFor();
-  await comparison.getByText('Requirement checks').waitFor();
+  await comparison.getByText('Runs used', { exact: true }).waitFor();
+  await comparison.getByText('Requirement checks', { exact: true }).waitFor();
 
   await page.screenshot({ path: join(evidence, 'version-comparison.png') });
   summary.screenshots.push('version-comparison.png');
@@ -216,6 +255,34 @@ try {
   // Close the History dialog
   await historyDialog.getByRole('button', { name: 'Close history view' }).click();
   await historyDialog.waitFor({ state: 'detached' });
+
+  // Navigate to Memory -> Project Basis to inspect simulation result value history
+  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Memory', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Project knowledge destinations' }).getByRole('link', { name: 'Project Basis', exact: true }).click();
+
+  const pkPanel = page.getByRole('region', { name: 'Project Knowledge' });
+  await pkPanel.waitFor();
+  const batchesSection = pkPanel.getByRole('region', { name: 'Simulation result batches' });
+  await batchesSection.waitFor();
+  await batchesSection.getByText('area', { exact: true }).waitFor();
+
+  // Open History view for the simulation result value
+  await batchesSection.getByRole('button', { name: 'History' }).first().click();
+
+  const resHistoryDialog = page.getByRole('dialog', { name: 'Value history' });
+  await resHistoryDialog.waitFor();
+  await resHistoryDialog.getByText('Result Value History').waitFor();
+  await resHistoryDialog.getByText('area', { exact: true }).waitFor();
+  await resHistoryDialog.getByText('Version chain').waitFor();
+  await resHistoryDialog.getByText('Version 0', { exact: true }).waitFor();
+
+  await page.screenshot({ path: join(evidence, 'sim-result-value-history.png') });
+  summary.screenshots.push('sim-result-value-history.png');
+  summary.steps.push('Opened simulation result value History view from Project Basis and verified Version chain');
+
+  // Close the Result Value History dialog
+  await resHistoryDialog.getByRole('button', { name: 'Close history view' }).click();
+  await resHistoryDialog.waitFor({ state: 'detached' });
 
   if (summary.errors.length) throw Error(`Unexpected browser errors: ${summary.errors.join('; ')}`);
 } catch (error) {
