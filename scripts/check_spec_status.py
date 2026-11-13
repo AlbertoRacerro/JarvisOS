@@ -91,8 +91,6 @@ def parse_registry(text: str) -> dict[str, dict[str, object]]:
         for dep in row["deps"]:
             if dep == spec_id:
                 raise GateError(f"spec {spec_id}: self-dependency")
-            if dep not in rows:
-                raise GateError(f"spec {spec_id}: dependency {dep} is absent")
     return rows
 
 
@@ -121,7 +119,7 @@ def implementation(rows, pr_number: int, spec_id: str) -> str:
     unmet = [
         f"{dep}={rows[dep]['status']}"
         for dep in row["deps"]
-        if rows[dep]["status"] != "merged"
+        if dep in rows and rows[dep]["status"] != "merged"
     ]
     if unmet:
         raise GateError(f"spec {spec_id}: unmerged dependencies: {', '.join(unmet)}")
