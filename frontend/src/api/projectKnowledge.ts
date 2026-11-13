@@ -1,4 +1,14 @@
 import { API_BASE_URL } from "./client";
+import type {
+  RunLinkedParameterItem,
+  RunInputsManifestRead,
+  ValueVersionItem,
+  ValueVersionChainRead,
+  BoundRunRef,
+  BoundRequirementCheckRef,
+  ValueComparisonSide,
+  ValueComparisonRead
+} from "./generated/projectKnowledge";
 
 export type ProjectKnowledgeOperation = {
   operation_id?: string | null;
@@ -309,17 +319,6 @@ export function evaluateProjectKnowledgeRequirement(
   return requestJson<ProjectKnowledgeValidationRead>("/project-knowledge/validation", jsonInit("POST", payload));
 }
 
-import type {
-  RunLinkedParameterItem,
-  RunInputsManifestRead,
-  ValueVersionItem,
-  ValueVersionChainRead,
-  BoundRunRef,
-  BoundRequirementCheckRef,
-  ValueComparisonSide,
-  ValueComparisonRead
-} from "./generated/projectKnowledge";
-
 export type {
   RunLinkedParameterItem,
   RunInputsManifestRead,
@@ -329,7 +328,7 @@ export type {
   BoundRequirementCheckRef,
   ValueComparisonSide,
   ValueComparisonRead
-};
+} from "./generated/projectKnowledge";
 
 export function getRunInputsManifest(
   workspaceId: string,
@@ -380,4 +379,3 @@ export function compareValues(
     `/project-knowledge/workspaces/${encodeURIComponent(workspaceId)}/values/compare?${query.toString()}`
   );
 }
-
