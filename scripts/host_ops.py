@@ -2267,7 +2267,7 @@ def required_checks_problem(sha: str) -> str | None:
     try:
         raw_rules = _gh([f"repos/{REPO}/rules/branches/master"])
         rules = json.loads(raw_rules)
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as exc:
         return f"unreadable ruleset: {exc}"
     if not isinstance(rules, list):
         return "unreadable ruleset: rules response is not a list"
@@ -2290,7 +2290,7 @@ def required_checks_problem(sha: str) -> str | None:
     try:
         raw_runs = _gh([f"repos/{REPO}/commits/{sha}/check-runs?per_page=100", "--paginate"])
         check_runs = _parse_check_runs(raw_runs)
-    except Exception as exc:
+    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as exc:
         return f"unreadable check runs: {exc}"
 
     for context in sorted(contexts):
@@ -2433,13 +2433,13 @@ def preflight(paths: Paths) -> int:
         policy, _ = load_policy(paths)
         ops = policy.get("ops")
         if not isinstance(ops, dict):
-            raise RuntimeError("policy ops must be a dict")
+            raise TypeError("policy ops must be a dict")
         unknown = set(ops) - set(OPERATIONS)
         if unknown:
             raise RuntimeError(f"policy enables unknown operations {sorted(unknown)}")
         print(json.dumps({"ok": True, "version": executor_version()}))
         return 0
-    except Exception as exc:
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
