@@ -66,6 +66,9 @@ def test_resolving_references_pass_and_scope_section_is_ignored(tmp_path: Path) 
     ("reference", "reason"),
     [
         ("scripts/missing.py::helper", "file does not exist"),
+        ("/scripts/tool.py::helper", "path is not repository-relative"),
+        ("../outside.py::helper", "path escapes repository root"),
+        ("scripts/../../outside.py::helper", "path escapes repository root"),
         ("scripts/tool.py::absent", "`absent` is not defined"),
         ("scripts/tool.py::Owner.absent", "`absent` is not defined"),
         ("scripts/tool.py::helper.inner", "`inner` is not defined"),
@@ -79,6 +82,40 @@ def test_unresolved_reference_fails_naming_spec_and_reference(tmp_path: Path, re
     assert len(errors) == 1
     assert errors[0].startswith("docs/specs/271-x.md:")
     assert f"`{reference}`: {reason}" in errors[0]
+
+
+def test_symlink_traversal_enforcement(tmp_path: Path) -> None:
+    make_repo(tmp_path, [("276", "ready")], {"276": spec_text("scripts/tool.py::helper")})
+    spec_file = tmp_path / "docs" / "specs" / "276-x.md"
+    outside_dir = tmp_path.parent / f"{tmp_path.name}_outside"
+    outside_dir.mkdir()
+    try:
+        outside_file = outside_dir / "external.py"
+        outside_file.write_text("def external():\n    pass\n", encoding="utf-8")
+
+        escaped_file = tmp_path / "scripts" / "escaped_file.py"
+        escaped_file.symlink_to(outside_file)
+        spec_file.write_text(spec_text("scripts/escaped_file.py::external"), encoding="utf-8")
+        errors, _, _ = ccf.check(tmp_path)
+        assert len(errors) == 1
+        assert "`scripts/escaped_file.py::external`: path escapes repository root" in errors[0]
+
+        escaped_dir = tmp_path / "scripts" / "escaped_dir"
+        escaped_dir.symlink_to(outside_dir)
+        spec_file.write_text(spec_text("scripts/escaped_dir/external.py::external"), encoding="utf-8")
+        errors, _, _ = ccf.check(tmp_path)
+        assert len(errors) == 1
+        assert "`scripts/escaped_dir/external.py::external`: path escapes repository root" in errors[0]
+
+        internal_link = tmp_path / "scripts" / "internal_link.py"
+        internal_link.symlink_to(tmp_path / "scripts" / "tool.py")
+        spec_file.write_text(spec_text("scripts/internal_link.py::helper"), encoding="utf-8")
+        errors, references, specs = ccf.check(tmp_path)
+        assert errors == []
+        assert (references, specs) == (1, 1)
+    finally:
+        import shutil
+        shutil.rmtree(outside_dir, ignore_errors=True)
 
 
 def test_missing_section_and_empty_section_fail(tmp_path: Path) -> None:

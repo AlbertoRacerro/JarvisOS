@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_spec_status import REGISTRY, parse_registry  # noqa: E402
+from check_spec_status import REGISTRY, parse_registry
 
 ROOT = Path(__file__).resolve().parents[1]
 FIRST_CHECKED = 270
@@ -43,7 +43,17 @@ def _names(body: list[ast.stmt]) -> dict[str, ast.AST]:
 
 def resolve(root: Path, path: str, symbol: str) -> str | None:
     """None when the reference resolves, else the reason it does not."""
-    file = root / path
+    target = Path(path)
+    if target.is_absolute() or path.startswith(("/", "\\")) or bool(target.drive):
+        return "path is not repository-relative"
+    file = root / target
+    try:
+        resolved_root = root.resolve()
+        resolved = file.resolve()
+        if not resolved.is_relative_to(resolved_root):
+            return "path escapes repository root"
+    except (OSError, RuntimeError, ValueError):
+        return "file does not exist"
     if not file.is_file():
         return "file does not exist"
     text = file.read_text(encoding="utf-8")
