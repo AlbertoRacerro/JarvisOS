@@ -236,8 +236,8 @@ def get_run_inputs_manifest(
             if isinstance(input_payload_raw, str)
             else input_payload_raw
         )
-    except (RunnerSafetyError, json.JSONDecodeError, TypeError, Exception) as exc:
-        msg = exc.message if hasattr(exc, "message") else str(exc)
+    except RunnerSafetyError as exc:
+        msg = exc.message
         return RunInputsManifestRead(
             simulation_run_id=simulation_run_id,
             workspace_id=workspace_id,
