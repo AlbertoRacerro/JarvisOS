@@ -3938,3 +3938,8 @@ def test_turn_failed_is_sent_only_from_the_second_consecutive_failure(tmp_path: 
 def test_no_supervisor_event_tells_the_maintainer_to_write_in_chat() -> None:
     assert not any("scrivi a Claude in chat" in text for text, _ in rc.EVENTS.values())
 
+
+def test_roadmap_task_readiness_is_yours_to_give() -> None:
+    assert "readiness is yours to give" in rc.ROADMAP_TASK
+    assert "still requires explicit readiness" not in rc.ROADMAP_TASK
+
