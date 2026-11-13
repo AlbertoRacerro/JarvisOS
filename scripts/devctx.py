@@ -575,6 +575,45 @@ def _freshness(env: Env, entry: dict[str, Any], gh_state: dict[str, Any], cache:
     return {"verdict": "stale", "why": f"{len(files)} changed in {scope} since {sha[:8]}; {how}", "changed": files[:8]}
 
 
+def maintainer_prompt_text(raw_text: str) -> str | None:
+    """Extract maintainer-authored prompt text from a Relay prompt.
+
+    Returns None for supervisor-generated attempt prompts. For maintainer prompts,
+    unwraps any Relay harness envelope and strips supervisor-injected blocks
+    (operator mission brief, standing directives, worker routing).
+    """
+    if re.search(r"\[relay-continuity attempt\b", raw_text):
+        return None
+
+    text = raw_text
+    if "You are participating in a Relay-managed" in text and "## Task" in text:
+        text = text.split("## Task", 1)[1]
+    if "\n## Continuation Context" in text:
+        text = text.split("\n## Continuation Context", 1)[0]
+
+    # Strip supervisor-injected brief block
+    text = re.sub(
+        r"(?:^|\n+)(?:This is the operator's private mission brief;[^\n]*|Operator mission brief not attached:[^\n]*)"
+        r"(?:\n[\s\S]*?)?(?=\n+(?:Standing maintainer directives for this mission|Directive \S+ not attached:|(?:## )?Worker routing(?:\n|\Z))|\Z)",
+        "",
+        text,
+    )
+    # Strip supervisor-injected standing directives block
+    text = re.sub(
+        r"(?:^|\n+)(?:Standing maintainer directives for this mission \(full text, oldest first\):|Directive \S+ not attached:[^\n]*)"
+        r"(?:\n[\s\S]*?)?(?=\n+(?:## )?Worker routing(?:\n|\Z)|\Z)",
+        "",
+        text,
+    )
+    # Strip supervisor-injected worker routing block
+    text = re.sub(
+        r"(?:^|\n+)(?:## )?Worker routing(?:\n[\s\S]*)?\Z",
+        "",
+        text,
+    )
+    return text.strip()
+
+
 def directive_provenance(entry: dict[str, Any], relay_texts: list[tuple[str, str]]) -> str:
     """A directive is maintainer-verified only when Relay's verbatim prompt store contains it."""
     path = Path(entry["directive"]["path"])
@@ -583,8 +622,9 @@ def directive_provenance(entry: dict[str, Any], relay_texts: list[tuple[str, str
     body = path.read_text(encoding="utf-8", errors="replace").strip()
     if hashlib.sha256(path.read_bytes()).hexdigest() != entry["directive"]["sha256"]:
         return "directive file modified after recording"
-    for name, text in relay_texts:
-        if body and body in text:
+    for name, raw_text in relay_texts:
+        cleaned = maintainer_prompt_text(raw_text)
+        if cleaned is not None and body and body in cleaned:
             return f"relay-verified ({name})"
     return f"unverified source (recorded by {entry['author']}; source {entry['directive'].get('source') or 'unstated'})"
 
