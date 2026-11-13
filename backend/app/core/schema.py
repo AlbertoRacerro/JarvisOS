@@ -28,8 +28,6 @@ SCHEMA_BUBU_TURN_EXTRAS_MIGRATION_ID = "0028_bubu_turn_extras"
 SCHEMA_BUBU_TURN_EXTRAS_MIGRATION_NAME = "Bubu page description and screenshot references per AI thread turn"
 SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_ID = "0029_geometry_feature_history"
 SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_NAME = "Design component parametric geometry feature history"
-SCHEMA_SIM_RESULT_INGESTION_MIGRATION_ID = "0030_sim_result_ingestion"
-SCHEMA_SIM_RESULT_INGESTION_MIGRATION_NAME = "Validated simulation result ingestion batches and checks"
 CURRENT_SCHEMA_MIGRATION_ID = "0031_sim_result_value_versions"
 CURRENT_SCHEMA_MIGRATION_NAME = "Simulation result value version history"
 

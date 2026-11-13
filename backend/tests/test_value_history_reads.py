@@ -742,29 +742,541 @@ def test_compare_rejects_unrelated_values_with_not_same_value(client: TestClient
 def test_no_writes_in_reads_discipline(client: TestClient) -> None:
     _seed_parameters_and_decision("main")
     _, sim_run_id = _create_v2_model_and_run(client, "main", "param-length-v0")
+    now = "2026-11-06T00:00:00+00:00"
+
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO parameters (
+                id, workspace_id, name, value, unit, status, lifecycle_state,
+                supersedes_parameter_id, origin, created_at, updated_at
+            ) VALUES ('param-length-v1', 'main', 'tube_length', '12.0', 'm', 'accepted', 'active', 'param-length-v0', 'human', ?, ?)
+            """,
+            (now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_batches (
+                id, workspace_id, run_id, source_payload_digest, extractor_version,
+                notification_state, created_at
+            ) VALUES ('batch-nw', 'main', ?, 'd1', '1.0', 'none', ?)
+            """,
+            (sim_run_id, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_values (
+                id, batch_id, output_name, source_payload_digest, extractor_id, extractor_version,
+                quantity, value_text, unit, conditions_json, status, created_at
+            ) VALUES ('val-nw', 'batch-nw', 'heat_flux', 'd1', 'ext', '1.0', 'heat_flux', '10.0', 'MW/m^2', '{}', 'passed', ?)
+            """,
+            (now,),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_value_versions (
+                id, value_id, version_index, value_text, unit, conditions_json,
+                status, action, reason, actor, created_at, origin
+            ) VALUES
+                ('ver-nw0', 'val-nw', 0, '10.0', 'MW/m^2', '{}', 'passed', 'ingest', NULL, NULL, ?, 'recorded'),
+                ('ver-nw1', 'val-nw', 1, '8.0', 'MW/m^2', '{}', 'passed', 'correct', 'reason', 'user', ?, 'recorded')
+            """,
+            (now, now),
+        )
+        connection.commit()
 
     def get_table_counts() -> dict[str, int]:
         with open_sqlite_connection() as connection:
             tables = [
-                "parameters",
-                "simulation_runs",
-                "simulation_result_values",
-                "simulation_result_value_versions",
-                "project_knowledge_validation",
+                row["name"]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
             ]
             return {
                 t: connection.execute(f"SELECT COUNT(*) AS c FROM {t}").fetchone()["c"]
-                for t in tables
+                for t in sorted(tables)
             }
 
     counts_before = get_table_counts()
 
-    # Call read endpoints multiple times
-    res1 = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
-    assert res1.status_code == 200
+    # Call every read endpoint added by value-history
+    res_manifest = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
+    assert res_manifest.status_code == 200
 
-    res2 = client.get("/project-knowledge/workspaces/main/parameters/param-length-v0/history")
-    assert res2.status_code == 200
+    res_param_hist = client.get("/project-knowledge/workspaces/main/parameters/param-length-v0/history")
+    assert res_param_hist.status_code == 200
+
+    res_res_hist = client.get("/project-knowledge/workspaces/main/result-values/val-nw/history")
+    assert res_res_hist.status_code == 200
+
+    res_param_cmp = client.get(
+        "/project-knowledge/workspaces/main/values/compare?value_kind=parameter&parameter_a_id=param-length-v0&parameter_b_id=param-length-v1"
+    )
+    assert res_param_cmp.status_code == 200
+
+    res_res_cmp = client.get(
+        "/project-knowledge/workspaces/main/values/compare?value_kind=simulation_result_value&value_id=val-nw&version_a=0&version_b=1"
+    )
+    assert res_res_cmp.status_code == 200
 
     counts_after = get_table_counts()
-    assert counts_before == counts_after, "Read operations must not write to the database!"
+    assert counts_before == counts_after, "Read operations must not write to any database table!"
+
+
+def test_manifest_newer_version_exists_only_for_accepted_active(client: TestClient) -> None:
+    _seed_parameters_and_decision("main")
+    _, sim_run_id = _create_v2_model_and_run(client, "main", "param-length-v0")
+
+    now = "2026-11-06T01:00:00+00:00"
+    with open_sqlite_connection() as connection:
+        # Add a proposed child and a rejected child
+        connection.execute(
+            """
+            INSERT INTO parameters (
+                id, workspace_id, name, value, unit, status, lifecycle_state,
+                supersedes_parameter_id, origin, created_at, updated_at
+            ) VALUES
+                ('param-len-prop', 'main', 'tube_length', '12.0', 'm', 'proposed', 'active', 'param-length-v0', 'human', ?, ?),
+                ('param-len-rej', 'main', 'tube_length', '14.0', 'm', 'rejected', 'archived', 'param-length-v0', 'human', ?, ?)
+            """,
+            (now, now, now, now),
+        )
+        connection.commit()
+
+    # newer_version_exists must be False because proposed and rejected children do not count
+    res = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["items"][0]["newer_version_exists"] is False
+
+    # Also parameter history forward chain must NOT include proposed or rejected children
+    res_chain = client.get("/project-knowledge/workspaces/main/parameters/param-length-v0/history")
+    assert res_chain.status_code == 200
+    chain_data = res_chain.json()
+    assert len(chain_data["versions"]) == 1
+    assert chain_data["versions"][0]["id"] == "param-length-v0"
+
+    # Now add an accepted active child
+    now2 = "2026-11-06T02:00:00+00:00"
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO parameters (
+                id, workspace_id, name, value, unit, status, lifecycle_state,
+                supersedes_parameter_id, origin, created_at, updated_at
+            ) VALUES ('param-len-acc', 'main', 'tube_length', '15.0', 'm', 'accepted', 'active', 'param-length-v0', 'human', ?, ?)
+            """,
+            (now2, now2),
+        )
+        connection.commit()
+
+    # newer_version_exists must now be True
+    res2 = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
+    assert res2.status_code == 200
+    data2 = res2.json()
+    assert data2["items"][0]["newer_version_exists"] is True
+
+    # Parameter history forward chain now includes accepted active child
+    res_chain2 = client.get("/project-knowledge/workspaces/main/parameters/param-length-v0/history")
+    assert res_chain2.status_code == 200
+    chain_data2 = res_chain2.json()
+    assert len(chain_data2["versions"]) == 2
+    assert chain_data2["versions"][1]["id"] == "param-len-acc"
+
+
+def test_manifest_malformed_input_payload_returns_history_not_recorded(client: TestClient) -> None:
+    _seed_parameters_and_decision("main")
+    _, sim_run_id = _create_v2_model_and_run(client, "main", "param-length-v0")
+
+    # Case 1: Invalid JSON string
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            "UPDATE simulation_runs SET input_payload = '{not-valid-json' WHERE id = ?",
+            (sim_run_id,),
+        )
+        connection.commit()
+
+    res1 = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
+    assert res1.status_code == 200
+    data1 = res1.json()
+    assert data1["status"] == "history_not_recorded"
+    assert data1["history_not_recorded"] is True
+    assert data1["history_recorded"] is False
+    assert data1["reason"] is not None
+    assert data1["items"] == []
+
+    # Case 2: Not an object (e.g. array)
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            "UPDATE simulation_runs SET input_payload = '[1, 2, 3]' WHERE id = ?",
+            (sim_run_id,),
+        )
+        connection.commit()
+
+    res2 = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
+    assert res2.status_code == 200
+    data2 = res2.json()
+    assert data2["status"] == "history_not_recorded"
+    assert data2["history_not_recorded"] is True
+    assert data2["history_recorded"] is False
+    assert data2["reason"] is not None
+    assert data2["items"] == []
+
+    # Case 3: Object with non-string source_parameter_id
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            """
+            UPDATE simulation_runs
+            SET input_payload = '{"tube_length": {"value": 10.0, "unit": "m", "source_parameter_id": 12345}}'
+            WHERE id = ?
+            """,
+            (sim_run_id,),
+        )
+        connection.commit()
+
+    res3 = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
+    assert res3.status_code == 200
+    data3 = res3.json()
+    assert data3["status"] == "history_not_recorded"
+    assert data3["history_not_recorded"] is True
+    assert data3["history_recorded"] is False
+    assert data3["reason"] is not None
+    assert data3["items"] == []
+
+
+def test_manifest_lifecycle_state_null_returns_null(client: TestClient) -> None:
+    _seed_parameters_and_decision("main")
+    _, sim_run_id = _create_v2_model_and_run(client, "main", "param-length-v0")
+
+    with open_sqlite_connection() as connection:
+        cols = [r[1] for r in connection.execute("PRAGMA table_info(parameters)").fetchall()]
+        cols_str = ", ".join(cols)
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("CREATE TABLE parameters_bak AS SELECT * FROM parameters")
+        connection.execute("DROP TABLE parameters")
+        connection.execute(
+            """
+            CREATE TABLE parameters (
+                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL,
+                symbol TEXT, value TEXT, unit TEXT NOT NULL DEFAULT 'unspecified',
+                value_status TEXT NOT NULL DEFAULT 'candidate', value_min REAL, value_max REAL,
+                source_ref TEXT, confidence REAL, status TEXT NOT NULL DEFAULT 'draft',
+                origin TEXT NOT NULL DEFAULT 'user', source_ai_job_id TEXT, promoted_at TEXT,
+                supersedes_parameter_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                notes TEXT, lifecycle_state TEXT
+            )
+            """
+        )
+        connection.execute(f"INSERT INTO parameters ({cols_str}) SELECT {cols_str} FROM parameters_bak")
+        connection.execute("DROP TABLE parameters_bak")
+        connection.execute("UPDATE parameters SET lifecycle_state = NULL WHERE id = 'param-length-v0'")
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.commit()
+
+    res = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
+    assert res.status_code == 200
+    item = res.json()["items"][0]
+    assert item["lifecycle_state"] is None
+
+
+def test_conditions_strips_internal_unvalidated_key_on_read_and_compare(client: TestClient) -> None:
+    _seed_parameters_and_decision("main")
+    now0 = "2026-11-06T00:00:00+00:00"
+    now1 = "2026-11-06T01:00:00+00:00"
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            "INSERT INTO simulation_runs (id, workspace_id, run_label, status, created_at) VALUES ('run-c1', 'main', 'run-c1', 'completed', ?)",
+            (now0,),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_batches (
+                id, workspace_id, run_id, source_payload_digest, extractor_version,
+                notification_state, created_at
+            ) VALUES ('batch-c1', 'main', 'run-c1', 'digest1', '1.0', 'none', ?)
+            """,
+            (now0,),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_values (
+                id, batch_id, output_name, source_payload_digest, extractor_id, extractor_version,
+                quantity, value_text, unit, conditions_json, status, created_at
+            ) VALUES (
+                'val-c1', 'batch-c1', 'outlet_temp', 'digest1', 'ext1', '1.0',
+                'temperature', '350.0', 'K',
+                '{"pressure": 10.0, "_unvalidated_input_value_ids": ["val-upstream-1"]}',
+                'passed', ?
+            )
+            """,
+            (now0,),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_value_versions (
+                id, value_id, version_index, value_text, unit, conditions_json,
+                status, action, reason, actor, created_at, origin
+            ) VALUES
+                (
+                    'ver-c0', 'val-c1', 0, '350.0', 'K',
+                    '{"pressure": 10.0, "_unvalidated_input_value_ids": ["val-upstream-1"]}',
+                    'passed', 'ingest', NULL, NULL, ?, 'recorded'
+                ),
+                (
+                    'ver-c1', 'val-c1', 1, '350.0', 'K',
+                    '{"pressure": 10.0}',
+                    'passed', 'confirm', 'Confirmed', 'user', ?, 'recorded'
+                )
+            """,
+            (now0, now1),
+        )
+        connection.commit()
+
+    # Query history: _unvalidated_input_value_ids must not appear in conditions
+    res_hist = client.get("/project-knowledge/workspaces/main/result-values/val-c1/history")
+    assert res_hist.status_code == 200
+    versions = res_hist.json()["versions"]
+    assert versions[0]["conditions"] == {"pressure": 10.0}
+    assert "_unvalidated_input_value_ids" not in versions[0]["conditions"]
+    assert versions[1]["conditions"] == {"pressure": 10.0}
+
+    # Compare versions: differing ONLY in _unvalidated_input_value_ids must NOT report conditions as different
+    res_cmp = client.get(
+        "/project-knowledge/workspaces/main/values/compare?value_kind=simulation_result_value&value_id=val-c1&version_a=0&version_b=1"
+    )
+    assert res_cmp.status_code == 200
+    cmp_data = res_cmp.json()
+    assert cmp_data["version_a"]["conditions"] == {"pressure": 10.0}
+    assert cmp_data["version_b"]["conditions"] == {"pressure": 10.0}
+    assert cmp_data["version_a"]["conditions"] == cmp_data["version_b"]["conditions"]
+
+
+def test_compare_sim_result_values_foreign_workspace_scoped(client: TestClient) -> None:
+    _seed_parameters_and_decision("main")
+    now = "2026-11-06T00:00:00+00:00"
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO workspaces (id, name, slug, created_at, updated_at) VALUES ('foreign_ws', 'Foreign', 'foreign-ws', ?, ?)",
+            (now, now),
+        )
+        connection.execute(
+            "INSERT INTO simulation_runs (id, workspace_id, run_label, status, created_at) VALUES ('run-m', 'main', 'run-m', 'completed', ?)",
+            (now,),
+        )
+        connection.execute(
+            "INSERT INTO simulation_runs (id, workspace_id, run_label, status, created_at) VALUES ('run-f', 'foreign_ws', 'run-f', 'completed', ?)",
+            (now,),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_batches (
+                id, workspace_id, run_id, source_payload_digest, extractor_version,
+                notification_state, created_at
+            ) VALUES
+                ('batch-m', 'main', 'run-m', 'd1', '1.0', 'none', ?),
+                ('batch-f', 'foreign_ws', 'run-f', 'd2', '1.0', 'none', ?)
+            """,
+            (now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_values (
+                id, batch_id, output_name, source_payload_digest, extractor_id, extractor_version,
+                quantity, value_text, unit, conditions_json, status, created_at
+            ) VALUES
+                ('val-main', 'batch-m', 'out_m', 'd1', 'ext', '1.0', 'temp', '300', 'K', '{}', 'passed', ?),
+                ('val-foreign', 'batch-f', 'out_f', 'd2', 'ext', '1.0', 'temp', '400', 'K', '{}', 'passed', ?)
+            """,
+            (now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_value_versions (
+                id, value_id, version_index, value_text, unit, conditions_json,
+                status, action, reason, actor, created_at, origin
+            ) VALUES
+                ('ver-m0', 'val-main', 0, '300', 'K', '{}', 'passed', 'ingest', NULL, NULL, ?, 'recorded'),
+                ('ver-m1', 'val-main', 1, '305', 'K', '{}', 'passed', 'correct', 'reason', 'user', ?, 'recorded'),
+                ('ver-f0', 'val-foreign', 0, '400', 'K', '{}', 'passed', 'ingest', NULL, NULL, ?, 'recorded')
+            """,
+            (now, now, now),
+        )
+        connection.commit()
+
+    # In workspace 'main', looking up version from 'foreign_ws' must return 404 result_value_version_not_found, NOT 400 not_same_value
+    res_foreign = client.get(
+        "/project-knowledge/workspaces/main/values/compare?value_kind=simulation_result_value&value_id=val-main&version_a=ver-m0&version_b=ver-f0"
+    )
+    assert res_foreign.status_code == 404
+    assert res_foreign.json()["detail"]["code"] == "result_value_version_not_found"
+
+    # In workspace 'main', looking up a version from 'main' but belonging to a different value returns 400 not_same_value
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO simulation_result_values (
+                id, batch_id, output_name, source_payload_digest, extractor_id, extractor_version,
+                quantity, value_text, unit, conditions_json, status, created_at
+            ) VALUES ('val-main-2', 'batch-m', 'out_m2', 'd1', 'ext', '1.0', 'temp', '500', 'K', '{}', 'passed', ?)
+            """,
+            (now,),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_value_versions (
+                id, value_id, version_index, value_text, unit, conditions_json,
+                status, action, reason, actor, created_at, origin
+            ) VALUES ('ver-m2-0', 'val-main-2', 0, '500', 'K', '{}', 'passed', 'ingest', NULL, NULL, ?, 'recorded')
+            """,
+            (now,),
+        )
+        connection.commit()
+
+    res_diff = client.get(
+        "/project-knowledge/workspaces/main/values/compare?value_kind=simulation_result_value&value_id=val-main&version_a=ver-m0&version_b=ver-m2-0"
+    )
+    assert res_diff.status_code == 400
+    assert res_diff.json()["detail"]["code"] == "not_same_value"
+
+
+def test_compare_downstream_runs_attribution_and_decimal_checks(client: TestClient) -> None:
+    _seed_parameters_and_decision("main")
+    t0 = "2026-11-06T10:00:00+00:00"
+    t1 = "2026-11-06T11:00:00+00:00"
+    t2 = "2026-11-06T12:00:00+00:00"
+    t3 = "2026-11-06T13:00:00+00:00"
+
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            "INSERT INTO simulation_runs (id, workspace_id, run_label, status, created_at) VALUES ('run-producer', 'main', 'producer', 'completed', ?)",
+            (t0,),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_batches (
+                id, workspace_id, run_id, source_payload_digest, extractor_version,
+                notification_state, created_at
+            ) VALUES ('batch-timing', 'main', 'run-producer', 'd1', '1.0', 'none', ?)
+            """,
+            (t0,),
+        )
+        connection.execute(
+            """
+            INSERT INTO simulation_result_values (
+                id, batch_id, output_name, source_payload_digest, extractor_id, extractor_version,
+                quantity, value_text, unit, conditions_json, status, created_at
+            ) VALUES ('val-timing', 'batch-timing', 'pressure', 'd1', 'ext', '1.0', 'pressure', '1.0', 'MPa', '{}', 'passed', ?)
+            """,
+            (t0,),
+        )
+        # Version 0 created at t0, Version 1 created at t2
+        connection.execute(
+            """
+            INSERT INTO simulation_result_value_versions (
+                id, value_id, version_index, value_text, unit, conditions_json,
+                status, action, reason, actor, created_at, origin
+            ) VALUES
+                ('ver-t0', 'val-timing', 0, '1.0', 'MPa', '{}', 'passed', 'ingest', NULL, NULL, ?, 'recorded'),
+                ('ver-t1', 'val-timing', 1, '2.0', 'MPa', '{}', 'passed', 'correct', 'adjust', 'user', ?, 'recorded')
+            """,
+            (t0, t2),
+        )
+        # Run 1 created at t1 (t0 <= t1 < t2) -> attributed to Version 0
+        connection.execute(
+            """
+            INSERT INTO simulation_runs (
+                id, workspace_id, run_label, status, input_payload, created_at
+            ) VALUES (
+                'run-downstream-1', 'main', 'run-1', 'completed',
+                '{"p": {"value": 1.0, "unit": "MPa", "source_result_value_id": "val-timing"}}',
+                ?
+            )
+            """,
+            (t1,),
+        )
+        # Run 2 created at t3 (t3 >= t2) -> attributed to Version 1
+        connection.execute(
+            """
+            INSERT INTO simulation_runs (
+                id, workspace_id, run_label, status, input_payload, created_at
+            ) VALUES (
+                'run-downstream-2', 'main', 'run-2', 'completed',
+                '{"p": {"value": 2.0, "unit": "MPa", "source_result_value_id": "val-timing"}}',
+                ?
+            )
+            """,
+            (t3,),
+        )
+        # Insert requirement and revision for foreign keys
+        connection.execute(
+            """
+            INSERT INTO requirements (
+                id, workspace_id, statement, basis_kind, criterion_operator, criterion_expected_value,
+                criterion_output_name, criterion_expected_unit, criterion_rule_version,
+                status, created_at, updated_at
+            ) VALUES (
+                'req-1', 'main', 'Pressure Requirement', 'acceptance_criterion', '>=', '1.0',
+                'pressure', 'MPa', 'criterion_v0',
+                'accepted', ?, ?
+            )
+            """,
+            (t0, t0),
+        )
+        connection.execute(
+            """
+            INSERT INTO project_knowledge_revisions (
+                id, workspace_id, parent_kind, state, change_set_digest, change_set_json,
+                projected_state_digest, origin, created_at, accepted_at
+            ) VALUES (
+                'rev-1', 'main', 'working', 'working', 'cs-digest', '{}',
+                'digest-basis', 'human', ?, ?
+            )
+            """,
+            (t0, t0),
+        )
+
+        # Requirement check: observed_json has value 1 (numeric Decimal matches "1.0"), unit "MPa"
+        connection.execute(
+            """
+            INSERT INTO project_knowledge_validation (
+                id, workspace_id, working_revision_id, requirement_id, requirement_updated_at,
+                rule_version, validated_basis_digest, applicability_set_digest,
+                source_run_id, source_scalar_id, validator_id, validator_version,
+                outcome, reason_code, observed_json, created_at
+            ) VALUES (
+                'val-chk-1', 'main', 'rev-1', 'req-1', ?,
+                'criterion_v0', 'digest-basis', 'app-digest',
+                'run-producer', NULL, 'criterion_v0', '0.1.0',
+                'pass', 'within_bounds',
+                '{"value": 1, "unit": "MPa"}',
+                ?
+            )
+            """,
+            (t1, t1),
+        )
+        connection.commit()
+
+    res = client.get(
+        "/project-knowledge/workspaces/main/values/compare?value_kind=simulation_result_value&value_id=val-timing&version_a=0&version_b=1"
+    )
+    assert res.status_code == 200
+    data = res.json()
+
+    v_a = data["version_a"]
+    v_b = data["version_b"]
+
+    # Downstream run attribution:
+    # Version 0 has run-downstream-1 (and not run-downstream-2)
+    run_ids_a = {r["id"] for r in v_a["runs"]}
+    assert "run-downstream-1" in run_ids_a
+    assert "run-downstream-2" not in run_ids_a
+
+    # Version 1 has run-downstream-2 (and not run-downstream-1)
+    run_ids_b = {r["id"] for r in v_b["runs"]}
+    assert "run-downstream-2" in run_ids_b
+    assert "run-downstream-1" not in run_ids_b
+
+    # Requirement check: 1 matches "1.0" numerically via Decimal
+    check_ids_a = {c["id"] for c in v_a["requirement_checks"]}
+    assert "val-chk-1" in check_ids_a

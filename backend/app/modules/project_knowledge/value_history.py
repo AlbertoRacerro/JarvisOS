@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -10,6 +11,7 @@ from app.modules.runner.linked_parameters import (
     contract_requires_canonical_linked_parameters,
     linked_parameter_items,
 )
+from app.modules.runner.safety import RunnerSafetyError
 
 
 class ValueHistoryError(Exception):
@@ -120,6 +122,35 @@ class ValueComparisonRead(BaseModel):
     version_b: ValueComparisonSide
 
 
+def _values_match(v1: object, v2: object) -> bool:
+    if v1 is None or v2 is None:
+        return v1 == v2
+    s1 = str(v1).strip()
+    s2 = str(v2).strip()
+    try:
+        return Decimal(s1) == Decimal(s2)
+    except (InvalidOperation, TypeError, ValueError):
+        return s1 == s2
+
+
+def _clean_conditions(conditions: object) -> dict[str, Any]:
+    if not conditions:
+        return {}
+    if isinstance(conditions, str):
+        try:
+            conds = json.loads(conditions)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+    elif isinstance(conditions, dict):
+        conds = dict(conditions)
+    else:
+        return {}
+    if isinstance(conds, dict):
+        conds.pop("_unvalidated_input_value_ids", None)
+        return conds
+    return {}
+
+
 def get_run_inputs_manifest(
     connection: sqlite3.Connection,
     workspace_id: str,
@@ -187,28 +218,46 @@ def get_run_inputs_manifest(
         )
 
     input_payload_raw = run["input_payload"]
-    if not input_payload_raw:
+    if input_payload_raw is None:
         return RunInputsManifestRead(
             simulation_run_id=simulation_run_id,
             workspace_id=workspace_id,
-            status="recorded",
-            history_not_recorded=False,
-            history_recorded=True,
-            reason=None,
+            status="history_not_recorded",
+            history_not_recorded=True,
+            history_recorded=False,
+            reason="Stored input payload is missing.",
             items=[],
         )
 
     try:
+        _ = linked_parameter_items(input_payload_raw)
         payload_dict = (
             json.loads(input_payload_raw)
             if isinstance(input_payload_raw, str)
             else input_payload_raw
         )
-    except (TypeError, json.JSONDecodeError):
-        payload_dict = {}
+    except RunnerSafetyError as exc:
+        msg = exc.message
+        return RunInputsManifestRead(
+            simulation_run_id=simulation_run_id,
+            workspace_id=workspace_id,
+            status="history_not_recorded",
+            history_not_recorded=True,
+            history_recorded=False,
+            reason=f"Stored input payload is invalid: {msg}",
+            items=[],
+        )
 
     if not isinstance(payload_dict, dict):
-        payload_dict = {}
+        return RunInputsManifestRead(
+            simulation_run_id=simulation_run_id,
+            workspace_id=workspace_id,
+            status="history_not_recorded",
+            history_not_recorded=True,
+            history_recorded=False,
+            reason="Stored input payload must be an object.",
+            items=[],
+        )
 
     items: list[RunLinkedParameterItem] = []
     for var_name, var_data in sorted(payload_dict.items()):
@@ -235,7 +284,11 @@ def get_run_inputs_manifest(
         if p_row is not None:
             name = str(p_row["name"])
             status = str(p_row["status"])
-            lifecycle_state = str(p_row["lifecycle_state"])
+            lifecycle_state = (
+                str(p_row["lifecycle_state"])
+                if p_row["lifecycle_state"] is not None
+                else None
+            )
 
             # Compute position in supersedes chain
             position = 0
@@ -256,20 +309,28 @@ def get_run_inputs_manifest(
 
             # Compute newer_version_exists
             newer_version_exists = False
-            curr_id = param_id
             visited_down = {param_id}
-            while True:
-                child = connection.execute(
+            queue = [param_id]
+            while queue:
+                curr_id = queue.pop(0)
+                children = connection.execute(
                     "SELECT id, status, lifecycle_state FROM parameters WHERE supersedes_parameter_id = ? AND workspace_id = ?",
                     (curr_id, workspace_id),
-                ).fetchone()
-                if not child or child["id"] in visited_down:
+                ).fetchall()
+                found_active = False
+                for child in children:
+                    c_id = str(child["id"])
+                    if c_id in visited_down:
+                        continue
+                    visited_down.add(c_id)
+                    if child["status"] == "accepted" and child["lifecycle_state"] == "active":
+                        newer_version_exists = True
+                        found_active = True
+                        break
+                    elif child["status"] == "superseded":
+                        queue.append(c_id)
+                if found_active:
                     break
-                visited_down.add(child["id"])
-                if child["lifecycle_state"] == "active" or child["status"] == "accepted":
-                    newer_version_exists = True
-                    break
-                curr_id = child["id"]
         else:
             name = var_name
             status = "missing"
@@ -349,7 +410,7 @@ def get_parameter_version_chain(
     curr = start_param
     successors: list[sqlite3.Row] = []
     while True:
-        child = connection.execute(
+        children = connection.execute(
             """
             SELECT id, workspace_id, name, value, unit, status, lifecycle_state,
                    supersedes_parameter_id, origin, notes, source_ref, created_at, updated_at
@@ -357,12 +418,22 @@ def get_parameter_version_chain(
             WHERE supersedes_parameter_id = ? AND workspace_id = ?
             """,
             (curr["id"], workspace_id),
-        ).fetchone()
-        if not child or child["id"] in visited:
+        ).fetchall()
+        next_child = None
+        for child in children:
+            if child["id"] in visited:
+                continue
+            if (
+                (child["status"] == "accepted" and child["lifecycle_state"] == "active")
+                or child["status"] == "superseded"
+            ):
+                next_child = child
+                break
+        if not next_child:
             break
-        visited.add(child["id"])
-        successors.append(child)
-        curr = child
+        visited.add(next_child["id"])
+        successors.append(next_child)
+        curr = next_child
 
     full_chain = ancestors + [start_param] + successors
 
@@ -431,17 +502,14 @@ def get_sim_result_value_version_chain(
     ).fetchall()
 
     if not version_rows:
-        try:
-            conds = json.loads(str(v_row["conditions_json"]))
-        except (TypeError, json.JSONDecodeError):
-            conds = {}
+        conds = _clean_conditions(v_row["conditions_json"])
         versions = [
             ValueVersionItem(
                 version_index=0,
                 id=str(v_row["id"]),
                 value=str(v_row["value_text"]),
                 unit=str(v_row["unit"]),
-                conditions=conds if isinstance(conds, dict) else {},
+                conditions=conds,
                 status=str(v_row["status"]),
                 validation_state=str(v_row["status"]),
                 action="ingest",
@@ -467,11 +535,7 @@ def get_sim_result_value_version_chain(
 
     versions = []
     for row in version_rows:
-        try:
-            conds = json.loads(str(row["conditions_json"]))
-        except (TypeError, json.JSONDecodeError):
-            conds = {}
-
+        conds = _clean_conditions(row["conditions_json"])
         st = str(row["status"])
         versions.append(
             ValueVersionItem(
@@ -479,7 +543,7 @@ def get_sim_result_value_version_chain(
                 id=str(row["id"]),
                 value=str(row["value_text"]),
                 unit=str(row["unit"]),
-                conditions=conds if isinstance(conds, dict) else {},
+                conditions=conds,
                 status=st,
                 validation_state=st,
                 action=str(row["action"]) if row["action"] is not None else None,
@@ -580,8 +644,8 @@ def _find_requirement_checks_for_result_version(
     """
     rows = connection.execute(query, (workspace_id, run_id, scalar_id or "")).fetchall()
     matched: list[BoundRequirementCheckRef] = []
-    val_text = str(version_row["value_text"])
-    unit_text = str(version_row["unit"])
+    val_text = version_row["value_text"]
+    unit_text = str(version_row["unit"] or "").strip()
     for row in rows:
         obs_raw = row["observed_json"]
         if not obs_raw:
@@ -591,9 +655,9 @@ def _find_requirement_checks_for_result_version(
         except (TypeError, json.JSONDecodeError):
             continue
         if isinstance(obs, dict):
-            obs_val = str(obs.get("value"))
-            obs_unit = str(obs.get("unit") or "")
-            if obs_val == val_text and (not unit_text or obs_unit == unit_text):
+            obs_unit = str(obs.get("unit") or "").strip()
+            units_match = not unit_text or obs_unit == unit_text
+            if _values_match(obs.get("value"), val_text) and units_match:
                 matched.append(
                     BoundRequirementCheckRef(
                         id=str(row["id"]),
@@ -734,8 +798,14 @@ def compare_sim_result_values(
             ).fetchone()
         if row is None:
             diff_val = connection.execute(
-                "SELECT value_id FROM simulation_result_value_versions WHERE id = ?",
-                (str(v_target),),
+                """
+                SELECT v.id AS value_id
+                FROM simulation_result_value_versions ver
+                JOIN simulation_result_values v ON v.id = ver.value_id
+                JOIN simulation_result_batches b ON b.id = v.batch_id
+                WHERE ver.id = ? AND b.workspace_id = ?
+                """,
+                (str(v_target), workspace_id),
             ).fetchone()
             if diff_val and str(diff_val["value_id"]) != value_id:
                 raise ValueHistoryError("not_same_value", "Version belongs to a different simulation result value.")
@@ -762,11 +832,27 @@ def compare_sim_result_values(
         else []
     )
 
+    all_versions = connection.execute(
+        "SELECT * FROM simulation_result_value_versions WHERE value_id = ? ORDER BY version_index ASC",
+        (value_id,),
+    ).fetchall()
+
     def find_downstream_runs_for_version(v_row_target: sqlite3.Row) -> list[BoundRunRef]:
         v_idx = int(v_row_target["version_index"])
         runs: list[BoundRunRef] = []
         if v_idx == 0 and origin_ref:
             runs.extend(origin_ref)
+
+        next_ver = next(
+            (v for v in all_versions if int(v["version_index"]) > v_idx),
+            None,
+        )
+        v_created_at = str(v_row_target["created_at"]) if v_row_target["created_at"] else ""
+        next_created_at = (
+            str(next_ver["created_at"])
+            if next_ver is not None and next_ver["created_at"]
+            else None
+        )
 
         all_runs = connection.execute(
             "SELECT id, run_label, status, input_payload, created_at FROM simulation_runs WHERE workspace_id = ?",
@@ -789,14 +875,18 @@ def compare_sim_result_values(
                         matched_run = True
                         break
                 if matched_run:
-                    runs.append(
-                        BoundRunRef(
-                            id=str(r["id"]),
-                            run_label=str(r["run_label"]) if r["run_label"] else None,
-                            status=str(r["status"]),
-                            created_at=str(r["created_at"]) if r["created_at"] else None,
+                    r_created_at = str(r["created_at"]) if r["created_at"] else ""
+                    if v_created_at <= r_created_at and (
+                        next_created_at is None or r_created_at < next_created_at
+                    ):
+                        runs.append(
+                            BoundRunRef(
+                                id=str(r["id"]),
+                                run_label=str(r["run_label"]) if r["run_label"] else None,
+                                status=str(r["status"]),
+                                created_at=str(r["created_at"]) if r["created_at"] else None,
+                            )
                         )
-                    )
         return runs
 
     runs_a = find_downstream_runs_for_version(row_a)
@@ -810,11 +900,7 @@ def compare_sim_result_values(
     )
 
     def row_to_conds(r: sqlite3.Row) -> dict[str, Any]:
-        try:
-            c = json.loads(str(r["conditions_json"]))
-            return c if isinstance(c, dict) else {}
-        except Exception:
-            return {}
+        return _clean_conditions(r["conditions_json"])
 
     side_a = ValueComparisonSide(
         version_index=int(row_a["version_index"]),

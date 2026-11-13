@@ -497,3 +497,62 @@ with open('result.json', 'w', encoding='utf-8') as f:
         assert v1["reason"] == "Corrected legacy exception value."
         assert v1["actor"] == "operator"
         assert v1["origin"] == "recorded"
+
+
+def test_correction_creates_exactly_one_freshness_invalidation_and_reads_add_none(client: TestClient) -> None:
+    _seed_basis_bounds_and_decisions("main")
+    script = r"""
+import json
+with open('result.json', 'w', encoding='utf-8') as f:
+    json.dump({
+        'outputs': {
+            'heat_flux': {'value': 25.0, 'unit': 'MW/m^2', 'quantity': 'heat_flux', 'conditions': {'regime': 'nominal'}}
+        }
+    }, f)
+""".strip()
+    calc_res = _create_calc_run(client, script)
+    sim_run_id = calc_res["simulation_run"]["id"]
+
+    batches = list_simulation_result_batches("main")
+    heat_id = batches[0].values[0].id
+
+    # Check freshness_invalidations count before correction
+    with open_sqlite_connection() as connection:
+        count_before = connection.execute("SELECT COUNT(*) AS c FROM freshness_invalidations").fetchone()["c"]
+        assert count_before == 0
+
+    # Correct the result value
+    resolved = resolve_simulation_result_exception(
+        heat_id,
+        SimulationResultResolveRequest(
+            workspace_id="main",
+            action="correct",
+            reason="Corrected to 7.5 within bounds.",
+            corrected_value="7.5",
+        ),
+    )
+    assert resolved.status == "corrected"
+
+    with open_sqlite_connection() as connection:
+        # Check freshness_invalidations count: exactly one row created through existing path
+        inval_rows = connection.execute("SELECT * FROM freshness_invalidations").fetchall()
+        assert len(inval_rows) == 1
+        assert inval_rows[0]["workspace_id"] == "main"
+
+    # Now execute subsequent version-history reads
+    r_hist = client.get(f"/project-knowledge/workspaces/main/result-values/{heat_id}/history")
+    assert r_hist.status_code == 200
+
+    r_cmp = client.get(
+        f"/project-knowledge/workspaces/main/values/compare?value_kind=simulation_result_value&value_id={heat_id}&version_a=0&version_b=1"
+    )
+    assert r_cmp.status_code == 200
+
+    r_man = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
+    assert r_man.status_code == 200
+
+    with open_sqlite_connection() as connection:
+        # Verify subsequent reads add no rows to freshness_invalidations
+        count_after = connection.execute("SELECT COUNT(*) AS c FROM freshness_invalidations").fetchone()["c"]
+        assert count_after == 1
+
