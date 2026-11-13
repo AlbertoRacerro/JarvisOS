@@ -220,9 +220,8 @@ def parse_open_questions(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
             consequence = re.sub(r"^(?:conseguenza|consequence)\s*:\s*", "", parts[1], flags=re.IGNORECASE) if len(parts) > 1 else ""
             options.append({"index": int(match.group(1)), "label": clean(parts[0], 200),
                             "recommended": recommended, "consequence": clean(consequence, 240)})
-        if not options:
-            continue
-        result.append({"id": qid, "at": entry.get("ts"), "prompt": clean(" ".join(prompt_lines), 300),
+        prompt = clean(" ".join(prompt_lines), 300) if options else clean(str(entry.get("text") or ""), 300)
+        result.append({"id": qid, "at": entry.get("ts"), "prompt": prompt or "",
                        "options": options})
     return result
 
@@ -230,7 +229,7 @@ def parse_open_questions(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def question_text(question: dict[str, Any]) -> str:
     """The same bounded question and choices exposed to the Jarvis UI, in ledger order."""
     lines = [question.get("prompt") or "Domanda per te:"]
-    for option in question["options"]:
+    for option in question.get("options") or []:
         label = option.get("label") or "opzione"
         mark = " (consigliata)" if option.get("recommended") else ""
         consequence = option.get("consequence") or "non specificata"
