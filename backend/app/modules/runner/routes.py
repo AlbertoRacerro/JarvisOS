@@ -1,11 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core.database import open_sqlite_connection
-from app.modules.project_knowledge.value_history import (
-    RunInputsManifestRead,
-    ValueHistoryError,
-    get_run_inputs_manifest,
-)
 from app.modules.runner.guarded_service import (
     create_model_implementation,
     create_runner_job,
@@ -157,23 +151,3 @@ def list_run_artifacts_endpoint(
         return list_run_artifacts(workspace_id, simulation_run_id)
     except RunnerSafetyError as exc:
         raise _runner_error(exc) from exc
-
-
-@router.get(
-    "/workspaces/{workspace_id}/simulation-runs/{simulation_run_id}/manifest",
-    response_model=RunInputsManifestRead,
-)
-@router.get(
-    "/workspaces/{workspace_id}/simulation-runs/{simulation_run_id}/values-used",
-    response_model=RunInputsManifestRead,
-)
-def get_simulation_run_manifest_endpoint(
-    workspace_id: str,
-    simulation_run_id: str,
-) -> RunInputsManifestRead:
-    with open_sqlite_connection() as connection:
-        try:
-            return get_run_inputs_manifest(connection, workspace_id, simulation_run_id)
-        except ValueHistoryError as exc:
-            status_code = 404 if "not_found" in exc.code else 400
-            raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": exc.message}) from exc

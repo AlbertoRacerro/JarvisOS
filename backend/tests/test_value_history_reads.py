@@ -143,7 +143,7 @@ def test_run_manifest_canonical_linked_parameters_preserves_snapshot_on_supersed
     _, sim_run_id = _create_v2_model_and_run(client, "main", "param-length-v0")
 
     # 1. Fetch manifest initially
-    res = client.get(f"/workspaces/main/simulation-runs/{sim_run_id}/manifest")
+    res = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "recorded"
@@ -158,11 +158,6 @@ def test_run_manifest_canonical_linked_parameters_preserves_snapshot_on_supersed
     assert item["status"] == "accepted"
     assert item["position"] == 0
     assert item["newer_version_exists"] is False
-
-    # Also test /values-used alias
-    res_alias = client.get(f"/workspaces/main/simulation-runs/{sim_run_id}/values-used")
-    assert res_alias.status_code == 200
-    assert res_alias.json() == data
 
     # 2. Supersede param-length-v0 with param-length-v1
     now = "2026-11-07T00:00:00+00:00"
@@ -191,7 +186,7 @@ def test_run_manifest_canonical_linked_parameters_preserves_snapshot_on_supersed
 
     # 3. Fetch manifest again: run snapshot (10.0 m) MUST be preserved!
     # Status is updated and newer_version_exists is True.
-    res2 = client.get(f"/workspaces/main/simulation-runs/{sim_run_id}/manifest")
+    res2 = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
     assert res2.status_code == 200
     data2 = res2.json()
     assert data2["status"] == "recorded"
@@ -264,7 +259,7 @@ with open('result.json', 'w', encoding='utf-8') as f:
     sim_run_id = job_created.runner_job.simulation_run_id
 
     # Manifest read: MUST return history_not_recorded with reason and never guess!
-    res = client.get(f"/workspaces/main/simulation-runs/{sim_run_id}/manifest")
+    res = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "history_not_recorded"
@@ -326,7 +321,7 @@ with open('result.json', 'w', encoding='utf-8') as f:
     run_runner_job(job_created.runner_job.id)
     sim_run_id = job_created.runner_job.simulation_run_id
 
-    res = client.get(f"/workspaces/main/simulation-runs/{sim_run_id}/manifest")
+    res = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "recorded"
@@ -379,7 +374,7 @@ def test_parameter_version_chain_returns_ordered_lineage(client: TestClient) -> 
         connection.commit()
 
     # Query from any parameter in the chain (e.g. middle parameter param-p1)
-    res = client.get("/workspaces/main/parameters/param-p1/history")
+    res = client.get("/project-knowledge/workspaces/main/parameters/param-p1/history")
     assert res.status_code == 200
     data = res.json()
     assert data["value_kind"] == "parameter"
@@ -447,7 +442,7 @@ with open('result.json', 'w', encoding='utf-8') as f:
     val_id = batches[0].values[0].id
 
     # Version 0: exception (initial ingest)
-    res_v0 = client.get(f"/workspaces/main/result-values/{val_id}/history")
+    res_v0 = client.get(f"/project-knowledge/workspaces/main/result-values/{val_id}/history")
     assert res_v0.status_code == 200
     data_v0 = res_v0.json()
     assert data_v0["value_kind"] == "simulation_result_value"
@@ -470,7 +465,7 @@ with open('result.json', 'w', encoding='utf-8') as f:
     assert resolved.status == "corrected"
 
     # Version chain now has versions 0 and 1
-    res_v1 = client.get(f"/workspaces/main/result-values/{val_id}/history")
+    res_v1 = client.get(f"/project-knowledge/workspaces/main/result-values/{val_id}/history")
     assert res_v1.status_code == 200
     data_v1 = res_v1.json()
     assert data_v1["intermediate_versions_unknown"] is False
@@ -535,7 +530,7 @@ def test_backfilled_chain_reports_intermediate_versions_unknown_true_when_holdin
 
     # Read chain: because it holds a backfilled resolution (origin='backfilled' and version_index > 0),
     # it must report intermediate_versions_unknown: True!
-    res = client.get(f"/workspaces/main/result-values/{val_id}/history")
+    res = client.get(f"/project-knowledge/workspaces/main/result-values/{val_id}/history")
     assert res.status_code == 200
     data = res.json()
     assert data["intermediate_versions_unknown"] is True
@@ -577,7 +572,7 @@ def test_compare_parameter_versions_returns_side_by_side_with_bound_runs(client:
         connection.commit()
 
     # Compare P0 and P1
-    res = client.get("/workspaces/main/parameters/compare?version_a=param-length-v0&version_b=param-length-v1")
+    res = client.get("/project-knowledge/workspaces/main/values/compare?value_kind=parameter&version_a=param-length-v0&version_b=param-length-v1")
     assert res.status_code == 200
     data = res.json()
     assert data["value_kind"] == "parameter"
@@ -696,7 +691,7 @@ with open('result.json', 'w', encoding='utf-8') as f:
         connection.commit()
 
     # Compare version 0 and version 1 of val_id
-    res = client.get(f"/workspaces/main/result-values/{val_id}/compare?version_a=0&version_b=1")
+    res = client.get(f"/project-knowledge/workspaces/main/values/compare?value_kind=simulation_result_value&value_id={val_id}&version_a=0&version_b=1")
     assert res.status_code == 200
     data = res.json()
     assert data["value_kind"] == "simulation_result_value"
@@ -734,12 +729,12 @@ def test_compare_rejects_unrelated_values_with_not_same_value(client: TestClient
         connection.commit()
 
     # Compare unrelated parameters: MUST refuse with not_same_value (400)
-    res = client.get("/workspaces/main/parameters/compare?version_a=unrelated-1&version_b=unrelated-2")
+    res = client.get("/project-knowledge/workspaces/main/values/compare?value_kind=parameter&version_a=unrelated-1&version_b=unrelated-2")
     assert res.status_code == 400
     assert res.json()["detail"]["code"] == "not_same_value"
 
     # Compare parameter with non-existent or cross-kind target
-    res_kind = client.get("/workspaces/main/values/compare?value_kind=parameter&version_a=unrelated-1&version_b=nonexistent")
+    res_kind = client.get("/project-knowledge/workspaces/main/values/compare?value_kind=parameter&version_a=unrelated-1&version_b=nonexistent")
     assert res_kind.status_code == 404
     assert res_kind.json()["detail"]["code"] == "parameter_not_found"
 
@@ -765,10 +760,10 @@ def test_no_writes_in_reads_discipline(client: TestClient) -> None:
     counts_before = get_table_counts()
 
     # Call read endpoints multiple times
-    res1 = client.get(f"/workspaces/main/simulation-runs/{sim_run_id}/manifest")
+    res1 = client.get(f"/project-knowledge/workspaces/main/simulation-runs/{sim_run_id}/values-used")
     assert res1.status_code == 200
 
-    res2 = client.get("/workspaces/main/parameters/param-length-v0/history")
+    res2 = client.get("/project-knowledge/workspaces/main/parameters/param-length-v0/history")
     assert res2.status_code == 200
 
     counts_after = get_table_counts()

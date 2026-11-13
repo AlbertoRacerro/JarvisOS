@@ -120,17 +120,6 @@ class ValueComparisonRead(BaseModel):
     version_b: ValueComparisonSide
 
 
-class ValueComparisonRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    value_kind: str | None = None
-    value_id: str | None = None
-    version_a: str | None = None
-    version_b: str | None = None
-    parameter_a_id: str | None = None
-    parameter_b_id: str | None = None
-
-
 def get_run_inputs_manifest(
     connection: sqlite3.Connection,
     workspace_id: str,
@@ -509,20 +498,6 @@ def get_sim_result_value_version_chain(
         intermediate_versions_unknown=bool(has_backfilled_resolution),
         versions=versions,
     )
-
-
-def get_value_version_chain(
-    connection: sqlite3.Connection,
-    workspace_id: str,
-    value_kind: str,
-    value_id: str,
-) -> ValueVersionChainRead:
-    if value_kind in {"parameter", "parameters"}:
-        return get_parameter_version_chain(connection, workspace_id, value_id)
-    elif value_kind in {"simulation_result_value", "result_value", "simulation-results", "result-values"}:
-        return get_sim_result_value_version_chain(connection, workspace_id, value_id)
-    else:
-        raise ValueHistoryError("value_kind_unknown", f"Unknown value kind '{value_kind}'.")
 
 
 def _find_runs_using_parameter(
