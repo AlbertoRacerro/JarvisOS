@@ -3403,17 +3403,27 @@ class Supervisor:
         counters = self.state["counters"]
         if report.outcome == "auth":
             until, source = None, "auth"
-            safe_detail = _safe_auth_detail(report.detail)
-            q_text = (
-                f"Autenticazione fallita per l'agente {agent} ({safe_detail}). Come procedere?\n"
-                f"1. (consigliata) Accesso ripristinato per {agent}, riprova — conseguenza: riprova l'agente al prossimo turno\n"
-                f"2. Mantieni {agent} escluso — conseguenza: l'agente resta escluso fino al comando release"
-            )
-            qid = self.record("question", q_text)
+            existing = self.state["cooldowns"].get(agent)
+            if isinstance(existing, dict) and existing.get("source") == "auth":
+                qid = existing.get("question")
+            else:
+                safe_detail = _safe_auth_detail(report.detail)
+                q_text = (
+                    f"Autenticazione fallita per l'agente {agent} ({safe_detail}). Come procedere?\n"
+                    f"1. (consigliata) Accesso ripristinato per {agent}, riprova — conseguenza: riprova l'agente al prossimo turno\n"
+                    f"2. Mantieni {agent} escluso — conseguenza: l'agente resta escluso fino al comando release"
+                )
+                self.state["cooldowns"][agent] = {
+                    "until": None, "source": "auth", "reason": report.outcome,
+                    "since": iso(now), "turn": report.turn_id, "question": None,
+                }
+                self.save()
+                qid = self.record("question", q_text)
             self.state["cooldowns"][agent] = {
                 "until": None, "source": "auth", "reason": report.outcome,
                 "since": iso(now), "turn": report.turn_id, "question": qid,
             }
+            self.save()
             self.notify("provider_exhausted", dedupe_key=f"exhausted|{agent}|auth", agent=agent,
                         outcome=report.outcome, reset_at="manual", reset_source=source)
             return
@@ -4412,14 +4422,43 @@ class Supervisor:
         if not pending:
             return None
         self.host.log(f"resolving unsettled attempt {pending['nonce']}")
+        started = parse_ts(pending.get("started_at")) or self.host.now()
+        timed_out = bool(pending.get("timed_out"))
+        diagnostics = pending.get("diagnostics") or ""
         if pending.get("pid") and self.host.pid_alive(pending["pid"], pending.get("pid_start")):
             self.host.log(f"attempt still running as pid {pending['pid']}; waiting for it (never relaunched)")
+            wall_limit = getattr(self.limits, "turn_wall", Limits.turn_wall)
             while self.host.pid_alive(pending["pid"], pending.get("pid_start")):
-                if self._sleep(30.0):
+                elapsed = (self.host.now() - started).total_seconds()
+                if elapsed >= wall_limit:
+                    timed_out = True
+                    wall_diag = f"turn wall limit ({int(wall_limit)}s) exceeded"
+                    diagnostics = f"{diagnostics}\n{wall_diag}".strip() if diagnostics else wall_diag
+                    pending["timed_out"] = True
+                    pending["diagnostics"] = diagnostics
+                    self.save()
+                    killpg_fn = getattr(self.host.relay, "killpg", os.killpg)
+                    try:
+                        killpg_fn(pending["pid"], signal.SIGTERM)
+                    except (ProcessLookupError, PermissionError, OSError):
+                        pass
+                    term_deadline = self.host.now() + timedelta(seconds=30.0)
+                    while self.host.pid_alive(pending["pid"], pending.get("pid_start")) and self.host.now() < term_deadline:
+                        rem = max(0.01, (term_deadline - self.host.now()).total_seconds())
+                        if self._sleep(min(1.0, rem)):
+                            return "signal" if self.signalled else "stopped"
+                    if self.host.pid_alive(pending["pid"], pending.get("pid_start")):
+                        try:
+                            killpg_fn(pending["pid"], signal.SIGKILL)
+                        except (ProcessLookupError, PermissionError, OSError):
+                            pass
+                    break
+                rem_wall = max(0.01, wall_limit - elapsed)
+                if self._sleep(min(30.0, rem_wall)):
                     return "signal" if self.signalled else "stopped"
-        session_id = self.host.relay.find_by_nonce(pending["nonce"], parse_ts(pending["started_at"]) or self.host.now())
+        session_id = self.host.relay.find_by_nonce(pending["nonce"], started)
         # An adopted run was started by an earlier owner: what it left behind is not this process's to stop.
-        return self._settle(pending, session_id, pending.get("diagnostics") or "", timed_out=bool(pending.get("timed_out")))
+        return self._settle(pending, session_id, diagnostics, timed_out=timed_out)
 
 
 # ---------------------------------------------------------------------------

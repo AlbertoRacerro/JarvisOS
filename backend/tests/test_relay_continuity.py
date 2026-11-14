@@ -6599,3 +6599,80 @@ def test_choose_ranks_using_refreshed_reading_when_cooldown_clears(tmp_path: Pat
     assert chosen == "claude"
     assert "claude" not in sup.state["cooldowns"]
 
+
+def test_auth_failure_saves_cooldown_before_ledger_and_never_asks_twice_on_restart(tmp_path: Path) -> None:
+    """If the owner crashes right after appending the auth question, the auth cooldown is already on disk so restart does not ask again."""
+    env = Env(tmp_path)
+    questions_asked: list[str] = []
+
+    def crashing_ledger(kind: str, text: str) -> str:
+        if kind == "question":
+            questions_asked.append(text)
+            on_disk = env.store.load()
+            assert on_disk["cooldowns"].get("claude", {}).get("source") == "auth"
+            raise SystemExit("simulated crash right after ledger append")
+        return "L1"
+
+    env.host.ledger = crashing_ledger
+    env.head([claude_result("Invalid API key · Please run /login", error=True, status=401)])
+
+    sup1 = env.supervisor()
+    with pytest.raises(SystemExit):
+        sup1.run(HEAD)
+    assert len(questions_asked) == 1
+
+    # Now restart with a normal ledger and codex succeeding; no second question is written for claude
+    env.relay.script.append(("codex", CODEX_SUCCESS))
+    env.host.ledger = lambda kind, text: (questions_asked.append(text) if kind == "question" else None) or "L2"
+    sup2 = rc.Supervisor(env.store, env.host, env.limits)
+    assert sup2.run(HEAD) == "idle"
+    assert len(questions_asked) == 1
+
+
+def test_adopted_pending_turn_enforces_wall_limit_on_restart(tmp_path: Path) -> None:
+    """An adopted pending turn that exceeds turn_wall during _resolve_pending is terminated and settled as timed_out."""
+    env = Env(tmp_path, [("codex", CODEX_SUCCESS)])
+    env.limits = rc.Limits(turn_wall=120.0, min_free_percent=10.0)
+    signals: list[tuple[int, int]] = []
+    alive = [True]
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        signals.append((pgid, sig))
+        if sig == signal.SIGKILL:
+            alive[0] = False
+
+    env.relay.killpg = fake_killpg
+    env.host.pid_alive = lambda pid, start: alive[0]
+
+    nonce = "rc-20261018T080000Z-deadbeef"
+    sess_dir = env.relay.sessions_dir() / "20261018-080000-adopted"
+    write_turn(
+        sess_dir,
+        [claude_result("completed before timeout check", error=False, status=200)],
+        agent="claude",
+        prompt=relay_prompt(f"[relay-continuity attempt {nonce}]\ndo work"),
+        status="ok",
+    )
+
+    state = rc.default_state()
+    state.update({
+        "phase": "running", "head_session": HEAD, "chain": [HEAD], "agent": "claude",
+        "permissions_digest": env.host.permissions_digest(), "permissions_pinned": True,
+        "pending": {
+            "nonce": nonce, "agent": "claude", "parent": HEAD,
+            "started_at": rc.iso(T0), "pid": 42424, "pid_start": 999,
+            "fingerprint": "", "attempt": 1,
+        },
+    })
+    env.store.save(state, T0)
+    env.store.journal({"event": "launch", "nonce": nonce, "agent": "claude", "parent": HEAD,
+                       "started_at": rc.iso(T0), "pid": 42424, "pid_start": 999, "attempt": 1})
+
+    sup = rc.Supervisor(env.store, env.host, env.limits)
+    assert sup.run(HEAD) == "idle"
+    assert (42424, signal.SIGTERM) in signals
+    assert (42424, signal.SIGKILL) in signals
+    assert "claude" not in sup.state["cooldowns"]
+
+
+
