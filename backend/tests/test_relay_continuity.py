@@ -5858,51 +5858,97 @@ def test_reading_clear_boundaries_estimate_manual_stale_missing_unparseable_exha
     """Criterion 7: estimate and manual cooldowns are not cleared by a reading with room;
     stale, missing, unparseable and exhausted readings leave limits and message cooldowns intact."""
     env = Env(tmp_path)
-    sup = env.supervisor()
     cooldown_since = T0 - timedelta(minutes=10)
     cooldown_until = T0 + timedelta(hours=4)
     as_of = T0 - timedelta(minutes=5)
+
     def good_readings() -> dict[str, Any]:
         return {"claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of)}
 
-    # 1. estimate cooldown not cleared
-    sup.state["cooldowns"]["claude"] = {
+    # 1. estimate cooldown not cleared by reading with room
+    sup1 = env.supervisor()
+    sup1.state["cooldowns"]["claude"] = {
         "until": rc.iso(cooldown_until), "source": "estimate", "reason": "transient", "since": rc.iso(cooldown_since),
     }
     env.relay.readings = good_readings
-    assert not sup.available("claude")
-    assert sup.state["cooldowns"]["claude"]["source"] == "estimate"
+    assert not sup1.available("claude")
+    assert sup1.state["cooldowns"]["claude"]["source"] == "estimate"
 
-    # 2. manual cooldown not cleared
-    sup.state["cooldowns"]["claude"] = {
+    # 2. manual cooldown not cleared by reading with room
+    sup2 = env.supervisor()
+    sup2.state["cooldowns"]["claude"] = {
         "until": None, "source": "manual", "reason": "spend_limit", "since": rc.iso(cooldown_since),
     }
-    assert not sup.available("claude")
-    assert sup.state["cooldowns"]["claude"]["source"] == "manual"
+    env.relay.readings = good_readings
+    assert not sup2.available("claude")
+    assert sup2.state["cooldowns"]["claude"]["source"] == "manual"
 
     # 3. stale reading (as_of <= since) leaves limits cooldown intact
-    sup.state["cooldowns"]["claude"] = {
+    sup3 = env.supervisor()
+    sup3.state["cooldowns"]["claude"] = {
         "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
     }
     stale_as_of = cooldown_since - timedelta(minutes=1)
     env.relay.readings = lambda: {"claude": reading("claude", 5.0, T0 + timedelta(days=1), stale_as_of)}
-    assert not sup.available("claude")
-    assert "claude" in sup.state["cooldowns"]
+    assert not sup3.available("claude")
+    assert "claude" in sup3.state["cooldowns"]
 
     # 4. missing reading leaves limits cooldown intact
+    sup4 = env.supervisor()
+    sup4.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
     env.relay.readings = lambda: {}
-    assert not sup.available("claude")
-    assert "claude" in sup.state["cooldowns"]
+    assert not sup4.available("claude")
+    assert "claude" in sup4.state["cooldowns"]
 
     # 5. unparseable reading leaves limits cooldown intact
+    sup5 = env.supervisor()
+    sup5.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
     env.relay.readings = lambda: {"claude": {"status": "error", "windows": "bad"}}
-    assert not sup.available("claude")
-    assert "claude" in sup.state["cooldowns"]
+    assert not sup5.available("claude")
+    assert "claude" in sup5.state["cooldowns"]
 
     # 6. exhausted reading (>= 99.5% used) leaves limits cooldown intact
+    sup6 = env.supervisor()
+    sup6.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
     env.relay.readings = lambda: {"claude": reading("claude", 100.0, T0 + timedelta(hours=2), as_of)}
-    assert not sup.available("claude")
-    assert "claude" in sup.state["cooldowns"]
+    assert not sup6.available("claude")
+    assert "claude" in sup6.state["cooldowns"]
+
+    # 7. missing native reading leaves limits cooldown intact
+    sup7 = env.supervisor()
+    sup7.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.argon_limits = lambda agent: None
+    assert not sup7.available("argon")
+    assert "argon" in sup7.state["cooldowns"]
+
+    # 8. unparseable native reading leaves limits cooldown intact
+    sup8 = env.supervisor()
+    sup8.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.argon_limits = lambda agent: {"as_of": rc.iso(as_of), "windows": "bad"}
+    assert not sup8.available("argon")
+    assert "argon" in sup8.state["cooldowns"]
+
+    # 9. exhausted native reading leaves limits cooldown intact
+    sup9 = env.supervisor()
+    sup9.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.argon_limits = lambda agent: {
+        "as_of": rc.iso(as_of),
+        "windows": [{"used_percent": 100.0, "disabled": False}],
+    }
+    assert not sup9.available("argon")
+    assert "argon" in sup9.state["cooldowns"]
 
 
 def test_auth_failure_diagnostic_secret_never_enters_question_or_notification(tmp_path: Path) -> None:
