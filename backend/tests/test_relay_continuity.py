@@ -394,6 +394,58 @@ def test_choose_skips_native_coordinator_with_low_headroom(tmp_path: Path) -> No
     assert env.supervisor()._choose("argon") == "claude"
 
 
+def test_last_completed_agent_outside_preferred_seeds_preferred(tmp_path: Path) -> None:
+    # Acceptance criterion 2: A last completed agent outside PREFERRED_AGENTS (codex) seeds the
+    # next mission with PREFERRED, launches claude, and emits no spurious provider-switched ledger/notification.
+    root = tmp_path / "control"
+    env = Env(tmp_path, [("claude", SUCCESS, "propose_done")])
+    env.relay.readings = {
+        "claude": reading("claude", 30, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+    }
+
+    def factory(store: Any, _m: Any) -> rc.Supervisor:
+        return rc.Supervisor(store, env.host, env.limits, sender=env.sender)
+
+    # 1. Previous mission completed on codex (outside PREFERRED_AGENTS)
+    m_codex = mission_def("cycle codex", mid="m-20261018T080001Z-aabbc1", submitted=T0)
+    _write_mission(root, m_codex)
+    store_codex = rc.mission_store(root, m_codex["id"])
+    state_codex = rc.default_state()
+    state_codex.update({
+        "phase": "idle",
+        "agent": "codex",
+        "mission": {
+            "id": m_codex["id"],
+            "next": 1,
+            "total": 1,
+            "done": [{"task": 0, "outcome": "verified"}],
+            "completed_at": rc.iso(T0),
+        },
+    })
+    store_codex.save(state_codex, T0)
+
+    # 2. Next mission with no initial state definition
+    m_next = mission_def("cycle next", mid="m-20261018T080002Z-aabbc2", submitted=T0 + timedelta(seconds=1))
+    _write_mission(root, m_next)
+
+    mid_next = m_next["id"]
+    outcome = rc.serve_step(root, factory, conflicts=lambda: [], now=lambda: T0 + timedelta(seconds=1))
+    assert outcome == f"ran:{mid_next}:idle"
+
+    # Verify state was seeded with PREFERRED ("claude")
+    next_store = rc.mission_store(root, mid_next)
+    saved_state = next_store.load()
+    assert saved_state["agent"] == rc.PREFERRED
+    assert saved_state["agent"] == "claude"
+
+    # Proving real serve_step/Supervisor launched claude without spurious provider switch
+    assert len(env.relay.launches) == 1
+    assert env.relay.launches[0]["agent"] == "claude"
+    assert not any("switched coordinator" in text for _, text in env.ledger)
+    assert not any("cambiato assistente" in msg for msg in env.sent)
+
+
 def test_choose_headroom_ordering_prefers_agent_with_more_free_room(tmp_path: Path) -> None:
     # Acceptance criterion 3: Seeded agent (claude) is low. Between argon and agy_opus,
     # agy_opus has more room (70% vs 40%), so agy_opus is chosen despite tuple order.
