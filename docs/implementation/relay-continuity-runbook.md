@@ -212,3 +212,62 @@ WantedBy=default.target
 ```
 
 The installer reloads user units and starts the watcher only with `--with-watch`. After installation the sandbox may request `host_ops.py request service.install --args '{"template":"jarvisos-relay-watch"}' --wait 60` for a signed installation receipt. Run either this unit or a tmux `watch`, never both: the second one exits 3 on `watch.lock`, which the unit does not restart. The watcher is a separate process, so it reports an owner crash or stop while work is pending (`owner_down`) without an `OnFailure=` hook. A watcher that is itself down cannot report anything: check `systemctl --user status jarvisos-relay-watch`. Rollback: `systemctl --user disable --now jarvisos-relay-watch`.
+
+## Supervisor self-installation and release guards (spec 262)
+
+The supervisor can install its own releases from GitHub `master` when new commits land with all required status checks green. Self-installation is gated by `release.install.trust_master: true` in `~/.config/jarvisos-hostops/policy.json`.
+
+### Host self-installation command
+
+To enable supervisor self-installation, the maintainer runs this exact command once from a host shell:
+
+```bash
+python3 scripts/host_ops.py install --sha <sha> --self-install --with-watch
+```
+
+This single command:
+1. Installs the candidate release from `master` into `~/.local/share/jarvisos-hostops/releases/<sha>` and switches `current`.
+2. Writes the executor unit (`SERVICE_UNIT`), ensuring it includes the `ExecStartPre=/usr/bin/python3 -I %h/.local/share/jarvisos-hostops/guard/scripts/host_ops.py guard` pre-start guard.
+3. Writes the observer unit template (`jarvisos-relay-watch.service`) and the mission owner unit template (`jarvisos-mission-owner.service`) to `~/.config/systemd/user/`.
+4. Atomically updates the host policy `~/.config/jarvisos-hostops/policy.json` (mode `0600`) setting `policy["ops"]["release.install"]["trust_master"] = true` while preserving every other policy key.
+5. Runs `systemctl --user daemon-reload` and restarts the host executor unit `jarvisos-hostops.service`.
+6. Enables and starts `jarvisos-relay-watch.service` (when `--with-watch` is given).
+7. Never stops or restarts the running mission owner unit (`jarvisos-mission-owner.service` remains start-only).
+
+Without `--self-install`, `host_ops.py install` leaves `trust_master` untouched (`false` by default) and does not write the mission owner unit template.
+
+### Automatic release confirmation, health checks, and rollback
+
+When a release is installed:
+- A pending marker `~/.local/share/jarvisos-hostops/state/release-pending.json` is created before switching `current`.
+- The outgoing executor pins a copy of the previous release under `~/.local/share/jarvisos-hostops/guard/`.
+- Every executor start runs the pinned guard via `ExecStartPre=`. If the pending marker expires its deadline (10 minutes) or start count exceeds 3, or if the candidate crashes or reports an unhealthy heartbeat, the guard automatically rolls back `current` and the published release symlinks to the previous release, starts the owner on the previous release, notifies Slack once, and marks the failed candidate as refused so it is never retried automatically.
+- Once healthy (successful heartbeat with `problem: null`, active watcher for 60 seconds without restarts, and the owner reporting its release sha within the deadline), the release is confirmed and the pending marker moves to `release-history.jsonl`.
+- **Manual rollback:** To force an immediate return to the previous release:
+  ```bash
+  python3 ~/.local/share/jarvisos-hostops/guard/scripts/host_ops.py guard --return --reason "manual rollback"
+  ```
+- **Disabling self-install:** To disable self-installation and revert to manual releases, set `"trust_master": false` under `"release.install"` in `~/.config/jarvisos-hostops/policy.json` (mode 0600).
+
+### Release pruning (Scope 6)
+
+After a release is confirmed and its pending marker is moved to history:
+- Releases under `~/.local/share/jarvisos-hostops/releases/` and `~/.local/share/jarvisos/hostops/releases/` are automatically pruned.
+- Pruning retains:
+  1. The current release (pointed to by `current`).
+  2. The previous release (from confirmation history).
+  3. The release from which the pinned guard copy was sourced (`guard/RELEASE`).
+- Pruning never leaves fewer than these releases, never runs while any release marker is pending, and never deletes a directory that is the target of any symlink.
+- Each pruned directory is recorded with a `"status": "pruned"` line in `release-history.jsonl` (and synced to the published history).
+
+### Main checkout fast-forward (Scope 7)
+
+Sessions run `scripts/devctx.py` and other repository scripts from the main checkout (`~/src/JarvisOS`). At task boundaries between turns (after any release request is settled):
+- The mission owner runs `git fetch origin master` and `git merge --ff-only origin/master` in the main checkout.
+- Fast-forward occurs only when:
+  1. The checkout is on branch `master`.
+  2. `git status --porcelain --untracked-files=no` is empty (no tracked modifications; untracked files are ignored).
+- It never runs `git reset`, `git checkout`, `git stash`, or recursive merge.
+- If the checkout is dirty, on another branch, or history has diverged (non-fast-forward), the checkout is left untouched.
+- A refused or failed fast-forward is logged once per `origin/master` sha and is non-fatal.
+- Fast-forward never runs during an active provider turn.

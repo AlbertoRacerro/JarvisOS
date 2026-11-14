@@ -1,5 +1,6 @@
 import argparse
 import json
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -296,3 +297,171 @@ def test_refused_install_restarts_owner_and_owner_does_not_loop(tmp_path, monkey
     assert any("previously refused" in m for m in logs)
     # No new request spooled -> loop is broken!
     assert len(list(paths.requests.glob("*.json"))) == 0
+
+
+def _setup_git_repos(tmp_path):
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+
+    repo = tmp_path / "main_checkout"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "master", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+
+    (repo / "file.txt").write_text("v1\n")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=repo, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "master"], cwd=repo, check=True)
+
+    clone = tmp_path / "other_clone"
+    subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=clone, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=clone, check=True)
+
+    return repo, origin, clone
+
+
+def test_fast_forward_clean_master(tmp_path):
+    repo, origin, clone = _setup_git_repos(tmp_path)
+
+    # Push commit 2 from other clone to origin/master
+    (clone / "file.txt").write_text("v2\n")
+    subprocess.run(["git", "commit", "-am", "commit 2"], cwd=clone, check=True)
+    subprocess.run(["git", "push", "origin", "master"], cwd=clone, check=True)
+    target_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone, check=True, capture_output=True, text=True).stdout.strip()
+
+    # Also have an untracked file in main repo (untracked files must not block fast-forward)
+    (repo / "untracked.txt").write_text("untracked\n")
+
+    logs = []
+    tracker = {"sha": None}
+    res = rc.fast_forward_main_checkout(repo, log=logs.append, last_logged=tracker)
+    assert res is True
+    assert (repo / "file.txt").read_text() == "v2\n"
+    assert (repo / "untracked.txt").read_text() == "untracked\n"
+    head_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+    assert head_sha == target_sha
+    assert any("fast-forwarded main checkout to origin/master" in m for m in logs)
+
+
+def test_fast_forward_skipped_on_dirty_tracked_file(tmp_path):
+    repo, origin, clone = _setup_git_repos(tmp_path)
+
+    # Push commit 2 to origin/master
+    (clone / "file.txt").write_text("v2\n")
+    subprocess.run(["git", "commit", "-am", "commit 2"], cwd=clone, check=True)
+    subprocess.run(["git", "push", "origin", "master"], cwd=clone, check=True)
+    target_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone, check=True, capture_output=True, text=True).stdout.strip()
+
+    head_before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    # Make tracked file dirty in repo
+    (repo / "file.txt").write_text("dirty\n")
+    (repo / "untracked.txt").write_text("untracked\n")
+
+    logs = []
+    tracker = {"sha": None}
+    res = rc.fast_forward_main_checkout(repo, log=logs.append, last_logged=tracker)
+    assert res is False
+    assert (repo / "file.txt").read_text() == "dirty\n"
+    head_after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+    assert head_after == head_before
+    assert tracker["sha"] == target_sha
+    assert any("checkout is dirty" in m for m in logs)
+
+    # Call a second time: must NOT log again for the same origin/master sha
+    logs_second = []
+    res2 = rc.fast_forward_main_checkout(repo, log=logs_second.append, last_logged=tracker)
+    assert res2 is False
+    assert logs_second == []
+
+
+def test_fast_forward_skipped_on_another_branch(tmp_path):
+    repo, origin, clone = _setup_git_repos(tmp_path)
+
+    # Push commit 2 to origin/master
+    (clone / "file.txt").write_text("v2\n")
+    subprocess.run(["git", "commit", "-am", "commit 2"], cwd=clone, check=True)
+    subprocess.run(["git", "push", "origin", "master"], cwd=clone, check=True)
+
+    # Checkout a feature branch in repo
+    subprocess.run(["git", "checkout", "-q", "-b", "feature-x"], cwd=repo, check=True)
+    head_before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    logs = []
+    tracker = {"sha": None}
+    res = rc.fast_forward_main_checkout(repo, log=logs.append, last_logged=tracker)
+    assert res is False
+    head_after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+    assert head_after == head_before
+    assert any("on branch 'feature-x', not 'master'" in m for m in logs)
+
+    # Call again: logs once per sha
+    logs_second = []
+    rc.fast_forward_main_checkout(repo, log=logs_second.append, last_logged=tracker)
+    assert logs_second == []
+
+
+def test_fast_forward_skipped_on_diverged_history(tmp_path):
+    repo, origin, clone = _setup_git_repos(tmp_path)
+
+    # Push commit 2 to origin/master from clone
+    (clone / "file.txt").write_text("from clone\n")
+    subprocess.run(["git", "commit", "-am", "clone commit"], cwd=clone, check=True)
+    subprocess.run(["git", "push", "origin", "master"], cwd=clone, check=True)
+
+    # Commit local change to master in repo without pulling clone commit
+    (repo / "local.txt").write_text("local\n")
+    subprocess.run(["git", "add", "local.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "local commit"], cwd=repo, check=True)
+    head_before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    logs = []
+    tracker = {"sha": None}
+    res = rc.fast_forward_main_checkout(repo, log=logs.append, last_logged=tracker)
+    assert res is False
+    head_after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+    assert head_after == head_before
+    assert (repo / "local.txt").read_text() == "local\n"
+    assert any("merge --ff-only failed" in m for m in logs)
+
+    # Call again: logs once per sha
+    logs_second = []
+    rc.fast_forward_main_checkout(repo, log=logs_second.append, last_logged=tracker)
+    assert logs_second == []
+
+
+def test_command_serve_does_not_call_fast_forward_when_release_requested(tmp_path, monkeypatch):
+    sha = "e" * 40
+    monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(tmp_path / "continuity"))
+    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc, "become_subreaper", lambda: True)
+
+    monkeypatch.setattr(rc, "check_and_request_release_update", lambda *a, **kw: True)
+
+    ff_called = False
+
+    def spy_ff(*a, **kw):
+        nonlocal ff_called
+        ff_called = True
+        return True
+
+    monkeypatch.setattr(rc, "fast_forward_main_checkout", spy_ff)
+
+    args = argparse.Namespace(
+        action="serve",
+        repo=str(tmp_path / "repo"),
+        clear_stop=True,
+        no_notify=True,
+        interval=1,
+        turns=1,
+        once=True,
+    )
+    res = rc.command_serve(args)
+    assert res == 0
+    assert not ff_called
+

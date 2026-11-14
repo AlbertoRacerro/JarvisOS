@@ -4746,6 +4746,76 @@ def check_and_request_release_update(
     return True
 
 
+_LAST_FF_LOGGED: dict[str, str | None] = {"sha": None}
+
+
+def fast_forward_main_checkout(
+    repo: Path,
+    *,
+    log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
+    run: Runner = devctx.run,
+    last_logged: dict[str, str | None] | None = None,
+) -> bool:
+    """At a task boundary, fast-forward a clean main checkout on master to origin/master.
+
+    A dirty tree (tracked modifications), another branch, or a non-fast-forward
+    leaves the checkout untouched and logs once per origin/master sha.
+    """
+    tracker = last_logged if last_logged is not None else _LAST_FF_LOGGED
+
+    def _log_refusal(target_sha: str, reason: str) -> None:
+        if tracker.get("sha") != target_sha:
+            short = target_sha[:8] if host_ops.SHA_RE.fullmatch(target_sha) else target_sha
+            log(f"owner: fast-forward to origin/master ({short}) refused/failed: {reason}")
+            tracker["sha"] = target_sha
+
+    # 1. Fetch origin master
+    code, fetch_out = run(["git", "fetch", "-q", "origin", "master"], cwd=repo, timeout=60.0)
+    if code != 0:
+        _, target_sha = run(["git", "rev-parse", "origin/master"], cwd=repo, timeout=20.0)
+        target_sha = target_sha.strip()
+        ref_sha = target_sha if host_ops.SHA_RE.fullmatch(target_sha) else "unknown"
+        _log_refusal(ref_sha, f"fetch origin master failed ({fetch_out.strip() or 'exit ' + str(code)})")
+        return False
+
+    code, target_sha = run(["git", "rev-parse", "origin/master"], cwd=repo, timeout=20.0)
+    target_sha = target_sha.strip()
+    if code != 0 or not host_ops.SHA_RE.fullmatch(target_sha):
+        ref_sha = target_sha if host_ops.SHA_RE.fullmatch(target_sha) else "unknown"
+        _log_refusal(ref_sha, "rev-parse origin/master failed")
+        return False
+
+    # 2. Check branch is 'master'
+    code, branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, timeout=20.0)
+    branch = branch.strip()
+    if code != 0 or branch != "master":
+        _log_refusal(target_sha, f"checkout is on branch '{branch or 'unknown'}', not 'master'")
+        return False
+
+    # 3. Check tracked files are clean (untracked files are ignored)
+    code, status = run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo, timeout=20.0)
+    if code != 0 or status.strip():
+        count = len(status.strip().splitlines()) if status.strip() else 0
+        _log_refusal(target_sha, f"checkout is dirty ({count} tracked modification{'s' if count != 1 else ''})")
+        return False
+
+    # 4. Check if HEAD is already at origin/master
+    code, head_sha = run(["git", "rev-parse", "HEAD"], cwd=repo, timeout=20.0)
+    head_sha = head_sha.strip()
+    if code == 0 and head_sha == target_sha:
+        return True
+
+    # 5. Fast-forward merge only
+    code, merge_out = run(["git", "merge", "--ff-only", "origin/master"], cwd=repo, timeout=60.0)
+    if code != 0:
+        _log_refusal(target_sha, f"merge --ff-only failed: {merge_out.strip() or 'exit ' + str(code)}")
+        return False
+
+    log(f"owner: fast-forwarded main checkout to origin/master ({target_sha[:8]})")
+    tracker["sha"] = None
+    return True
+
+
 def permissions_digest(path: Path) -> str | None:
     """Digest of the authority-bearing Relay permission settings. Relay rewrites `model` whenever `--model`
     is passed; a model choice grants no authority, so it is excluded. An unreadable file digests as such."""
@@ -5542,12 +5612,17 @@ def command_serve(args: argparse.Namespace) -> int:
 
     log(f"mission owner serving {missions_dir(root)} (pid {os.getpid()})")
     previous = None
+    last_ff_logged: dict[str, str | None] = {"sha": serve_state.get("last_ff_logged_sha")}
     try:
         while not stop["flag"] and not (root / "STOP").exists():
             _reap_zombies()  # adopted durable wrappers also finish while the owner is idle
             if check_and_request_release_update(repo, root, log=log):
                 log("owner: release install requested; stopping at task boundary without taking a new task")
                 return 0
+            fast_forward_main_checkout(repo, log=log, last_logged=last_ff_logged)
+            if last_ff_logged.get("sha") != serve_state.get("last_ff_logged_sha"):
+                serve_state["last_ff_logged_sha"] = last_ff_logged.get("sha")
+                serve_store.save(serve_state, now_utc())
             outcome = serve_step(root, factory, conflicts=lambda: live_conflicts(repo, {os.getpid()}), log=log)
             if outcome == "empty":
                 outcome = roadmap_step(root, repo, fingerprint=lambda: remote_fingerprint(repo),

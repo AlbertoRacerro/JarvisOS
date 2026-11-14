@@ -11,7 +11,7 @@ receipt with the published public key; nobody without the host-only private key 
     host_ops.py cancel ID                                               (sandbox or host)
     host_ops.py status                                                   (sandbox or host)
     host_ops.py serve                                                    (host executor; systemd unit)
-    host_ops.py install --sha SHA [--with-watch]                           (host; maintainer/host session only)
+    host_ops.py install --sha SHA [--with-watch] [--self-install]         (host; maintainer/host session only)
     host_ops.py health                                                   (host)
     host_ops.py preflight                                                (host)
 
@@ -2518,6 +2518,126 @@ def read_release_history(paths: Paths) -> list[dict[str, Any]]:
     return out
 
 
+def _collect_symlink_targets(paths: Paths) -> set[Path]:
+    targets: set[Path] = set()
+    bases = (
+        paths.install,
+        paths.published,
+        paths.install / "releases",
+        paths.published / "releases",
+    )
+    for base in bases:
+        if not base.is_dir():
+            continue
+        try:
+            for item in base.iterdir():
+                if item.is_symlink():
+                    try:
+                        targets.add(item.resolve())
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return targets
+
+
+def prune_releases(paths: Paths, *, now: datetime | None = None) -> list[dict[str, Any]]:
+    """Prune releases/ in install and published dirs to current, previous, and guard source releases.
+
+    Never fewer, never while a marker is pending, never the target of any symlink.
+    Each pruned directory gets a line in release-history.jsonl.
+    """
+    if paths.release_pending.exists():
+        return []
+
+    keep_shas: set[str] = set()
+
+    for link in (paths.install / "current", paths.published / "current"):
+        if link.is_symlink() or link.exists():
+            try:
+                name = link.resolve().name
+                if SHA_RE.fullmatch(name):
+                    keep_shas.add(name)
+            except OSError:
+                pass
+
+    guard_release = paths.guard / "RELEASE"
+    if guard_release.is_file():
+        try:
+            g_sha = guard_release.read_text(encoding="utf-8").strip()
+            if SHA_RE.fullmatch(g_sha):
+                keep_shas.add(g_sha)
+        except OSError:
+            pass
+
+    history = read_release_history(paths)
+    confirmed = [h for h in history if h.get("status") == "confirmed"]
+    if confirmed:
+        latest = confirmed[-1]
+        c_sha = latest.get("candidate_sha")
+        if c_sha and SHA_RE.fullmatch(str(c_sha)):
+            keep_shas.add(str(c_sha))
+        p_sha = latest.get("previous_sha")
+        if p_sha and SHA_RE.fullmatch(str(p_sha)):
+            keep_shas.add(str(p_sha))
+        if len(confirmed) >= 2:
+            prev_cand = confirmed[-2].get("candidate_sha")
+            if prev_cand and SHA_RE.fullmatch(str(prev_cand)):
+                keep_shas.add(str(prev_cand))
+
+    symlink_targets = _collect_symlink_targets(paths)
+    pruned: list[dict[str, Any]] = []
+    t_now = now or now_utc()
+
+    for base, kind in ((paths.install / "releases", "install"), (paths.published / "releases", "published")):
+        if not base.is_dir():
+            continue
+        try:
+            entries = sorted(base.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.is_dir() or entry.is_symlink():
+                continue
+            sha = entry.name
+            if not SHA_RE.fullmatch(sha):
+                continue
+            if sha in keep_shas:
+                continue
+            try:
+                if entry.resolve() in symlink_targets:
+                    continue
+            except OSError:
+                continue
+            try:
+                shutil.rmtree(entry)
+            except OSError:
+                continue
+
+            line = {
+                "candidate_sha": sha,
+                "dir": kind,
+                "path": str(entry),
+                "pruned_at": iso(t_now),
+                "sha": sha,
+                "status": "pruned",
+            }
+            pruned.append(line)
+            state_fd = open_dir(paths.state, create=True)
+            try:
+                with open(paths.release_history, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(line, sort_keys=True) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            finally:
+                os.close(state_fd)
+
+    if pruned:
+        sync_published_release_history(paths)
+
+    return pruned
+
+
 class Executor:
     def __init__(self, paths: Paths, *, run: Callable[..., subprocess.CompletedProcess] = real_run,
                  post: Callable[[str, bytes], int] | None = None, now: Callable[[], datetime] = now_utc,
@@ -2905,6 +3025,7 @@ class Executor:
                     unlink_at(state_fd, "release-pending.json")
                 finally:
                     os.close(state_fd)
+                prune_releases(self.paths, now=self.now())
                 return True
 
         if not marker.get("owner_active"):
@@ -3070,6 +3191,7 @@ class Executor:
             os.close(state_fd)
         sync_published_release_history(self.paths)
         self.log(f"hostops: release {candidate} confirmed")
+        prune_releases(self.paths, now=self.now())
         return True
 
 
@@ -3545,7 +3667,7 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
 OPERATIONS["release.install"] = op_release_install
 
 
-def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
+def install(paths: Paths, sha: str, with_watch: bool = False, self_install: bool = False) -> int:
     try:
         install_release(paths, sha, watcher_active=with_watch)
     except Refused as exc:
@@ -3560,12 +3682,33 @@ def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
     paths.published.mkdir(parents=True, exist_ok=True)
     (paths.published / "allowed_signers").write_text(
         f'{SIGNER} namespaces="{SIG_NAMESPACE}" {public[0]} {public[1]}\n')
-    if not paths.policy.exists():
-        paths.policy.write_text(json.dumps(DEFAULT_POLICY, indent=1, sort_keys=True) + "\n")
-        os.chmod(paths.policy, 0o600)
+    if self_install:
+        if paths.policy.exists():
+            try:
+                policy, _ = load_policy(paths)
+            except Exception:
+                policy = json.loads(paths.policy.read_text(encoding="utf-8"))
+        else:
+            policy = json.loads(json.dumps(DEFAULT_POLICY))
+        ops = policy.setdefault("ops", {})
+        if isinstance(ops, dict):
+            rel_inst = ops.setdefault("release.install", {})
+            if isinstance(rel_inst, dict):
+                rel_inst["trust_master"] = True
+        cfd = open_dir(paths.config, create=True)
+        try:
+            write_at(cfd, "policy.json", (json.dumps(policy, indent=1, sort_keys=True) + "\n").encode("utf-8"), mode=0o600)
+        finally:
+            os.close(cfd)
+    else:
+        if not paths.policy.exists():
+            paths.policy.write_text(json.dumps(DEFAULT_POLICY, indent=1, sort_keys=True) + "\n")
+            os.chmod(paths.policy, 0o600)
     paths.units.mkdir(parents=True, exist_ok=True)
     (paths.units / UNIT).write_text(SERVICE_UNIT)
     (paths.units / "jarvisos-relay-watch.service").write_text(UNIT_TEMPLATES["jarvisos-relay-watch"])
+    if self_install:
+        (paths.units / "jarvisos-mission-owner.service").write_text(UNIT_TEMPLATES["jarvisos-mission-owner"])
     env = _host_env()
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, timeout=60, env=env)
     subprocess.run(["systemctl", "--user", "enable", UNIT], check=True, timeout=60, env=env)
@@ -3657,6 +3800,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("install", help="install the executor from a GitHub master commit (host session)")
     p.add_argument("--sha", required=True)
     p.add_argument("--with-watch", action="store_true")
+    p.add_argument("--self-install", action="store_true",
+                   help="enable supervisor self-installation and write owner unit template")
     sub.add_parser("health", help="host-side health check")
     sub.add_parser("preflight", help="candidate preflight validation")
     p = sub.add_parser("guard", help="pre-start release guard (systemd ExecStartPre)")
@@ -3725,7 +3870,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.action == "serve":
         return serve(paths, args.interval)
     if args.action == "install":
-        return install(paths, args.sha, args.with_watch)
+        return install(paths, args.sha, args.with_watch, self_install=args.self_install)
     if args.action == "health":
         return health(paths)
     if args.action == "preflight":

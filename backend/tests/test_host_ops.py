@@ -3967,11 +3967,12 @@ def test_guard_start_count_exceeded_returns_and_restores(tmp_path):
     # Marker is now unlinked and confirmed in history
     assert not paths.release_pending.exists()
     final_history = h.read_release_history(paths)
-    assert len(final_history) == 2
-    assert final_history[0]["candidate_sha"] == candidate_sha
-    assert final_history[0]["status"] == "refused"
-    assert final_history[1]["candidate_sha"] == old_sha
-    assert final_history[1]["status"] == "confirmed"
+    non_pruned = [e for e in final_history if e.get("status") != "pruned"]
+    assert len(non_pruned) == 2
+    assert non_pruned[0]["candidate_sha"] == candidate_sha
+    assert non_pruned[0]["status"] == "refused"
+    assert non_pruned[1]["candidate_sha"] == old_sha
+    assert non_pruned[1]["status"] == "confirmed"
 
     # Exactly one notification was sent throughout
     assert len(notices) == 1
@@ -4976,3 +4977,124 @@ def test_maybe_confirm_release_owner_start_failure_does_not_mark_started_or_conf
     assert marker.get("owner_started") is not True
     assert "owner_started_at" not in marker
     assert len(h.read_release_history(paths)) == 0
+
+
+def test_install_self_install_writes_owner_template_and_enables_trust_master(host, monkeypatch):
+    paths, _, _ = host
+    # Pre-populate custom policy
+    custom_policy = json.loads(json.dumps(h.DEFAULT_POLICY))
+    custom_policy["ops"]["slack.deliver"]["max_per_hour"] = 42
+    custom_policy["custom_preserved_key"] = "preserved"
+    paths.policy.write_text(json.dumps(custom_policy, indent=1, sort_keys=True) + "\n")
+    paths.policy.chmod(0o600)
+
+    calls = mock_install(monkeypatch, release_archive())
+    res = h.install(paths, SHA, self_install=True)
+    assert res == 0
+
+    # Executor service unit carries ExecStartPre guard
+    unit_content = (paths.units / h.UNIT).read_text()
+    assert "ExecStartPre=/usr/bin/python3 -I %h/.local/share/jarvisos-hostops/guard/scripts/host_ops.py guard" in unit_content
+
+    # Owner unit template written
+    owner_unit = paths.units / "jarvisos-mission-owner.service"
+    assert owner_unit.is_file()
+    assert owner_unit.read_text() == h.UNIT_TEMPLATES["jarvisos-mission-owner"]
+
+    # Policy updated atomically with mode 0600
+    assert paths.policy.stat().st_mode & 0o777 == 0o600
+    updated_policy = json.loads(paths.policy.read_text())
+    assert updated_policy["ops"]["release.install"]["trust_master"] is True
+    # Preserves other keys
+    assert updated_policy["ops"]["slack.deliver"]["max_per_hour"] == 42
+    assert updated_policy["custom_preserved_key"] == "preserved"
+
+    # Must never stop or restart the mission owner
+    assert not any("jarvisos-mission-owner.service" in " ".join(call) for call in calls)
+
+
+def test_install_plain_leaves_trust_master_false(host, monkeypatch):
+    paths, _, _ = host
+    mock_install(monkeypatch, release_archive())
+    res = h.install(paths, SHA, self_install=False)
+    assert res == 0
+
+    # Owner unit template is NOT written
+    assert not (paths.units / "jarvisos-mission-owner.service").exists()
+
+    # Policy has trust_master: False
+    updated_policy = json.loads(paths.policy.read_text())
+    assert updated_policy["ops"]["release.install"]["trust_master"] is False
+
+
+def test_prune_releases_keeps_current_previous_and_guard_source(tmp_path):
+    paths = h.Paths(tmp_path)
+    sha_guard = "1" * 40
+    sha_prev = "2" * 40
+    sha_curr = "3" * 40
+    sha_symlink = "4" * 40
+    sha_old = "5" * 40
+
+    # Setup directories in install and published
+    for base in (paths.install / "releases", paths.published / "releases"):
+        for s in (sha_guard, sha_prev, sha_curr, sha_symlink, sha_old):
+            (base / s / "scripts").mkdir(parents=True, exist_ok=True)
+
+    # Current symlinks point to sha_curr
+    (paths.install / "current").symlink_to(paths.install / "releases" / sha_curr)
+    (paths.published / "current").symlink_to(paths.published / "releases" / sha_curr)
+
+    # Pinned guard copy points to sha_guard
+    paths.guard.mkdir(parents=True, exist_ok=True)
+    (paths.guard / "RELEASE").write_text(f"{sha_guard}\n")
+
+    # Extra symlinks point to sha_symlink in both install and published
+    (paths.install / "pinned-extra").symlink_to(paths.install / "releases" / sha_symlink)
+    (paths.published / "pinned-extra").symlink_to(paths.published / "releases" / sha_symlink)
+
+    # History records sha_curr with previous_sha = sha_prev
+    paths.state.mkdir(parents=True, exist_ok=True)
+    paths.release_history.write_text(
+        json.dumps({"candidate_sha": sha_prev, "status": "confirmed", "created_at": "2026-01-01T00:00:00Z"}) + "\n"
+        + json.dumps({"candidate_sha": sha_curr, "previous_sha": sha_prev, "status": "confirmed", "created_at": "2026-01-02T00:00:00Z"}) + "\n"
+    )
+
+    pruned = h.prune_releases(paths)
+    pruned_shas = [p["sha"] for p in pruned]
+    assert sha_old in pruned_shas
+    assert sha_guard not in pruned_shas
+    assert sha_prev not in pruned_shas
+    assert sha_curr not in pruned_shas
+    assert sha_symlink not in pruned_shas
+
+    # Verify directory states
+    assert not (paths.install / "releases" / sha_old).exists()
+    assert not (paths.published / "releases" / sha_old).exists()
+    assert (paths.install / "releases" / sha_guard).is_dir()
+    assert (paths.install / "releases" / sha_prev).is_dir()
+    assert (paths.install / "releases" / sha_curr).is_dir()
+    assert (paths.install / "releases" / sha_symlink).is_dir()
+    assert (paths.published / "releases" / sha_symlink).is_dir()
+
+    # History has pruned records
+    history = h.read_release_history(paths)
+    pruned_records = [rec for rec in history if rec.get("status") == "pruned"]
+    assert len(pruned_records) == 2  # one for install, one for published
+    assert all(rec.get("sha") == sha_old for rec in pruned_records)
+    # Synced to published
+    pub_history = [json.loads(line) for line in (paths.published / "release-history.jsonl").read_text().splitlines()]
+    assert any(rec.get("status") == "pruned" and rec.get("sha") == sha_old for rec in pub_history)
+
+
+def test_prune_releases_does_nothing_while_marker_pending(tmp_path):
+    paths = h.Paths(tmp_path)
+    sha_old = "9" * 40
+    (paths.install / "releases" / sha_old).mkdir(parents=True, exist_ok=True)
+    paths.state.mkdir(parents=True, exist_ok=True)
+    paths.release_pending.write_text(json.dumps({"candidate_sha": "a" * 40, "created_at": "2026-01-01T00:00:00Z"}))
+
+    pruned = h.prune_releases(paths)
+    assert pruned == []
+    assert (paths.install / "releases" / sha_old).is_dir()
+    assert not paths.release_history.exists()
+
