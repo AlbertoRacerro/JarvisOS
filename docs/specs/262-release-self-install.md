@@ -77,11 +77,20 @@ In scope:
    the exact command, but only after acceptance criteria 1–7 are proven in tests and the real install below has
    passed with `trust_master` still false. Until then releases are installed as today.
 6. Releases are pruned to the current one, the previous one and the pinned guard copy, never fewer.
+7. **Main checkout follows `master` (amendment, defect F5).** Sessions run `scripts/devctx.py` and the other scripts
+   from the main checkout, so a current owner alone leaves them stale. At a task boundary, after any release request
+   is settled, the owner runs `git fetch origin master` and `git merge --ff-only origin/master` in the main checkout,
+   and only when the checkout is
+   on branch `master` and `git status --porcelain --untracked-files=no` is empty. It never resets, checks out, stashes
+   or merges anything else. A refused or failed fast-forward is logged once per `origin/master` sha and is not fatal.
+   Chosen over naming the published release path in the cycle text (option (b) of F5): it also keeps `AGENTS.md`,
+   `docs/PROCESS.md` and the specs that sessions read current, and the checkout was fast-forwarded by hand twice on
+   2026-11-13 with no incident.
 
 Out of scope (binding non-goals):
 
-- No change to the main checkout. The supervisor never moves, resets or checks out the main checkout, because the
-  maintainer's app runs from it.
+- No other change to the main checkout. Beyond the fast-forward of scope 7 the supervisor never moves, resets or
+  checks out the main checkout, because the maintainer's app runs from it.
 - No install during a turn, and no stop or restart of a running owner. `OWNER_ACTIONS` stays `start` only.
 - No new dependency, no new daemon, no sd_notify watchdog. A hung executor that keeps a stale heartbeat is reported by
   the existing heartbeat checks, not repaired (residual risk, stated in the runbook).
@@ -114,13 +123,15 @@ Out of scope (binding non-goals):
 6. The owner never requests or undergoes an install while a turn runs. It resumes from the new release and reports
    its sha. If it does not report in time, it is returned to the previous release.
 7. A refused candidate is not retried automatically. The next newer green commit is.
+7a. At a task boundary the owner fast-forwards a clean main checkout on `master` to `origin/master`; a dirty tree,
+   another branch or a non-fast-forward leaves the checkout untouched and logs once; nothing runs during a turn.
 8. **Real-environment proof (high risk).** Install a real green `master` commit on the host executor with the
    maintainer's current policy (`trust_master: false`). This proves the refusal path. Then prove a guarded install
    and a forced return on a temporary home with real `systemd --user` units. Attach both receipts.
 
 ## Required tests
 
-Offline, with fake `gh`, a fake `systemctl` and a temporary home. Cover every acceptance criterion from 1 to 7: green,
+Offline, with fake `gh`, a fake `systemctl` and a temporary home. Cover every acceptance criterion from 1 to 7a: green,
 red, pending and missing checks; an unreadable ruleset; preflight failure; crash loop then return; unhealthy then
 return; confirmation; the owner boundary (no request mid-turn); a refused candidate not retried; pruning keeps the
 previous release.
