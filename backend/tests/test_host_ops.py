@@ -5875,4 +5875,140 @@ def test_serve_returns_75_when_recover_requests_restart(tmp_path, monkeypatch):
     assert not step_called
 
 
+def test_guard_past_deadline_watcher_restart_fails_persists_owed_record_and_retries(host):
+    """(a) Marker past deadline, watcher_active true, watcher restart returns nonzero:
+    guard() returns 0, marker is gone, exactly one history entry, and owed record exists.
+    Second guard() with succeeding run restarts watcher and deletes record, history still has one entry."""
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+    (paths.published / "current").unlink(missing_ok=True)
+    (paths.published / "current").symlink_to(paths.published / "releases" / prev_sha)
+    h._pin_guard(paths, paths.install / "releases" / prev_sha, prev_sha)
+
+    d_cand = paths.install / "releases" / cand_sha / "scripts"
+    d_cand.mkdir(parents=True)
+    (d_cand / "host_ops.py").write_text("# cand\n")
+    h.publish_release(paths, cand_sha)
+
+    past_deadline = h.iso(t0 - timedelta(minutes=5))
+    h.write_release_pending(
+        paths,
+        previous_sha=None,
+        candidate_sha=cand_sha,
+        deadline=past_deadline,
+        request_id="req-test-a",
+        attempts=0,
+        watcher_active=True,
+        owner_active=False,
+        now=t0 - timedelta(minutes=15),
+    )
+
+    orig_run = ex.run
+
+    def failing_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if "restart" in argv and "jarvisos-relay-watch.service" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "Failed to restart unit\n")
+        return orig_run(argv, **kwargs)
+
+    def succeeding_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return orig_run(argv, **kwargs)
+
+    calls.clear()
+    ret = h.guard(paths, run=failing_run, now=t0)
+    assert ret == 0
+    assert not paths.release_pending.exists()
+    history = [e for e in h.read_release_history(paths) if e.get("candidate_sha") == cand_sha]
+    assert len(history) == 1
+    assert history[0]["status"] == "refused"
+    assert paths.release_watcher_restore.exists()
+
+    calls.clear()
+    ret2 = h.guard(paths, run=succeeding_run, now=t0)
+    assert ret2 == 0
+    assert not paths.release_watcher_restore.exists()
+    watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
+    assert len(watcher_restarts) >= 1
+    history2 = [e for e in h.read_release_history(paths) if e.get("candidate_sha") == cand_sha]
+    assert len(history2) == 1
+
+
+def test_executor_recover_owed_watcher_restore_fails_then_succeeds(host):
+    """(b) Owed record present and watcher restart fails in Executor.recover():
+    record is kept and restart_requested is True. When restart then succeeds, record is removed."""
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+
+    h.persist_owed_watcher_restore(paths, "jarvisos-relay-watch.service", "test failure", now=t0)
+    assert paths.release_watcher_restore.exists()
+
+    orig_run = ex.run
+
+    def failing_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if "restart" in argv and "jarvisos-relay-watch.service" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "Failed to restart unit\n")
+        return orig_run(argv, **kwargs)
+
+    ex.run = failing_run
+    calls.clear()
+
+    ex.recover()
+    assert paths.release_watcher_restore.exists()
+    assert ex.restart_requested is True
+
+    # When the restart then succeeds
+    ex.run = orig_run
+    ex.restart_requested = False
+    calls.clear()
+
+    ex.recover()
+    assert not paths.release_watcher_restore.exists()
+    watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
+    assert len(watcher_restarts) >= 1
+
+
+def test_return_release_successful_watcher_restart_creates_no_record(host):
+    """(c) A successful return_release watcher restart creates no record."""
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+    (paths.published / "current").unlink(missing_ok=True)
+    (paths.published / "current").symlink_to(paths.published / "releases" / prev_sha)
+
+    marker = {
+        "candidate_sha": cand_sha,
+        "previous_sha": prev_sha,
+        "watcher_active": True,
+        "owner_active": False,
+    }
+
+    calls.clear()
+    ret = h.return_release(paths, marker=marker, reason="test rollback", run=ex.run, now=t0)
+    assert ret is True
+    assert not paths.release_watcher_restore.exists()
+    watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
+    assert len(watcher_restarts) >= 1
+
+
+
 

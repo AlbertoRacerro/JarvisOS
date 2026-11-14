@@ -158,6 +158,10 @@ class Paths:
         return self.state / "release-pending.json"
 
     @property
+    def release_watcher_restore(self) -> Path:
+        return self.state / "release-watcher-restore.json"
+
+    @property
     def release_history(self) -> Path:
         return self.state / "release-history.jsonl"
 
@@ -2233,6 +2237,60 @@ def notify_return(
         return False
 
 
+def persist_owed_watcher_restore(
+    paths: Paths,
+    unit: str = "jarvisos-relay-watch.service",
+    reason: str = "watcher restart failed",
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    ts = now or now_utc()
+    record = {
+        "unit": unit,
+        "reason": reason,
+        "timestamp": iso(ts),
+    }
+    state_fd = open_dir(paths.state, create=True)
+    try:
+        write_at(state_fd, "release-watcher-restore.json", canonical(record))
+    finally:
+        os.close(state_fd)
+    return record
+
+
+write_release_watcher_restore = persist_owed_watcher_restore
+
+
+def retry_owed_watcher_restore(
+    paths: Paths,
+    run: Callable[..., subprocess.CompletedProcess] = real_run,
+) -> bool:
+    record_path = paths.release_watcher_restore
+    try:
+        if not record_path.exists():
+            return False
+    except OSError:
+        return False
+    unit = "jarvisos-relay-watch.service"
+    try:
+        data = json.loads(record_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("unit"):
+            unit = str(data["unit"])
+    except (OSError, ValueError):
+        pass
+    try:
+        proc = run(["systemctl", "--user", "restart", unit], timeout=60)
+        if proc.returncode == 0:
+            try:
+                record_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
 def return_release(
     paths: Paths,
     *,
@@ -2273,10 +2331,20 @@ def return_release(
     # Restore watcher if it was active
     if marker and marker.get("watcher_active"):
         unit = "jarvisos-relay-watch.service"
+        watcher_ok = False
         try:
-            run(["systemctl", "--user", "restart", unit], timeout=60)
-        except Exception:  # noqa: BLE001, S110
+            proc = run(["systemctl", "--user", "restart", unit], timeout=60)
+            if proc.returncode == 0:
+                watcher_ok = True
+        except Exception:  # noqa: BLE001
             pass
+        if not watcher_ok:
+            persist_owed_watcher_restore(paths, unit, reason, now=current_time)
+        else:
+            try:
+                paths.release_watcher_restore.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     # Start owner on previous release if it was active
     if marker and marker.get("owner_active"):
@@ -2342,6 +2410,10 @@ def _guard_impl(
     now: datetime | None = None,
 ) -> int:
     current_time = now or now_utc()
+    try:
+        retry_owed_watcher_restore(paths, run=run)
+    except Exception:  # noqa: BLE001
+        pass
     if force_return:
         if not paths.release_pending.exists():
             print("refusal: no release is pending", file=sys.stderr)
@@ -2679,6 +2751,8 @@ class Executor:
 
     def recover(self) -> None:
         """A request in flight when the executor died gets an `interrupted` receipt; it is never re-executed."""
+        if retry_owed_watcher_restore(self.paths, self.run):
+            self.restart_requested = True
         fd = self._state_fd("inflight")
         try:
             names = [n for n in os.listdir(fd) if REQUEST_NAME_RE.fullmatch(n)]
