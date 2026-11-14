@@ -4557,13 +4557,17 @@ def test_confirm_release_owner_timeout_returns_published_link_and_restarts_owner
     current_time[0] = t0 + timedelta(minutes=11)
     calls.clear()
 
-    # Step 2 past deadline: timeout return!
+    # Step 2 past deadline: candidate records unhealthy and requests restart
     ex.step()
-    assert not paths.release_pending.exists()
+    assert paths.release_pending.is_file()
+    assert ex.restart_requested is True
+
+    # Pinned guard runs on next start
+    rc = h.guard(paths, post=ex.post, run=ex.run, now=current_time[0])
+    assert rc == 0
     # Published current returned to previous release
     assert (paths.published / "current").resolve().name == prev_sha
     assert (paths.install / "current").resolve().name == prev_sha
-    assert ex.restart_requested is True
     # Owner was started again on previous release
     restart_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
     assert len(restart_calls) >= 1
@@ -4602,12 +4606,14 @@ def test_owner_timeout_returns_executor_and_watcher_to_previous_release(host):
     current_time[0] = t0 + timedelta(minutes=11)
     calls.clear()
     ex.step()
+    assert ex.restart_requested is True
+
+    rc = h.guard(paths, post=ex.post, run=ex.run, now=current_time[0])
+    assert rc == 0
 
     # Check recovery: published, install, watcher, owner, executor restart
-    assert not paths.release_pending.exists()
     assert (paths.published / "current").resolve().name == prev_sha
     assert (paths.install / "current").resolve().name == prev_sha
-    assert ex.restart_requested is True
 
     watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
     assert len(watcher_restarts) >= 1
@@ -4645,11 +4651,13 @@ def test_owner_timeout_guards_against_unsafe_restart_when_previous_missing(host)
     current_time[0] = t0 + timedelta(minutes=11)
     calls.clear()
     ex.step()
+    assert ex.restart_requested is True
+
+    rc = h.guard(paths, run=ex.run, now=current_time[0])
+    assert rc == 0
 
     # Previous release cannot be restored, so install/current is unlinked
     assert not (paths.install / "current").exists()
-    # Executor MUST NOT request restart unsafely into missing release
-    assert ex.restart_requested is False
 
 
 def test_owner_timeout_guards_against_repeated_notification(host):
@@ -4677,6 +4685,14 @@ def test_owner_timeout_guards_against_repeated_notification(host):
     ex.step()
     current_time[0] = t0 + timedelta(minutes=11)
     ex.step()
+    assert ex.restart_requested is True
+    rc = h.guard(paths, post=ex.post, run=ex.run, now=current_time[0])
+    assert rc == 0
+    assert len(notices) == 1
+
+    rc2 = h.guard(paths, post=ex.post, run=ex.run, now=current_time[0])
+    assert rc2 == 0
+    assert len(notices) == 1
 
     assert len(notices) == 1
 
@@ -4846,9 +4862,9 @@ def test_op_release_install_watcher_restart_failure_restores_published_link_and_
     assert receipt["outcome"] == "failed"
     assert "watcher restart failed" in str(receipt.get("error"))
 
-    # Published current was restored to previous release (owner never runs candidate on failed install)
+    # Both links returned to previous release; executor restart requested into previous release
     assert (paths.published / "current").resolve().name == sha_prev
-    # Executor restart requested so candidate can fail health check under guard
+    assert (paths.install / "current").resolve().name == sha_prev
     assert ex.restart_requested
 
     # Owner was restarted on previous release
@@ -4976,3 +4992,260 @@ def test_maybe_confirm_release_owner_start_failure_does_not_mark_started_or_conf
     assert marker.get("owner_started") is not True
     assert "owner_started_at" not in marker
     assert len(h.read_release_history(paths)) == 0
+
+
+def test_owner_timeout_routes_through_pinned_guard_and_confirms_previous_executor(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    prev_sha = "9" * 40
+    for s in (prev_sha, SHA):
+        d = paths.install / "releases" / s / "scripts"
+        d.mkdir(parents=True)
+        (d / "host_ops.py").write_text("# code\n")
+        h.publish_release(paths, s)
+
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / SHA)
+    h._pin_guard(paths, paths.install / "releases" / prev_sha, prev_sha)
+
+    h.write_release_pending(paths, previous_sha=prev_sha, candidate_sha=SHA,
+                            deadline=h.iso(t0 + timedelta(minutes=10)),
+                            request_id="req1", attempts=0, watcher_active=False,
+                            owner_active=True, now=t0)
+
+    # Step 1 at t=0: starts owner
+    ex.step()
+    assert paths.release_pending.is_file()
+
+    # Advance past deadline without owner reporting SHA
+    current_time[0] = t0 + timedelta(minutes=11)
+    calls.clear()
+
+    # Step 2 past deadline: candidate executor must NOT run rollback directly.
+    # It must record unhealthy reason, request restart, and leave links for guard.
+    ex.step()
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert marker.get("unhealthy_reason") == "owner release sha not reported within deadline"
+    assert (paths.install / "current").resolve().name == SHA
+    assert ex.restart_requested is True
+    assert len(h.read_release_history(paths)) == 0
+
+    # Next start: pinned guard executes rollback, restores previous release, and sets confirmation marker
+    notices = []
+    rc = h.guard(paths, post=lambda text, _: notices.append(text) or 200, run=ex.run, now=current_time[0])
+    assert rc == 0
+    assert (paths.install / "current").resolve().name == prev_sha
+    assert (paths.published / "current").resolve().name == prev_sha
+    assert paths.release_pending.is_file()
+    ret_marker = h.load_release_pending(paths)
+    assert ret_marker["kind"] == "return"
+    assert ret_marker["candidate_sha"] == prev_sha
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == SHA
+    assert history[0]["status"] == "refused"
+    assert "owner release sha not reported within deadline" in history[0]["reason"]
+
+    # Restored previous executor runs and confirms itself
+    ex_prev = h.Executor(paths, now=lambda: current_time[0])
+    ex_prev._version = prev_sha
+    ex_prev.step()
+    assert not paths.release_pending.exists()
+    final_history = h.read_release_history(paths)
+    assert len(final_history) == 2
+    assert final_history[1]["status"] == "confirmed"
+    assert final_history[1]["candidate_sha"] == prev_sha
+
+
+def test_unhandled_install_request_expiry_recovers_owner_and_records_candidate(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["release.install"]["trust_master"] = True
+    paths.policy.write_text(json.dumps(policy))
+
+    # Submit an owner install request with requested_at too old (expired before executor handles it)
+    req = h.make_request("release.install", {"sha": cand_sha}, None, "relay-continuity:owner",
+                         t0 - timedelta(hours=2))
+    h.submit(paths, req)
+    calls.clear()
+
+    ex.step()
+
+    receipt, _ = h.load_receipt(paths, req["id"])
+    assert receipt["outcome"] == "refused"
+    assert "too old" in str(receipt.get("error"))
+
+    # Owner must be started
+    owner_starts = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(owner_starts) >= 1
+
+    # Candidate outcome must be recorded in release history
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == cand_sha
+    assert history[0]["status"] == "refused"
+
+
+def test_unhandled_install_request_timeout_recovers_owner_and_records_candidate(host, monkeypatch):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["release.install"]["trust_master"] = True
+    paths.policy.write_text(json.dumps(policy))
+
+    def timeout_install(ctx):
+        calls.append((["mock_timeout"], {}))
+        raise subprocess.TimeoutExpired(cmd=["gh"], timeout=10)
+
+    monkeypatch.setitem(h.OPERATIONS, "release.install", timeout_install)
+
+    req = h.make_request("release.install", {"sha": cand_sha}, None, "relay-continuity:owner", t0)
+    h.submit(paths, req)
+    calls.clear()
+
+    ex.step()
+
+    receipt, _ = h.load_receipt(paths, req["id"])
+    assert receipt["outcome"] == "timeout"
+
+    # Owner must be recovered/started
+    owner_starts = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(owner_starts) >= 1
+
+    # Candidate outcome must be recorded in release history
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == cand_sha
+    assert history[0]["status"] == "refused"
+
+
+def test_unhandled_install_request_cancellation_recovers_owner_and_records_candidate(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["release.install"]["trust_master"] = True
+    paths.policy.write_text(json.dumps(policy))
+
+    req = h.make_request("release.install", {"sha": cand_sha}, None, "relay-continuity:owner", t0)
+    h.submit(paths, req)
+    (paths.requests / f"{req['id']}.cancel").write_text("cancel\n")
+    calls.clear()
+
+    ex.step()
+
+    receipt, _ = h.load_receipt(paths, req["id"])
+    assert receipt["outcome"] == "cancelled"
+
+    # Owner must be recovered/started
+    owner_starts = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(owner_starts) >= 1
+
+    # Candidate outcome must be recorded in release history
+    history = h.read_release_history(paths)
+    assert len(history) == 1
+    assert history[0]["candidate_sha"] == cand_sha
+    assert history[0]["status"] == "refused"
+
+
+def test_op_release_install_watcher_restart_failure_returns_both_links_and_settles_marker(host, monkeypatch):
+    paths, ex, calls = host
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["release.install"]["trust_master"] = True
+    paths.policy.write_text(json.dumps(policy))
+
+    sha_prev = "8" * 40
+    sha_cand = "9" * 40
+
+    d_prev = paths.install / "releases" / sha_prev / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# code\n")
+    h.publish_release(paths, sha_prev)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / sha_prev)
+    h._pin_guard(paths, paths.install / "releases" / sha_prev, sha_prev)
+
+    def mock_install_fn(p, sha, **kw):
+        d_cand = p.install / "releases" / sha / "scripts"
+        d_cand.mkdir(parents=True, exist_ok=True)
+        (d_cand / "host_ops.py").write_text("# cand\n")
+        h.publish_release(p, sha)
+        (p.install / "current").unlink(missing_ok=True)
+        (p.install / "current").symlink_to(d_cand.parent)
+        h.write_release_pending(p, previous_sha=sha_prev, candidate_sha=sha,
+                                deadline=h.iso(ex.now() + timedelta(minutes=10)),
+                                request_id=kw.get("request_id"), attempts=0,
+                                watcher_active=kw.get("watcher_active", False),
+                                owner_active=kw.get("owner_active", False), now=ex.now())
+
+    monkeypatch.setattr(h, "install_release", mock_install_fn)
+
+    def custom_run(argv, **kw):
+        calls.append((argv, kw))
+        return subprocess.CompletedProcess(
+            argv, 1 if "restart" in argv and "jarvisos-relay-watch.service" in argv else 0,
+            "ActiveState=active\n", ""
+        )
+
+    ex.run = custom_run
+
+    req = h.make_request("release.install", {"sha": sha_cand}, None, "relay-continuity:owner", ex.now())
+    h.submit(paths, req)
+    calls.clear()
+    ex.step()
+
+    receipt, _ = h.load_receipt(paths, req["id"])
+    assert receipt["outcome"] == "failed"
+    assert "watcher restart failed" in str(receipt.get("error"))
+
+    # BOTH links must be returned to previous release, NOT left on candidate!
+    assert (paths.published / "current").resolve().name == sha_prev
+    assert (paths.install / "current").resolve().name == sha_prev
+
+    # Candidate pending marker must be settled (it's now a return marker for sha_prev)
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert marker["candidate_sha"] == sha_prev
+    assert marker.get("kind") == "return"
+
+    # Executor restart is requested so previous release runs and confirms
+    assert ex.restart_requested is True
+
+    # Owner restart call made
+    start_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(start_calls) >= 1
+
