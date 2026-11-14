@@ -6479,7 +6479,7 @@ def test_malformed_negative_or_nan_quota_reading_never_clears_cooldown(tmp_path:
     cooldown_until = T0 + timedelta(hours=4)
     as_of = T0 - timedelta(minutes=2)
 
-    for bad_used in (-5.0, 105.0, float("nan"), float("inf"), float("-inf")):
+    for bad_used in (-5.0, 105.0, float("nan"), float("inf"), float("-inf"), 10**400, -10**400):
         sup = env.supervisor()
         sup.state["cooldowns"]["claude"] = {
             "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
@@ -6498,6 +6498,78 @@ def test_malformed_negative_or_nan_quota_reading_never_clears_cooldown(tmp_path:
         }
         assert not sup_n.available("argon")
         assert "argon" in sup_n.state["cooldowns"]
+
+
+def test_reading_clear_counter_survives_new_chain_and_unrelated_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """reading_clear_<agent> is preserved across new-chain initialization and unrelated release commands."""
+    env = Env(tmp_path)
+    cooldown_since = T0 - timedelta(minutes=10)
+    cooldown_until = T0 + timedelta(hours=4)
+    as_of = T0 - timedelta(minutes=2)
+
+    sup = env.supervisor()
+    sup.state["counters"]["reading_clear_claude"] = 1
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.store.save(sup.state, T0)
+
+    # New-chain initialization in run() preserves reading_clear_claude
+    write_turn(env.relay.sessions_dir() / "20261018-090000-newchn", [*SUCCESS], agent="codex")
+    sup_chain = rc.Supervisor(env.store, env.host, env.limits)
+    assert sup_chain.run("20261018-090000-newchn") == "idle"
+    assert sup_chain.state["counters"].get("reading_clear_claude") == 1
+    env.relay.readings = lambda: {"claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of)}
+    assert not sup_chain.available("claude")
+
+    # Unrelated release preserves reading_clear_claude unless --clear-cooldown claude is passed
+    sup_chain.state["phase"] = "held"
+    sup_chain.state["hold"] = {"reason": "effects_uncertain", "at": rc.iso(T0), "attempt": 1, "turn": "t1"}
+    env.store.save(sup_chain.state, T0)
+    monkeypatch.setattr(rc, "control_root", lambda: tmp_path / "control")
+    monkeypatch.setattr(rc, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(rc, "make_host", lambda repo, relay_env=None: env.host)
+    assert rc.main(["release", "--note", "reviewed", "--clear-cooldown", "codex"]) == 0
+    reloaded = env.store.load()
+    assert reloaded["counters"].get("reading_clear_claude") == 1
+
+    # Explicit --clear-cooldown claude clears both cooldown and reading_clear_claude
+    reloaded["phase"] = "held"
+    reloaded["hold"] = {"reason": "effects_uncertain", "at": rc.iso(T0), "attempt": 1, "turn": "t1"}
+    env.store.save(reloaded, T0)
+    assert rc.main(["release", "--note", "cleared claude", "--clear-cooldown", "claude"]) == 0
+    reloaded2 = env.store.load()
+    assert "reading_clear_claude" not in reloaded2["counters"]
+
+
+def test_empty_turn_with_auth_diagnostic_records_auth_cooldown_and_question(tmp_path: Path) -> None:
+    """An empty-output turn classified as auth from stderr/diagnostics records an auth cooldown and question instead of holding on output_missing."""
+    env = Env(tmp_path, [("codex", CODEX_SUCCESS)])
+    entries: list[dict[str, Any]] = []
+
+    def fake_ledger(kind: str, text: str) -> str:
+        qid = f"L{env.clock.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(2)}"
+        entries.append({"id": qid, "kind": kind, "text": text, "ts": rc.iso(env.clock.now())})
+        env.ledger.append((kind, text))
+        return qid
+
+    env.host.ledger = fake_ledger
+    turn = env.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    turn.mkdir(parents=True, exist_ok=True)
+    (turn / "output.jsonl").write_text("", encoding="utf-8")
+    (turn / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "error"}), encoding="utf-8")
+    (turn / "stderr.log").write_text("HTTP 401 Unauthorized: Invalid API key\n", encoding="utf-8")
+    pin_to_t0(turn)
+
+    result, sup = env.run()
+    assert result == "idle"
+    assert sup.state["hold"] is None
+    assert "claude" in sup.state["cooldowns"]
+    assert sup.state["cooldowns"]["claude"]["source"] == "auth"
+    q_entries = [e for e in entries if e["kind"] == "question"]
+    assert len(q_entries) == 1
+    assert "output empty; runner reported an authentication failure" in q_entries[0]["text"]
+
 
 
 def test_choose_ranks_using_refreshed_reading_when_cooldown_clears(tmp_path: Path) -> None:

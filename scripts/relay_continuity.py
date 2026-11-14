@@ -32,6 +32,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import urllib.error
@@ -1294,6 +1295,7 @@ def no_terminal_evidence(report: TurnReport, turn_dir: Path, diagnostics: str) -
     text = "\n".join(t for t in texts if t)
     if text and classify_text(text, None) == "auth":
         report.outcome, report.detail = "auth", f"{report.detail}; runner reported an authentication failure"
+        report.no_evidence = False
     elif "wall limit" in text.lower():
         report.detail = f"{report.detail}; {diagnostics.strip()}"
     return report
@@ -3039,12 +3041,48 @@ def session_context_block(
     return text_block, journal_fields
 
 
-def default_reachable(host: str = "github.com", port: int = 443, timeout: float = 5.0) -> bool:
+def _connect_endpoint(host: str, port: int, timeout: float, result: list[bool], done: threading.Event) -> None:
     try:
         with socket.create_connection((host, port), timeout=timeout):
-            return True
+            result[0] = True
     except Exception:  # noqa: BLE001
-        return False
+        pass
+    finally:
+        done.set()
+
+
+def default_reachable(host: str = "github.com", port: int = 443, timeout: float = 5.0) -> bool:
+    result = [False]
+    done = threading.Event()
+    bound = max(0.0, timeout)
+    threading.Thread(target=_connect_endpoint, args=(host, port, max(0.01, bound), result, done), daemon=True).start()
+    done.wait(timeout=bound)
+    return result[0]
+
+
+def _valid_percent(value: Any) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and (isinstance(value, int) or math.isfinite(value))
+            and 0 <= value <= 100)
+
+
+def _safe_auth_detail(detail: str | None) -> str:
+    text = (detail or "").strip()
+    if text in ("output missing; runner reported an authentication failure",
+                "output empty; runner reported an authentication failure",
+                "output unparseable; runner reported an authentication failure"):
+        return text
+    if text.startswith("native preflight refused: "):
+        reason = text.removeprefix("native preflight refused: ").strip()
+        if reason in ("login_state_missing", "login_path_conflict", "agy_missing", "not_sandbox"):
+            return text
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,40} status=(?:None|\d{1,3})", text):
+        return text
+    if re.fullmatch(r"codex [A-Za-z0-9_.-]{1,40}", text):
+        return text
+    if re.fullmatch(r"native [A-Za-z0-9_.-]{1,20} failed or empty result", text):
+        return text
+    return "classified auth failure"
 
 
 @dataclass
@@ -3212,7 +3250,7 @@ class Supervisor:
             return None  # no usage windows: no evidence either way
         for window in windows:
             used = window.get("used_percent") if isinstance(window, dict) else None
-            if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used) or not 0 <= used <= 100:
+            if not _valid_percent(used):
                 return None  # an unusable window is not evidence of room
             reset = parse_ts(window.get("resets_at"))
             if used >= 99.5:
@@ -3263,10 +3301,7 @@ class Supervisor:
                                         windows = native.get("windows")
                                         plausible = (isinstance(windows, list) and len(windows) > 0 and
                                                      all(isinstance(w, dict) and
-                                                         isinstance(w.get("used_percent"), (int, float)) and
-                                                         not isinstance(w.get("used_percent"), bool) and
-                                                         math.isfinite(w["used_percent"]) and
-                                                         0 <= w["used_percent"] <= 100 for w in windows))
+                                                         _valid_percent(w.get("used_percent")) for w in windows))
                                         fresh = as_of is not None and abs(now - as_of) <= self.limits.reading_freshness
                                         room = plausible and all(not w.get("disabled") and w["used_percent"] < 100 for w in windows)
                                         if fresh and as_of > since and room:
@@ -3328,7 +3363,7 @@ class Supervisor:
             if not isinstance(window, dict):
                 return None
             used = window.get("used_percent")
-            if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used) or not 0 <= used <= 100:
+            if not _valid_percent(used):
                 return None
             if not native:
                 reset = parse_ts(window.get("resets_at"))
@@ -3368,8 +3403,9 @@ class Supervisor:
         counters = self.state["counters"]
         if report.outcome == "auth":
             until, source = None, "auth"
+            safe_detail = _safe_auth_detail(report.detail)
             q_text = (
-                f"Autenticazione fallita per l'agente {agent}. Come procedere?\n"
+                f"Autenticazione fallita per l'agente {agent} ({safe_detail}). Come procedere?\n"
                 f"1. (consigliata) Accesso ripristinato per {agent}, riprova — conseguenza: riprova l'agente al prossimo turno\n"
                 f"2. Mantieni {agent} escluso — conseguenza: l'agente resta escluso fino al comando release"
             )
@@ -3440,9 +3476,10 @@ class Supervisor:
             self.host.log(f"a launched attempt from chain {head} is unresolved; resume that chain first")
             return "held"
         if head != session and session not in self.state.get("chain", []):
+            kept_clears = {k: v for k, v in (self.state.get("counters") or {}).items() if k.startswith("reading_clear_")}
             self.state.update({"head_session": session, "chain": [session], "agent": self.state.get("agent") if head is None else None, "switches": [],
                                "last_switch_at": None, "waiting_since": None, "last_attempt": None,
-                               "counters": {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0}})
+                               "counters": {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0, **kept_clears}})
         if isinstance(legacy := self.state.pop("reconcile", None), dict) and isinstance(legacy.get("diag"), dict):
             # A read-only diagnosis of the earlier controller (it could change nothing): abandoned, never adopted.
             self.store.journal({"event": "settle", "purpose": "diagnostic", "outcome": "abandoned",
@@ -5614,7 +5651,9 @@ def command_release(args: argparse.Namespace) -> int:
             previous["cleared"] = sorted(set(previous.get("cleared") or []) | set(args.clear_cooldown))
         state["hold"] = None
         state["phase"] = "idle"
-        state["counters"] = {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0}
+        kept_clears = {k: v for k, v in (state.get("counters") or {}).items()
+                       if k.startswith("reading_clear_") and k.removeprefix("reading_clear_") not in (args.clear_cooldown or [])}
+        state["counters"] = {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0, **kept_clears}
         for agent in args.clear_cooldown or []:
             state["cooldowns"].pop(agent, None)
             state["spend_caps"].pop(agent, None)  # e.g. the maintainer raised a spend cap
