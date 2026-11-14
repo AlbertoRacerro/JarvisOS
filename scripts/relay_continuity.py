@@ -2967,6 +2967,30 @@ class Host:
     pr_ci_status: Callable[[int, str], dict[str, Any] | None] | None = None  # spec 267: check results for (pr, head_sha)
 
 
+class _DecisionSnapshot:
+    """A per-decision snapshot of provider quota readings so availability, headroom,
+    and coordinator ranking evaluate against a single consistent observation per agent."""
+
+    def __init__(self, sup: Supervisor):
+        self.sup = sup
+        self._entries: dict[str, Any] = {}
+        self._rooms: dict[str, float | None] = {}
+
+    def get_entry(self, agent: str) -> Any:
+        if agent not in self._entries:
+            if agent in NATIVE_AGENTS:
+                self._entries[agent] = self.sup.host.relay.argon_limits(agent)
+            else:
+                self._entries[agent] = self.sup._raw_reading(agent)
+        return self._entries[agent]
+
+    def free_room(self, agent: str) -> float | None:
+        if agent not in self._rooms:
+            entry = self.get_entry(agent)
+            self._rooms[agent] = self.sup._calculate_free_room(agent, entry)
+        return self._rooms[agent]
+
+
 class Supervisor:
     def __init__(self, store: Store, host: Host, limits: Limits | None = None, *, turns: int = 1,
                  sender: Callable[[str], str | None] | None = None):
@@ -2984,6 +3008,7 @@ class Supervisor:
         self.deciding: str | None = None
         self._reading: dict[str, Any] | None = None
         self._reading_at: datetime | None = None
+        self._snapshot: _DecisionSnapshot | None = None
         self.mission: dict[str, Any] | None = None  # spec 201: the validated mission this store executes
 
     # -- persistence helpers
@@ -3039,7 +3064,7 @@ class Supervisor:
         return "held"
 
     # -- provider availability
-    def reading(self, agent: str) -> dict[str, Any] | None:
+    def _raw_reading(self, agent: str) -> dict[str, Any] | None:
         now = self.host.now()
         if self._reading is None or self._reading_at is None or now - self._reading_at > timedelta(minutes=2):
             self._reading = self.host.relay.limits() or {}
@@ -3051,6 +3076,12 @@ class Supervisor:
         if as_of is None or abs(now - as_of) > self.limits.reading_freshness:
             return None
         return entry
+
+    def reading(self, agent: str) -> dict[str, Any] | None:
+        """A validated limits reading for `agent` if one was fetched recently, else fetch a fresh one."""
+        if self._snapshot is not None and agent not in NATIVE_AGENTS:
+            return self._snapshot.get_entry(agent)
+        return self._raw_reading(agent)
 
     def exhausted_until(self, agent: str) -> datetime | None | bool:
         """Validated reset time when a fresh reading shows the agent out of quota; False when it shows room."""
@@ -3086,7 +3117,7 @@ class Supervisor:
             if until is None or now < until:
                 return False
         if agent in NATIVE_AGENTS:
-            native = self.host.relay.argon_limits(agent)
+            native = self._snapshot.get_entry(agent) if self._snapshot is not None else self.host.relay.argon_limits(agent)
             if native is None:
                 return False
             windows = native["windows"]
@@ -3109,26 +3140,37 @@ class Supervisor:
             self.state["cooldowns"].pop(agent, None)
         return True
 
-    def low_headroom(self, agent: str) -> bool:
-        """Whether a usable quota reading shows less than the minimum free room in any window."""
+    def _calculate_free_room(self, agent: str, entry: Any) -> float | None:
         native = agent in NATIVE_AGENTS
-        entry = self.host.relay.argon_limits(agent) if native else self.reading(agent)
         if not isinstance(entry, dict) or not isinstance(entry.get("windows"), list) or not entry["windows"]:
-            return False
+            return None
         now = self.host.now()
         used_values = []
         for window in entry["windows"]:
             if not isinstance(window, dict):
-                return False
+                return None
             used = window.get("used_percent")
             if isinstance(used, bool) or not isinstance(used, (int, float)) or not 0 <= used <= 100:
-                return False
+                return None
             if not native:
                 reset = parse_ts(window.get("resets_at"))
                 if reset is None or not now < reset <= now + self.limits.max_reset_ahead:
-                    return False
+                    return None
             used_values.append(used)
-        return any(100 - used < self.limits.min_free_percent for used in used_values)
+        return min(100 - used for used in used_values)
+
+    def free_room(self, agent: str) -> float | None:
+        """The smallest free room (100 - used_percent) over windows of a usable reading, or None."""
+        if self._snapshot is not None:
+            return self._snapshot.free_room(agent)
+        native = agent in NATIVE_AGENTS
+        entry = self.host.relay.argon_limits(agent) if native else self.reading(agent)
+        return self._calculate_free_room(agent, entry)
+
+    def low_headroom(self, agent: str) -> bool:
+        """Whether a usable quota reading shows less than the minimum free room in any window."""
+        room = self.free_room(agent)
+        return room is not None and room < self.limits.min_free_percent
 
     def set_cooldown(self, agent: str, report: TurnReport) -> None:
         now = self.host.now()
@@ -3489,29 +3531,51 @@ class Supervisor:
 
     def _choose(self, current: str) -> str | None:
         """Prefer available coordinators with quota room, retaining the first available if all are low."""
-        # A completed mission rotates the next mission's seed; Codex follows the preferred routes in this order.
-        order = ([current] + [a for a in PREFERRED_AGENTS if a != current]) if current in PREFERRED_AGENTS else list(PREFERRED_AGENTS)
-        first_available = None
-        for agent in [*order, "codex"]:
-            if self.available(agent):
-                first_available = first_available or agent
-                if self.low_headroom(agent):
-                    continue
-                break
-        else:
-            agent = first_available
-        if agent is not None:
-            if agent != current:
-                now = self.host.now()
-                self.state["switches"] = [t for t in self.state["switches"]
-                                          if (ts := parse_ts(t)) and now - ts < timedelta(days=1)] + [iso(now)]
-                self.state["last_switch_at"] = iso(now)
-                self.notify("provider_switched", session=self.state["head_session"], from_agent=current,
-                            agent=agent, outcome=self.state.get("last_outcome") or "success")
-                self.record("decision", f"relay-continuity: switched coordinator {current} -> {agent} "
-                                        f"after {self.state.get('last_outcome')} on {self.state['head_session']}.")
-            return agent
-        return None
+        prev = self._snapshot
+        self._snapshot = _DecisionSnapshot(self)
+        try:
+            first_available = None
+            if current in PREFERRED_AGENTS and self.available(current):
+                first_available = current
+                room = self.free_room(current)
+                if room is None or room >= self.limits.min_free_percent:
+                    agent = current
+                else:
+                    agent = None
+            else:
+                agent = None
+
+            if agent is None:
+                remaining = [a for a in PREFERRED_AGENTS if a != current] if current in PREFERRED_AGENTS else list(PREFERRED_AGENTS)
+                rooms = {a: self.free_room(a) for a in remaining}
+                sorted_remaining = sorted(
+                    remaining,
+                    key=lambda a: ((0, -rooms[a]) if rooms[a] is not None else (1, 0.0)),
+                )
+                for candidate in [*sorted_remaining, "codex"]:
+                    if self.available(candidate):
+                        first_available = first_available or candidate
+                        room = rooms[candidate] if candidate in rooms else self.free_room(candidate)
+                        if room is not None and room < self.limits.min_free_percent:
+                            continue
+                        agent = candidate
+                        break
+                else:
+                    agent = first_available
+            if agent is not None:
+                if agent != current:
+                    now = self.host.now()
+                    self.state["switches"] = [t for t in self.state["switches"]
+                                              if (ts := parse_ts(t)) and now - ts < timedelta(days=1)] + [iso(now)]
+                    self.state["last_switch_at"] = iso(now)
+                    self.notify("provider_switched", session=self.state["head_session"], from_agent=current,
+                                agent=agent, outcome=self.state.get("last_outcome") or "success")
+                    self.record("decision", f"relay-continuity: switched coordinator {current} -> {agent} "
+                                            f"after {self.state.get('last_outcome')} on {self.state['head_session']}.")
+                return agent
+            return None
+        finally:
+            self._snapshot = prev
 
     def _wait_or_hold(self, make_prompt: Callable[[str], str]) -> tuple[str, str] | str:
         """No agent can run now: sleep until the earliest cooldown ends (at most one recheck interval at a time),
@@ -4495,8 +4559,7 @@ def serve_step(root: Path, factory: Callable[[Store, dict[str, Any]], Supervisor
                 return f"waiting:{mission_id}:{'repl_active' if 'repl_active' in found else 'legacy_autopilot'}"
             if state is None and last_completed_agent:
                 state = default_state()
-                state["agent"] = (PREFERRED_AGENTS[(PREFERRED_AGENTS.index(last_completed_agent) + 1) % len(PREFERRED_AGENTS)]
-                                  if last_completed_agent in PREFERRED_AGENTS else PREFERRED)
+                state["agent"] = last_completed_agent if last_completed_agent in PREFERRED_AGENTS else PREFERRED
             state = init_mission_state(store, mission, state, now)
             if not state.get("pending") and (reopened := reopen_unverified(state)):
                 store.save(state, now())
