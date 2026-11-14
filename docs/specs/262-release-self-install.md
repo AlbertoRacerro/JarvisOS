@@ -80,9 +80,8 @@ In scope:
 7. **Main checkout follows `master` (amendment, defect F5).** Sessions run `scripts/devctx.py` and the other scripts
    from the main checkout, so a current owner alone leaves them stale. At a task boundary, after any release request
    is settled, the owner runs `git fetch origin master` and `git merge --ff-only origin/master` in the main checkout,
-   and only when the checkout is
-   on branch `master` and `git status --porcelain --untracked-files=no` is empty. It never resets, checks out, stashes
-   or merges anything else. A refused or failed fast-forward is logged once per `origin/master` sha and is not fatal.
+   and only when the checkout is on branch `master` and `git status --porcelain --untracked-files=no` is empty. It
+   never resets, checks out, stashes or merges anything else. A refused or failed fast-forward is logged once per `origin/master` sha and is not fatal.
    Chosen over naming the published release path in the cycle text (option (b) of F5): it also keeps `AGENTS.md`,
    `docs/PROCESS.md` and the specs that sessions read current, and the checkout was fast-forwarded by hand twice on
    2026-11-13 with no incident.
