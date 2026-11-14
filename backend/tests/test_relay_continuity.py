@@ -5593,22 +5593,33 @@ def test_pre_launch_reachable_probe_waiting_and_single_ledger_finding(tmp_path: 
     findings1 = [t for k, t in env.ledger if k == "finding" and "probe failed" in t]
     assert len(findings1) == 1
 
-    # Second failing probe (repeated failure during outage)
-    res2 = sup._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    # Second failing probe across supervisor restart (repeated failure during outage)
+    sup2 = env.supervisor()
+    sup2.state = env.store.load()
+    res2 = sup2._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
     assert res2 == "waiting"
-    assert sup.attempts == 0
-    assert sup.state["pending"] is None
+    assert sup2.attempts == 0
+    assert sup2.state["pending"] is None
     assert len(env.relay.launches) == 0
     # Exactly one ledger finding per outage
     findings2 = [t for k, t in env.ledger if k == "finding" and "probe failed" in t]
     assert len(findings2) == 1
 
-    # Network recovers: probe succeeds
+    # Network recovers: probe succeeds (resets outage state)
     reachable_status[0] = True
-    res3 = sup._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    res3 = sup2._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
     assert res3 != "waiting"
-    assert sup.attempts == 1
+    assert sup2.attempts == 1
     assert len(env.relay.launches) == 1
+
+    # After recovery, a new outage writes a finding
+    reachable_status[0] = False
+    sup3 = env.supervisor()
+    sup3.state = env.store.load()
+    res4 = sup3._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert res4 == "waiting"
+    findings3 = [t for k, t in env.ledger if k == "finding" and "probe failed" in t]
+    assert len(findings3) == 2
 
 
 def test_auth_failure_writes_single_question_with_two_options_and_cooldown_until_none(tmp_path: Path) -> None:

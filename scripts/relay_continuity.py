@@ -1352,7 +1352,7 @@ def default_state() -> dict[str, Any]:
         "permissions_digest": None, "permissions_pinned": False, "pending": None, "waiting_since": None, "last_outcome": None,
         "notify": {"sent": {}, "window": [], "last_digest": None, "failures": 0, "retry": None, "dropped": 0},
         "watch": {"seen": {}, "master": None}, "acknowledged": None, "spend_caps": {}, "updated_at": None,
-        "parked_turns": [], "wait": None, "resumes": 0, "last_checkpoint_at": None,
+        "parked_turns": [], "wait": None, "resumes": 0, "last_checkpoint_at": None, "network_outage": False,
     }
 
 
@@ -3959,14 +3959,14 @@ class Supervisor:
         except Exception:  # noqa: BLE001
             reachable = False
         if not reachable:
-            if not getattr(self, "_network_outage", False):
-                self._network_outage = True
+            if not self.state.get("network_outage", False):
+                self.state["network_outage"] = True
                 self.record("finding", "relay-continuity: pre-launch probe failed (github.com:443 unreachable); waiting for network")
             self.host.log("pre-launch network probe failed (github.com:443 unreachable); waiting")
             self.state["phase"] = "waiting"
             self.save()
             return "waiting"
-        self._network_outage = False
+        self.state["network_outage"] = False
         digest = self.host.permissions_digest()
         if digest != self.state.get("permissions_digest"):
             return self.hold("permissions_changed")
