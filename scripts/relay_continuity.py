@@ -4805,7 +4805,15 @@ def fast_forward_main_checkout(
     if code == 0 and head_sha == target_sha:
         return True
 
+    # Re-check tracked files immediately before merge
+    code, status = run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo, timeout=20.0)
+    if code != 0 or status.strip():
+        count = len(status.strip().splitlines()) if status.strip() else 0
+        _log_refusal(target_sha, f"checkout is dirty ({count} tracked modification{'s' if count != 1 else ''})")
+        return False
+
     # 5. Fast-forward merge only
+    # The remaining window is safe because git merge --ff-only refuses to overwrite local modifications to files the incoming commits touch.
     code, merge_out = run(["git", "merge", "--ff-only", "origin/master"], cwd=repo, timeout=60.0)
     if code != 0:
         _log_refusal(target_sha, f"merge --ff-only failed: {merge_out.strip() or 'exit ' + str(code)}")

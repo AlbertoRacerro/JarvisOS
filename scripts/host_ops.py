@@ -2694,6 +2694,10 @@ class Executor:
                     else:
                         self._finish(request, "interrupted", {}, "the executor stopped while this request was running",
                                      started=None)
+                        if isinstance(request, dict) and request.get("op") == "release.install":
+                            self._recover_unsuccessful_install(
+                                request, "interrupted", "the executor stopped while this request was running"
+                            )
                 finally:
                     os.close(done_fd)
                 unlink_at(fd, name)

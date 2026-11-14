@@ -388,6 +388,46 @@ def test_fast_forward_skipped_on_dirty_tracked_file(tmp_path):
     assert logs_second == []
 
 
+def test_fast_forward_skipped_when_tree_becomes_dirty_between_checks(tmp_path):
+    repo, origin, clone = _setup_git_repos(tmp_path)
+
+    # Push commit 2 to origin/master
+    (clone / "file.txt").write_text("v2\n")
+    subprocess.run(["git", "commit", "-am", "commit 2"], cwd=clone, check=True)
+    subprocess.run(["git", "push", "origin", "master"], cwd=clone, check=True)
+    target_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone, check=True, capture_output=True, text=True).stdout.strip()
+
+    head_before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    status_calls = []
+    merge_called = []
+    real_run = rc.devctx.run
+
+    def wrapped_run(argv, **kw):
+        if argv == ["git", "status", "--porcelain", "--untracked-files=no"]:
+            status_calls.append(len(status_calls) + 1)
+        if "merge" in argv:
+            merge_called.append(list(argv))
+        res = real_run(argv, **kw)
+        if argv == ["git", "rev-parse", "HEAD"]:
+            # Dirty the tracked file after initial status check passed
+            (repo / "file.txt").write_text("dirty-between-checks\n")
+        return res
+
+    logs = []
+    tracker = {"sha": None}
+    res = rc.fast_forward_main_checkout(repo, run=wrapped_run, log=logs.append, last_logged=tracker)
+    assert res is False
+    assert len(status_calls) == 2
+    assert not merge_called
+    assert (repo / "file.txt").read_text() == "dirty-between-checks\n"
+    head_after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+    assert head_after == head_before
+    assert tracker["sha"] == target_sha
+    assert any("checkout is dirty" in m for m in logs)
+
+
+
 def test_fast_forward_skipped_on_another_branch(tmp_path):
     repo, origin, clone = _setup_git_repos(tmp_path)
 

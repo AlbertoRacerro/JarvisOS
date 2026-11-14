@@ -5373,3 +5373,99 @@ def test_op_release_install_watcher_restart_failure_returns_both_links_and_settl
     start_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
     assert len(start_calls) >= 1
 
+
+def test_interrupted_owner_install_before_marker_recovers_owner_and_links(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+    h._pin_guard(paths, paths.install / "releases" / prev_sha, prev_sha)
+
+    # Owner requested release.install
+    req = h.make_request("release.install", {"sha": cand_sha}, None, "relay-continuity:owner", t0)
+
+    # Simulate crash before marker creation: request was placed in-flight,
+    # but executor died before writing state/release-pending.json.
+    # Also verify restore of published link if needed.
+    (paths.published / "current").unlink(missing_ok=True)
+
+    fd = ex._state_fd("inflight")
+    try:
+        h.write_at(fd, f"{req['id']}.json", h.canonical(req))
+    finally:
+        os.close(fd)
+
+    assert not paths.release_pending.exists()
+    calls.clear()
+
+    # Executor restarts and runs recover()
+    ex.recover()
+
+    # 1. Interrupted receipt must be recorded
+    receipt, _ = h.load_receipt(paths, req["id"])
+    assert receipt["outcome"] == "interrupted"
+
+    # 2. Owner start must be requested
+    owner_starts = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(owner_starts) >= 1
+
+    # 3. Links must be on the previous release
+    assert (paths.install / "current").resolve().name == prev_sha
+    assert (paths.published / "current").resolve().name == prev_sha
+
+
+def test_interrupted_owner_install_switched_published_link_restores_previous(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+    h._pin_guard(paths, paths.install / "releases" / prev_sha, prev_sha)
+
+    # Candidate staged under published and published/current points to candidate
+    d_cand = paths.install / "releases" / cand_sha / "scripts"
+    d_cand.mkdir(parents=True)
+    (d_cand / "host_ops.py").write_text("# cand\n")
+    h.publish_release(paths, cand_sha)
+    (paths.published / "current").unlink(missing_ok=True)
+    (paths.published / "current").symlink_to(paths.published / "releases" / cand_sha)
+
+    req = h.make_request("release.install", {"sha": cand_sha}, None, "relay-continuity:owner", t0)
+
+    fd = ex._state_fd("inflight")
+    try:
+        h.write_at(fd, f"{req['id']}.json", h.canonical(req))
+    finally:
+        os.close(fd)
+
+    assert not paths.release_pending.exists()
+    calls.clear()
+
+    ex.recover()
+
+    receipt, _ = h.load_receipt(paths, req["id"])
+    assert receipt["outcome"] == "interrupted"
+
+    owner_starts = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(owner_starts) >= 1
+
+    assert (paths.install / "current").resolve().name == prev_sha
+    assert (paths.published / "current").resolve().name == prev_sha
+
+
+
