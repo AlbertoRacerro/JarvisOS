@@ -81,7 +81,8 @@ Rules:
 1. **The coordinator owns spec acceptance.** It drafts or takes the spec, reviews it critically against overengineering
    (section 6: is every part needed for the outcome?), and if it agrees moves the row to `ready` and implements it
    without a maintainer approval step. Implementation starts only from `ready` with every hard dependency merged (or no
-   longer listed).
+   longer listed). The review checks the spec's code facts against the code first; from spec 270 they are
+   `path::Symbol` references that `scripts/check_code_facts.py` keeps resolving while the row is `ready`.
 2. The implementation PR carries `**Spec gate:** implementation NNN` in its body; the row must be `in_review` with this
    PR's number, or `merged` with it when this PR completes the spec (the row reaches the base branch only by that merge, so
    it is never early there). A slice that leaves work open keeps `in_review`. `definition NNN` or `N/A` is used for
