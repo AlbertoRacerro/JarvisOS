@@ -34,6 +34,7 @@ SOURCE_LABEL = "backend/app/modules/modeling/models.py::ParameterRead"
 TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "modeling.ts"
 ENGINEERING_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "engineering.ts"
 EDITOR_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "dwsimEditor.ts"
+PROJECT_KNOWLEDGE_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "projectKnowledge.ts"
 HEADER = (
     "// GENERATED FILE — DO NOT EDIT.\n"
     f"// Source: {SOURCE_LABEL}\n"
@@ -42,6 +43,11 @@ HEADER = (
 EDITOR_HEADER = (
     "// GENERATED FILE — DO NOT EDIT.\n"
     "// Source: backend/app/modules/process_stack/editor_models.py\n"
+    "// Regenerate with: python scripts/generate_frontend_contracts.py\n\n"
+)
+PROJECT_KNOWLEDGE_HEADER = (
+    "// GENERATED FILE — DO NOT EDIT.\n"
+    "// Source: backend/app/modules/project_knowledge/value_history.py\n"
     "// Regenerate with: python scripts/generate_frontend_contracts.py\n\n"
 )
 
@@ -61,6 +67,8 @@ def _literal(value: object) -> str:
 
 
 def _typescript_type(annotation: object) -> str:
+    if annotation is typing.Any or annotation is object:
+        return "unknown"
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return annotation.__name__
     if annotation is str:
@@ -69,8 +77,6 @@ def _typescript_type(annotation: object) -> str:
         return "number"
     if annotation is bool:
         return "boolean"
-    if annotation is object:
-        return "unknown"
 
     origin = get_origin(annotation)
     if origin is list:
@@ -157,6 +163,35 @@ def render_editor_contracts() -> str:
     ]
     union = "export type EditorCommand =\n" + "".join(f"  | {model.__name__}\n" for model in commands)
     return "\n".join(rendered) + "\n" + union.rstrip("\n") + ";\n"
+
+
+def render_project_knowledge_contracts() -> str:
+    from app.modules.project_knowledge.value_history import (
+        BoundRequirementCheckRef,
+        BoundRunRef,
+        RunInputsManifestRead,
+        RunLinkedParameterItem,
+        ValueComparisonRead,
+        ValueComparisonSide,
+        ValueVersionChainRead,
+        ValueVersionItem,
+    )
+
+    models = [
+        RunLinkedParameterItem,
+        RunInputsManifestRead,
+        ValueVersionItem,
+        ValueVersionChainRead,
+        BoundRunRef,
+        BoundRequirementCheckRef,
+        ValueComparisonSide,
+        ValueComparisonRead,
+    ]
+    rendered = [
+        render_model(model, model.__name__, header=PROJECT_KNOWLEDGE_HEADER if index == 0 else "")
+        for index, model in enumerate(models)
+    ]
+    return "\n".join(rendered)
 
 
 def _matches(path: Path, expected: str, *, report: bool = False) -> bool:
@@ -258,11 +293,13 @@ def main() -> int:
     expected = render_parameter_read()
     engineering_expected = render_engineering_reads()
     editor_expected = render_editor_contracts()
+    project_knowledge_expected = render_project_knowledge_contracts()
     if args.check:
         if (
             _matches(TARGET, expected, report=True)
             and _matches(ENGINEERING_TARGET, engineering_expected, report=True)
             and _matches(EDITOR_TARGET, editor_expected, report=True)
+            and _matches(PROJECT_KNOWLEDGE_TARGET, project_knowledge_expected, report=True)
         ):
             print("frontend generated contracts are current")
             return 0
@@ -274,6 +311,8 @@ def main() -> int:
     ENGINEERING_TARGET.write_text(engineering_expected, encoding="utf-8", newline="\n")
     EDITOR_TARGET.parent.mkdir(parents=True, exist_ok=True)
     EDITOR_TARGET.write_text(editor_expected, encoding="utf-8", newline="\n")
+    PROJECT_KNOWLEDGE_TARGET.parent.mkdir(parents=True, exist_ok=True)
+    PROJECT_KNOWLEDGE_TARGET.write_text(project_knowledge_expected, encoding="utf-8", newline="\n")
     print(f"wrote {TARGET.relative_to(REPO_ROOT)}")
     return 0
 

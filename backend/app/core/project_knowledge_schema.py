@@ -10,6 +10,12 @@ SIM_RESULT_INGESTION_MIGRATION_RECORD = {
     "checksum": None,
 }
 
+SIM_RESULT_VALUE_VERSIONS_MIGRATION_RECORD = {
+    "migration_id": "0031_sim_result_value_versions",
+    "name": "Simulation result value version history",
+    "checksum": None,
+}
+
 PROJECT_KNOWLEDGE_SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS project_knowledge_drafts (
@@ -159,6 +165,24 @@ PROJECT_KNOWLEDGE_SCHEMA_STATEMENTS = (
         corrected_conditions_json TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (value_id) REFERENCES simulation_result_values(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS simulation_result_value_versions (
+        id TEXT PRIMARY KEY,
+        value_id TEXT NOT NULL,
+        version_index INTEGER NOT NULL,
+        value_text TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        conditions_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('passed', 'exception', 'corrected', 'confirmed')),
+        action TEXT CHECK (action IN ('ingest', 'correct', 'confirm')),
+        reason TEXT,
+        actor TEXT,
+        created_at TEXT NOT NULL,
+        origin TEXT NOT NULL DEFAULT 'recorded' CHECK (origin IN ('recorded', 'backfilled')),
+        FOREIGN KEY (value_id) REFERENCES simulation_result_values(id),
+        UNIQUE(value_id, version_index)
     )
     """,
     """

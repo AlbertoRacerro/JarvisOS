@@ -67,6 +67,7 @@ from app.core.project_knowledge_schema import (
     PROJECT_KNOWLEDGE_MIGRATION_STATEMENTS,
     PROJECT_KNOWLEDGE_SCHEMA_STATEMENTS,
     SIM_RESULT_INGESTION_MIGRATION_RECORD,
+    SIM_RESULT_VALUE_VERSIONS_MIGRATION_RECORD,
 )
 from app.core.relay_gateway_schema import (
     RELAY_GATEWAY_INDEX_STATEMENTS,
@@ -97,6 +98,7 @@ from app.core.workspace_actions_schema import (
     WORKSPACE_ACTIONS_SCHEMA_STATEMENTS,
 )
 from app.modules.events.service import utc_now
+from app.modules.project_knowledge.sim_result_versions import backfill_simulation_result_value_versions
 
 RETRIEVAL_INDEX_MAX_PAGE_COUNT = 262_144  # 1 GiB at SQLite's default 4 KiB page size.
 
@@ -228,6 +230,7 @@ def initialize_database() -> DatabaseInfo:
                 if "duplicate column name" not in str(exc).lower():
                     raise
         _ensure_parameter_lifecycle_schema(connection)
+        backfill_simulation_result_value_versions(connection)
         for statement in SCHEMA_INDEX_STATEMENTS:
             connection.execute(statement)
         for statement in CAD_LINK_SCHEMA_INDEX_STATEMENTS:
@@ -321,6 +324,7 @@ def is_database_initialized() -> bool:
         "simulation_result_values",
         "simulation_result_checks",
         "simulation_result_resolutions",
+        "simulation_result_value_versions",
         "project_knowledge_validation",
         "project_knowledge_reconciled_snapshots",
         "project_knowledge_reconciliation_requests",
@@ -421,6 +425,7 @@ def _record_schema_migrations(connection: sqlite3.Connection) -> None:
         PARAMETER_LIFECYCLE_MIGRATION_RECORD,
         PROJECT_KNOWLEDGE_MIGRATION_RECORD,
         SIM_RESULT_INGESTION_MIGRATION_RECORD,
+        SIM_RESULT_VALUE_VERSIONS_MIGRATION_RECORD,
         LITERATURE_SCHEMA_MIGRATION_RECORD,
         DEVELOPMENT_SCHEMA_MIGRATION_RECORD,
         BRAINSTORM_SCHEMA_MIGRATION_RECORD,

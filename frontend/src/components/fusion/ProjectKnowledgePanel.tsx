@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { listParameters, type Parameter } from "../../api/client";
 import {
   approveProjectKnowledgeDraft,
   changeProjectKnowledgeRevisionState,
@@ -22,6 +23,7 @@ import {
   type SimulationResultBatchRead,
   type SimulationResultNotificationRead
 } from "../../api/projectKnowledge";
+import ValueHistoryModal, { type HistoryTarget } from "./ValueHistoryModal";
 
 type Requirement = import("../../api/client").Requirement;
 type Props = Readonly<{ workspaceId: string | null; readOnly?: boolean; onChanged?: () => void; editing?: Requirement | null; onCancelEdit?: () => void }>;
@@ -70,6 +72,8 @@ export default function ProjectKnowledgePanel({ workspaceId, readOnly = false, o
   const [validations, setValidations] = useState<ProjectKnowledgeValidationRead[]>([]);
   const [batches, setBatches] = useState<SimulationResultBatchRead[]>([]);
   const [notifications, setNotifications] = useState<SimulationResultNotificationRead[]>([]);
+  const [parameters, setParameters] = useState<Parameter[]>([]);
+  const [activeHistoryTarget, setActiveHistoryTarget] = useState<HistoryTarget | null>(null);
   const [selectedValueId, setSelectedValueId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("valueId"));
   const [resolveAction, setResolveAction] = useState<"correct" | "confirm">("correct");
   const [resolveReason, setResolveReason] = useState("");
@@ -97,16 +101,19 @@ export default function ProjectKnowledgePanel({ workspaceId, readOnly = false, o
       setSelectedRevisionId(null);
       setBatches([]);
       setNotifications([]);
+      setParameters([]);
       return;
     }
-    const [next, nextBatches, nextNotices] = await Promise.all([
+    const [next, nextBatches, nextNotices, nextParams] = await Promise.all([
       listProjectKnowledgeRevisions(workspaceId),
       listSimulationResultBatches(workspaceId),
-      listSimulationResultNotifications(workspaceId)
+      listSimulationResultNotifications(workspaceId),
+      listParameters(workspaceId).catch(() => [])
     ]);
     setRevisions(next);
     setBatches(nextBatches);
     setNotifications(nextNotices);
+    setParameters(nextParams);
     const nextWorking = next.find((revision) => revision.state === "working") ?? null;
     const nextReconciled = next.find((revision) => revision.state === "reconciled" && revision.reconciled_snapshot_id) ?? null;
     setSelectedRevisionId((current) => next.some((revision) => revision.id === current) ? current : nextWorking?.id ?? nextReconciled?.id ?? next[0]?.id ?? null);
@@ -316,9 +323,12 @@ export default function ProjectKnowledgePanel({ workspaceId, readOnly = false, o
               {Object.keys(val.conditions).length > 0 && <div>Conditions · {JSON.stringify(val.conditions)}</div>}
               {failedChecks.length > 0 && <div aria-label={`Failed checks for ${val.output_name}`}>Failed checks · {failedChecks.map((c) => `${c.check_name}:${c.reason_code}`).join(", ")}</div>}
               {val.resolution && <div>Resolution · {val.resolution.action} ({val.resolution.reason}) · original {val.resolution.original_value} {val.resolution.original_unit}</div>}
-              {!readOnly && val.status !== "passed" && <div className="final-fusion__toolbar-line">
-                <button type="button" onClick={() => setSelectedValueId(isSelected ? null : val.id)}>{isSelected ? "Close resolution" : `Review ${val.output_name}`}</button>
-              </div>}
+              <div className="final-fusion__toolbar-line">
+                <button type="button" onClick={() => setActiveHistoryTarget({ kind: "simulation_result_value", id: val.id, name: val.output_name })}>History</button>
+                {!readOnly && val.status !== "passed" && (
+                  <button type="button" onClick={() => setSelectedValueId(isSelected ? null : val.id)}>{isSelected ? "Close resolution" : `Review ${val.output_name}`}</button>
+                )}
+              </div>
               {!readOnly && isSelected && val.status !== "passed" && <section className="final-fusion__source-list" aria-label={`Resolve exception ${val.output_name}`}>
                 <label>Action
                   <select aria-label="Resolution action" value={resolveAction} onChange={(e) => setResolveAction(e.target.value as "correct" | "confirm")}>
@@ -340,6 +350,26 @@ export default function ProjectKnowledgePanel({ workspaceId, readOnly = false, o
         </ul>
       </div>)}
     </section>}
+    {parameters.length > 0 && <section className="final-fusion__source-list" aria-label="Parameters">
+      <div className="final-fusion__disclosure-row"><strong>Parameters</strong><em>{parameters.length} active</em></div>
+      <ul className="basis-change-list">
+        {parameters.map((param) => <li key={param.id} data-parameter-id={param.id}>
+          <div>
+            <strong>{param.name}</strong>: {param.value ?? "Not set"} {param.unit ?? ""} <em>({param.status})</em>
+          </div>
+          <div className="final-fusion__toolbar-line">
+            <button type="button" onClick={() => setActiveHistoryTarget({ kind: "parameter", id: param.id, name: param.name })}>History</button>
+          </div>
+        </li>)}
+      </ul>
+    </section>}
     <div className="final-fusion__context-strip">Changes become part of the project only when you accept them. Older accepted versions can be reopened as a starting point; discarded and superseded revisions remain inspectable but cannot be edited.</div>
+    {activeHistoryTarget && workspaceId && (
+      <ValueHistoryModal
+        workspaceId={workspaceId}
+        target={activeHistoryTarget}
+        onClose={() => setActiveHistoryTarget(null)}
+      />
+    )}
   </section>;
 }
