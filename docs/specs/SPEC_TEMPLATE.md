@@ -12,6 +12,15 @@ One paragraph: what exists after this slice that did not exist before.
 2–4 lines linking the slice to strategy. Enough for an agent to make small in-scope
 judgment calls correctly.
 
+## Code facts checked at `<commit>`
+
+The facts about existing code this spec relies on, one per line, each naming its symbol as a backticked
+`<path>::<Symbol>` or `<path>::<Class>.<method>` reference (for example a function in `scripts/<tool>.py`).
+For a `ready` spec numbered 270 or higher, `scripts/check_code_facts.py` (CI) fails when a reference no longer
+resolves. `python scripts/code_index.py <path>` lists the symbols of a file or directory with their lines.
+
+- `<path>::<Symbol>` does ...
+
 ## Scope
 
 In scope:
