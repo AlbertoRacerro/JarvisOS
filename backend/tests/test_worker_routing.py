@@ -48,8 +48,10 @@ def test_tier_is_the_maximum_of_difficulty_and_risk() -> None:
 
 
 def test_models_table_is_declarative_with_effort_tiers() -> None:
-    assert [m.key for m in wr.MODELS] == ["luna", "flash", "copilot-auto", "haiku", "flash-medium", "argon-medium",
-                                          "terra", "sonnet", "flash-high", "argon-high", "agy-sonnet", "agy-opus", "sol"]
+    assert [m.key for m in wr.MODELS] == ["luna", "flash", "hydrogen-low", "copilot-auto", "haiku",
+                                          "flash-medium", "hydrogen-medium", "argon-medium",
+                                          "terra", "sonnet", "flash-high", "hydrogen-high",
+                                          "argon-high", "agy-sonnet", "agy-opus", "sol"]
     assert {m.kind for m in wr.MODELS} == {"codex", "agy", "copilot", "claude"}
     by_key = {m.key: m for m in wr.MODELS}
     assert (by_key["haiku"].model, by_key["haiku"].pool, by_key["haiku"].capability) == ("claude-haiku-5-5", "claude", 1)
@@ -58,7 +60,9 @@ def test_models_table_is_declarative_with_effort_tiers() -> None:
     assert all(1 <= m.capability <= 3 for m in wr.MODELS)
     # spec 255: no brand bias; Flash and Argon at high effort take tier 3 until measured
     assert {m.key: (m.pool, m.capability) for m in wr.MODELS if m.kind == "agy"} == {
-        "flash": ("gemini", 1), "flash-medium": ("gemini", 2), "flash-high": ("gemini", 3),
+        "flash": ("gemini", 1), "hydrogen-low": ("gemini", 1),
+        "flash-medium": ("gemini", 2), "hydrogen-medium": ("gemini", 2),
+        "flash-high": ("gemini", 3), "hydrogen-high": ("gemini", 3),
         "argon-medium": ("argon", 2), "argon-high": ("argon", 3), "agy-sonnet": ("agy3p", 3), "agy-opus": ("agy3p", 3)}
     assert {wr.family(m) for m in wr.MODELS if m.pool == "agy3p"} == {"claude"}
 
@@ -68,8 +72,9 @@ def test_cheapest_adequate_model_wins_by_smallest_surplus() -> None:
     assert wr.decide("high", "low", pools())["worker"] == "flash-high"
     low = wr.decide("low", "low", pools())
     assert low["worker"] == "flash"  # equal surplus: the gemini family first
-    assert [a["worker"] for a in low["alternatives"]] == ["luna", "haiku", "flash-medium", "terra", "sonnet",
-                                                          "flash-high", "sol"]
+    assert [a["worker"] for a in low["alternatives"]] == ["hydrogen-low", "luna", "haiku", "flash-medium",
+                                                          "hydrogen-medium", "terra", "sonnet",
+                                                          "flash-high", "hydrogen-high", "sol"]
     no_gemini = pools(gemini=pool("gemini", 0.0))
     assert wr.decide("medium", "low", no_gemini)["worker"] == "terra"  # terra (cap 2) beats sol (cap 3)
     assert wr.decide("high", "low", no_gemini)["worker"] == "sol"
@@ -116,8 +121,31 @@ def test_unreadable_or_disabled_pool_fails_closed_for_that_pool_only() -> None:
 def test_no_worker_when_nothing_qualifies() -> None:
     decision = wr.decide("high", "medium", pools(codex=pool("codex", 0.04), gemini=pool("gemini", 0.04)))
     assert decision["status"] == "no_worker" and decision["reason"] == "no_worker"
-    assert [s["worker"] for s in decision["skipped"]] == ["flash-high", "argon-high", "agy-sonnet", "agy-opus", "sol"]
+    assert [s["worker"] for s in decision["skipped"]] == ["flash-high", "hydrogen-high", "argon-high", "agy-sonnet", "agy-opus", "sol"]
     assert "worker" not in decision
+
+
+def test_flash_ranks_before_hydrogen_and_hydrogen_skipped_below_reserve() -> None:
+    for req_tier, flash_key, hydro_key in [
+        (1, "flash", "hydrogen-low"),
+        (2, "flash-medium", "hydrogen-medium"),
+        (3, "flash-high", "hydrogen-high"),
+    ]:
+        ranked, _ = wr.rank(req_tier, pools())
+        workers = [e["worker"] for e in ranked]
+        assert flash_key in workers and hydro_key in workers
+        assert workers.index(flash_key) < workers.index(hydro_key)
+
+    below = pools(gemini=pool("gemini", 0.04))
+    for req_tier, hydro_key in [
+        (1, "hydrogen-low"),
+        (2, "hydrogen-medium"),
+        (3, "hydrogen-high"),
+    ]:
+        ranked, skipped = wr.rank(req_tier, below)
+        assert hydro_key not in [e["worker"] for e in ranked]
+        hydro_skip = next(s for s in skipped if s["worker"] == hydro_key)
+        assert hydro_skip["skipped"] == "below_reserve"
 
 
 def test_review_requirement_follows_risk() -> None:
@@ -186,7 +214,7 @@ def test_summary_line_formatting() -> None:
     assert line.startswith("worker quota: codex 95% free (5h 100%) · gemini 99% free (5h 100%) · copilot unavailable "
                            "(no_reading) · claude 60% free (5h 60%) · argon unavailable (no_reading) · agy3p unavailable "
                            "(no_reading) — effort by task tier, gemini first, then quota expiring unused; tiers: luna t1, ")
-    assert "flash-high t3, argon-high t3, agy-sonnet t3, agy-opus t3, sol t3" in line
+    assert "flash-high t3, hydrogen-high t3, argon-high t3, agy-sonnet t3, agy-opus t3, sol t3" in line
     degraded = wr.summary_line(pools(codex=pool("codex", 0.04), gemini=wr.unreadable("gemini", "timeout")))
     assert "codex 4% free (5h 4%) [below reserve]" in degraded and "gemini unavailable (timeout)" in degraded
     assert "\n" not in line
@@ -378,7 +406,7 @@ def test_gemini_first_then_quota_expiring_unused_at_equal_surplus() -> None:
     low = wr.decide("low", "low", pools(claude=pool("claude", 1.0), gemini=pool("gemini", 0.2)))
     assert low["worker"] == "flash"  # the gemini family first, whatever the headroom elsewhere
     # no fixed claude-last order: with equal (unknown) resets, more free room ranks first
-    assert [a["worker"] for a in low["alternatives"]][:2] == ["haiku", "luna"]
+    assert [a["worker"] for a in low["alternatives"]][:3] == ["hydrogen-low", "haiku", "luna"]
     now = datetime.now(UTC)
     soon = wr.Pool("claude", {"5h": 0.9, "weekly": 0.4}, 0.4, resets={"weekly": now + timedelta(hours=6)})
     later = wr.Pool("codex", {"5h": 0.9, "weekly": 0.7}, 0.7, resets={"weekly": now + timedelta(days=6)})
@@ -648,7 +676,7 @@ def test_claude_codex_and_argon_out_still_route_every_tier() -> None:
     assert wr.decide("medium", "high", only_3p)["worker"] in ("agy-sonnet", "agy-opus")
     only_argon = {**state, "gemini": pool("gemini", 0.6), "argon": pool("argon", 0.6)}
     high = wr.decide("high", "high", only_argon)
-    assert high["worker"] == "flash-high" and high["alternatives"][0]["worker"] == "argon-high"
+    assert high["worker"] == "flash-high" and [a["worker"] for a in high["alternatives"]][:2] == ["hydrogen-high", "argon-high"]
     assert "--model argon-high" in wr.bare_command(next(m for m in wr.MODELS if m.key == "argon-high"))
 
 
@@ -795,7 +823,8 @@ def test_spec_256_criterion_4_measured_inadequate_at_five_records(tmp_path: Path
 
     outcomes_5 = wr.load_records(rf)
     decision_5 = wr.decide("medium", "low", pools(), kind="feature", outcomes=outcomes_5)
-    assert decision_5["worker"] == "terra"
+    assert decision_5["worker"] == "hydrogen-medium"
+    assert "terra" in [a["worker"] for a in decision_5["alternatives"]]
     skipped_fm = next(s for s in decision_5["skipped"] if s["worker"] == "flash-medium")
     assert skipped_fm["skipped"] == "measured_inadequate"
 
