@@ -3650,7 +3650,7 @@ def test_204_check_task_spec_merged_reads_the_remote_registry(tmp_path: Path) ->
     registry = ("| Spec | State | PRs |\n|---|---|---|\n"
                 "| 203 | merged | [#854](https://x/854) | ROADMAP |\n"
                 "| 204 | merged | [#865](https://x/865), [#870](https://x/870) | MISSION |\n"
-                "| 205 | in_review | [#871](https://x/871) | X |\n| 206 | merged | — | Y |\n")
+                "| 205 | ready | [#871](https://x/871) | X |\n| 206 | merged | — | Y |\n")
     states = {"865": "MERGED", "870": "MERGED", "854": "MERGED"}
 
     def remote(args: list[str], **_: Any) -> tuple[int, str]:
@@ -3662,7 +3662,7 @@ def test_204_check_task_spec_merged_reads_the_remote_registry(tmp_path: Path) ->
     assert check("204") is None
     states["870"] = "OPEN"
     assert check("204") == "PR #870 is OPEN"
-    assert check("205") == "spec 205 is in_review in STATUS.md"
+    assert check("205") == "spec 205 is ready in STATUS.md"
     assert check("206") == "spec 206 links no PR in STATUS.md"
     assert check("299") == "spec 299 has 0 STATUS.md rows"
     assert check("204", lambda *a, **k: (1, "")) == "STATUS.md on GitHub master is unreadable"
@@ -3671,6 +3671,33 @@ def test_204_check_task_spec_merged_reads_the_remote_registry(tmp_path: Path) ->
     assert rc.validate_check({"kind": "spec_merged", "spec": "100g"}) is None
     assert rc.validate_check({"kind": "spec_merged", "spec": "../x"})
     assert rc.validate_check({"kind": "coordinator_cycle", "pr": 1})
+
+
+def test_273_check_task_spec_merged_accepts_in_review_with_merged_prs(tmp_path: Path) -> None:
+    assert ("is `merged` in docs/specs/STATUS.md on GitHub master, or `in_review` there with every linked PR merged"
+            in rc.describe_check({"kind": "spec_merged", "spec": "273"}))
+
+    registry = ("| Spec | State | PRs |\n|---|---|---|\n"
+                "| 271 | merged | [#901](https://x/901) | A |\n"
+                "| 272 | in_review | [#902](https://x/902), [#903](https://x/903) | B |\n"
+                "| 273 | in_review | [#904](https://x/904) | C |\n"
+                "| 274 | in_review | — | D |\n"
+                "| 275 | ready | — | E |\n")
+    states = {"901": "MERGED", "902": "MERGED", "903": "MERGED", "904": "OPEN"}
+
+    def remote(args: list[str], **_: Any) -> tuple[int, str]:
+        if args[:2] == ["gh", "api"]:
+            assert "ref=master" in args[-1]
+            return 0, registry
+        return 0, states[args[3]] + "\n"
+
+    check = lambda spec, run=remote: rc.check_task(tmp_path, {"kind": "spec_merged", "spec": spec}, run=run)  # noqa: E731
+
+    assert check("271") is None
+    assert check("272") is None
+    assert check("273") == "PR #904 is OPEN"
+    assert check("274") == "spec 274 links no PR in STATUS.md"
+    assert check("275") == "spec 275 is ready in STATUS.md"
 
 
 def test_204_roadmap_cycle_settles_on_blocked_as_unverified_cycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

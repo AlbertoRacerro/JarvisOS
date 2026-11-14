@@ -166,11 +166,71 @@ def test_pr_bound_entries_report_current_pr_state(world) -> None:
     fresh = {e["id"]: e["freshness"] for e in packet["ledger"]}
     assert "now MERGED" in fresh[entry["id"]]["why"]
     assert fresh[proof["id"]]["verdict"] == "current" and "merged" in fresh[proof["id"]]["why"]
-    assert any("spec 003 is in_review but none of its PRs is open" in c for c in packet["candidates"])
+    assert any("spec 003 is in_review but PR #7 is closed unmerged" in c for c in packet["candidates"])
     assert any(c.endswith("TWO is ready with dependencies merged") for c in packet["candidates"])
     gh.open = [{"number": 8, "title": "impl two", "headRefName": "impl/002-two", "headRefOid": base, "isDraft": True}]
     packet = devctx.build_packet(env, fetch=True)
     assert any("spec 002 TWO is ready" in c and "[8]" in c for c in packet["candidates"])
+
+
+def test_273_reconciliation_batched_into_next_registry_change(world) -> None:
+    env, gh, base = world["env"], world["gh"], world["base"]
+    status_text = (
+        "| Spec | Status | Implementation PR | Name | Depends on | Description |\n"
+        "| --- | --- | --- | --- | --- | --- |\n"
+        "| 010 | in_review | [#20] | A | — | d |\n"
+        "| 011 | ready | — | B | 010 | d |\n"
+        "| 012 | in_review | [#30], [#31] | MULTI | — | d |\n"
+    )
+    advance_master(world, {"docs/specs/STATUS.md": status_text}, "specs for 273")
+
+    # Acceptance criterion 2:
+    # A is in_review with its PR merged, B is ready and depends on A.
+    # Packet marks B deps_merged and lists no "reconcile STATUS" candidate for A.
+    gh.open = []
+    gh.merged = [
+        {"number": 20, "title": "impl A", "mergedAt": "2026-01-01T00:00:00Z",
+         "headRefName": "impl/010", "headRefOid": base},
+        {"number": 30, "title": "impl multi 1", "mergedAt": "2026-01-01T00:00:00Z",
+         "headRefName": "impl/012a", "headRefOid": base},
+    ]
+    packet = devctx.build_packet(env, fetch=True)
+    row_a = next(r for r in packet["status_in_flight"] if r["spec"] == "010")
+    row_b = next(r for r in packet["status_ready"] if r["spec"] == "011")
+    assert row_a["done"] is True
+    assert row_b["deps_merged"] is True
+    assert not any("spec 010" in c and "reconcile STATUS" in c for c in packet["candidates"])
+    assert any("spec 011 B is ready with dependencies merged" in c for c in packet["candidates"])
+    # MULTI has #30 merged and #31 closed unmerged: only #31 is named.
+    assert any("spec 012 is in_review but PR #31 is closed unmerged: reconcile STATUS" in c for c in packet["candidates"])
+
+    # Acceptance criterion 3:
+    # A is in_review and its only PR closed unmerged: packet keeps reconcile candidate for A naming the PR,
+    # and B is not deps_merged. MULTI now has both PRs unmerged -> names both.
+    gh.merged = []
+    packet = devctx.build_packet(env, fetch=True)
+    row_a = next(r for r in packet["status_in_flight"] if r["spec"] == "010")
+    row_b = next(r for r in packet["status_ready"] if r["spec"] == "011")
+    row_m = next(r for r in packet["status_in_flight"] if r["spec"] == "012")
+    assert row_a["done"] is False
+    assert row_b["deps_merged"] is False
+    assert row_m["done"] is False
+    assert any("spec 010 is in_review but PR #20 is closed unmerged: reconcile STATUS" in c for c in packet["candidates"])
+    assert any("spec 012 is in_review but PRs #30, #31 are closed unmerged: reconcile STATUS" in c for c in packet["candidates"])
+    assert not any("spec 011 B is ready with dependencies merged" in c for c in packet["candidates"])
+
+    # Acceptance criterion 4:
+    # With GitHub state unavailable, deps_merged and candidates are as on 40f6ecc1.
+    gh.fail = True
+    packet = devctx.build_packet(env, fetch=True)
+    assert not packet["authority"]["github_ok"]
+    row_a = next(r for r in packet["status_in_flight"] if r["spec"] == "010")
+    row_b = next(r for r in packet["status_ready"] if r["spec"] == "011")
+    assert row_a["done"] is False
+    assert row_b["deps_merged"] is False
+    assert any("spec 010 is in_review but none of its PRs is open: reconcile STATUS" in c for c in packet["candidates"])
+    assert any("spec 012 is in_review but none of its PRs is open: reconcile STATUS" in c for c in packet["candidates"])
+    assert not any("spec 011 B is ready with dependencies merged" in c for c in packet["candidates"])
 
 
 def test_lane_states_including_reparented_worker(world) -> None:
