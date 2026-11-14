@@ -588,3 +588,24 @@ def test_activity_log_write_failure_reports_overlap_null(env: Env, monkeypatch: 
     assert res["status"] == "succeeded"
     assert res["overlap"] is None
 
+
+def test_sequential_subsecond_runs_do_not_report_overlap(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    log_file = env.tmp / ".worker_runs.jsonl"
+    monkeypatch.setenv("JARVISOS_AGY_ACTIVITY_LOG", str(log_file))
+    ev1 = env.tmp / "ev_seq_1"
+    ev2 = env.tmp / "ev_seq_2"
+    args1 = argparse.Namespace(
+        task_file=str(env.task), worktree=str(env.wt), model="flash",
+        timeout=30, evidence_dir=str(ev1), coordinator_fallback=False,
+    )
+    args2 = argparse.Namespace(
+        task_file=str(env.task), worktree=str(env.wt), model="flash",
+        timeout=30, evidence_dir=str(ev2), coordinator_fallback=False,
+    )
+    _, res1 = worker.execute(args1, sandbox_check=lambda: True)
+    env.clean()
+    _, res2 = worker.execute(args2, sandbox_check=lambda: True)
+    assert res1["overlap"] is False
+    assert res2["overlap"] is False
+
+

@@ -1285,3 +1285,23 @@ def test_non_agy_workers_keep_order_and_ignore_spend() -> None:
     workers = [r["worker"] for r in ranked]
     assert workers.index("terra") < workers.index("sol")
 
+
+def test_clean_harness_failure_record_contributes_to_quota_per_token_ratio() -> None:
+    # A harness-failure record is not itself costed in c_records, but its clean run contributes to the model's
+    # quota-per-token ratio across all records with spend.
+    harness_clean = {
+        "task": "h_clean", "kind": "feature", "worker": "flash-medium", "model": "gemini-3.8-flash-medium",
+        "failure": "harness",
+        "spend": {"runs": 1, "tokens": 1000, "quota": 0.05, "quota_runs": 1, "overlap_runs": 0},
+    }
+    overlapped_records = [
+        {"task": f"ov{i}", "kind": "feature", "worker": "flash-medium", "model": "gemini-3.8-flash-medium",
+         "failure": "none", "spend": {"runs": 1, "tokens": 600, "quota": 0.0, "quota_runs": 0, "overlap_runs": 1}}
+        for i in range(5)
+    ]
+    model = next(m for m in wr.MODELS if m.key == "flash-medium")
+    cost, count = wr.candidate_measured_cost(model, "feature", [harness_clean, *overlapped_records])
+    assert count == 5
+    assert cost == pytest.approx(600 * (0.05 / 1000))
+
+

@@ -325,14 +325,14 @@ def check_overlap(path: Path, run_id: str, this_start: float, this_end: float) -
         return None
 
     s1 = this_start
-    e1 = max(this_end, this_start + 0.001)
+    e1 = max(this_end, this_start + 1e-6)
 
     for peer_id, info in runs.items():
         if peer_id == run_id or "start" not in info:
             continue
         s2 = info["start"]
         if "end" in info:
-            e2 = max(info["end"], s2 + 0.001)
+            e2 = max(info["end"], s2 + 1e-6)
         else:
             e2 = s2 + MAX_TIMEOUT + KILL_MARGIN
             if s1 >= e2:
@@ -401,7 +401,7 @@ def execute(args: argparse.Namespace, sandbox_check: Callable[[], bool] | None =
         if not 0 < args.timeout <= MAX_TIMEOUT:
             raise Refused("timeout_out_of_range", f"{args.timeout} not in 1..{MAX_TIMEOUT}")
         started = now_utc()
-        started_ts = started.timestamp()
+        started_ts = datetime.now(UTC).timestamp()
         result["started_at"] = iso(started)
         start_logged = log_run_start(log_path, run_id, started, started_ts)
         _run(args, result, evidence, sandbox_check or in_sandbox, alias=alias, model=model,
@@ -409,7 +409,7 @@ def execute(args: argparse.Namespace, sandbox_check: Callable[[], bool] | None =
     except Refused as refusal:
         result.update(status="refused", reason=refusal.reason + (f": {refusal.detail}" if refusal.detail else ""))
     finished = now_utc()
-    finished_ts = finished.timestamp()
+    finished_ts = datetime.now(UTC).timestamp()
     result["finished_at"] = iso(finished)
     if start_logged:
         end_logged = log_run_end(log_path, run_id, finished, finished_ts)

@@ -981,7 +981,6 @@ def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[d
     all_spend_records = [
         r for r in outcomes
         if (r.get("worker") == candidate.key or r.get("model") == candidate.model)
-        and r.get("failure") != "harness"
         and isinstance(r.get("spend"), dict)
     ]
     clean_pairs = [
