@@ -73,6 +73,8 @@ def isolated_data_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Itera
     # Tests that start relay jobs otherwise append ledger lines to the maintainer's real control ledger.
     monkeypatch.setenv("JARVIS_CONTROL_DIR", str(tmp_path / "jarvis-control"))
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(tmp_path / "continuity"))
+    # The host's mission profile would otherwise let relay tests read the real agy quota.
+    monkeypatch.delenv("JARVISOS_MISSION_PROFILE", raising=False)
     get_settings.cache_clear()
 
     settings = get_settings()
