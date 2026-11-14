@@ -186,6 +186,7 @@ jobs:
           ../scripts/check_architecture_enforcement.py
           ../scripts/classify_ci_scope.py
           ../scripts/check_doc_paths.py
+          ../scripts/check_code_facts.py ../scripts/code_index.py
           ../scripts/check_ip_denylist.py
           ../scripts/gen_modules.py
           ../scripts/check_typecheck_ratchet.py
@@ -231,6 +232,9 @@ jobs:
 
       - name: Canonical documents cite only existing paths
         run: python scripts/check_doc_paths.py
+
+      - name: Ready specs cite code facts that still resolve
+        run: python scripts/check_code_facts.py
 
   leak-guard:
     name: leak-guard
