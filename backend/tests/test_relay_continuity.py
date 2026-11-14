@@ -6464,6 +6464,7 @@ def test_timed_out_turn_stopped_during_reap_stays_crash_on_restart(tmp_path: Pat
     # Restart supervisor: process is now gone, _resolve_pending adopts the pending attempt
     env.store.stop_path.unlink(missing_ok=True)
     env.host.pid_alive = lambda pid, start=None: False
+    env.host.reap = lambda: []
     sup2 = rc.Supervisor(env.store, env.host, env.limits)
     sup2.state = env.store.load()
     resolved = sup2._resolve_pending()
@@ -6630,19 +6631,34 @@ def test_auth_failure_saves_cooldown_before_ledger_and_never_asks_twice_on_resta
 
 
 def test_adopted_pending_turn_enforces_wall_limit_on_restart(tmp_path: Path) -> None:
-    """An adopted pending turn that exceeds turn_wall during _resolve_pending is terminated and settled as timed_out."""
+    """An adopted pending turn that exceeds turn_wall during _resolve_pending terminates its process group (even when
+    the leader exits on SIGTERM while a group member survives), calls _reap, and settles as timed_out."""
     env = Env(tmp_path, [("codex", CODEX_SUCCESS)])
     env.limits = rc.Limits(turn_wall=120.0, min_free_percent=10.0)
     signals: list[tuple[int, int]] = []
-    alive = [True]
+    leader_alive = [True]
+    group_alive = [True]
+    reap_called = [0]
 
     def fake_killpg(pgid: int, sig: int) -> None:
+        if sig == 0:
+            if not group_alive[0]:
+                raise ProcessLookupError
+            return
         signals.append((pgid, sig))
-        if sig == signal.SIGKILL:
-            alive[0] = False
+        if sig == signal.SIGTERM:
+            # Leader exits on SIGTERM, but a child in the process group survives until SIGKILL
+            leader_alive[0] = False
+        elif sig == signal.SIGKILL:
+            group_alive[0] = False
+
+    def fake_reap() -> list[str]:
+        reap_called[0] += 1
+        return ["stray_child"]
 
     env.relay.killpg = fake_killpg
-    env.host.pid_alive = lambda pid, start: alive[0]
+    env.host.pid_alive = lambda pid, start: leader_alive[0]
+    env.host.reap = fake_reap
 
     nonce = "rc-20261018T080000Z-deadbeef"
     sess_dir = env.relay.sessions_dir() / "20261018-080000-adopted"
@@ -6672,7 +6688,6 @@ def test_adopted_pending_turn_enforces_wall_limit_on_restart(tmp_path: Path) -> 
     assert sup.run(HEAD) == "idle"
     assert (42424, signal.SIGTERM) in signals
     assert (42424, signal.SIGKILL) in signals
+    assert reap_called[0] >= 1
     assert "claude" not in sup.state["cooldowns"]
-
-
 

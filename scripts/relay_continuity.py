@@ -4425,10 +4425,26 @@ class Supervisor:
         started = parse_ts(pending.get("started_at")) or self.host.now()
         timed_out = bool(pending.get("timed_out"))
         diagnostics = pending.get("diagnostics") or ""
-        if pending.get("pid") and self.host.pid_alive(pending["pid"], pending.get("pid_start")):
-            self.host.log(f"attempt still running as pid {pending['pid']}; waiting for it (never relaunched)")
+        killpg_fn = getattr(self.host.relay, "killpg", os.killpg)
+        group_running_fn = getattr(self.host.relay, "_group_is_running", None)
+
+        def group_alive(pgid: int) -> bool:
+            if callable(group_running_fn):
+                return bool(group_running_fn(pgid))
+            try:
+                killpg_fn(pgid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+            except (PermissionError, OSError):
+                return True
+
+        pid = pending.get("pid")
+        pid_start = pending.get("pid_start")
+        if pid and self.host.pid_alive(pid, pid_start):
+            self.host.log(f"attempt still running as pid {pid}; waiting for it (never relaunched)")
             wall_limit = getattr(self.limits, "turn_wall", Limits.turn_wall)
-            while self.host.pid_alive(pending["pid"], pending.get("pid_start")):
+            while self.host.pid_alive(pid, pid_start):
                 elapsed = (self.host.now() - started).total_seconds()
                 if elapsed >= wall_limit:
                     timed_out = True
@@ -4437,28 +4453,34 @@ class Supervisor:
                     pending["timed_out"] = True
                     pending["diagnostics"] = diagnostics
                     self.save()
-                    killpg_fn = getattr(self.host.relay, "killpg", os.killpg)
                     try:
-                        killpg_fn(pending["pid"], signal.SIGTERM)
+                        killpg_fn(pid, signal.SIGTERM)
                     except (ProcessLookupError, PermissionError, OSError):
                         pass
                     term_deadline = self.host.now() + timedelta(seconds=30.0)
-                    while self.host.pid_alive(pending["pid"], pending.get("pid_start")) and self.host.now() < term_deadline:
+                    while (self.host.pid_alive(pid, pid_start) or group_alive(pid)) and self.host.now() < term_deadline:
                         rem = max(0.01, (term_deadline - self.host.now()).total_seconds())
                         if self._sleep(min(1.0, rem)):
                             return "signal" if self.signalled else "stopped"
-                    if self.host.pid_alive(pending["pid"], pending.get("pid_start")):
+                    if self.host.pid_alive(pid, pid_start) or group_alive(pid):
                         try:
-                            killpg_fn(pending["pid"], signal.SIGKILL)
+                            killpg_fn(pid, signal.SIGKILL)
                         except (ProcessLookupError, PermissionError, OSError):
                             pass
                     break
                 rem_wall = max(0.01, wall_limit - elapsed)
                 if self._sleep(min(30.0, rem_wall)):
                     return "signal" if self.signalled else "stopped"
+        if timed_out:
+            reaped = self._reap()
+            if reaped is None:
+                return "signal" if self.signalled else "stopped"
+        else:
+            reaped = None
         session_id = self.host.relay.find_by_nonce(pending["nonce"], started)
-        # An adopted run was started by an earlier owner: what it left behind is not this process's to stop.
-        return self._settle(pending, session_id, diagnostics, timed_out=timed_out)
+        # An adopted run was started by an earlier owner: unless it was terminated under the wall limit,
+        # what it left behind is not this process's to stop.
+        return self._settle(pending, session_id, diagnostics, reaped, timed_out=timed_out)
 
 
 # ---------------------------------------------------------------------------
