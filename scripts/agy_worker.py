@@ -22,7 +22,6 @@ import signal
 import socket
 import subprocess
 import sys
-import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -254,14 +253,14 @@ def read_quota_after(agy: str, alias: str, env: dict[str, str]) -> tuple[list[di
         return None, str(exc)
 
 
-def activity_log_path(evidence: Path) -> Path:
+def activity_log_path() -> Path:
     configured = os.environ.get("JARVISOS_AGY_ACTIVITY_LOG")
     if configured:
         return Path(configured)
-    return evidence.resolve().parent / ".worker_runs.jsonl"
+    return Path.home() / "jarvis-control" / "work" / "evidence" / ".worker_runs.jsonl"
 
 
-def log_run_start(path: Path, run_id: str, started_at: datetime, ts: float) -> None:
+def log_run_start(path: Path, run_id: str, started_at: datetime, ts: float) -> bool:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         entry = {"run_id": run_id, "event": "start", "started_at": iso(started_at), "ts": ts}
@@ -271,11 +270,12 @@ def log_run_start(path: Path, run_id: str, started_at: datetime, ts: float) -> N
             os.write(fd, line)
         finally:
             os.close(fd)
+        return True
     except OSError:
-        pass
+        return False
 
 
-def log_run_end(path: Path, run_id: str, finished_at: datetime, ts: float) -> None:
+def log_run_end(path: Path, run_id: str, finished_at: datetime, ts: float) -> bool:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         entry = {"run_id": run_id, "event": "end", "finished_at": iso(finished_at), "ts": ts}
@@ -285,14 +285,15 @@ def log_run_end(path: Path, run_id: str, finished_at: datetime, ts: float) -> No
             os.write(fd, line)
         finally:
             os.close(fd)
+        return True
     except OSError:
-        pass
+        return False
 
 
 def check_overlap(path: Path, run_id: str, this_start: float, this_end: float) -> bool | None:
     try:
         if not path.is_file():
-            return False
+            return None
         runs: dict[str, dict[str, float]] = {}
         with open(path, encoding="utf-8") as handle:
             for line in handle:
@@ -318,6 +319,9 @@ def check_overlap(path: Path, run_id: str, this_start: float, this_end: float) -
                 elif ev == "end":
                     info["end"] = float(ts)
     except OSError:
+        return None
+
+    if "start" not in runs.get(run_id, {}):
         return None
 
     s1 = this_start
@@ -372,7 +376,6 @@ def default_evidence_dir() -> Path:
 def execute(args: argparse.Namespace, sandbox_check: Callable[[], bool] | None = None) -> tuple[Path | None, dict[str, Any]]:
     """Run the wrapper; returns (result.json path or None, result). Never raises for refusals."""
     started = now_utc()
-    started_ts = time.time()
     worktree = Path(args.worktree).expanduser()
     evidence = Path(args.evidence_dir).expanduser() if args.evidence_dir else default_evidence_dir()
     result: dict[str, Any] = {
@@ -385,8 +388,9 @@ def execute(args: argparse.Namespace, sandbox_check: Callable[[], bool] | None =
         result["reason"] = f"evidence_dir_uncreatable: {error}"
         return None, result
     run_id = secrets.token_hex(8)
-    log_path = activity_log_path(evidence)
-    logged = False
+    log_path = activity_log_path()
+    started_ts = 0.0
+    start_logged = False
     try:
         if not (sandbox_check or in_sandbox)():
             raise Refused("not_sandbox")
@@ -396,18 +400,20 @@ def execute(args: argparse.Namespace, sandbox_check: Callable[[], bool] | None =
         result["start_head"], git_dir, common = check_worktree(worktree)
         if not 0 < args.timeout <= MAX_TIMEOUT:
             raise Refused("timeout_out_of_range", f"{args.timeout} not in 1..{MAX_TIMEOUT}")
-        log_run_start(log_path, run_id, started, started_ts)
-        logged = True
+        started = now_utc()
+        started_ts = started.timestamp()
+        result["started_at"] = iso(started)
+        start_logged = log_run_start(log_path, run_id, started, started_ts)
         _run(args, result, evidence, sandbox_check or in_sandbox, alias=alias, model=model,
              task=task, digest=digest, git_dir=git_dir, common=common)
     except Refused as refusal:
         result.update(status="refused", reason=refusal.reason + (f": {refusal.detail}" if refusal.detail else ""))
     finished = now_utc()
-    finished_ts = time.time()
+    finished_ts = finished.timestamp()
     result["finished_at"] = iso(finished)
-    if logged:
-        log_run_end(log_path, run_id, finished, finished_ts)
-        result["overlap"] = check_overlap(log_path, run_id, started_ts, finished_ts)
+    if start_logged:
+        end_logged = log_run_end(log_path, run_id, finished, finished_ts)
+        result["overlap"] = check_overlap(log_path, run_id, started_ts, finished_ts) if end_logged else None
     path = evidence / "result.json"
     write_json(path, result)
     return path, result

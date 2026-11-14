@@ -940,6 +940,7 @@ def test_record_with_overlapped_run_adds_tokens_but_no_quota(tmp_path: Path) -> 
     assert entry["spend"] == {
         "runs": 2,
         "tokens": 800,
+        "clean_tokens": 500,
         "quota": pytest.approx(0.02),
         "quota_runs": 1,
         "overlap_runs": 1,
@@ -1229,3 +1230,58 @@ def test_non_clean_run_with_zero_tokens_not_costed_zero() -> None:
     # The zero-token non-clean record must NOT append 0.0 to costs; only the clean record is costed
     assert count == 1
     assert cost is None  # count < 5
+
+
+def test_mixed_clean_and_overlapped_record_contributes_clean_ratio(tmp_path: Path) -> None:
+    dir_clean = tmp_path / "run_clean"
+    dir_clean.mkdir()
+    (dir_clean / "result.json").write_text(json.dumps({
+        "usage": {"total_tokens": 500},
+        "quota": [{"id": "gemini-weekly", "remaining_fraction": 0.80}],
+        "quota_after": [{"id": "gemini-weekly", "remaining_fraction": 0.78}],
+        "overlap": False,
+    }))
+    dir_ov = tmp_path / "run_ov"
+    dir_ov.mkdir()
+    (dir_ov / "result.json").write_text(json.dumps({
+        "usage": {"total_tokens": 300},
+        "quota": [{"id": "gemini-weekly", "remaining_fraction": 0.78}],
+        "quota_after": [{"id": "gemini-weekly", "remaining_fraction": 0.75}],
+        "overlap": True,
+    }))
+    rf = tmp_path / "worker-outcomes.jsonl"
+    mixed = wr.record(task="t_mixed", kind="feature", worker="flash-medium",
+                      evidence=[dir_clean, dir_ov], record_file=rf)
+    # Only the mixed record provides a clean run (0.02 quota / 500 clean_tokens = 0.00004 ratio).
+    # Its total tokens (800) * 0.00004 = 0.032 cost.
+    # Add 4 overlapped-only records of 500 tokens each -> cost = 500 * 0.00004 = 0.02 each.
+    ov_records = [
+        {"task": f"ov{i}", "kind": "feature", "worker": "flash-medium", "model": "gemini-3.8-flash-medium",
+         "failure": "none", "spend": {"runs": 1, "tokens": 500, "quota": 0.0, "quota_runs": 0, "overlap_runs": 1}}
+        for i in range(4)
+    ]
+    model = next(m for m in wr.MODELS if m.key == "flash-medium")
+    cost, count = wr.candidate_measured_cost(model, "feature", [mixed, *ov_records])
+    assert count == 5
+    assert cost == pytest.approx(0.02)
+
+
+def test_non_agy_workers_keep_order_and_ignore_spend() -> None:
+    # Codex/Claude/Copilot workers do not write agy evidence; their ordering is unchanged even if spend is present.
+    records = [
+        {"task": f"t{i}", "kind": "feature", "worker": "terra", "model": "gpt-6.1-terra",
+         "failure": "none", "spend": {"runs": 1, "tokens": 1000, "quota": 0.05, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(5)
+    ] + [
+        {"task": f"s{i}", "kind": "feature", "worker": "sol", "model": "gpt-6-sol",
+         "failure": "none", "spend": {"runs": 1, "tokens": 1000, "quota": 0.001, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(5)
+    ]
+    terra = next(m for m in wr.MODELS if m.key == "terra")
+    cost, count = wr.candidate_measured_cost(terra, "feature", records)
+    assert cost is None
+    assert count == 0
+    ranked, _ = wr.rank(2, pools(), kind="feature", outcomes=records)
+    workers = [r["worker"] for r in ranked]
+    assert workers.index("terra") < workers.index("sol")
+

@@ -562,3 +562,29 @@ def test_crashed_peer_older_than_max_timeout_plus_kill_margin_not_overlapping(
 
     res = env.run()
     assert res["overlap"] is False
+
+
+def test_different_evidence_parents_share_default_activity_log(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JARVISOS_AGY_ACTIVITY_LOG", raising=False)
+    default_log = worker.activity_log_path()
+    now = time.time()
+    worker.log_run_start(default_log, "peer_other_dir", worker.now_utc(), now - 5)
+
+    custom_ev = env.tmp / "custom_sub" / "nested" / "ev1"
+    args = argparse.Namespace(
+        task_file=str(env.task), worktree=str(env.wt), model="flash",
+        timeout=30, evidence_dir=str(custom_ev), coordinator_fallback=False,
+    )
+    _, res = worker.execute(args, sandbox_check=lambda: True)
+    assert res["overlap"] is True
+
+
+def test_activity_log_write_failure_reports_overlap_null(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Point activity log at an existing directory so open() fails with EISDIR (OSError)
+    bad_log = env.tmp / "is_a_dir"
+    bad_log.mkdir()
+    monkeypatch.setenv("JARVISOS_AGY_ACTIVITY_LOG", str(bad_log))
+    res = env.run()
+    assert res["status"] == "succeeded"
+    assert res["overlap"] is None
+

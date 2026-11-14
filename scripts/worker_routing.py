@@ -712,6 +712,7 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
         if raw_list:
             seen_evidence: set[Path] = set()
             total_tokens = 0
+            clean_tokens = 0
             sum_quota = 0.0
             quota_runs = 0
             overlap_runs = 0
@@ -731,9 +732,11 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
                 if not isinstance(res_dict, dict):
                     raise ValueError(f"evidence result missing or unreadable: {item}")
                 usage = res_dict.get("usage")
+                run_tokens = 0
                 if isinstance(usage, dict):
                     tot = usage.get("total_tokens", 0)
                     if isinstance(tot, int) and not isinstance(tot, bool) and tot >= 0:
+                        run_tokens = tot
                         total_tokens += tot
                 overlap = res_dict.get("overlap")
                 if overlap is True:
@@ -753,6 +756,7 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
                                 if delta >= 0.0:
                                     sum_quota += delta
                                     quota_runs += 1
+                                    clean_tokens += run_tokens
             spend_data = {
                 "runs": len(raw_list),
                 "tokens": total_tokens,
@@ -760,6 +764,8 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
                 "quota_runs": quota_runs,
                 "overlap_runs": overlap_runs,
             }
+            if 0 < quota_runs < len(raw_list):
+                spend_data["clean_tokens"] = clean_tokens
 
     moment = now or datetime.now(UTC)
     entry: dict[str, Any] = {
@@ -938,10 +944,28 @@ def _is_clean_spend(spend: dict[str, Any]) -> bool:
             and overlap_runs == 0 and quota_runs == runs and runs > 0)
 
 
+def _clean_quota_and_tokens(spend: dict[str, Any]) -> tuple[float, int] | None:
+    if _is_clean_spend(spend):
+        tokens = spend.get("tokens")
+        if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) and int(tokens) > 0:
+            quota = spend.get("quota", 0.0)
+            if isinstance(quota, (int, float)) and not isinstance(quota, bool) and float(quota) >= 0.0:
+                return float(quota), int(tokens)
+        return None
+    quota_runs = spend.get("quota_runs", 0)
+    clean_tok = spend.get("clean_tokens")
+    if (isinstance(quota_runs, int) and not isinstance(quota_runs, bool) and quota_runs > 0
+            and isinstance(clean_tok, (int, float)) and not isinstance(clean_tok, bool) and int(clean_tok) > 0):
+        quota = spend.get("quota", 0.0)
+        if isinstance(quota, (int, float)) and not isinstance(quota, bool) and float(quota) >= 0.0:
+            return float(quota), int(clean_tok)
+    return None
+
+
 def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[dict[str, Any]] | None) -> tuple[float | None, int]:
     """Median measured quota per accepted task of the requested kind (failure != harness, with spend).
     Returns (median_cost or None, count of costed records). Measured when count >= 5."""
-    if kind is None or not outcomes:
+    if candidate.kind != "agy" or kind is None or not outcomes:
         return None, 0
 
     c_records = [
@@ -960,14 +984,13 @@ def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[d
         and r.get("failure") != "harness"
         and isinstance(r.get("spend"), dict)
     ]
-    clean_records = [
-        r for r in all_spend_records
-        if _is_clean_spend(r["spend"])
-        and (int(r["spend"]["tokens"]) if isinstance(r["spend"].get("tokens"), (int, float)) and not isinstance(r["spend"]["tokens"], bool) else 0) > 0
+    clean_pairs = [
+        pair for r in all_spend_records
+        if (pair := _clean_quota_and_tokens(r["spend"])) is not None
     ]
-    clean_quota = sum(float(r["spend"].get("quota", 0.0)) for r in clean_records)
-    clean_tokens = sum(int(r["spend"]["tokens"]) for r in clean_records)
-    ratio = (clean_quota / clean_tokens) if (clean_records and clean_tokens > 0) else None
+    clean_quota = sum(q for q, _ in clean_pairs)
+    clean_tokens = sum(t for _, t in clean_pairs)
+    ratio = (clean_quota / clean_tokens) if (clean_pairs and clean_tokens > 0) else None
 
     costs: list[float] = []
     for r in c_records:
