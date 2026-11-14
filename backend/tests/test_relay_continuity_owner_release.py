@@ -1,10 +1,19 @@
 import argparse
+import importlib.util
 import json
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts import relay_continuity as rc
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "relay_continuity.py"
+rc = sys.modules.get("relay_continuity")
+if rc is None:
+    SPEC = importlib.util.spec_from_file_location("relay_continuity", SCRIPT)
+    assert SPEC and SPEC.loader
+    rc = importlib.util.module_from_spec(SPEC)
+    sys.modules["relay_continuity"] = rc
+    SPEC.loader.exec_module(rc)
 
 
 def test_owner_release_sha(tmp_path, monkeypatch):
