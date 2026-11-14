@@ -134,7 +134,7 @@ are away. Operations manual: `docs/implementation/relay-continuity-runbook.md`.
 - **Missions and roadmap mode.** A mission is an ordered task list queued under a recorded maintainer directive and run
   one task at a time. In roadmap mode the supervisor keeps one coordinator cycle queued; the cycle reads `docs/specs/STATUS.md` and
   the fresh GitHub state, picks the highest-value authorized work, and drives it to a merged and reconciled result or to a
-  durable checkpoint (a pushed branch or PR plus a ledger note).
+  durable checkpoint (a pushed branch or PR plus a ledger note). After an implementation PR merges its row stays `in_review` until the next PR that edits STATUS.md writes `merged`; no PR is opened only for that word; a PR that sets a dependent spec `in_review` writes `merged` for its done dependencies because the CI spec gate still requires it.
 - Every coordinator turn records a maintainer update with `python3 scripts/devctx.py note note --lane maintainer "Sto … . Prossimo: …"`: one or two plain Italian sentences about what the maintainer sees, naming a feature by its visible name or a spec by its subject, without ids, SHAs, paths or codenames.
 - **Recovery packet.** Start every resumed or taken-over session with `python3 scripts/devctx.py recover`. It prints a
   freshness-checked picture of Git, GitHub, `docs/specs/STATUS.md`, worktrees and the local control ledger. Record what the code

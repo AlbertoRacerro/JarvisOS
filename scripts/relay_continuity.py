@@ -2856,8 +2856,8 @@ def describe_check(check: dict[str, Any] | None) -> str:
     what = {"host_receipt": lambda c: f"a signed ok host receipt exists for {c['op']} at {c.get('sha') or 'any commit'}",
             "pr_merged": lambda c: f"PR #{c['pr']} is merged on GitHub",
             "path_exists": lambda c: f"`{c['path']}` exists in the repository",
-            "spec_merged": lambda c: f"spec {c['spec']} is `merged` in docs/specs/STATUS.md on GitHub master and every "
-                                     "PR linked in its row is merged",
+            "spec_merged": lambda c: f"spec {c['spec']} is `merged` in docs/specs/STATUS.md on GitHub master, or "
+                                     "`in_review` there with every linked PR merged",
             "coordinator_cycle": lambda c: "the cycle ends with a final RELAY_STATUS while the remote heads are readable; "
                                            "the cycle is recorded settled, not as verified delivery of its work"}
     return f"Completion contract: the owner records this task complete only after its own read-only check that {what[check['kind']](check)}."
@@ -4881,7 +4881,7 @@ def check_task(repo: Path, check: dict[str, Any], run: Runner = devctx.run) -> s
                 and len(cells := [c.strip() for c in line.strip().strip("|").split("|")]) >= 3 and cells[0] == check["spec"]]
         if len(rows) != 1:
             return f"spec {check['spec']} has {len(rows)} STATUS.md rows"
-        if rows[0][1] != "merged":
+        if rows[0][1] not in ("merged", "in_review"):
             return f"spec {check['spec']} is {rows[0][1] or 'unknown'} in STATUS.md"
         prs = sorted({int(n) for n in re.findall(r"\[#(\d+)\]", rows[0][2])})
         if not prs:

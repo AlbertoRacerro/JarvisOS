@@ -22,7 +22,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -43,11 +43,11 @@ SECRET_PATTERNS = [re.compile(p) for p in (
 
 
 def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def iso(ts: datetime) -> str:
-    return ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return ts.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def parse_ts(value: str) -> datetime:
@@ -148,7 +148,7 @@ def real_processes(log_root: Path | None = None) -> list[dict[str, Any]]:
             stat = (entry / "stat").read_text().rsplit(")", 1)[1].split()
             rows.append({
                 "pid": int(entry.name), "ppid": int(stat[1]), "name": name,
-                "start": int(stat[19]), "started_at": iso(datetime.fromtimestamp(boot + int(stat[19]) / hertz, timezone.utc)),
+                "start": int(stat[19]), "started_at": iso(datetime.fromtimestamp(boot + int(stat[19]) / hertz, UTC)),
                 "cwd": os.readlink(entry / "cwd"),
                 "logs": sorted(set(logs)),
                 "cmdline": " ".join(a.decode(errors="replace") for a in argv if a)[:4_000],
@@ -325,7 +325,7 @@ def master_state(env: Env) -> dict[str, Any]:
     fetch_head = env.git("rev-parse", "--path-format=absolute", "--git-common-dir")
     fetched_at = None
     if fetch_head and (Path(fetch_head) / "FETCH_HEAD").exists():
-        fetched_at = iso(datetime.fromtimestamp((Path(fetch_head) / "FETCH_HEAD").stat().st_mtime, timezone.utc))
+        fetched_at = iso(datetime.fromtimestamp((Path(fetch_head) / "FETCH_HEAD").stat().st_mtime, UTC))
     return {"sha": sha, "committed_at": when, "subject": subject[:120], "fetched_at": fetched_at}
 
 
@@ -378,7 +378,7 @@ def pr_lookup(env: Env, gh_state: dict[str, Any], number: int,
 STATUS_ROW = re.compile(r"^\| (\w+) \| (\w+) \| ([^|]*) \| ([^|]*) \| ([^|]*) \|")
 
 
-def status_state(env: Env) -> dict[str, Any]:
+def status_state(env: Env, gh_state: dict[str, Any] | None = None) -> dict[str, Any]:
     text = env.git("show", "origin/master:docs/specs/STATUS.md")
     if text is None:
         return {"ok": False, "rows": []}
@@ -389,9 +389,19 @@ def status_state(env: Env) -> dict[str, Any]:
             spec, status, pr, name, deps = (g.strip() for g in match.groups())
             rows.append({"spec": spec, "status": status, "prs": re.findall(r"#(\d+)", pr), "name": name,
                          "deps": [d.strip() for d in deps.split(",") if d.strip() and d.strip() != "—"]})
-    merged = {row["spec"] for row in rows if row["status"] == "merged"}
+    gh_ok = bool(gh_state and gh_state.get("ok"))
+    merged_prs = {str(p["number"]) for p in gh_state.get("merged", [])} if gh_ok else set()
     for row in rows:
-        row["deps_merged"] = all(dep in merged for dep in row["deps"])
+        if gh_ok:
+            row["done"] = (row["status"] == "merged"
+                           or (row["status"] == "in_review"
+                               and bool(row["prs"])
+                               and all(p in merged_prs for p in row["prs"])))
+        else:
+            row["done"] = row["status"] == "merged"
+    done_specs = {row["spec"] for row in rows if row["done"]}
+    for row in rows:
+        row["deps_merged"] = all(dep in done_specs for dep in row["deps"])
     return {"ok": True, "rows": rows}
 
 
@@ -478,7 +488,7 @@ def lane_state(env: Env, procs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 lane["state"] = "failed-empty-report" if lane.get("exit_code") is None else f"failed-exit-{lane['exit_code']}"
         else:
             lane["state"] = "incomplete-no-process" if not lane["report_bytes"] else "report-without-done-marker"
-        lane["last_write_at"] = iso(datetime.fromtimestamp(lane.pop("last_write"), timezone.utc))
+        lane["last_write_at"] = iso(datetime.fromtimestamp(lane.pop("last_write"), UTC))
     return sorted(lanes.values(), key=lambda item: item["last_write_at"], reverse=True)
 
 
@@ -488,7 +498,7 @@ def relay_prompts(env: Env, since: datetime | None, limit: int = 3) -> list[dict
     found: list[dict[str, Any]] = []
     for prompt in env.relay_sessions.glob("*/turns/*/prompt.md"):
         stat = prompt.stat()
-        when = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+        when = datetime.fromtimestamp(stat.st_mtime, UTC)
         if stat.st_size < 800 or (since and when <= since):
             continue
         text = prompt.read_text(encoding="utf-8", errors="replace")
@@ -643,7 +653,7 @@ def build_packet(env: Env, *, fetch: bool = True) -> dict[str, Any]:
     fetched = fetch_origin(env, fetch)
     procs = env.processes() if env.processes else []
     gh_state = github_state(env)
-    status = status_state(env)
+    status = status_state(env, gh_state)
     ledger = read_ledger(env)
     superseded = {ref for item in ledger for ref in item.get("supersedes", [])}
     cache: dict[int, Any] = {}
@@ -668,7 +678,7 @@ def build_packet(env: Env, *, fetch: bool = True) -> dict[str, Any]:
     progress = env.control / "PROGRESS.md"
     progress_note = None
     if progress.exists():
-        mtime = datetime.fromtimestamp(progress.stat().st_mtime, timezone.utc)
+        mtime = datetime.fromtimestamp(progress.stat().st_mtime, UTC)
         if last_ledger_ts is None or mtime > last_ledger_ts + timedelta(seconds=5):
             heads = [line for line in progress.read_text(encoding="utf-8", errors="replace").splitlines() if line.startswith("## ")]
             progress_note = {"path": str(progress), "modified_at": iso(mtime), "last_section": heads[-1][3:120] if heads else None}
@@ -689,9 +699,19 @@ def build_packet(env: Env, *, fetch: bool = True) -> dict[str, Any]:
             "complete evidence / undraft" if pr.get("isDraft") else "merge decision for"
         candidates.append(f"{verb} PR #{pr['number']} ({pr['title'][:70]})")
     open_numbers = {str(pr["number"]) for pr in open_prs}
+    merged_numbers = {str(pr["number"]) for pr in gh_state.get("merged", [])}
     for row in in_flight:
         if row["status"] == "in_review" and not set(row["prs"]) & open_numbers:
-            candidates.append(f"spec {row['spec']} is in_review but none of its PRs is open: reconcile STATUS")
+            if not gh_state["ok"]:
+                candidates.append(f"spec {row['spec']} is in_review but none of its PRs is open: reconcile STATUS")
+            elif not row["done"]:
+                closed = [p for p in row["prs"] if p not in open_numbers and p not in merged_numbers]
+                if closed:
+                    prs_str = ", ".join(f"#{p}" for p in closed)
+                    label = f"PRs {prs_str} are" if len(closed) > 1 else f"PR {prs_str} is"
+                    candidates.append(f"spec {row['spec']} is in_review but {label} closed unmerged: reconcile STATUS")
+                else:
+                    candidates.append(f"spec {row['spec']} is in_review but none of its PRs is open: reconcile STATUS")
     for row in ready:
         if row["deps_merged"] and not set(row["prs"]) & open_numbers:
             linked = [pr["number"] for pr in open_prs if re.search(rf"/{re.escape(row['spec'])}-", pr["headRefName"])]
@@ -824,7 +844,7 @@ def render(packet: dict[str, Any], budget: int = DEFAULT_BUDGET_CHARS) -> str:
         out.append(f"- (+{len(trees) - 14} more)")
     out.append(f"- ({len(packet['worktrees']) - len(trees)} other worktrees are clean and merged)")
     lanes = packet["lanes"]
-    recent = [l for l in lanes if l["state"] != "done" or (now - parse_ts(l["last_write_at"])) < timedelta(hours=24)]
+    recent = [lane for lane in lanes if lane["state"] != "done" or (now - parse_ts(lane["last_write_at"])) < timedelta(hours=24)]
     out += ["", "## Worker lanes (running, unfinished, or finished in 24 h; reports are unreviewed claims)"]
     for lane in recent[:14]:
         where = f" in {lane['worktree']}" if lane.get("worktree") else ""
