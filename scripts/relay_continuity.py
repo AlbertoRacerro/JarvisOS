@@ -20,6 +20,7 @@ import fcntl
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import secrets
@@ -31,6 +32,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import urllib.error
@@ -149,6 +151,7 @@ class Limits:
     max_reset_ahead: timedelta = timedelta(days=8)
     min_free_percent: float = 25.0
     reap_grace: float = 5.0  # seconds a leftover process gets to exit on SIGTERM before SIGKILL
+    turn_wall: float = 3600.0  # seconds RelayAdapter.finish waits before terminating the process group
 
 
 def now_utc() -> datetime:
@@ -1292,6 +1295,9 @@ def no_terminal_evidence(report: TurnReport, turn_dir: Path, diagnostics: str) -
     text = "\n".join(t for t in texts if t)
     if text and classify_text(text, None) == "auth":
         report.outcome, report.detail = "auth", f"{report.detail}; runner reported an authentication failure"
+        report.no_evidence = False
+    elif "wall limit" in text.lower():
+        report.detail = f"{report.detail}; {diagnostics.strip()}"
     return report
 
 
@@ -1349,7 +1355,7 @@ def default_state() -> dict[str, Any]:
         "permissions_digest": None, "permissions_pinned": False, "pending": None, "waiting_since": None, "last_outcome": None,
         "notify": {"sent": {}, "window": [], "last_digest": None, "failures": 0, "retry": None, "dropped": 0},
         "watch": {"seen": {}, "master": None}, "acknowledged": None, "spend_caps": {}, "updated_at": None,
-        "parked_turns": [], "wait": None, "resumes": 0, "last_checkpoint_at": None,
+        "parked_turns": [], "wait": None, "resumes": 0, "last_checkpoint_at": None, "network_outage": False,
     }
 
 
@@ -1553,7 +1559,7 @@ FIELD_RULES: dict[str, Callable[[str], bool]] = {
     "claude_until": lambda v: v in ("none", "manual") or bool(re.fullmatch(ISO_RE, v)),
     "codex_until": lambda v: v in ("none", "manual") or bool(re.fullmatch(ISO_RE, v)),
     "argon_until": lambda v: v in ("none", "manual") or bool(re.fullmatch(ISO_RE, v)),
-    "reset_source": lambda v: v in ("limits", "message", "estimate", "manual"),
+    "reset_source": lambda v: v in ("limits", "message", "estimate", "manual", "auth"),
     "attempt": lambda v: bool(re.fullmatch(r"\d{1,4}", v)),
     "attempts": lambda v: bool(re.fullmatch(r"\d{1,6}", v)),
     "holds": lambda v: bool(re.fullmatch(r"\d{1,6}", v)),
@@ -1903,13 +1909,20 @@ class RunResult:
     exit_code: int | None
     raw_ok: bool
     diagnostics: str = ""
+    timed_out: bool = False
 
 
 class RelayAdapter:
-    def __init__(self, repo: Path, binary: str = "agent-relay", env: dict[str, str] | None = None):
+    def __init__(self, repo: Path, binary: str = "agent-relay", env: dict[str, str] | None = None,
+                 turn_wall: float = Limits.turn_wall, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], None] = time.sleep, killpg: Callable[[int, int], None] = os.killpg):
         self.repo = repo
         self.binary = binary
         self.env = env  # extra environment for launched runs (the sandboxed mission profile); None: inherited
+        self.turn_wall = turn_wall
+        self.clock = clock
+        self.sleep = sleep
+        self.killpg = killpg
         self._outputs: dict[int, tuple[Any, Any]] = {}
         self._argon_leases: dict[int, Any] = {}
 
@@ -1940,7 +1953,8 @@ class RelayAdapter:
             env = {**os.environ, **(self.env or {})}
             relay_argon.model_for(agent, env)
             reading = relay_argon.read_quota(binary, env, agent=agent)
-            result = {"windows": [{"used_percent": 100 * (1 - b["remaining_fraction"]),
+            result = {"as_of": iso(now_utc()),
+                      "windows": [{"used_percent": 100 * (1 - b["remaining_fraction"]),
                                    "resets_at": b.get("reset_time"), "disabled": b.get("disabled", False)}
                                   for b in reading]}
         except relay_argon.Refused:
@@ -1999,22 +2013,102 @@ class RelayAdapter:
         if lease:
             lease.close()
 
-    def finish(self, proc: subprocess.Popen) -> RunResult:
-        proc.wait()
-        files = self._outputs.pop(id(proc))
+    def _proc_is_running(self, proc: Any) -> bool:
+        if hasattr(proc, "poll"):
+            try:
+                return proc.poll() is None
+            except Exception:  # noqa: BLE001
+                return False
+        return False
+
+    def _group_is_running(self, pgid: int) -> bool:
+        try:
+            self.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+
+    def finish(self, proc: subprocess.Popen, timeout: float | None = None) -> RunResult:
+        wall_limit = self.turn_wall if timeout is None else timeout
+        start = self.clock()
+        timed_out = False
+        if self.clock is time.monotonic and self.sleep is time.sleep and hasattr(proc, "wait"):
+            try:
+                proc.wait(timeout=max(0.0, wall_limit))
+            except (subprocess.TimeoutExpired, TimeoutError):
+                timed_out = True
+        else:
+            while True:
+                if not self._proc_is_running(proc):
+                    break
+                if self.clock() - start >= wall_limit:
+                    timed_out = True
+                    break
+                self.sleep(min(1.0, max(0.01, wall_limit - (self.clock() - start))))
+
+        if timed_out:
+            pgid = getattr(proc, "pid", None)
+            if pgid:
+                try:
+                    self.killpg(pgid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            term_start = self.clock()
+            if self.clock is time.monotonic and self.sleep is time.sleep and hasattr(proc, "wait"):
+                try:
+                    proc.wait(timeout=30.0)
+                except (subprocess.TimeoutExpired, TimeoutError):
+                    pass
+                while pgid and self._group_is_running(pgid) and self.clock() - term_start < 30.0:
+                    self.sleep(min(1.0, max(0.01, 30.0 - (self.clock() - term_start))))
+            else:
+                while (self._proc_is_running(proc) or (pgid and self._group_is_running(pgid))) and self.clock() - term_start < 30.0:
+                    self.sleep(min(1.0, max(0.01, 30.0 - (self.clock() - term_start))))
+            if pgid and (self._proc_is_running(proc) or self._group_is_running(pgid)):
+                try:
+                    self.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            if hasattr(proc, "wait"):
+                try:
+                    if self.clock is time.monotonic and self.sleep is time.sleep:
+                        proc.wait(timeout=1.0)
+                    else:
+                        proc.wait()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        files = self._outputs.pop(id(proc), None)
         texts = []
-        for handle in files:
-            handle.seek(0)
-            texts.append(handle.read())
-            handle.close()
-        out, err = texts
+        if files:
+            for handle in files:
+                try:
+                    handle.seek(0)
+                    texts.append(handle.read())
+                    handle.close()
+                except Exception:  # noqa: BLE001
+                    texts.append("")
+        out, err = texts if len(texts) == 2 else ("", "")
         diagnostics = (err or "")[-8192:]
+        session_id = None
+        errors: list[str] = []
         try:
             data = json.loads(out)
+            session_id = data.get("session_id")
             errors = [str(data.get(k)) for k in ("run_error", "error", "stop_reason") if data.get(k)]
-            return RunResult(data.get("session_id"), proc.returncode, True, "\n".join([diagnostics, *errors]))
         except (json.JSONDecodeError, TypeError, AttributeError):
-            return RunResult(None, proc.returncode, False, diagnostics)
+            pass
+
+        if timed_out:
+            wall_diag = f"turn wall limit ({int(wall_limit)}s) exceeded"
+            diagnostics = f"{diagnostics}\n{wall_diag}".strip() if diagnostics else wall_diag
+            return RunResult(session_id, getattr(proc, "returncode", None), False, diagnostics, timed_out=True)
+
+        if session_id is not None or errors:
+            return RunResult(session_id, getattr(proc, "returncode", None), True, "\n".join([diagnostics, *errors]))
+        return RunResult(None, getattr(proc, "returncode", None), False, diagnostics)
 
     def sessions_dir(self) -> Path:
         return self.repo / ".agent-relay" / "sessions"
@@ -2947,6 +3041,50 @@ def session_context_block(
     return text_block, journal_fields
 
 
+def _connect_endpoint(host: str, port: int, timeout: float, result: list[bool], done: threading.Event) -> None:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            result[0] = True
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        done.set()
+
+
+def default_reachable(host: str = "github.com", port: int = 443, timeout: float = 5.0) -> bool:
+    result = [False]
+    done = threading.Event()
+    bound = max(0.0, timeout)
+    threading.Thread(target=_connect_endpoint, args=(host, port, max(0.01, bound), result, done), daemon=True).start()
+    done.wait(timeout=bound)
+    return result[0]
+
+
+def _valid_percent(value: Any) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and (isinstance(value, int) or math.isfinite(value))
+            and 0 <= value <= 100)
+
+
+def _safe_auth_detail(detail: str | None) -> str:
+    text = (detail or "").strip()
+    if text in ("output missing; runner reported an authentication failure",
+                "output empty; runner reported an authentication failure",
+                "output unparseable; runner reported an authentication failure"):
+        return text
+    if text.startswith("native preflight refused: "):
+        reason = text.removeprefix("native preflight refused: ").strip()
+        if reason in ("login_state_missing", "login_path_conflict", "agy_missing", "not_sandbox"):
+            return text
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,40} status=(?:None|\d{1,3})", text):
+        return text
+    if re.fullmatch(r"codex [A-Za-z0-9_.-]{1,40}", text):
+        return text
+    if re.fullmatch(r"native [A-Za-z0-9_.-]{1,20} failed or empty result", text):
+        return text
+    return "classified auth failure"
+
+
 @dataclass
 class Host:
     relay: Any
@@ -2955,7 +3093,7 @@ class Host:
     fingerprint: Callable[[], str] = lambda: ""
     conflicts: Callable[[set[int]], list[str]] = lambda own: []
     pid_alive: Callable[[int, int | None], bool] = lambda pid, start: devctx.pid_start(pid) == start and start is not None
-    ledger: Callable[[str, str], None] = lambda kind, text: None
+    ledger: Callable[[str, str], Any] = lambda kind, text: None
     permissions_digest: Callable[[], str | None] = lambda: None
     log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True)
     probe: Callable[[ToolCall], tuple[str, str] | None] = lambda call: None
@@ -2965,6 +3103,8 @@ class Host:
     session_context: Callable[[str | None], tuple[str, dict[str, Any]]] | None = None
     job_status: Callable[[str], dict[str, Any] | None] | None = None  # spec 267: None when unregistered
     pr_ci_status: Callable[[int, str], dict[str, Any] | None] | None = None  # spec 267: check results for (pr, head_sha)
+    reachable: Callable[[], bool] = default_reachable
+    read_ledger: Callable[[], list[dict[str, Any]]] | None = None
 
 
 class _DecisionSnapshot:
@@ -3023,11 +3163,26 @@ class Supervisor:
         except Exception as exc:  # noqa: BLE001 - notification can never interrupt supervision
             self.host.log(f"notify: internal error {type(exc).__name__}")
 
-    def record(self, kind: str, text: str) -> None:
+    def record(self, kind: str, text: str) -> str | None:
         try:
-            self.host.ledger(kind, text)
+            return self.host.ledger(kind, text)
         except Exception as exc:  # noqa: BLE001
             self.host.log(f"ledger: append failed {type(exc).__name__}")
+            return None
+
+    def _read_ledger(self) -> list[dict[str, Any]]:
+        if getattr(self.host, "read_ledger", None) is not None:
+            try:
+                return self.host.read_ledger() or []
+            except Exception:  # noqa: BLE001
+                return []
+        try:
+            repo = getattr(getattr(self.host, "relay", None), "repo", None)
+            if repo:
+                return devctx.read_ledger(devctx.default_env(repo))
+        except Exception:  # noqa: BLE001
+            pass
+        return []
 
     def stop_requested(self) -> bool:
         return self.signalled or self.store.stop_path.exists()
@@ -3095,7 +3250,7 @@ class Supervisor:
             return None  # no usage windows: no evidence either way
         for window in windows:
             used = window.get("used_percent") if isinstance(window, dict) else None
-            if isinstance(used, bool) or not isinstance(used, (int, float)):
+            if not _valid_percent(used):
                 return None  # an unusable window is not evidence of room
             reset = parse_ts(window.get("resets_at"))
             if used >= 99.5:
@@ -3113,9 +3268,67 @@ class Supervisor:
         now = self.host.now()
         cooldown = self.state["cooldowns"].get(agent)
         if cooldown:
-            until = parse_ts(cooldown.get("until"))
-            if until is None or now < until:
-                return False
+            source = cooldown.get("source")
+            if source == "auth":
+                qid = cooldown.get("question")
+                cleared = False
+                if qid:
+                    for entry in reversed(self._read_ledger()):
+                        if entry.get("kind") == "decision" and entry.get("status") == "accepted" and qid in (entry.get("supersedes") or []):
+                            text = str(entry.get("text") or "")
+                            if ": " in text:
+                                _, ans = text.split(": ", 1)
+                                if ans.strip().startswith("1"):
+                                    cleared = True
+                            break
+                if cleared:
+                    self.state["cooldowns"].pop(agent, None)
+                    cooldown = None
+                else:
+                    return False
+            else:
+                until = parse_ts(cooldown.get("until"))
+                if until is not None and now < until:
+                    if source in ("limits", "message"):
+                        counters = self.state["counters"]
+                        if counters.get(f"reading_clear_{agent}", 0) == 0:
+                            since = parse_ts(cooldown.get("since"))
+                            if since is not None:
+                                if agent in NATIVE_AGENTS:
+                                    native = self._snapshot.get_entry(agent) if self._snapshot is not None else self.host.relay.argon_limits(agent)
+                                    if isinstance(native, dict):
+                                        as_of = parse_ts(native.get("as_of"))
+                                        windows = native.get("windows")
+                                        plausible = (isinstance(windows, list) and len(windows) > 0 and
+                                                     all(isinstance(w, dict) and
+                                                         _valid_percent(w.get("used_percent")) for w in windows))
+                                        fresh = as_of is not None and abs(now - as_of) <= self.limits.reading_freshness
+                                        room = plausible and all(not w.get("disabled") and w["used_percent"] < 100 for w in windows)
+                                        if fresh and as_of > since and room:
+                                            self.state["cooldowns"].pop(agent, None)
+                                            counters[f"reading_clear_{agent}"] = 1
+                                            self.record("finding", f"relay-continuity: cleared {source} cooldown for {agent} via fresh limits reading")
+                                            return True
+                                else:
+                                    entry = self.reading(agent)
+                                    if entry is not None and (as_of := parse_ts(entry.get("as_of"))) is not None and as_of <= since:
+                                        self._reading = None
+                                        self._reading_at = None
+                                        if self._snapshot is not None:
+                                            self._snapshot._entries.pop(agent, None)
+                                            self._snapshot._rooms.pop(agent, None)
+                                        entry = self.reading(agent)
+                                    if entry is not None:
+                                        as_of = parse_ts(entry.get("as_of"))
+                                        room = (self.exhausted_until(agent) is False)
+                                        if as_of is not None and as_of > since and room:
+                                            self.state["cooldowns"].pop(agent, None)
+                                            counters[f"reading_clear_{agent}"] = 1
+                                            self.record("finding", f"relay-continuity: cleared {source} cooldown for {agent} via fresh limits reading")
+                                            return True
+                    return False
+                if until is None:
+                    return False
         if agent in NATIVE_AGENTS:
             native = self._snapshot.get_entry(agent) if self._snapshot is not None else self.host.relay.argon_limits(agent)
             if native is None:
@@ -3150,7 +3363,7 @@ class Supervisor:
             if not isinstance(window, dict):
                 return None
             used = window.get("used_percent")
-            if isinstance(used, bool) or not isinstance(used, (int, float)) or not 0 <= used <= 100:
+            if not _valid_percent(used):
                 return None
             if not native:
                 reset = parse_ts(window.get("resets_at"))
@@ -3188,7 +3401,33 @@ class Supervisor:
         if report.spend_cap:
             caps[agent] = {"turn": report.turn_id, "at": iso(now)}
         counters = self.state["counters"]
-        if report.outcome == "spend_limit":
+        if report.outcome == "auth":
+            until, source = None, "auth"
+            existing = self.state["cooldowns"].get(agent)
+            if isinstance(existing, dict) and existing.get("source") == "auth":
+                qid = existing.get("question")
+            else:
+                safe_detail = _safe_auth_detail(report.detail)
+                q_text = (
+                    f"Autenticazione fallita per l'agente {agent} ({safe_detail}). Come procedere?\n"
+                    f"1. (consigliata) Accesso ripristinato per {agent}, riprova — conseguenza: riprova l'agente al prossimo turno\n"
+                    f"2. Mantieni {agent} escluso — conseguenza: l'agente resta escluso fino al comando release"
+                )
+                self.state["cooldowns"][agent] = {
+                    "until": None, "source": "auth", "reason": report.outcome,
+                    "since": iso(now), "turn": report.turn_id, "question": None,
+                }
+                self.save()
+                qid = self.record("question", q_text)
+            self.state["cooldowns"][agent] = {
+                "until": None, "source": "auth", "reason": report.outcome,
+                "since": iso(now), "turn": report.turn_id, "question": qid,
+            }
+            self.save()
+            self.notify("provider_exhausted", dedupe_key=f"exhausted|{agent}|auth", agent=agent,
+                        outcome=report.outcome, reset_at="manual", reset_source=source)
+            return
+        elif report.outcome == "spend_limit":
             until, source = None, "manual"
         elif report.outcome == "transient":
             # An outage: back off this agent briefly (the other one may still be reachable).
@@ -3247,9 +3486,10 @@ class Supervisor:
             self.host.log(f"a launched attempt from chain {head} is unresolved; resume that chain first")
             return "held"
         if head != session and session not in self.state.get("chain", []):
+            kept_clears = {k: v for k, v in (self.state.get("counters") or {}).items() if k.startswith("reading_clear_")}
             self.state.update({"head_session": session, "chain": [session], "agent": self.state.get("agent") if head is None else None, "switches": [],
                                "last_switch_at": None, "waiting_since": None, "last_attempt": None,
-                               "counters": {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0}})
+                               "counters": {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0, **kept_clears}})
         if isinstance(legacy := self.state.pop("reconcile", None), dict) and isinstance(legacy.get("diag"), dict):
             # A read-only diagnosis of the earlier controller (it could change nothing): abandoned, never adopted.
             self.store.journal({"event": "settle", "purpose": "diagnostic", "outcome": "abandoned",
@@ -3380,6 +3620,7 @@ class Supervisor:
             counters.update({"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0})
             counters.pop(f"estimated_{failed_agent}", None)
             counters.pop(f"transient_{failed_agent}", None)
+            counters.pop(f"reading_clear_{failed_agent}", None)
             self.state["spend_caps"].pop(failed_agent, None)
             self.state["waiting_since"] = None
             if task is None and self.mission is not None:
@@ -3547,13 +3788,15 @@ class Supervisor:
 
             if agent is None:
                 remaining = [a for a in PREFERRED_AGENTS if a != current] if current in PREFERRED_AGENTS else list(PREFERRED_AGENTS)
+                avail = {a: self.available(a) for a in remaining}
                 rooms = {a: self.free_room(a) for a in remaining}
                 sorted_remaining = sorted(
                     remaining,
                     key=lambda a: ((0, -rooms[a]) if rooms[a] is not None else (1, 0.0)),
                 )
                 for candidate in [*sorted_remaining, "codex"]:
-                    if self.available(candidate):
+                    is_avail = avail[candidate] if candidate in avail else self.available(candidate)
+                    if is_avail:
                         first_available = first_available or candidate
                         room = rooms[candidate] if candidate in rooms else self.free_room(candidate)
                         if room is not None and room < self.limits.min_free_percent:
@@ -3828,6 +4071,20 @@ class Supervisor:
             self.state["phase"] = "waiting"
             self.save()
             return "waiting"
+        reachable_fn = getattr(self.host, "reachable", None) or default_reachable
+        try:
+            reachable = bool(reachable_fn())
+        except Exception:  # noqa: BLE001
+            reachable = False
+        if not reachable:
+            if not self.state.get("network_outage", False):
+                self.state["network_outage"] = True
+                self.record("finding", "relay-continuity: pre-launch probe failed (github.com:443 unreachable); waiting for network")
+            self.host.log("pre-launch network probe failed (github.com:443 unreachable); waiting")
+            self.state["phase"] = "waiting"
+            self.save()
+            return "waiting"
+        self.state["network_outage"] = False
         digest = self.host.permissions_digest()
         if digest != self.state.get("permissions_digest"):
             return self.hold("permissions_changed")
@@ -3835,6 +4092,18 @@ class Supervisor:
         self.attempts += 1
         nonce = f"rc-{now.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}"
         text = prompt.replace("{nonce}", nonce)
+        if agent not in NATIVE_AGENTS:
+            limit_min = int(self.limits.turn_wall // 60)
+            wall_sentence = f"Your turn has a hard limit of {limit_min} minutes."
+            if f"hard limit of {limit_min} minutes" not in text:
+                attempt_hdr = f"[relay-continuity attempt {nonce}]"
+                resume_hdr = f"[relay-continuity resume {nonce}]"
+                if attempt_hdr in text:
+                    text = text.replace(attempt_hdr, f"{attempt_hdr}\n{wall_sentence}", 1)
+                elif resume_hdr in text:
+                    text = text.replace(resume_hdr, f"{resume_hdr}\n{wall_sentence}", 1)
+                else:
+                    text = f"{text}\n\n{wall_sentence}"
         # A takeover starts a new native provider context; the task and durable chain carry recovery.
         # A Claude -> Codex takeover must start a new native Codex context. Relay's --continue otherwise
         # revives its prior thread, which reached 1.5-2.7M input tokens in the measured roadmap cycles.
@@ -3917,14 +4186,23 @@ class Supervisor:
         pending["pid_start"] = devctx.pid_start(pending["pid"]) if pending["pid"] else None
         self.save()
         try:
-            result = self.host.relay.finish(proc)
+            try:
+                result = self.host.relay.finish(proc, timeout=getattr(self.limits, "turn_wall", None))
+            except TypeError:
+                result = self.host.relay.finish(proc)
+            timed_out = getattr(result, "timed_out", False) or (not result.raw_ok and "wall limit" in (result.diagnostics or "").lower())
+            if timed_out:
+                pending["timed_out"] = True
+                if result.diagnostics:
+                    pending["diagnostics"] = result.diagnostics
+                self.save()
             reaped = self._reap()
         finally:
             self.host.relay.release_turn(proc)
         if reaped is None:
             # Stopped while a process of the turn still survived: the attempt stays pending, and a restart adopts it.
             return "signal" if self.signalled else "stopped"
-        return self._settle(pending, result.session_id, result.diagnostics, reaped)
+        return self._settle(pending, result.session_id, result.diagnostics, reaped, timed_out=timed_out)
 
     def _reap(self) -> list[str] | None:
         """Stop whatever the finished turn left running, so nothing of it overlaps the next turn. While a process
@@ -3947,7 +4225,7 @@ class Supervisor:
         return sorted(names)
 
     def _settle(self, pending: dict[str, Any], session_id: str | None, diagnostics: str = "",
-                reaped: list[str] | None = None) -> TurnReport | str:
+                reaped: list[str] | None = None, timed_out: bool = False) -> TurnReport | str:
         session_id = session_id or self.host.relay.find_by_nonce(pending["nonce"], parse_ts(pending["started_at"]) or self.host.now())
         self.state["last_attempt"] = {k: pending[k] for k in ("nonce", "agent", "attempt", "fingerprint")}
         if "task" in pending:
@@ -3962,8 +4240,14 @@ class Supervisor:
             return result
         turn = last_turn_dir(self.host.relay.sessions_dir() / session_id)
         report = classify_turn(turn, diagnostics=diagnostics) if turn else TurnReport(
-            outcome="crash", agent=pending["agent"], detail="session without turns", no_evidence=True,
-            turn_id=f"{session_id}/none")
+            outcome="crash", agent=pending["agent"],
+            detail=f"session without turns ({diagnostics.strip()})" if diagnostics else "session without turns",
+            no_evidence=True, turn_id=f"{session_id}/none")
+        if timed_out:
+            if report.outcome in ("success", "quota", "spend_limit", "auth", "transient"):
+                report.outcome = "crash"
+            if diagnostics and diagnostics.strip() not in report.detail:
+                report.detail = f"{report.detail}; {diagnostics.strip()}" if report.detail else diagnostics.strip()
         report.agent = pending["agent"]
         report.reaped = reaped
         self.state["head_session"] = session_id
@@ -4138,14 +4422,65 @@ class Supervisor:
         if not pending:
             return None
         self.host.log(f"resolving unsettled attempt {pending['nonce']}")
-        if pending.get("pid") and self.host.pid_alive(pending["pid"], pending.get("pid_start")):
-            self.host.log(f"attempt still running as pid {pending['pid']}; waiting for it (never relaunched)")
-            while self.host.pid_alive(pending["pid"], pending.get("pid_start")):
-                if self._sleep(30.0):
+        started = parse_ts(pending.get("started_at")) or self.host.now()
+        timed_out = bool(pending.get("timed_out"))
+        diagnostics = pending.get("diagnostics") or ""
+        killpg_fn = getattr(self.host.relay, "killpg", os.killpg)
+        group_running_fn = getattr(self.host.relay, "_group_is_running", None)
+
+        def group_alive(pgid: int) -> bool:
+            if callable(group_running_fn):
+                return bool(group_running_fn(pgid))
+            try:
+                killpg_fn(pgid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+            except (PermissionError, OSError):
+                return True
+
+        pid = pending.get("pid")
+        pid_start = pending.get("pid_start")
+        if pid and self.host.pid_alive(pid, pid_start):
+            self.host.log(f"attempt still running as pid {pid}; waiting for it (never relaunched)")
+            wall_limit = getattr(self.limits, "turn_wall", Limits.turn_wall)
+            while self.host.pid_alive(pid, pid_start):
+                elapsed = (self.host.now() - started).total_seconds()
+                if elapsed >= wall_limit:
+                    timed_out = True
+                    wall_diag = f"turn wall limit ({int(wall_limit)}s) exceeded"
+                    diagnostics = f"{diagnostics}\n{wall_diag}".strip() if diagnostics else wall_diag
+                    pending["timed_out"] = True
+                    pending["diagnostics"] = diagnostics
+                    self.save()
+                    try:
+                        killpg_fn(pid, signal.SIGTERM)
+                    except (ProcessLookupError, PermissionError, OSError):
+                        pass
+                    term_deadline = self.host.now() + timedelta(seconds=30.0)
+                    while (self.host.pid_alive(pid, pid_start) or group_alive(pid)) and self.host.now() < term_deadline:
+                        rem = max(0.01, (term_deadline - self.host.now()).total_seconds())
+                        if self._sleep(min(1.0, rem)):
+                            return "signal" if self.signalled else "stopped"
+                    if self.host.pid_alive(pid, pid_start) or group_alive(pid):
+                        try:
+                            killpg_fn(pid, signal.SIGKILL)
+                        except (ProcessLookupError, PermissionError, OSError):
+                            pass
+                    break
+                rem_wall = max(0.01, wall_limit - elapsed)
+                if self._sleep(min(30.0, rem_wall)):
                     return "signal" if self.signalled else "stopped"
-        session_id = self.host.relay.find_by_nonce(pending["nonce"], parse_ts(pending["started_at"]) or self.host.now())
-        # An adopted run was started by an earlier owner: what it left behind is not this process's to stop.
-        return self._settle(pending, session_id)
+        if timed_out:
+            reaped = self._reap()
+            if reaped is None:
+                return "signal" if self.signalled else "stopped"
+        else:
+            reaped = None
+        session_id = self.host.relay.find_by_nonce(pending["nonce"], started)
+        # An adopted run was started by an earlier owner: unless it was terminated under the wall limit,
+        # what it left behind is not this process's to stop.
+        return self._settle(pending, session_id, diagnostics, reaped, timed_out=timed_out)
 
 
 # ---------------------------------------------------------------------------
@@ -4251,8 +4586,10 @@ def make_host(repo: Path, relay_env: dict[str, str] | None = None) -> Host:
     env = devctx.default_env(repo)
     author = f"relay-continuity pid {os.getpid()}"
 
-    def ledger(kind: str, text: str) -> None:
-        devctx.append_entry(env, devctx.make_entry(env, kind, text, refs={"spec": "195"}, author=author))
+    def ledger(kind: str, text: str) -> str | None:
+        entry = devctx.make_entry(env, kind, text, refs={"spec": "195"}, author=author)
+        devctx.append_entry(env, entry)
+        return entry.get("id")
 
     def permissions() -> str | None:
         return permissions_digest(repo / ".agent-relay" / "permissions.toml")
@@ -4266,7 +4603,9 @@ def make_host(repo: Path, relay_env: dict[str, str] | None = None) -> Host:
                     control_root(), env, authority, log=lambda msg: print(msg, file=sys.stderr, flush=True)
                 ),
                 job_status=lambda jid: relay_jobs.load(jid),
-                pr_ci_status=lambda pr, sha: default_pr_ci_status(repo, pr, sha))
+                pr_ci_status=lambda pr, sha: default_pr_ci_status(repo, pr, sha),
+                reachable=default_reachable,
+                read_ledger=lambda: devctx.read_ledger(env))
 
 
 # ---------------------------------------------------------------------------
@@ -5373,7 +5712,9 @@ def command_release(args: argparse.Namespace) -> int:
             previous["cleared"] = sorted(set(previous.get("cleared") or []) | set(args.clear_cooldown))
         state["hold"] = None
         state["phase"] = "idle"
-        state["counters"] = {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0}
+        kept_clears = {k: v for k, v in (state.get("counters") or {}).items()
+                       if k.startswith("reading_clear_") and k.removeprefix("reading_clear_") not in (args.clear_cooldown or [])}
+        state["counters"] = {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0, **kept_clears}
         for agent in args.clear_cooldown or []:
             state["cooldowns"].pop(agent, None)
             state["spend_caps"].pop(agent, None)  # e.g. the maintainer raised a spend cap

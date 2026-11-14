@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import runpy
+import secrets
 import shutil
 import signal
 import subprocess
@@ -188,7 +189,8 @@ class Env:
             ledger=lambda kind, text: self.ledger.append((kind, text)), permissions_digest=lambda: self.perm["v"],
             log=self.logs.append,
             job_status=lambda jid: self.jobs.get(jid),
-            pr_ci_status=lambda pr, sha: self.ci.get((pr, sha)))
+            pr_ci_status=lambda pr, sha: self.ci.get((pr, sha)),
+            reachable=lambda: True)
         self.limits = limits or rc.Limits()
         self.sender = sender if sender is not None else self._send
 
@@ -1009,7 +1011,7 @@ def test_auth_failure_disables_only_that_provider_and_unknown_failure_retries(
     assert [launch["agent"] for launch in env.relay.launches] == agents
     if agents == ["codex"]:
         cooldown = sup.state["cooldowns"]["claude"]
-        assert cooldown["reason"] == "auth" and rc.parse_ts(cooldown["until"]) == T0 + timedelta(minutes=30)
+        assert cooldown["reason"] == "auth" and cooldown["until"] is None and cooldown["source"] == "auth"
         assert any("Un assistente non è disponibile" in e for e in env.events())
 
 
@@ -5759,4 +5761,933 @@ def test_validate_state_spec_267_fields() -> None:
         },
     }
     assert rc.validate_state(valid_wait) is None
+
+
+# ---------------------------------------------------------------------------
+# Spec 268: Bounded turns and provider failure handling
+
+
+def test_relay_turn_wall_limit_terminates_process_group_and_settles(tmp_path: Path) -> None:
+    """Criterion 1: Fake Relay turn running past wall limit is terminated with process group,
+    reaped, settled as not successful with wall limit named in report, and leaves cooldowns unchanged."""
+    signals_sent: list[tuple[int, int]] = []
+    fake_pid = 42424
+
+    class HungProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.returncode = None
+            self.alive = True
+
+        def poll(self) -> int | None:
+            return None if self.alive else self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode or 0
+
+    hung = HungProc(fake_pid)
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        signals_sent.append((pgid, sig))
+        if sig == signal.SIGKILL:
+            hung.alive = False
+            hung.returncode = -signal.SIGKILL
+        elif sig == signal.SIGTERM:
+            pass  # simulate hanging on SIGTERM
+
+    sim_time = [0.0]
+
+    def fake_clock() -> float:
+        return sim_time[0]
+
+    def fake_sleep(duration: float) -> None:
+        sim_time[0] += duration
+
+    adapter = rc.RelayAdapter(
+        tmp_path,
+        turn_wall=10.0,
+        clock=fake_clock,
+        sleep=fake_sleep,
+        killpg=fake_killpg,
+    )
+    result = adapter.finish(hung)
+    assert not result.raw_ok
+    assert "turn wall limit (10s) exceeded" in result.diagnostics
+    assert (fake_pid, signal.SIGTERM) in signals_sent
+    assert (fake_pid, signal.SIGKILL) in signals_sent
+
+    # Integration with Supervisor: verify settlement as unsuccessful, naming limit in report, cooldowns unchanged
+    env = Env(tmp_path)
+    env.host.relay.turn_wall = 10.0
+    env.host.relay.clock = fake_clock
+    env.host.relay.sleep = fake_sleep
+    env.host.relay.killpg = fake_killpg
+    hung2 = HungProc(fake_pid)
+    launches: list[str] = []
+
+    def hung_start(agent: str, parent: str | None, text: str, turns: int, **kw: Any) -> Any:
+        launches.append(text)
+        return hung2
+
+    def hung_finish(proc: Any, timeout: float | None = None) -> rc.RunResult:
+        return adapter.finish(hung2)
+
+    env.relay.start = hung_start
+    env.relay.finish = hung_finish
+    sid = "20261018-000001-bbbbbb"
+    t_dir = env.relay.sessions_dir() / sid / "turns" / "turn-001"
+    t_dir.mkdir(parents=True)
+    (t_dir / "state.json").write_text(json.dumps({"agent_key": "claude"}))
+    (t_dir / "output.jsonl").write_text("")
+    (t_dir / "prompt.md").write_text(f"## Task\n[relay-continuity attempt {env.store.root.name}]\ntask")
+
+    env.relay.find_by_nonce = lambda nonce, since: sid
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.perm["v"]
+    report = sup._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert isinstance(report, rc.TurnReport)
+    assert report.outcome != "success"
+    assert "turn wall limit" in report.detail.lower()
+    assert sup.state["cooldowns"] == {}
+    assert "Your turn has a hard limit of 60 minutes." in launches[0]
+
+
+def test_relay_turn_wall_limit_forces_non_success_even_if_success_terminal_written(tmp_path: Path) -> None:
+    """Finding P1: Even if the turn wrote a success terminal before hanging, settlement must force
+    a non-success outcome while preserving effect reconciliation."""
+    fake_pid = 43434
+
+    class HungProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.returncode = None
+            self.alive = True
+
+        def poll(self) -> int | None:
+            return None if self.alive else self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode or 0
+
+    hung = HungProc(fake_pid)
+    sim_time = [0.0]
+
+    def fake_clock() -> float:
+        return sim_time[0]
+
+    def fake_sleep(duration: float) -> None:
+        sim_time[0] += duration
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        if sig == signal.SIGKILL:
+            hung.alive = False
+            hung.returncode = -signal.SIGKILL
+
+    adapter = rc.RelayAdapter(
+        tmp_path,
+        turn_wall=10.0,
+        clock=fake_clock,
+        sleep=fake_sleep,
+        killpg=fake_killpg,
+    )
+
+    env = Env(tmp_path)
+    env.host.relay.turn_wall = 10.0
+    env.host.relay.clock = fake_clock
+    env.host.relay.sleep = fake_sleep
+    env.host.relay.killpg = fake_killpg
+
+    def hung_start(agent: str, parent: str | None, text: str, turns: int, **kw: Any) -> Any:
+        return hung
+
+    def hung_finish(proc: Any, timeout: float | None = None) -> rc.RunResult:
+        return adapter.finish(hung)
+
+    env.relay.start = hung_start
+    env.relay.finish = hung_finish
+    sid = "20261018-000002-cccccc"
+    t_dir = env.relay.sessions_dir() / sid / "turns" / "turn-001"
+    t_dir.mkdir(parents=True)
+    (t_dir / "state.json").write_text(json.dumps({"agent_key": "claude"}))
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "call_1", "name": "bash", "input": {"command": "echo done"}}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "done"}]}},
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "call_2", "name": "bash", "input": {"command": "sleep 100"}}]}},
+        {"type": "result", "is_error": False, "terminal_reason": "completed"},
+    ]
+    (t_dir / "output.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    (t_dir / "prompt.md").write_text(f"## Task\n[relay-continuity attempt {env.store.root.name}]\ntask")
+
+    env.relay.find_by_nonce = lambda nonce, since: sid
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.perm["v"]
+    report = sup._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert isinstance(report, rc.TurnReport)
+    assert report.outcome != "success"
+    assert "turn wall limit" in report.detail.lower()
+    # Preserves effect reconciliation: call_1 was completed, call_2 was in flight
+    assert any(c.id == "call_1" for c in report.effects)
+    assert any(c.id == "call_2" for c in report.in_flight)
+    # Cooldowns untouched
+    assert sup.state["cooldowns"] == {}
+    # Journal records non-success outcome with reconciled effects
+    settle_events = [j for j in journal(env) if j.get("event") == "settle"]
+    assert len(settle_events) == 1
+    assert settle_events[0]["outcome"] != "success"
+    assert len(settle_events[0]["effects"]) == 1
+    assert len(settle_events[0]["in_flight"]) == 1
+
+
+def test_relay_turn_wall_limit_kills_surviving_process_group_after_leader_exits(tmp_path: Path) -> None:
+    """Finding P1: Process group can survive timeout if leader exits on SIGTERM while child remains.
+    SIGKILL must be sent to surviving group members even when the leader is dead."""
+    fake_pid = 55555
+    signals_sent: list[tuple[int, int]] = []
+    leader_alive = [True]
+    child_alive = [True]
+
+    class LeaderProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.returncode = None
+
+        def poll(self) -> int | None:
+            return None if leader_alive[0] else (self.returncode or 0)
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode or 0
+
+    proc = LeaderProc(fake_pid)
+    sim_time = [0.0]
+
+    def fake_clock() -> float:
+        return sim_time[0]
+
+    def fake_sleep(duration: float) -> None:
+        sim_time[0] += duration
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        signals_sent.append((pgid, sig))
+        if sig == 0:
+            if not leader_alive[0] and not child_alive[0]:
+                raise ProcessLookupError("No such process group")
+            return
+        if sig == signal.SIGTERM:
+            # Simulate leader exiting on SIGTERM, but child surviving
+            leader_alive[0] = False
+            proc.returncode = -signal.SIGTERM
+        elif sig == signal.SIGKILL:
+            child_alive[0] = False
+            leader_alive[0] = False
+            proc.returncode = -signal.SIGKILL
+
+    adapter = rc.RelayAdapter(
+        tmp_path,
+        turn_wall=10.0,
+        clock=fake_clock,
+        sleep=fake_sleep,
+        killpg=fake_killpg,
+    )
+    result = adapter.finish(proc)
+    assert not result.raw_ok
+    assert "turn wall limit (10s) exceeded" in result.diagnostics
+    assert (fake_pid, signal.SIGTERM) in signals_sent
+    # SIGKILL must be sent to the group to terminate surviving child
+    assert (fake_pid, signal.SIGKILL) in signals_sent
+    assert not child_alive[0]
+
+
+def test_pre_launch_reachable_probe_waiting_and_single_ledger_finding(tmp_path: Path) -> None:
+    """Criterion 2: Failing Host.reachable makes _launch return 'waiting' with attempts, pending,
+    counters and cooldowns unchanged and nothing passed to relay.start; repeated failing probes write
+    one ledger finding; once probe succeeds launch proceeds."""
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    reachable_status = [False]
+    env.host.reachable = lambda: reachable_status[0]
+
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.perm["v"]
+    # First failing probe
+    res1 = sup._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert res1 == "waiting"
+    assert sup.attempts == 0
+    assert sup.state["pending"] is None
+    assert sup.state["cooldowns"] == {}
+    assert sup.state["counters"]["consecutive_failures"] == 0
+    assert len(env.relay.launches) == 0
+    findings1 = [t for k, t in env.ledger if k == "finding" and "probe failed" in t]
+    assert len(findings1) == 1
+
+    # Second failing probe across supervisor restart (repeated failure during outage)
+    sup2 = env.supervisor()
+    sup2.state = env.store.load()
+    res2 = sup2._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert res2 == "waiting"
+    assert sup2.attempts == 0
+    assert sup2.state["pending"] is None
+    assert len(env.relay.launches) == 0
+    # Exactly one ledger finding per outage
+    findings2 = [t for k, t in env.ledger if k == "finding" and "probe failed" in t]
+    assert len(findings2) == 1
+
+    # Network recovers: probe succeeds (resets outage state)
+    reachable_status[0] = True
+    res3 = sup2._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert res3 != "waiting"
+    assert sup2.attempts == 1
+    assert len(env.relay.launches) == 1
+
+    # After recovery, a new outage writes a finding
+    reachable_status[0] = False
+    sup3 = env.supervisor()
+    sup3.state = env.store.load()
+    res4 = sup3._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert res4 == "waiting"
+    findings3 = [t for k, t in env.ledger if k == "finding" and "probe failed" in t]
+    assert len(findings3) == 2
+
+
+def test_auth_failure_writes_single_question_with_two_options_and_cooldown_until_none(tmp_path: Path) -> None:
+    """Criterion 3: An 'auth' outcome writes exactly one ledger question whose text
+    parse_open_questions accepts with two options, records a cooldown with until: None and source: 'auth',
+    and no further question or retry follows on later decisions, restarts or polls."""
+    obs_spec = importlib.util.spec_from_file_location("relay_observe", SCRIPT.parent / "relay_observe.py")
+    assert obs_spec and obs_spec.loader
+    obs = importlib.util.module_from_spec(obs_spec)
+    obs_spec.loader.exec_module(obs)
+
+    env = Env(tmp_path, [("any", SUCCESS)])
+    entries: list[dict[str, Any]] = []
+
+    def fake_ledger(kind: str, text: str) -> str:
+        qid = f"L{env.clock.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(2)}"
+        entry = {"id": qid, "kind": kind, "text": text, "ts": rc.iso(env.clock.now())}
+        entries.append(entry)
+        env.ledger.append((kind, text))
+        return qid
+
+    env.host.ledger = fake_ledger
+    env.host.read_ledger = lambda: list(entries)
+
+    events = [claude_result("Invalid API key · Please run /login", error=True, status=401)]
+    env.head(events)
+    result, sup = env.run()
+    assert result == "idle"
+
+    cooldown = sup.state["cooldowns"]["claude"]
+    assert cooldown["reason"] == "auth"
+    assert cooldown["until"] is None
+    assert cooldown["source"] == "auth"
+    qid = cooldown["question"]
+    assert qid is not None
+
+    # Check the question with parse_open_questions
+    q_entries = [e for e in entries if e["kind"] == "question" and e["id"] == qid]
+    assert len(q_entries) == 1
+    parsed = obs.parse_open_questions(q_entries)
+    assert len(parsed) == 1
+    opts = parsed[0]["options"]
+    assert len(opts) == 2
+    assert opts[0]["index"] == 1
+    assert opts[0]["recommended"] is True
+    assert opts[1]["index"] == 2
+    assert opts[1]["recommended"] is False
+
+    # Deduplication: later decision/set_cooldown produces no new question
+    rep = rc.TurnReport(outcome="auth", agent="claude", detail="unauthorized", turn_id="t1")
+    sup.set_cooldown("claude", rep)
+    assert len([e for e in entries if e["kind"] == "question"]) == 1
+
+    # Restart produces no new question and no retry of claude
+    sup2 = rc.Supervisor(env.store, env.host, env.limits)
+    sup2.state = env.store.load()
+    assert not sup2.available("claude")
+    assert len([e for e in entries if e["kind"] == "question"]) == 1
+
+
+def test_clearing_auth_cooldown_by_decision_or_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Criterion 4: Maintainer answer 1 to that question makes agent available again; answer 2 or other text
+    leaves it excluded; release --clear-cooldown clears it; limits reading with room does not."""
+    env = Env(tmp_path)
+    qid = "L20261018080000-q001"
+    sup = env.supervisor()
+    sup.state["cooldowns"]["claude"] = {
+        "until": None, "source": "auth", "reason": "auth", "since": rc.iso(T0), "turn": "turn-1", "question": qid,
+    }
+    env.store.save(sup.state, T0)
+
+    # 1. Limits reading with room does NOT clear auth cooldown
+    env.relay.readings = room(env, "claude")
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+    # 2. Answer 2 leaves it excluded
+    ledger_entries = [
+        {"id": "L20261018080500-d001", "kind": "decision", "status": "accepted",
+         "text": f"Maintainer answer to question {qid} (via slack): 2 - Mantieni escluso",
+         "supersedes": [qid]},
+    ]
+    env.host.read_ledger = lambda: list(ledger_entries)
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+    # 3. Answer with other text leaves it excluded
+    ledger_entries = [
+        {"id": "L20261018080500-d001", "kind": "decision", "status": "accepted",
+         "text": f"Maintainer answer to question {qid} (via slack): altro - non so",
+         "supersedes": [qid]},
+    ]
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+    # 4. Answer 1 clears cooldown and makes agent available
+    ledger_entries = [
+        {"id": "L20261018080500-d002", "kind": "decision", "status": "accepted",
+         "text": f"Maintainer answer to question {qid} (via slack): 1 - Ho ripristinato l'accesso",
+         "supersedes": [qid]},
+    ]
+    assert sup.available("claude")
+    assert "claude" not in sup.state["cooldowns"]
+
+    # 5. release --clear-cooldown claude clears it
+    sup.state["cooldowns"]["claude"] = {
+        "until": None, "source": "auth", "reason": "auth", "since": rc.iso(T0), "turn": "turn-1", "question": qid,
+    }
+    env.store.save(sup.state, T0)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(env.store.root))
+    monkeypatch.setattr(rc, "make_host", lambda repo: env.host)
+    monkeypatch.setattr(rc, "repo_root", lambda: env.repo)
+    env.host.read_ledger = lambda: []  # no decision
+    assert rc.main(["release", "--clear-cooldown", "claude", "--note", "manual clear"]) == 0
+    sup2 = env.supervisor()
+    sup2.state = env.store.load()
+    assert "claude" not in sup2.state["cooldowns"]
+
+
+def test_fresh_reading_ends_limits_or_message_cooldown_for_relay_and_native(tmp_path: Path) -> None:
+    """Criterion 5: A future 'limits' or 'message' cooldown with a fresh reading showing room and
+    newer than 'since' makes the agent available and drops the cooldown, for a Relay agent and for a native agent."""
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    cooldown_since = T0 - timedelta(minutes=10)
+    cooldown_until = T0 + timedelta(hours=4)
+    as_of = T0 - timedelta(minutes=5)
+
+    # 1. Relay agent with limits cooldown
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.readings = lambda: {
+        "claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of),
+        "codex": reading("codex", 10.0, T0 + timedelta(days=1), as_of),
+    }
+    assert sup.available("claude")
+    assert "claude" not in sup.state["cooldowns"]
+    assert sup.state["counters"]["reading_clear_claude"] == 1
+    findings = [t for k, t in env.ledger if k == "finding" and "cleared limits cooldown for claude" in t]
+    assert len(findings) == 1
+
+    # 2. Relay agent with message cooldown
+    sup.state["cooldowns"]["codex"] = {
+        "until": rc.iso(cooldown_until), "source": "message", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    assert sup.available("codex")
+    assert "codex" not in sup.state["cooldowns"]
+    assert sup.state["counters"]["reading_clear_codex"] == 1
+
+    # 3. Native agent with limits cooldown
+    sup.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.argon_limits = lambda agent: {
+        "as_of": rc.iso(as_of),
+        "windows": [{"used_percent": 15.0, "disabled": False, "resets_at": rc.iso(T0 + timedelta(days=1))}],
+    } if agent == "argon" else None
+    assert sup.available("argon")
+    assert "argon" not in sup.state["cooldowns"]
+    assert sup.state["counters"]["reading_clear_argon"] == 1
+
+
+def test_stale_native_reading_does_not_clear_quota_cooldown(tmp_path: Path) -> None:
+    """Finding P1: A day-old native reading newer than cooldown since must not clear a future cooldown;
+    freshness (abs(now - as_of) <= reading_freshness) and plausibility checks must apply."""
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    # Cooldown recorded 2 days ago, valid until 4 hours in the future
+    cooldown_since = T0 - timedelta(days=2)
+    cooldown_until = T0 + timedelta(hours=4)
+    # Reading from 1 day ago (newer than since, but 24 hours stale compared to now=T0)
+    stale_as_of = T0 - timedelta(days=1)
+    sup.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.argon_limits = lambda agent: {
+        "as_of": rc.iso(stale_as_of),
+        "windows": [{"used_percent": 15.0, "disabled": False}],
+    } if agent == "argon" else None
+
+    assert not sup.available("argon")
+    assert "argon" in sup.state["cooldowns"]
+    assert sup.state["counters"].get("reading_clear_argon", 0) == 0
+
+
+def test_reading_clear_only_once_until_successful_turn(tmp_path: Path) -> None:
+    """Criterion 6: After a reading clear, a new quota failure records a cooldown that a further reading with
+    room does not clear until a successful turn resets the counter."""
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    cooldown_since = T0 - timedelta(minutes=10)
+    cooldown_until = T0 + timedelta(hours=4)
+    as_of = T0 - timedelta(minutes=5)
+
+    # First clear succeeds
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.readings = lambda: {"claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of)}
+    assert sup.available("claude")
+    assert "claude" not in sup.state["cooldowns"]
+    assert sup.state["counters"]["reading_clear_claude"] == 1
+
+    # New quota failure occurs
+    report_quota = rc.TurnReport(outcome="quota", agent="claude", detail="hit usage limit", reset_at=rc.iso(cooldown_until))
+    sup.set_cooldown("claude", report_quota)
+    assert "claude" in sup.state["cooldowns"]
+
+    # Even with fresh reading with room, second clear does NOT happen
+    as_of2 = T0 - timedelta(minutes=2)
+    env.relay.readings = lambda: {"claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of2)}
+    assert not sup.available("claude")
+    assert "claude" in sup.state["cooldowns"]
+
+    # A successful turn resets the counter
+    success_report = rc.TurnReport(outcome="success", agent="claude", detail="result ok")
+    sup._decide(success_report, None)
+    assert "reading_clear_claude" not in sup.state["counters"]
+
+    # Now a third quota cooldown CAN be cleared by a reading with room
+    cooldown_since3 = T0
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since3),
+    }
+    as_of3 = T0 + timedelta(minutes=1)
+    env.clock.sleep(120)
+    sup._reading = None
+    env.relay.readings = lambda: {"claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of3)}
+    assert sup.available("claude")
+    assert "claude" not in sup.state["cooldowns"]
+    assert sup.state["counters"]["reading_clear_claude"] == 1
+
+
+def test_reading_clear_boundaries_estimate_manual_stale_missing_unparseable_exhausted(tmp_path: Path) -> None:
+    """Criterion 7: estimate and manual cooldowns are not cleared by a reading with room;
+    stale, missing, unparseable and exhausted readings leave limits and message cooldowns intact."""
+    env = Env(tmp_path)
+    cooldown_since = T0 - timedelta(minutes=10)
+    cooldown_until = T0 + timedelta(hours=4)
+    as_of = T0 - timedelta(minutes=5)
+
+    def good_readings() -> dict[str, Any]:
+        return {"claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of)}
+
+    # 1. estimate cooldown not cleared by reading with room
+    sup1 = env.supervisor()
+    sup1.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "estimate", "reason": "transient", "since": rc.iso(cooldown_since),
+    }
+    env.relay.readings = good_readings
+    assert not sup1.available("claude")
+    assert sup1.state["cooldowns"]["claude"]["source"] == "estimate"
+
+    # 2. manual cooldown not cleared by reading with room
+    sup2 = env.supervisor()
+    sup2.state["cooldowns"]["claude"] = {
+        "until": None, "source": "manual", "reason": "spend_limit", "since": rc.iso(cooldown_since),
+    }
+    env.relay.readings = good_readings
+    assert not sup2.available("claude")
+    assert sup2.state["cooldowns"]["claude"]["source"] == "manual"
+
+    # 3. stale reading (as_of <= since) leaves limits cooldown intact
+    sup3 = env.supervisor()
+    sup3.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    stale_as_of = cooldown_since - timedelta(minutes=1)
+    env.relay.readings = lambda: {"claude": reading("claude", 5.0, T0 + timedelta(days=1), stale_as_of)}
+    assert not sup3.available("claude")
+    assert "claude" in sup3.state["cooldowns"]
+
+    # 4. missing reading leaves limits cooldown intact
+    sup4 = env.supervisor()
+    sup4.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.readings = lambda: {}
+    assert not sup4.available("claude")
+    assert "claude" in sup4.state["cooldowns"]
+
+    # 5. unparseable reading leaves limits cooldown intact
+    sup5 = env.supervisor()
+    sup5.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.readings = lambda: {"claude": {"status": "error", "windows": "bad"}}
+    assert not sup5.available("claude")
+    assert "claude" in sup5.state["cooldowns"]
+
+    # 6. exhausted reading (>= 99.5% used) leaves limits cooldown intact
+    sup6 = env.supervisor()
+    sup6.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.readings = lambda: {"claude": reading("claude", 100.0, T0 + timedelta(hours=2), as_of)}
+    assert not sup6.available("claude")
+    assert "claude" in sup6.state["cooldowns"]
+
+    # 7. missing native reading leaves limits cooldown intact
+    sup7 = env.supervisor()
+    sup7.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.argon_limits = lambda agent: None
+    assert not sup7.available("argon")
+    assert "argon" in sup7.state["cooldowns"]
+
+    # 8. unparseable native reading leaves limits cooldown intact
+    sup8 = env.supervisor()
+    sup8.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.argon_limits = lambda agent: {"as_of": rc.iso(as_of), "windows": "bad"}
+    assert not sup8.available("argon")
+    assert "argon" in sup8.state["cooldowns"]
+
+    # 9. exhausted native reading leaves limits cooldown intact
+    sup9 = env.supervisor()
+    sup9.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.argon_limits = lambda agent: {
+        "as_of": rc.iso(as_of),
+        "windows": [{"used_percent": 100.0, "disabled": False}],
+    }
+    assert not sup9.available("argon")
+    assert "argon" in sup9.state["cooldowns"]
+
+
+def test_auth_failure_diagnostic_secret_never_enters_question_or_notification(tmp_path: Path) -> None:
+    """A secret in auth failure diagnostics never enters the recorded ledger question or outbound notification."""
+    env = Env(tmp_path)
+    entries: list[dict[str, Any]] = []
+
+    def fake_ledger(kind: str, text: str) -> str:
+        qid = f"L{env.clock.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(2)}"
+        entry = {"id": qid, "kind": kind, "text": text, "ts": rc.iso(env.clock.now())}
+        entries.append(entry)
+        env.ledger.append((kind, text))
+        return qid
+
+    env.host.ledger = fake_ledger
+    secret = "sk-test-secret-deadbeef0011"
+    raw_diagnostic = f"401 Unauthorized: token={secret} in /var/secrets/key.json"
+    rep = rc.TurnReport(outcome="auth", agent="claude", detail=raw_diagnostic, turn_id="t-auth-sec")
+    sup = env.supervisor()
+    sup.set_cooldown("claude", rep)
+
+    # 1. Proving the secret-like diagnostic content never enters the recorded question
+    q_entries = [e for e in entries if e["kind"] == "question"]
+    assert len(q_entries) == 1
+    question_text = q_entries[0]["text"]
+    assert secret not in question_text
+    assert "token=" not in question_text
+    assert "/var/secrets" not in question_text
+    assert "Autenticazione fallita per l'agente claude" in question_text
+
+    # 2. Proving it never enters outbound notification
+    assert len(env.sent) == 1
+    assert not any(secret in msg for msg in env.sent)
+
+    # 3. Proving outbound question delivery via relay_observe never carries the secret
+    obs_spec = importlib.util.spec_from_file_location("relay_observe", SCRIPT.parent / "relay_observe.py")
+    assert obs_spec and obs_spec.loader
+    obs = importlib.util.module_from_spec(obs_spec)
+    obs_spec.loader.exec_module(obs)
+
+    parsed = obs.parse_open_questions(q_entries)
+    assert len(parsed) == 1
+    outbound = obs.question_text(parsed[0])
+    assert secret not in outbound
+    opts = parsed[0]["options"]
+    assert len(opts) == 2
+    assert opts[0]["index"] == 1
+    assert opts[0]["recommended"] is True
+    assert opts[1]["index"] == 2
+    assert opts[1]["recommended"] is False
+
+
+def test_timed_out_turn_stopped_during_reap_stays_crash_on_restart(tmp_path: Path) -> None:
+    """When a turn times out and stop arrives during _reap, restart recovery still settles it as a timed-out crash."""
+    env = Env(tmp_path)
+    sid = "20261018-090000-to0001"
+    session_dir = env.relay.sessions_dir() / sid
+
+    def fake_start(agent: str, parent: str | None, text: str, turns: Any, **kw: Any) -> Any:
+        # Include the nonce in prompt.md so find_by_nonce can adopt it on restart
+        write_turn(session_dir, [*SUCCESS], agent=agent, prompt=relay_prompt(text))
+        return FakeProc(4242)
+
+    def fake_finish(proc: Any, timeout: float | None = None) -> rc.RunResult:
+        return rc.RunResult(
+            session_id=sid, exit_code=124, raw_ok=False,
+            diagnostics="turn exceeded wall limit (3600s); process group terminated",
+            timed_out=True,
+        )
+
+    env.relay.start = fake_start  # type: ignore[method-assign]
+    env.relay.finish = fake_finish  # type: ignore[method-assign]
+
+    # Stop arrives while _reap is waiting on a surviving child
+    def failing_reap() -> list[str]:
+        env.store.stop_path.write_text("stop\n", encoding="utf-8")
+        raise RuntimeError("child still alive")
+
+    env.host.reap = failing_reap
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    prev_rep = rc.TurnReport(outcome="crash", agent="claude", detail="prev", turn_id="t0")
+    res = sup._launch("claude", "[relay-continuity attempt {nonce}]\ndo task", prev_rep)
+    assert res == "stopped"
+    assert sup.state["pending"] is not None
+    assert sup.state["pending"].get("timed_out") is True
+
+    # Restart supervisor: process is now gone, _resolve_pending adopts the pending attempt
+    env.store.stop_path.unlink(missing_ok=True)
+    env.host.pid_alive = lambda pid, start=None: False
+    env.host.reap = lambda: []
+    sup2 = rc.Supervisor(env.store, env.host, env.limits)
+    sup2.state = env.store.load()
+    resolved = sup2._resolve_pending()
+    assert isinstance(resolved, rc.TurnReport)
+    assert resolved.outcome == "crash"
+    assert "wall limit" in resolved.detail
+
+
+def test_malformed_negative_or_nan_quota_reading_never_clears_cooldown(tmp_path: Path) -> None:
+    """Negative, >100, or NaN used_percent in a Relay or native reading never clears a quota cooldown."""
+    env = Env(tmp_path)
+    cooldown_since = T0 - timedelta(minutes=10)
+    cooldown_until = T0 + timedelta(hours=4)
+    as_of = T0 - timedelta(minutes=2)
+
+    for bad_used in (-5.0, 105.0, float("nan"), float("inf"), float("-inf"), 10**400, -10**400):
+        sup = env.supervisor()
+        sup.state["cooldowns"]["claude"] = {
+            "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+        }
+        env.relay.readings = lambda u=bad_used: {"claude": reading("claude", u, T0 + timedelta(days=1), as_of)}
+        assert not sup.available("claude")
+        assert "claude" in sup.state["cooldowns"]
+
+        sup_n = env.supervisor()
+        sup_n.state["cooldowns"]["argon"] = {
+            "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+        }
+        env.relay.argon_limits = lambda agent, u=bad_used: {
+            "as_of": rc.iso(as_of),
+            "windows": [{"used_percent": u, "disabled": False}],
+        }
+        assert not sup_n.available("argon")
+        assert "argon" in sup_n.state["cooldowns"]
+
+
+def test_reading_clear_counter_survives_new_chain_and_unrelated_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """reading_clear_<agent> is preserved across new-chain initialization and unrelated release commands."""
+    env = Env(tmp_path)
+    cooldown_since = T0 - timedelta(minutes=10)
+    cooldown_until = T0 + timedelta(hours=4)
+    as_of = T0 - timedelta(minutes=2)
+
+    sup = env.supervisor()
+    sup.state["counters"]["reading_clear_claude"] = 1
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.store.save(sup.state, T0)
+
+    # New-chain initialization in run() preserves reading_clear_claude
+    write_turn(env.relay.sessions_dir() / "20261018-090000-newchn", [*SUCCESS], agent="codex")
+    sup_chain = rc.Supervisor(env.store, env.host, env.limits)
+    assert sup_chain.run("20261018-090000-newchn") == "idle"
+    assert sup_chain.state["counters"].get("reading_clear_claude") == 1
+    env.relay.readings = lambda: {"claude": reading("claude", 5.0, T0 + timedelta(days=1), as_of)}
+    assert not sup_chain.available("claude")
+
+    # Unrelated release preserves reading_clear_claude unless --clear-cooldown claude is passed
+    sup_chain.state["phase"] = "held"
+    sup_chain.state["hold"] = {"reason": "effects_uncertain", "at": rc.iso(T0), "attempt": 1, "turn": "t1"}
+    env.store.save(sup_chain.state, T0)
+    monkeypatch.setattr(rc, "control_root", lambda: tmp_path / "control")
+    monkeypatch.setattr(rc, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(rc, "make_host", lambda repo, relay_env=None: env.host)
+    assert rc.main(["release", "--note", "reviewed", "--clear-cooldown", "codex"]) == 0
+    reloaded = env.store.load()
+    assert reloaded["counters"].get("reading_clear_claude") == 1
+
+    # Explicit --clear-cooldown claude clears both cooldown and reading_clear_claude
+    reloaded["phase"] = "held"
+    reloaded["hold"] = {"reason": "effects_uncertain", "at": rc.iso(T0), "attempt": 1, "turn": "t1"}
+    env.store.save(reloaded, T0)
+    assert rc.main(["release", "--note", "cleared claude", "--clear-cooldown", "claude"]) == 0
+    reloaded2 = env.store.load()
+    assert "reading_clear_claude" not in reloaded2["counters"]
+
+
+def test_empty_turn_with_auth_diagnostic_records_auth_cooldown_and_question(tmp_path: Path) -> None:
+    """An empty-output turn classified as auth from stderr/diagnostics records an auth cooldown and question instead of holding on output_missing."""
+    env = Env(tmp_path, [("codex", CODEX_SUCCESS)])
+    entries: list[dict[str, Any]] = []
+
+    def fake_ledger(kind: str, text: str) -> str:
+        qid = f"L{env.clock.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(2)}"
+        entries.append({"id": qid, "kind": kind, "text": text, "ts": rc.iso(env.clock.now())})
+        env.ledger.append((kind, text))
+        return qid
+
+    env.host.ledger = fake_ledger
+    turn = env.relay.sessions_dir() / HEAD / "turns" / "turn-001"
+    turn.mkdir(parents=True, exist_ok=True)
+    (turn / "output.jsonl").write_text("", encoding="utf-8")
+    (turn / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "error"}), encoding="utf-8")
+    (turn / "stderr.log").write_text("HTTP 401 Unauthorized: Invalid API key\n", encoding="utf-8")
+    pin_to_t0(turn)
+
+    result, sup = env.run()
+    assert result == "idle"
+    assert sup.state["hold"] is None
+    assert "claude" in sup.state["cooldowns"]
+    assert sup.state["cooldowns"]["claude"]["source"] == "auth"
+    q_entries = [e for e in entries if e["kind"] == "question"]
+    assert len(q_entries) == 1
+    assert "output empty; runner reported an authentication failure" in q_entries[0]["text"]
+
+
+
+def test_choose_ranks_using_refreshed_reading_when_cooldown_clears(tmp_path: Path) -> None:
+    """When available() refreshes a cached reading older than a cooldown, _choose ranks with the refreshed room."""
+    env = Env(tmp_path)
+    cooldown_since = T0 - timedelta(minutes=5)
+    cooldown_until = T0 + timedelta(hours=4)
+    stale_as_of = cooldown_since - timedelta(minutes=1)
+    fresh_as_of = T0 - timedelta(minutes=1)
+
+    sup = env.supervisor()
+    # Current is argon, which is unavailable so _choose evaluates remaining = ["claude"]
+    sup.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "estimate", "reason": "transient", "since": rc.iso(cooldown_since),
+    }
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    # Pre-seed a cached reading for claude that was fetched 1 min ago, with as_of older than cooldown_since
+    # and showing 95% used (5% free room, below min_free_percent=10%).
+    sup._reading = {"claude": reading("claude", 95.0, T0 + timedelta(days=1), stale_as_of)}
+    sup._reading_at = T0 - timedelta(seconds=30)
+
+    # Fresh fetch returns a reading newer than cooldown_since with 80% free room (20% used).
+    env.relay.readings = lambda: {"claude": reading("claude", 20.0, T0 + timedelta(days=1), fresh_as_of)}
+    chosen = sup._choose("argon")
+    assert chosen == "claude"
+    assert "claude" not in sup.state["cooldowns"]
+
+
+def test_auth_failure_saves_cooldown_before_ledger_and_never_asks_twice_on_restart(tmp_path: Path) -> None:
+    """If the owner crashes right after appending the auth question, the auth cooldown is already on disk so restart does not ask again."""
+    env = Env(tmp_path)
+    questions_asked: list[str] = []
+
+    def crashing_ledger(kind: str, text: str) -> str:
+        if kind == "question":
+            questions_asked.append(text)
+            on_disk = env.store.load()
+            assert on_disk["cooldowns"].get("claude", {}).get("source") == "auth"
+            raise SystemExit("simulated crash right after ledger append")
+        return "L1"
+
+    env.host.ledger = crashing_ledger
+    env.head([claude_result("Invalid API key · Please run /login", error=True, status=401)])
+
+    sup1 = env.supervisor()
+    with pytest.raises(SystemExit):
+        sup1.run(HEAD)
+    assert len(questions_asked) == 1
+
+    # Now restart with a normal ledger and codex succeeding; no second question is written for claude
+    env.relay.script.append(("codex", CODEX_SUCCESS))
+    env.host.ledger = lambda kind, text: (questions_asked.append(text) if kind == "question" else None) or "L2"
+    sup2 = rc.Supervisor(env.store, env.host, env.limits)
+    assert sup2.run(HEAD) == "idle"
+    assert len(questions_asked) == 1
+
+
+def test_adopted_pending_turn_enforces_wall_limit_on_restart(tmp_path: Path) -> None:
+    """An adopted pending turn that exceeds turn_wall during _resolve_pending terminates its process group (even when
+    the leader exits on SIGTERM while a group member survives), calls _reap, and settles as timed_out."""
+    env = Env(tmp_path, [("codex", CODEX_SUCCESS)])
+    env.limits = rc.Limits(turn_wall=120.0, min_free_percent=10.0)
+    signals: list[tuple[int, int]] = []
+    leader_alive = [True]
+    group_alive = [True]
+    reap_called = [0]
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        if sig == 0:
+            if not group_alive[0]:
+                raise ProcessLookupError
+            return
+        signals.append((pgid, sig))
+        if sig == signal.SIGTERM:
+            # Leader exits on SIGTERM, but a child in the process group survives until SIGKILL
+            leader_alive[0] = False
+        elif sig == signal.SIGKILL:
+            group_alive[0] = False
+
+    def fake_reap() -> list[str]:
+        reap_called[0] += 1
+        return ["stray_child"]
+
+    env.relay.killpg = fake_killpg
+    env.host.pid_alive = lambda pid, start: leader_alive[0]
+    env.host.reap = fake_reap
+
+    nonce = "rc-20261018T080000Z-deadbeef"
+    sess_dir = env.relay.sessions_dir() / "20261018-080000-adopted"
+    write_turn(
+        sess_dir,
+        [claude_result("completed before timeout check", error=False, status=200)],
+        agent="claude",
+        prompt=relay_prompt(f"[relay-continuity attempt {nonce}]\ndo work"),
+        status="ok",
+    )
+
+    state = rc.default_state()
+    state.update({
+        "phase": "running", "head_session": HEAD, "chain": [HEAD], "agent": "claude",
+        "permissions_digest": env.host.permissions_digest(), "permissions_pinned": True,
+        "pending": {
+            "nonce": nonce, "agent": "claude", "parent": HEAD,
+            "started_at": rc.iso(T0), "pid": 42424, "pid_start": 999,
+            "fingerprint": "", "attempt": 1,
+        },
+    })
+    env.store.save(state, T0)
+    env.store.journal({"event": "launch", "nonce": nonce, "agent": "claude", "parent": HEAD,
+                       "started_at": rc.iso(T0), "pid": 42424, "pid_start": 999, "attempt": 1})
+
+    sup = rc.Supervisor(env.store, env.host, env.limits)
+    assert sup.run(HEAD) == "idle"
+    assert (42424, signal.SIGTERM) in signals
+    assert (42424, signal.SIGKILL) in signals
+    assert reap_called[0] >= 1
+    assert "claude" not in sup.state["cooldowns"]
 
