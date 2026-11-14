@@ -2018,6 +2018,15 @@ class RelayAdapter:
                 return False
         return False
 
+    def _group_is_running(self, pgid: int) -> bool:
+        try:
+            self.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+
     def finish(self, proc: subprocess.Popen, timeout: float | None = None) -> RunResult:
         wall_limit = self.turn_wall if timeout is None else timeout
         start = self.clock()
@@ -2049,10 +2058,12 @@ class RelayAdapter:
                     proc.wait(timeout=30.0)
                 except (subprocess.TimeoutExpired, TimeoutError):
                     pass
-            else:
-                while self._proc_is_running(proc) and self.clock() - term_start < 30.0:
+                while pgid and self._group_is_running(pgid) and self.clock() - term_start < 30.0:
                     self.sleep(min(1.0, max(0.01, 30.0 - (self.clock() - term_start))))
-            if self._proc_is_running(proc) and pgid:
+            else:
+                while (self._proc_is_running(proc) or (pgid and self._group_is_running(pgid))) and self.clock() - term_start < 30.0:
+                    self.sleep(min(1.0, max(0.01, 30.0 - (self.clock() - term_start))))
+            if pgid and (self._proc_is_running(proc) or self._group_is_running(pgid)):
                 try:
                     self.killpg(pgid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError, OSError):

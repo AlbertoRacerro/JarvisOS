@@ -5513,6 +5513,65 @@ def test_relay_turn_wall_limit_forces_non_success_even_if_success_terminal_writt
     assert len(settle_events[0]["in_flight"]) == 1
 
 
+def test_relay_turn_wall_limit_kills_surviving_process_group_after_leader_exits(tmp_path: Path) -> None:
+    """Finding P1: Process group can survive timeout if leader exits on SIGTERM while child remains.
+    SIGKILL must be sent to surviving group members even when the leader is dead."""
+    fake_pid = 55555
+    signals_sent: list[tuple[int, int]] = []
+    leader_alive = [True]
+    child_alive = [True]
+
+    class LeaderProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.returncode = None
+
+        def poll(self) -> int | None:
+            return None if leader_alive[0] else (self.returncode or 0)
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode or 0
+
+    proc = LeaderProc(fake_pid)
+    sim_time = [0.0]
+
+    def fake_clock() -> float:
+        return sim_time[0]
+
+    def fake_sleep(duration: float) -> None:
+        sim_time[0] += duration
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        signals_sent.append((pgid, sig))
+        if sig == 0:
+            if not leader_alive[0] and not child_alive[0]:
+                raise ProcessLookupError("No such process group")
+            return
+        if sig == signal.SIGTERM:
+            # Simulate leader exiting on SIGTERM, but child surviving
+            leader_alive[0] = False
+            proc.returncode = -signal.SIGTERM
+        elif sig == signal.SIGKILL:
+            child_alive[0] = False
+            leader_alive[0] = False
+            proc.returncode = -signal.SIGKILL
+
+    adapter = rc.RelayAdapter(
+        tmp_path,
+        turn_wall=10.0,
+        clock=fake_clock,
+        sleep=fake_sleep,
+        killpg=fake_killpg,
+    )
+    result = adapter.finish(proc)
+    assert not result.raw_ok
+    assert "turn wall limit (10s) exceeded" in result.diagnostics
+    assert (fake_pid, signal.SIGTERM) in signals_sent
+    # SIGKILL must be sent to the group to terminate surviving child
+    assert (fake_pid, signal.SIGKILL) in signals_sent
+    assert not child_alive[0]
+
+
 def test_pre_launch_reachable_probe_waiting_and_single_ledger_finding(tmp_path: Path) -> None:
     """Criterion 2: Failing Host.reachable makes _launch return 'waiting' with attempts, pending,
     counters and cooldowns unchanged and nothing passed to relay.start; repeated failing probes write
