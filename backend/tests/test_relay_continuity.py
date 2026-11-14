@@ -5427,6 +5427,92 @@ def test_relay_turn_wall_limit_terminates_process_group_and_settles(tmp_path: Pa
     assert "Your turn has a hard limit of 60 minutes." in launches[0]
 
 
+def test_relay_turn_wall_limit_forces_non_success_even_if_success_terminal_written(tmp_path: Path) -> None:
+    """Finding P1: Even if the turn wrote a success terminal before hanging, settlement must force
+    a non-success outcome while preserving effect reconciliation."""
+    fake_pid = 43434
+
+    class HungProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.returncode = None
+            self.alive = True
+
+        def poll(self) -> int | None:
+            return None if self.alive else self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode or 0
+
+    hung = HungProc(fake_pid)
+    sim_time = [0.0]
+
+    def fake_clock() -> float:
+        return sim_time[0]
+
+    def fake_sleep(duration: float) -> None:
+        sim_time[0] += duration
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        if sig == signal.SIGKILL:
+            hung.alive = False
+            hung.returncode = -signal.SIGKILL
+
+    adapter = rc.RelayAdapter(
+        tmp_path,
+        turn_wall=10.0,
+        clock=fake_clock,
+        sleep=fake_sleep,
+        killpg=fake_killpg,
+    )
+
+    env = Env(tmp_path)
+    env.host.relay.turn_wall = 10.0
+    env.host.relay.clock = fake_clock
+    env.host.relay.sleep = fake_sleep
+    env.host.relay.killpg = fake_killpg
+
+    def hung_start(agent: str, parent: str | None, text: str, turns: int, **kw: Any) -> Any:
+        return hung
+
+    def hung_finish(proc: Any, timeout: float | None = None) -> rc.RunResult:
+        return adapter.finish(hung)
+
+    env.relay.start = hung_start
+    env.relay.finish = hung_finish
+    sid = "20261018-000002-cccccc"
+    t_dir = env.relay.sessions_dir() / sid / "turns" / "turn-001"
+    t_dir.mkdir(parents=True)
+    (t_dir / "state.json").write_text(json.dumps({"agent_key": "claude"}))
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "call_1", "name": "bash", "input": {"command": "echo done"}}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "done"}]}},
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "call_2", "name": "bash", "input": {"command": "sleep 100"}}]}},
+        {"type": "result", "is_error": False, "terminal_reason": "completed"},
+    ]
+    (t_dir / "output.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    (t_dir / "prompt.md").write_text(f"## Task\n[relay-continuity attempt {env.store.root.name}]\ntask")
+
+    env.relay.find_by_nonce = lambda nonce, since: sid
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.perm["v"]
+    report = sup._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert isinstance(report, rc.TurnReport)
+    assert report.outcome != "success"
+    assert "turn wall limit" in report.detail.lower()
+    # Preserves effect reconciliation: call_1 was completed, call_2 was in flight
+    assert any(c.id == "call_1" for c in report.effects)
+    assert any(c.id == "call_2" for c in report.in_flight)
+    # Cooldowns untouched
+    assert sup.state["cooldowns"] == {}
+    # Journal records non-success outcome with reconciled effects
+    settle_events = [j for j in journal(env) if j.get("event") == "settle"]
+    assert len(settle_events) == 1
+    assert settle_events[0]["outcome"] != "success"
+    assert len(settle_events[0]["effects"]) == 1
+    assert len(settle_events[0]["in_flight"]) == 1
+
+
 def test_pre_launch_reachable_probe_waiting_and_single_ledger_finding(tmp_path: Path) -> None:
     """Criterion 2: Failing Host.reachable makes _launch return 'waiting' with attempts, pending,
     counters and cooldowns unchanged and nothing passed to relay.start; repeated failing probes write

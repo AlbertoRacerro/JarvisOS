@@ -1906,6 +1906,7 @@ class RunResult:
     exit_code: int | None
     raw_ok: bool
     diagnostics: str = ""
+    timed_out: bool = False
 
 
 class RelayAdapter:
@@ -2089,7 +2090,7 @@ class RelayAdapter:
         if timed_out:
             wall_diag = f"turn wall limit ({int(wall_limit)}s) exceeded"
             diagnostics = f"{diagnostics}\n{wall_diag}".strip() if diagnostics else wall_diag
-            return RunResult(session_id, getattr(proc, "returncode", None), False, diagnostics)
+            return RunResult(session_id, getattr(proc, "returncode", None), False, diagnostics, timed_out=True)
 
         if session_id is not None or errors:
             return RunResult(session_id, getattr(proc, "returncode", None), True, "\n".join([diagnostics, *errors]))
@@ -4064,7 +4065,8 @@ class Supervisor:
         if reaped is None:
             # Stopped while a process of the turn still survived: the attempt stays pending, and a restart adopts it.
             return "signal" if self.signalled else "stopped"
-        return self._settle(pending, result.session_id, result.diagnostics, reaped)
+        timed_out = getattr(result, "timed_out", False) or (not result.raw_ok and "wall limit" in (result.diagnostics or "").lower())
+        return self._settle(pending, result.session_id, result.diagnostics, reaped, timed_out=timed_out)
 
     def _reap(self) -> list[str] | None:
         """Stop whatever the finished turn left running, so nothing of it overlaps the next turn. While a process
@@ -4087,7 +4089,7 @@ class Supervisor:
         return sorted(names)
 
     def _settle(self, pending: dict[str, Any], session_id: str | None, diagnostics: str = "",
-                reaped: list[str] | None = None) -> TurnReport | str:
+                reaped: list[str] | None = None, timed_out: bool = False) -> TurnReport | str:
         session_id = session_id or self.host.relay.find_by_nonce(pending["nonce"], parse_ts(pending["started_at"]) or self.host.now())
         self.state["last_attempt"] = {k: pending[k] for k in ("nonce", "agent", "attempt", "fingerprint")}
         if "task" in pending:
@@ -4105,6 +4107,11 @@ class Supervisor:
             outcome="crash", agent=pending["agent"],
             detail=f"session without turns ({diagnostics.strip()})" if diagnostics else "session without turns",
             no_evidence=True, turn_id=f"{session_id}/none")
+        if timed_out:
+            if report.outcome in ("success", "quota", "spend_limit", "auth", "transient"):
+                report.outcome = "crash"
+            if diagnostics and diagnostics.strip() not in report.detail:
+                report.detail = f"{report.detail}; {diagnostics.strip()}" if report.detail else diagnostics.strip()
         report.agent = pending["agent"]
         report.reaped = reaped
         self.state["head_session"] = session_id
