@@ -22,7 +22,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -43,11 +43,11 @@ SECRET_PATTERNS = [re.compile(p) for p in (
 
 
 def now_utc() -> datetime:
-    return datetime.now(UTC)
+    return datetime.now(timezone.utc)
 
 
 def iso(ts: datetime) -> str:
-    return ts.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def parse_ts(value: str) -> datetime:
@@ -148,7 +148,7 @@ def real_processes(log_root: Path | None = None) -> list[dict[str, Any]]:
             stat = (entry / "stat").read_text().rsplit(")", 1)[1].split()
             rows.append({
                 "pid": int(entry.name), "ppid": int(stat[1]), "name": name,
-                "start": int(stat[19]), "started_at": iso(datetime.fromtimestamp(boot + int(stat[19]) / hertz, UTC)),
+                "start": int(stat[19]), "started_at": iso(datetime.fromtimestamp(boot + int(stat[19]) / hertz, timezone.utc)),
                 "cwd": os.readlink(entry / "cwd"),
                 "logs": sorted(set(logs)),
                 "cmdline": " ".join(a.decode(errors="replace") for a in argv if a)[:4_000],
@@ -325,7 +325,7 @@ def master_state(env: Env) -> dict[str, Any]:
     fetch_head = env.git("rev-parse", "--path-format=absolute", "--git-common-dir")
     fetched_at = None
     if fetch_head and (Path(fetch_head) / "FETCH_HEAD").exists():
-        fetched_at = iso(datetime.fromtimestamp((Path(fetch_head) / "FETCH_HEAD").stat().st_mtime, UTC))
+        fetched_at = iso(datetime.fromtimestamp((Path(fetch_head) / "FETCH_HEAD").stat().st_mtime, timezone.utc))
     return {"sha": sha, "committed_at": when, "subject": subject[:120], "fetched_at": fetched_at}
 
 
@@ -488,7 +488,7 @@ def lane_state(env: Env, procs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 lane["state"] = "failed-empty-report" if lane.get("exit_code") is None else f"failed-exit-{lane['exit_code']}"
         else:
             lane["state"] = "incomplete-no-process" if not lane["report_bytes"] else "report-without-done-marker"
-        lane["last_write_at"] = iso(datetime.fromtimestamp(lane.pop("last_write"), UTC))
+        lane["last_write_at"] = iso(datetime.fromtimestamp(lane.pop("last_write"), timezone.utc))
     return sorted(lanes.values(), key=lambda item: item["last_write_at"], reverse=True)
 
 
@@ -498,7 +498,7 @@ def relay_prompts(env: Env, since: datetime | None, limit: int = 3) -> list[dict
     found: list[dict[str, Any]] = []
     for prompt in env.relay_sessions.glob("*/turns/*/prompt.md"):
         stat = prompt.stat()
-        when = datetime.fromtimestamp(stat.st_mtime, UTC)
+        when = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
         if stat.st_size < 800 or (since and when <= since):
             continue
         text = prompt.read_text(encoding="utf-8", errors="replace")
@@ -678,7 +678,7 @@ def build_packet(env: Env, *, fetch: bool = True) -> dict[str, Any]:
     progress = env.control / "PROGRESS.md"
     progress_note = None
     if progress.exists():
-        mtime = datetime.fromtimestamp(progress.stat().st_mtime, UTC)
+        mtime = datetime.fromtimestamp(progress.stat().st_mtime, timezone.utc)
         if last_ledger_ts is None or mtime > last_ledger_ts + timedelta(seconds=5):
             heads = [line for line in progress.read_text(encoding="utf-8", errors="replace").splitlines() if line.startswith("## ")]
             progress_note = {"path": str(progress), "modified_at": iso(mtime), "last_section": heads[-1][3:120] if heads else None}
@@ -844,7 +844,7 @@ def render(packet: dict[str, Any], budget: int = DEFAULT_BUDGET_CHARS) -> str:
         out.append(f"- (+{len(trees) - 14} more)")
     out.append(f"- ({len(packet['worktrees']) - len(trees)} other worktrees are clean and merged)")
     lanes = packet["lanes"]
-    recent = [lane for lane in lanes if lane["state"] != "done" or (now - parse_ts(lane["last_write_at"])) < timedelta(hours=24)]
+    recent = [l for l in lanes if l["state"] != "done" or (now - parse_ts(l["last_write_at"])) < timedelta(hours=24)]
     out += ["", "## Worker lanes (running, unfinished, or finished in 24 h; reports are unreviewed claims)"]
     for lane in recent[:14]:
         where = f" in {lane['worktree']}" if lane.get("worktree") else ""
