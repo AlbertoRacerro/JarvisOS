@@ -607,5 +607,3 @@ def test_sequential_subsecond_runs_do_not_report_overlap(env: Env, monkeypatch: 
     _, res2 = worker.execute(args2, sandbox_check=lambda: True)
     assert res1["overlap"] is False
     assert res2["overlap"] is False
-
-

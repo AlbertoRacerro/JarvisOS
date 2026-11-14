@@ -1246,11 +1246,21 @@ def render(decision: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return "inf" if value > 0 else ("-inf" if value < 0 else None)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 def cmd_pick(args: argparse.Namespace) -> int:
     outcomes = load_records(args.record_file)
     decision = decide(args.difficulty, args.risk, resolve_pools(args.quota_file), args.review_of,
                       task=args.task, kind=args.kind, outcomes=outcomes)
-    print(json.dumps(decision, indent=2, sort_keys=True) if args.json else render(decision))
+    print(json.dumps(_json_safe(decision), indent=2, sort_keys=True, allow_nan=False) if args.json else render(decision))
     return 0 if decision["status"] == "ok" else NO_WORKER_EXIT
 
 

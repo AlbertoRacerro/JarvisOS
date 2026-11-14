@@ -1305,3 +1305,25 @@ def test_clean_harness_failure_record_contributes_to_quota_per_token_ratio() -> 
     assert cost == pytest.approx(600 * (0.05 / 1000))
 
 
+def test_pick_json_with_infinite_measured_cost_is_strict_rfc8259_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    rf = tmp_path / "worker-outcomes.jsonl"
+    entries = [
+        {"task": f"f{i}", "kind": "feature", "worker": "flash-medium", "model": "gemini-3.8-flash-medium",
+         "failure": "none", "spend": {"runs": 1, "tokens": 1000, "quota": 0.01, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(2)
+    ] + [
+        {"task": f"fm{i}", "kind": "feature", "worker": "flash-medium", "model": "gemini-3.8-flash-medium",
+         "failure": "model", "spend": {"runs": 1, "tokens": 1000, "quota": 0.01, "quota_runs": 1, "overlap_runs": 0}}
+        for i in range(3)
+    ]
+    rf.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
+    monkeypatch.setattr(wr, "resolve_pools", lambda qf: pools())
+    assert wr.main(["pick", "--difficulty", "medium", "--risk", "low", "--kind", "feature",
+                    "--record-file", str(rf), "--json"]) == 0
+    out = capsys.readouterr().out
+    # Strict JSON parser (rejecting NaN / Infinity) must parse without error
+    parsed = json.loads(out, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f"non-standard constant: {c}")))
+    assert parsed["worker"] == "flash-medium"
+    assert parsed["measured_cost"] == "inf"
