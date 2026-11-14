@@ -195,7 +195,6 @@ def initialize_database() -> DatabaseInfo:
             connection.execute(statement)
         for statement in PROJECT_KNOWLEDGE_SCHEMA_STATEMENTS:
             connection.execute(statement)
-        backfill_simulation_result_value_versions(connection)
         for statement in LITERATURE_SCHEMA_STATEMENTS:
             connection.execute(statement)
         for statement in DEVELOPMENT_SCHEMA_STATEMENTS:
@@ -231,6 +230,7 @@ def initialize_database() -> DatabaseInfo:
                 if "duplicate column name" not in str(exc).lower():
                     raise
         _ensure_parameter_lifecycle_schema(connection)
+        backfill_simulation_result_value_versions(connection)
         for statement in SCHEMA_INDEX_STATEMENTS:
             connection.execute(statement)
         for statement in CAD_LINK_SCHEMA_INDEX_STATEMENTS:
@@ -324,6 +324,7 @@ def is_database_initialized() -> bool:
         "simulation_result_values",
         "simulation_result_checks",
         "simulation_result_resolutions",
+        "simulation_result_value_versions",
         "project_knowledge_validation",
         "project_knowledge_reconciled_snapshots",
         "project_knowledge_reconciliation_requests",

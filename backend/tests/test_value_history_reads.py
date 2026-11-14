@@ -1280,3 +1280,142 @@ def test_compare_downstream_runs_attribution_and_decimal_checks(client: TestClie
     # Requirement check: 1 matches "1.0" numerically via Decimal
     check_ids_a = {c["id"] for c in v_a["requirement_checks"]}
     assert "val-chk-1" in check_ids_a
+
+
+def test_compare_result_values_disambiguates_shared_value_by_scalar_id(client: TestClient) -> None:
+    _seed_parameters_and_decision("main")
+    script = r"""
+import json
+with open('result.json', 'w', encoding='utf-8') as f:
+    json.dump({
+        'outputs': {
+            'inlet_temp': {'value': 300.0, 'unit': 'K', 'quantity': 'temperature'},
+            'outlet_temp': {'value': 300.0, 'unit': 'K', 'quantity': 'temperature'}
+        }
+    }, f)
+""".strip()
+    spec_res = client.post(
+        "/workspaces/main/model-specs",
+        json={"title": "Temp Spec", "engineering_question": "Test scalar disambiguation."},
+    )
+    impl = create_model_implementation(
+        "main",
+        ModelImplementationCreate(
+            model_spec_id=spec_res.json()["id"],
+            version_label="impl-temps",
+            implementation_kind="calc_v0",
+            script_text=script,
+        ),
+    )
+    job = create_runner_job(
+        "main",
+        RunnerJobCreate(
+            model_version_id=impl.id,
+            input_set={"inlet_temp": {"value": 300, "unit": "K"}},
+        ),
+    )
+    run_runner_job(job.runner_job.id)
+
+    batches = list_simulation_result_batches("main")
+    assert batches
+    batch = batches[0]
+    val_inlet = next(v for v in batch.values if v.output_name == "inlet_temp")
+    val_outlet = next(v for v in batch.values if v.output_name == "outlet_temp")
+
+    assert val_inlet.admitted_scalar_id is not None
+    assert val_outlet.admitted_scalar_id is not None
+    assert val_inlet.admitted_scalar_id != val_outlet.admitted_scalar_id
+
+    # Resolve/confirm both so each has version 0 and version 1
+    resolve_simulation_result_exception(
+        val_inlet.id,
+        SimulationResultResolveRequest(
+            workspace_id="main",
+            action="confirm",
+            reason="Confirmed inlet temp.",
+        ),
+    )
+    resolve_simulation_result_exception(
+        val_outlet.id,
+        SimulationResultResolveRequest(
+            workspace_id="main",
+            action="confirm",
+            reason="Confirmed outlet temp.",
+        ),
+    )
+
+    now = "2026-11-10T00:00:00+00:00"
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO requirements (
+                id, workspace_id, statement, basis_kind, criterion_operator, criterion_expected_value,
+                criterion_output_name, criterion_expected_unit, criterion_rule_version,
+                status, created_at, updated_at
+            ) VALUES (
+                'req-temp', 'main', 'Temp Criterion', 'acceptance_criterion', '<=', '350.0',
+                'outlet_temp', 'K', 'criterion_v0',
+                'accepted', ?, ?
+            )
+            """,
+            (now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO project_knowledge_revisions (
+                id, workspace_id, parent_kind, state, change_set_digest, change_set_json,
+                projected_state_digest, origin, created_at, accepted_at
+            ) VALUES (
+                'rev-temp', 'main', 'working', 'working', 'cs-digest', '{}',
+                'digest-basis', 'human', ?, ?
+            )
+            """,
+            (now, now),
+        )
+        # Requirement check bound to outlet_temp only (via source_scalar_id = val_outlet.admitted_scalar_id)
+        connection.execute(
+            """
+            INSERT INTO project_knowledge_validation (
+                id, workspace_id, working_revision_id, requirement_id, requirement_updated_at,
+                rule_version, validated_basis_digest, applicability_set_digest,
+                source_run_id, source_scalar_id, validator_id, validator_version,
+                outcome, reason_code, observed_json, created_at
+            ) VALUES (
+                'chk-outlet-only', 'main', 'rev-temp', 'req-temp', ?,
+                'criterion_v0', 'digest-basis', 'app-digest',
+                ?, ?, 'criterion_v0', '0.1.0',
+                'pass', 'satisfied', ?, ?
+            )
+            """,
+            (
+                now,
+                job.runner_job.simulation_run_id,
+                val_outlet.admitted_scalar_id,
+                json.dumps({"value": "300.0", "unit": "K"}),
+                now,
+            ),
+        )
+        connection.commit()
+
+    # Comparing versions of inlet_temp must NOT list that check
+    res_inlet = client.get(
+        f"/project-knowledge/workspaces/main/values/compare?value_kind=simulation_result_value&value_id={val_inlet.id}&version_a=0&version_b=1"
+    )
+    assert res_inlet.status_code == 200
+    inlet_data = res_inlet.json()
+    inlet_checks_a = [c["id"] for c in inlet_data["version_a"]["requirement_checks"]]
+    inlet_checks_b = [c["id"] for c in inlet_data["version_b"]["requirement_checks"]]
+    assert "chk-outlet-only" not in inlet_checks_a
+    assert "chk-outlet-only" not in inlet_checks_b
+
+    # Comparing versions of outlet_temp MUST list that check
+    res_outlet = client.get(
+        f"/project-knowledge/workspaces/main/values/compare?value_kind=simulation_result_value&value_id={val_outlet.id}&version_a=0&version_b=1"
+    )
+    assert res_outlet.status_code == 200
+    outlet_data = res_outlet.json()
+    outlet_checks_a = [c["id"] for c in outlet_data["version_a"]["requirement_checks"]]
+    outlet_checks_b = [c["id"] for c in outlet_data["version_b"]["requirement_checks"]]
+    assert "chk-outlet-only" in outlet_checks_a
+    assert "chk-outlet-only" in outlet_checks_b
+

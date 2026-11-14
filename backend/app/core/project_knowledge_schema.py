@@ -186,10 +186,6 @@ PROJECT_KNOWLEDGE_SCHEMA_STATEMENTS = (
     )
     """,
     """
-    CREATE INDEX IF NOT EXISTS idx_sim_result_value_versions_lookup
-        ON simulation_result_value_versions(value_id, version_index)
-    """,
-    """
     CREATE TABLE IF NOT EXISTS project_knowledge_validation (
         id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL,

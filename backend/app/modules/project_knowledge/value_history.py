@@ -637,7 +637,7 @@ def _find_requirement_checks_for_result_version(
     version_row: sqlite3.Row,
 ) -> list[BoundRequirementCheckRef]:
     query = """
-        SELECT id, requirement_id, outcome, reason_code, observed_json, created_at
+        SELECT id, requirement_id, outcome, reason_code, observed_json, source_scalar_id, created_at
         FROM project_knowledge_validation
         WHERE workspace_id = ? AND (source_run_id = ? OR source_scalar_id = ?)
         ORDER BY created_at DESC
@@ -646,7 +646,11 @@ def _find_requirement_checks_for_result_version(
     matched: list[BoundRequirementCheckRef] = []
     val_text = version_row["value_text"]
     unit_text = str(version_row["unit"] or "").strip()
+    target_scalar_id = str(scalar_id).strip() if scalar_id is not None else ""
     for row in rows:
+        row_scalar_id = str(row["source_scalar_id"] or "").strip()
+        if target_scalar_id and row_scalar_id and row_scalar_id != target_scalar_id:
+            continue
         obs_raw = row["observed_json"]
         if not obs_raw:
             continue
