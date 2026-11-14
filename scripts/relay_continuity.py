@@ -3229,12 +3229,14 @@ class Supervisor:
                                     if isinstance(native, dict):
                                         as_of = parse_ts(native.get("as_of"))
                                         windows = native.get("windows")
-                                        room = (isinstance(windows, list) and len(windows) > 0 and
-                                                all(isinstance(w, dict) and not w.get("disabled") and
-                                                    isinstance(w.get("used_percent"), (int, float)) and
-                                                    not isinstance(w.get("used_percent"), bool) and
-                                                    w["used_percent"] < 100 for w in windows))
-                                        if as_of is not None and as_of > since and room:
+                                        plausible = (isinstance(windows, list) and len(windows) > 0 and
+                                                     all(isinstance(w, dict) and
+                                                         isinstance(w.get("used_percent"), (int, float)) and
+                                                         not isinstance(w.get("used_percent"), bool) and
+                                                         0 <= w["used_percent"] <= 100 for w in windows))
+                                        fresh = as_of is not None and abs(now - as_of) <= self.limits.reading_freshness
+                                        room = plausible and all(not w.get("disabled") and w["used_percent"] < 100 for w in windows)
+                                        if fresh and as_of > since and room:
                                             self.state["cooldowns"].pop(agent, None)
                                             counters[f"reading_clear_{agent}"] = 1
                                             self.record("finding", f"relay-continuity: cleared {source} cooldown for {agent} via fresh limits reading")

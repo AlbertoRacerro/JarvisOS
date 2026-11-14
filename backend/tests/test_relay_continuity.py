@@ -5772,6 +5772,29 @@ def test_fresh_reading_ends_limits_or_message_cooldown_for_relay_and_native(tmp_
     assert sup.state["counters"]["reading_clear_argon"] == 1
 
 
+def test_stale_native_reading_does_not_clear_quota_cooldown(tmp_path: Path) -> None:
+    """Finding P1: A day-old native reading newer than cooldown since must not clear a future cooldown;
+    freshness (abs(now - as_of) <= reading_freshness) and plausibility checks must apply."""
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    # Cooldown recorded 2 days ago, valid until 4 hours in the future
+    cooldown_since = T0 - timedelta(days=2)
+    cooldown_until = T0 + timedelta(hours=4)
+    # Reading from 1 day ago (newer than since, but 24 hours stale compared to now=T0)
+    stale_as_of = T0 - timedelta(days=1)
+    sup.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    env.relay.argon_limits = lambda agent: {
+        "as_of": rc.iso(stale_as_of),
+        "windows": [{"used_percent": 15.0, "disabled": False}],
+    } if agent == "argon" else None
+
+    assert not sup.available("argon")
+    assert "argon" in sup.state["cooldowns"]
+    assert sup.state["counters"].get("reading_clear_argon", 0) == 0
+
+
 def test_reading_clear_only_once_until_successful_turn(tmp_path: Path) -> None:
     """Criterion 6: After a reading clear, a new quota failure records a cooldown that a further reading with
     room does not clear until a successful turn resets the counter."""
