@@ -201,10 +201,12 @@ def test_273_reconciliation_batched_into_next_registry_change(world) -> None:
     assert row_b["deps_merged"] is True
     assert not any("spec 010" in c and "reconcile STATUS" in c for c in packet["candidates"])
     assert any("spec 011 B is ready with dependencies merged" in c for c in packet["candidates"])
+    # MULTI has #30 merged and #31 closed unmerged: only #31 is named.
+    assert any("spec 012 is in_review but PR #31 is closed unmerged: reconcile STATUS" in c for c in packet["candidates"])
 
     # Acceptance criterion 3:
     # A is in_review and its only PR closed unmerged: packet keeps reconcile candidate for A naming the PR,
-    # and B is not deps_merged. MULTI has 1 merged and 1 unmerged PR -> names the closed unmerged PR.
+    # and B is not deps_merged. MULTI now has both PRs unmerged -> names both.
     gh.merged = []
     packet = devctx.build_packet(env, fetch=True)
     row_a = next(r for r in packet["status_in_flight"] if r["spec"] == "010")
