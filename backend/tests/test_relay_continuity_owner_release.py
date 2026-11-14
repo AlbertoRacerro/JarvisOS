@@ -449,6 +449,9 @@ def test_command_serve_does_not_call_fast_forward_when_release_requested(tmp_pat
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(tmp_path / "continuity"))
     monkeypatch.setattr(rc, "in_sandbox", lambda: True)
     monkeypatch.setattr(rc, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
+    monkeypatch.setattr(rc, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
 
     monkeypatch.setattr(rc, "check_and_request_release_update", lambda *a, **kw: True)
 
