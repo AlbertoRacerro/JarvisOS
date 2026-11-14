@@ -83,6 +83,7 @@ If an accepted spec seems to require violating one of these, stop that change an
 | --- | --- |
 | Roles, spec lifecycle, PR/merge, supervisor, when to ask the maintainer | `docs/PROCESS.md` |
 | Which module does what, status, entrypoints (generated) | `docs/MODULES.md` |
+| Classes and functions of a file or directory, with lines (generated on demand) | `scripts/code_index.py` |
 | Architecture, authority boundaries, packs | `docs/ARCHITECTURE.md` |
 | Open specs, dependencies, implementation PRs | `docs/specs/STATUS.md` (template: `docs/specs/SPEC_TEMPLATE.md`) |
 | Durable architecture decisions | `docs/DECISIONS.md` |

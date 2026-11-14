@@ -1,4 +1,4 @@
-purpose = "Repository tooling: CI gates, spec-status check, frontend contract codegen, module-table generator, launcher, supervisor (Relay continuity, jobs, observer, host ops), worker routing, Copilot CLI delegation and control-room recovery (devctx)."
+purpose = "Repository tooling: CI gates, spec-status check, frontend contract codegen, module-table generator, code index and code-facts check, launcher, supervisor (Relay continuity, jobs, observer, host ops), worker routing, Copilot CLI delegation and control-room recovery (devctx)."
 status = "live"
 entrypoints = ["relay_continuity.py", "devctx.py", "worker_routing.py", "copilot_worker.py", "jarvisos_launcher.py", "check_spec_status.py"]
 owner = "maintainer"

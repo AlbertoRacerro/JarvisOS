@@ -1,6 +1,7 @@
 """Spec 195: Relay provider continuity supervisor and Slack outbound monitor (offline, injected Relay)."""
 from __future__ import annotations
 
+import collections
 import hashlib
 import importlib.util
 import json
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -390,6 +392,429 @@ def test_choose_skips_native_coordinator_with_low_headroom(tmp_path: Path) -> No
     env = Env(tmp_path, readings={"claude": reading("claude", 10, T0 + timedelta(days=5), T0)})
     env.relay.argon_limits = lambda agent: {"windows": [{"used_percent": 86}]} if agent == "argon" else None
     assert env.supervisor()._choose("argon") == "claude"
+
+
+def test_last_completed_agent_outside_preferred_seeds_preferred(tmp_path: Path) -> None:
+    # Acceptance criterion 2: A last completed agent outside PREFERRED_AGENTS (codex) seeds the
+    # next mission with PREFERRED, launches claude, and emits no spurious provider-switched ledger/notification.
+    root = tmp_path / "control"
+    env = Env(tmp_path, [("claude", SUCCESS, "propose_done")])
+    env.relay.readings = {
+        "claude": reading("claude", 30, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+    }
+
+    def factory(store: Any, _m: Any) -> rc.Supervisor:
+        return rc.Supervisor(store, env.host, env.limits, sender=env.sender)
+
+    # 1. Previous mission completed on codex (outside PREFERRED_AGENTS)
+    m_codex = mission_def("cycle codex", mid="m-20261018T080001Z-aabbc1", submitted=T0)
+    _write_mission(root, m_codex)
+    store_codex = rc.mission_store(root, m_codex["id"])
+    state_codex = rc.default_state()
+    state_codex.update({
+        "phase": "idle",
+        "agent": "codex",
+        "mission": {
+            "id": m_codex["id"],
+            "next": 1,
+            "total": 1,
+            "done": [{"task": 0, "outcome": "verified"}],
+            "completed_at": rc.iso(T0),
+        },
+    })
+    store_codex.save(state_codex, T0)
+
+    # 2. Next mission with no initial state definition
+    m_next = mission_def("cycle next", mid="m-20261018T080002Z-aabbc2", submitted=T0 + timedelta(seconds=1))
+    _write_mission(root, m_next)
+
+    mid_next = m_next["id"]
+    outcome = rc.serve_step(root, factory, conflicts=lambda: [], now=lambda: T0 + timedelta(seconds=1))
+    assert outcome == f"ran:{mid_next}:idle"
+
+    # Verify state was seeded with PREFERRED ("claude")
+    next_store = rc.mission_store(root, mid_next)
+    saved_state = next_store.load()
+    assert saved_state["agent"] == rc.PREFERRED
+    assert saved_state["agent"] == "claude"
+
+    # Proving real serve_step/Supervisor launched claude without spurious provider switch
+    assert len(env.relay.launches) == 1
+    assert env.relay.launches[0]["agent"] == "claude"
+    assert not any("switched coordinator" in text for _, text in env.ledger)
+    assert not any("cambiato assistente" in msg for msg in env.sent)
+
+
+def test_choose_headroom_ordering_prefers_agent_with_more_free_room(tmp_path: Path) -> None:
+    # Acceptance criterion 3: Seeded agent (claude) is low. Between argon and agy_opus,
+    # agy_opus has more room (70% vs 40%), so agy_opus is chosen despite tuple order.
+    env = Env(tmp_path, readings={"claude": reading("claude", 90, T0 + timedelta(days=5), T0)})
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 60 if a == "argon" else 30}]} if a in ("argon", "agy_opus") else None
+    assert env.supervisor()._choose("claude") == "agy_opus"
+
+    # When argon has more room (70% vs 40%), argon is chosen.
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 30 if a == "argon" else 60}]} if a in ("argon", "agy_opus") else None
+    assert env.supervisor()._choose("claude") == "argon"
+
+    # With equal room (both 50%), tuple order decides (argon before agy_opus).
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 50}]} if a in ("argon", "agy_opus") else None
+    assert env.supervisor()._choose("claude") == "argon"
+
+
+def test_choose_ranks_agents_without_usable_reading_after_those_with_room(tmp_path: Path) -> None:
+    # Acceptance criterion 4: An agent with no usable reading is chosen only after every
+    # available agent with a usable reading and enough room.
+    # Seeded agent argon is low on headroom (85% used, 15% room).
+    # claude has no usable reading (empty readings dict), while agy_opus has room (40% used, 60% room).
+    env = Env(tmp_path, readings={})
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 85 if a == "argon" else 40}]} if a in ("argon", "agy_opus") else None
+    assert env.supervisor()._choose("argon") == "agy_opus"
+
+    # When claude has a usable reading with room (30% used) and agy_opus has no usable reading, claude is chosen.
+    env = Env(tmp_path, readings={"claude": reading("claude", 30, T0 + timedelta(days=5), T0)})
+    env.relay.argon_limits = lambda a: (
+        {"windows": [{"used_percent": 85}]} if a == "argon"
+        else {"windows": [{"used_percent": -5}]} if a == "agy_opus"
+        else None
+    )
+    assert env.supervisor()._choose("argon") == "claude"
+
+    # When neither has a usable reading, tuple order applies as today (claude before agy_opus).
+    env = Env(tmp_path, readings={})
+    env.relay.argon_limits = lambda a: (
+        {"windows": [{"used_percent": 85}]} if a == "argon"
+        else {"windows": [{"used_percent": -5}]} if a == "agy_opus"
+        else None
+    )
+    assert env.supervisor()._choose("argon") == "claude"
+
+    # When an agent with a usable reading is LOW on headroom, an agent with no usable reading is chosen over it.
+    # claude (seeded) is low (90% used). argon has a usable reading but is LOW (85% used -> 15% room < 25%).
+    # agy_opus has no usable reading (used_percent -5). agy_opus is chosen because argon has low headroom.
+    env = Env(tmp_path, readings={"claude": reading("claude", 90, T0 + timedelta(days=5), T0)})
+    env.relay.argon_limits = lambda a: (
+        {"windows": [{"used_percent": 85}]} if a == "argon"
+        else {"windows": [{"used_percent": -5}]} if a == "agy_opus"
+        else None
+    )
+    assert env.supervisor()._choose("claude") == "agy_opus"
+
+
+def test_choose_all_low_fallback_and_codex_last_resort(tmp_path: Path) -> None:
+    # Acceptance criterion 5: When every available agent is low, the first available one in the
+    # headroom ordering is returned, and codex is chosen only when no preferred agent is available.
+
+    # 1. Every available agent is low. current (claude) is in cooldown.
+    # argon has 20% room (80% used), agy_opus has 15% room (85% used), codex has 5% room (95% used).
+    # Headroom ordering of remaining preferred agents: argon (20%) before agy_opus (15%).
+    # Since all are low, first available in headroom ordering (argon) is returned. codex is NOT chosen.
+    env = Env(tmp_path, readings={
+        "claude": reading("claude", 90, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 95, T0 + timedelta(days=5), T0),
+    })
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 80 if a == "argon" else 85}]} if a in ("argon", "agy_opus") else None
+    sup = env.supervisor()
+    sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    assert sup._choose("claude") == "argon"
+
+    # If agy_opus has 22% room and argon has 18% room, agy_opus is first available in headroom order.
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 82 if a == "argon" else 78}]} if a in ("argon", "agy_opus") else None
+    sup = env.supervisor()
+    sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    assert sup._choose("claude") == "agy_opus"
+
+    # 2. Codex is chosen only when no preferred agent is available.
+    # All preferred agents in cooldown / unavailable; codex is available (even if low).
+    env = Env(tmp_path, readings={"codex": reading("codex", 95, T0 + timedelta(days=5), T0)})
+    env.relay.argon_limits = lambda a: None
+    sup = env.supervisor()
+    sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    assert sup._choose("claude") == "codex"
+
+
+def test_low_headroom_and_free_room_conformance(tmp_path: Path) -> None:
+    # Acceptance criterion 6: low_headroom returns identical results and is backed by free_room.
+    # Usable reading with room (30% free >= 25%)
+    env = Env(tmp_path, readings={"claude": reading("claude", 70, T0 + timedelta(days=1), T0)})
+    sup = env.supervisor()
+    assert sup.free_room("claude") == 30.0
+    assert not sup.low_headroom("claude")
+
+    # Usable reading with low headroom (20% free < 25%)
+    env = Env(tmp_path, readings={"claude": reading("claude", 80, T0 + timedelta(days=1), T0)})
+    sup = env.supervisor()
+    assert sup.free_room("claude") == 20.0
+    assert sup.low_headroom("claude")
+
+    # Multiple windows: smallest free room over windows is returned
+    multi = {
+        "agent_key": "claude", "status": "ok", "as_of": rc.iso(T0),
+        "windows": [
+            {"id": "session", "used_percent": 50, "resets_at": rc.iso(T0 + timedelta(days=1))},
+            {"id": "weekly", "used_percent": 85, "resets_at": rc.iso(T0 + timedelta(days=3))},
+        ],
+    }
+    env = Env(tmp_path, readings={"claude": multi})
+    sup = env.supervisor()
+    assert sup.free_room("claude") == 15.0
+    assert sup.low_headroom("claude")
+
+    # Stale or unusable readings return None and low_headroom is False
+    stale = reading("claude", 90, T0 + timedelta(days=1), T0 - timedelta(hours=2))
+    env = Env(tmp_path, readings={"claude": stale})
+    sup = env.supervisor()
+    assert sup.free_room("claude") is None
+    assert not sup.low_headroom("claude")
+
+    past_reset = reading("claude", 90, T0 - timedelta(hours=1), T0)
+    env = Env(tmp_path, readings={"claude": past_reset})
+    sup = env.supervisor()
+    assert sup.free_room("claude") is None
+    assert not sup.low_headroom("claude")
+
+    # Native agents
+    env = Env(tmp_path)
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 80}]} if a == "argon" else None
+    sup = env.supervisor()
+    assert sup.free_room("argon") == 20.0
+    assert sup.low_headroom("argon")
+
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 60}]} if a == "argon" else None
+    sup = env.supervisor()
+    assert sup.free_room("argon") == 40.0
+    assert not sup.low_headroom("argon")
+
+    # Missing native limits
+    env.relay.argon_limits = lambda a: None
+    sup = env.supervisor()
+    assert sup.free_room("argon") is None
+    assert not sup.low_headroom("argon")
+
+
+def test_choose_reads_quota_at_most_once_per_agent_per_choice(tmp_path: Path) -> None:
+    # Scope item 2/3: quota readings stay at most one per agent per decision.
+    class CountingSupervisor(rc.Supervisor):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.readings_by_agent: dict[str, int] = collections.defaultdict(int)
+
+        def _raw_reading(self, agent: str) -> dict[str, Any] | None:
+            self.readings_by_agent[agent] += 1
+            return super()._raw_reading(agent)
+
+    argon_reads: dict[str, int] = collections.defaultdict(int)
+    limits_reads = 0
+
+    def track_argon(a: str, fn: Callable[[str], dict[str, Any] | None]) -> dict[str, Any] | None:
+        argon_reads[a] += 1
+        return fn(a)
+
+    # 1. Seeded agent claude is low on headroom, argon is low, agy_opus is low, codex has room.
+    # _choose evaluates every candidate in order, proving at most one quota reading per agent.
+    env = Env(
+        tmp_path,
+        readings={
+            "claude": reading("claude", 90, T0 + timedelta(days=5), T0),
+            "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+        },
+    )
+    def base_argon(a: str) -> dict[str, Any] | None:
+        return {"windows": [{"used_percent": 85 if a == "argon" else 80}]} if a in ("argon", "agy_opus") else None
+
+    env.relay.argon_limits = lambda a: track_argon(a, base_argon)
+    orig_limits = env.relay.limits
+
+    def track_limits() -> dict[str, Any] | None:
+        nonlocal limits_reads
+        limits_reads += 1
+        return orig_limits()
+
+    env.relay.limits = track_limits
+    sup = CountingSupervisor(env.store, env.host, env.limits, sender=env.sender)
+    assert sup._choose("claude") == "codex"
+    assert sup.readings_by_agent["claude"] == 1
+    assert sup.readings_by_agent["codex"] == 1
+    assert argon_reads["argon"] == 1
+    assert argon_reads["agy_opus"] == 1
+    assert limits_reads == 1
+
+    # 2. When seeded agent (claude) has headroom, codex is never read,
+    # native agents are not probed, and healthy claude is kept directly.
+    argon_reads.clear()
+    limits_reads = 0
+    sup2 = CountingSupervisor(env.store, env.host, env.limits, sender=env.sender)
+    env.relay.readings = {
+        "claude": reading("claude", 30, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+    }
+    assert sup2._choose("claude") == "claude"
+    assert sup2.readings_by_agent["claude"] == 1
+    assert sup2.readings_by_agent["codex"] == 0
+    assert argon_reads["argon"] == 0
+    assert argon_reads["agy_opus"] == 0
+    assert limits_reads == 1
+
+    # 3. Seeded with a non-preferred agent (codex): preferred agents are ordered by headroom,
+    # codex is not re-read, and no agent is read more than once.
+    argon_reads.clear()
+    limits_reads = 0
+    sup3 = CountingSupervisor(env.store, env.host, env.limits, sender=env.sender)
+    env.relay.readings = {
+        "claude": reading("claude", 90, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+    }
+    def base_argon3(a: str) -> dict[str, Any] | None:
+        return {"windows": [{"used_percent": 30 if a == "argon" else 90}]} if a in ("argon", "agy_opus") else None
+
+    env.relay.argon_limits = lambda a: track_argon(a, base_argon3)
+    assert sup3._choose("codex") == "argon"
+    assert sup3.readings_by_agent["claude"] == 1
+    assert sup3.readings_by_agent["codex"] == 0
+    assert argon_reads["argon"] == 1
+    assert limits_reads == 1
+
+
+def test_choose_healthy_current_does_not_abort_on_raising_native_probe(tmp_path: Path) -> None:
+    # A healthy current coordinator is kept without probing remaining agents;
+    # a native probe that raises does not abort the decision.
+    env = Env(tmp_path, readings={"claude": reading("claude", 30, T0 + timedelta(days=5), T0)})
+    def probe_raises(_agent: str) -> Any:
+        raise RuntimeError("native quota probe failed")
+    env.relay.argon_limits = probe_raises
+    sup = env.supervisor()
+    assert sup._choose("claude") == "claude"
+
+
+def test_choose_snapshot_restore_on_return_and_raise(tmp_path: Path) -> None:
+    # Snapshot is restored to previous value (None) on normal return and on exceptions.
+    env = Env(tmp_path, readings={"claude": reading("claude", 90, T0 + timedelta(days=5), T0)})
+    argon_reads: list[str] = []
+    def probe(a: str) -> dict[str, Any] | None:
+        argon_reads.append(a)
+        return {"windows": [{"used_percent": 30 if a == "argon" else 80}]} if a in ("argon", "agy_opus") else None
+    env.relay.argon_limits = probe
+    sup = env.supervisor()
+
+    assert sup._snapshot is None
+    assert sup._choose("claude") == "argon"
+    # 1. sup._snapshot is None after _choose returns
+    assert sup._snapshot is None
+
+    # 2. A second _choose re-reads (no stale reading reused)
+    env.clock.sleep(150)
+    env.relay.readings = {"claude": reading("claude", 20, T0 + timedelta(days=5), T0)}
+    argon_reads_before = len(argon_reads)
+    assert sup._choose("claude") == "claude"
+    assert sup._snapshot is None
+    # Claude was healthy so remaining agents were not read again
+    assert len(argon_reads) == argon_reads_before
+
+    # 3. sup._snapshot is restored when _choose raises
+    def raising_probe(_a: str) -> Any:
+        raise RuntimeError("quota probe exploded")
+
+    env.clock.sleep(150)
+    env.relay.readings = {"claude": reading("claude", 90, T0 + timedelta(days=5), T0)}
+    env.relay.argon_limits = raising_probe
+    with pytest.raises(RuntimeError, match="quota probe exploded"):
+        sup._choose("claude")
+    assert sup._snapshot is None
+
+
+def test_choose_changing_readings_across_calls_exposes_double_read(tmp_path: Path) -> None:
+    # A single validated per-decision snapshot prevents double reads when provider
+    # readings fluctuate between availability and headroom checks.
+    argon_reads: dict[str, int] = collections.defaultdict(int)
+    limits_reads = 0
+
+    # 1. Native replacement agent has room on call 1 (20% used), but blocked on call 2 (100% used).
+    # If double-read, free_room ranks argon first, but available blocks it and sets cooldown.
+    # The per-decision snapshot ensures exactly one read: argon is chosen and not placed on cooldown.
+    env = Env(
+        tmp_path,
+        readings={
+            "claude": reading("claude", 90, T0 + timedelta(days=5), T0),
+            "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+        },
+    )
+
+    def argon_flip(a: str) -> dict[str, Any] | None:
+        argon_reads[a] += 1
+        if a == "argon":
+            return {"windows": [{"used_percent": 20 if argon_reads[a] == 1 else 100}]}
+        if a == "agy_opus":
+            return {"windows": [{"used_percent": 50}]}
+        return None
+
+    orig_limits = env.relay.limits
+
+    def count_limits() -> dict[str, Any] | None:
+        nonlocal limits_reads
+        limits_reads += 1
+        return orig_limits()
+
+    env.relay.argon_limits = argon_flip
+    env.relay.limits = count_limits
+    sup = env.supervisor()
+
+    assert sup._choose("claude") == "argon"
+    assert argon_reads["argon"] == 1
+    assert argon_reads["agy_opus"] == 1
+    assert limits_reads == 1
+    assert "argon" not in sup.state["cooldowns"]
+
+    # 2. Native current coordinator (argon) has room on call 1 (20% used), but low on call 2 (90% used).
+    # If double-read, available accepts argon, but low_headroom rejects it.
+    # The snapshot ensures argon is kept based on the single reading.
+    argon_reads.clear()
+    limits_reads = 0
+    env2 = Env(
+        tmp_path,
+        readings={
+            "claude": reading("claude", 90, T0 + timedelta(days=5), T0),
+            "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+        },
+    )
+
+    def argon_current_flip(a: str) -> dict[str, Any] | None:
+        argon_reads[a] += 1
+        if a == "argon":
+            return {"windows": [{"used_percent": 20 if argon_reads[a] == 1 else 90}]}
+        if a == "agy_opus":
+            return {"windows": [{"used_percent": 50}]}
+        return None
+
+    env2.relay.argon_limits = argon_current_flip
+    env2.relay.limits = count_limits
+    sup2 = env2.supervisor()
+
+    assert sup2._choose("argon") == "argon"
+    assert argon_reads["argon"] == 1
+    assert limits_reads == 0
+    assert "argon" not in sup2.state["cooldowns"]
+
+    # 3. Seeded agent claude has room on call 1 (30% used), but low on call 2 (90% used).
+    # Advancing the clock past the 2-minute limits cache during the read proves that
+    # the non-native snapshot branch in reading() prevents re-reading and keeps claude.
+    limits_call_count = 0
+
+    def limits_flip() -> dict[str, Any] | None:
+        nonlocal limits_call_count
+        limits_call_count += 1
+        env3.clock.sleep(150)
+        return {
+            "claude": reading("claude", 30 if limits_call_count == 1 else 90, T0 + timedelta(days=5), T0),
+            "codex": reading("codex", 20, T0 + timedelta(days=5), T0),
+        }
+
+    env3 = Env(tmp_path)
+    env3.relay.limits = limits_flip
+    env3.relay.argon_limits = lambda a: {"windows": [{"used_percent": 50}]} if a in ("argon", "agy_opus") else None
+    sup3 = env3.supervisor()
+
+    assert sup3._choose("claude") == "claude"
+    assert limits_call_count == 1
 
 
 def test_claude_quota_switches_to_codex_and_goes_idle(tmp_path: Path) -> None:
