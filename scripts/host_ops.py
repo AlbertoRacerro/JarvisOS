@@ -2690,7 +2690,22 @@ class Executor:
                 done_fd = self._state_fd("done")
                 try:
                     if exists_at(done_fd, name[:-5]):
-                        self._republish(done_fd, name[:-5])
+                        data = self._republish(done_fd, name[:-5])
+                        receipt: dict[str, Any] = {}
+                        try:
+                            receipt = json.loads(data)
+                        except (OSError, ValueError):
+                            pass
+                        op = receipt.get("op") or (request.get("op") if isinstance(request, dict) else None)
+                        outcome = receipt.get("outcome") if isinstance(receipt, dict) else None
+                        error = receipt.get("error") if isinstance(receipt, dict) else None
+                        if op == "release.install" and outcome != "ok":
+                            if isinstance(request, dict):
+                                if not (request.get("args") or {}).get("sha") and receipt.get("sha"):
+                                    request.setdefault("args", {})["sha"] = receipt["sha"]
+                                if not request.get("requester") and receipt.get("requester"):
+                                    request["requester"] = receipt["requester"]
+                            self._recover_unsuccessful_install(request, outcome or "failed", error)
                     else:
                         self._finish(request, "interrupted", {}, "the executor stopped while this request was running",
                                      started=None)
@@ -2893,8 +2908,10 @@ class Executor:
             except OSError:
                 pass
 
+        p_marker: dict[str, Any] | None = None
         restart_req = ctx.restart_required if ctx is not None else False
         if not restart_req:
+            moved_install_back = False
             inst_curr = self.paths.install / "current"
             if inst_curr.is_symlink() or inst_curr.exists():
                 try:
@@ -2908,6 +2925,7 @@ class Executor:
                             except OSError:
                                 pass
                         restore_release_links(self.paths, prev)
+                        moved_install_back = True
                 except OSError:
                     pass
             if self.paths.release_pending.exists():
@@ -2915,8 +2933,20 @@ class Executor:
                     p_marker = load_release_pending(self.paths)
                     if p_marker and p_marker.get("candidate_sha") == candidate:
                         self.paths.release_pending.unlink(missing_ok=True)
+                    else:
+                        p_marker = None
                 except MalformedPendingRelease:
                     _quarantine_pending_marker(self.paths)
+                    p_marker = None
+
+            if ctx is None and moved_install_back:
+                if p_marker and p_marker.get("watcher_active"):
+                    unit = "jarvisos-relay-watch.service"
+                    try:
+                        self.run(["systemctl", "--user", "restart", unit], timeout=60)
+                    except Exception:  # noqa: BLE001
+                        pass
+                self.restart_requested = True
 
         if candidate and SHA_RE.fullmatch(str(candidate)):
             already_recorded = any(
@@ -2941,7 +2971,11 @@ class Executor:
                     os.close(state_fd)
                 sync_published_release_history(self.paths)
 
-        if request.get("requester") == "relay-continuity:owner" or (request.get("args") or {}).get("owner_active") is True:
+        if (
+            request.get("requester") == "relay-continuity:owner"
+            or (request.get("args") or {}).get("owner_active") is True
+            or (p_marker and p_marker.get("owner_active") is True)
+        ):
             if not (self.paths.published / "current").exists():
                 inst = None
                 if (self.paths.install / "current").exists():
@@ -2980,10 +3014,11 @@ class Executor:
         finally:
             os.close(fd)
 
-    def _republish(self, done_fd: int, request_id: str) -> None:
+    def _republish(self, done_fd: int, request_id: str) -> bytes:
         stored = read_regular(done_fd, request_id, 2 << 20)
         data, _, signature = stored.partition(b"\x00")
         self._publish(request_id, data, signature)
+        return data
 
     def _record_unhealthy(self, marker: dict[str, Any] | None, reason: str) -> None:
         self.restart_requested = True
@@ -3215,6 +3250,9 @@ def serve(paths: Paths, interval: float) -> int:
     signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
     executor = Executor(paths)
     executor.recover()
+    if executor.restart_requested:
+        os.close(lock_fd)
+        return 75
     version_str = getattr(executor, "version", None) or executor_version()
     executor.log(f"hostops: executor {version_str} serving")
     while not stop["flag"]:

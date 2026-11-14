@@ -5468,4 +5468,201 @@ def test_interrupted_owner_install_switched_published_link_restores_previous(hos
     assert (paths.published / "current").resolve().name == prev_sha
 
 
+def test_interrupted_install_with_done_receipt_recovers_owner_and_links(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+    h._pin_guard(paths, paths.install / "releases" / prev_sha, prev_sha)
+
+    # Candidate staged under published and install; current links point to candidate
+    d_cand = paths.install / "releases" / cand_sha / "scripts"
+    d_cand.mkdir(parents=True)
+    (d_cand / "host_ops.py").write_text("# cand\n")
+    h.publish_release(paths, cand_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / cand_sha)
+    (paths.published / "current").unlink(missing_ok=True)
+    (paths.published / "current").symlink_to(paths.published / "releases" / cand_sha)
+
+    req = h.make_request("release.install", {"sha": cand_sha}, None, "relay-continuity:owner", t0)
+
+    # Place in flight
+    ifd = ex._state_fd("inflight")
+    try:
+        h.write_at(ifd, f"{req['id']}.json", h.canonical(req))
+    finally:
+        os.close(ifd)
+
+    # Finish wrote a failed receipt, but process died before _recover_unsuccessful_install or unlinking inflight
+    ex._finish(req, "failed", {}, "command failed", started=t0)
+    calls.clear()
+
+    # Executor restarts and runs recover()
+    ex.recover()
+
+    # Receipt is preserved/republished
+    receipt, _ = h.load_receipt(paths, req["id"])
+    assert receipt["outcome"] == "failed"
+
+    # Owner start must be requested
+    owner_starts = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(owner_starts) >= 1
+
+    # Links must be restored to previous release
+    assert (paths.install / "current").resolve().name == prev_sha
+    assert (paths.published / "current").resolve().name == prev_sha
+
+    # Exactly one release history entry for candidate
+    history = [entry for entry in h.read_release_history(paths) if entry.get("candidate_sha") == cand_sha]
+    assert len(history) == 1
+    assert history[0]["status"] == "refused"
+
+    # Inflight file unlinked
+    assert not (paths.state / "inflight" / f"{req['id']}.json").exists()
+
+    # Confirm idempotency when run a second time
+    calls.clear()
+    ex.recover()
+    history2 = [entry for entry in h.read_release_history(paths) if entry.get("candidate_sha") == cand_sha]
+    assert len(history2) == 1
+    assert (paths.install / "current").resolve().name == prev_sha
+    assert (paths.published / "current").resolve().name == prev_sha
+
+
+def test_interrupted_install_switched_links_with_marker_restarts_watcher_and_requests_restart(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    h._pin_guard(paths, paths.install / "releases" / prev_sha, prev_sha)
+
+    # Candidate releases staged, and install/current points to candidate
+    d_cand = paths.install / "releases" / cand_sha / "scripts"
+    d_cand.mkdir(parents=True)
+    (d_cand / "host_ops.py").write_text("# cand\n")
+    h.publish_release(paths, cand_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / cand_sha)
+    (paths.published / "current").unlink(missing_ok=True)
+    (paths.published / "current").symlink_to(paths.published / "releases" / cand_sha)
+
+    req = h.make_request("release.install", {"sha": cand_sha}, None, "relay-continuity:owner", t0)
+
+    # Pending marker written with watcher_active=True
+    deadline = h.iso(t0 + timedelta(minutes=10))
+    h.write_release_pending(
+        paths,
+        previous_sha=prev_sha,
+        candidate_sha=cand_sha,
+        deadline=deadline,
+        request_id=req["id"],
+        attempts=0,
+        watcher_active=True,
+        owner_active=True,
+        now=t0,
+    )
+
+    ifd = ex._state_fd("inflight")
+    try:
+        h.write_at(ifd, f"{req['id']}.json", h.canonical(req))
+    finally:
+        os.close(ifd)
+
+    assert paths.release_pending.exists()
+    assert ex.restart_requested is False
+    calls.clear()
+
+    # Executor restarts and runs recover()
+    ex.recover()
+
+    # 1. Links restored to previous release
+    assert (paths.install / "current").resolve().name == prev_sha
+    assert (paths.published / "current").resolve().name == prev_sha
+
+    # 2. restart_requested set to True on executor
+    assert ex.restart_requested is True
+
+    # 3. Watcher restarted because marker had watcher_active=True
+    watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
+    assert len(watcher_restarts) >= 1
+
+    # 4. Pending marker unlinked
+    assert not paths.release_pending.exists()
+
+    # 5. Owner started
+    owner_starts = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
+    assert len(owner_starts) >= 1
+
+
+def test_interrupted_install_links_not_on_candidate_does_not_request_restart(host):
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+    h._pin_guard(paths, paths.install / "releases" / prev_sha, prev_sha)
+
+    req = h.make_request("release.install", {"sha": cand_sha}, None, "relay-continuity:owner", t0)
+    ifd = ex._state_fd("inflight")
+    try:
+        h.write_at(ifd, f"{req['id']}.json", h.canonical(req))
+    finally:
+        os.close(ifd)
+
+    ex.recover()
+    assert ex.restart_requested is False
+    watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
+    assert len(watcher_restarts) == 0
+
+
+def test_serve_returns_75_when_recover_requests_restart(tmp_path, monkeypatch):
+    paths = h.Paths(tmp_path)
+    monkeypatch.delenv("JARVIS_SANDBOX", raising=False)
+    monkeypatch.setattr(h.socket, "gethostname", lambda: "host")
+    monkeypatch.setattr(h.signal, "signal", lambda *args: None)
+
+    step_called = []
+
+    class Executor:
+        def __init__(self, paths):
+            self.restart_requested = False
+
+        def recover(self):
+            self.restart_requested = True
+
+        def log(self, message):
+            pass
+
+        def step(self):
+            step_called.append(True)
+
+    monkeypatch.setattr(h, "Executor", Executor)
+    before = len(os.listdir("/proc/self/fd"))
+    assert h.serve(paths, 0.1) == 75
+    assert len(os.listdir("/proc/self/fd")) == before
+    assert not step_called
+
+
 
