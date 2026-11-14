@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import secrets
 import shutil
@@ -42,10 +43,13 @@ ARGON_MODEL = "gemini-4-argon-low"
 # Spec 255: effort follows the task tier, so every family has an alias per effort the router may pick. The two base
 # aliases keep their env overrides; the others are fixed ids. agy Sonnet and Opus run on the 3p buckets.
 FIXED_MODELS = {"flash-medium": "gemini-3.8-flash-medium", "flash-high": "gemini-3.8-flash-high",
+                "hydrogen-low": "gemini-4-hydrogen-low", "hydrogen-medium": "gemini-4-hydrogen-medium",
+                "hydrogen-high": "gemini-4-hydrogen-high",
                 "argon-medium": "gemini-4-argon-medium", "argon-high": "gemini-4-argon-high",
                 "agy-sonnet": "claude-sonnet-5-5-high", "agy-opus": "claude-opus-5-5-high"}
 GEMINI_BUCKETS = ("gemini-5h", "gemini-weekly")
-FAMILY_BUCKETS = {"flash": GEMINI_BUCKETS, "argon": (*GEMINI_BUCKETS, "gemini-argon-wtu-weekly"),
+FAMILY_BUCKETS = {"flash": GEMINI_BUCKETS, "hydrogen": GEMINI_BUCKETS,
+                  "argon": (*GEMINI_BUCKETS, "gemini-argon-wtu-weekly"),
                   "agy": ("3p-5h", "3p-weekly")}
 DEFAULT_TIMEOUT = 1800
 MAX_TIMEOUT = 6 * 3600
@@ -192,8 +196,25 @@ def target_buckets(alias: str) -> tuple[str, ...]:
     return FAMILY_BUCKETS[alias.split("-")[0]]
 
 
-def quota_preflight(agy: str, alias: str, env: dict[str, str]) -> list[dict[str, Any]]:
-    """Target buckets of a no-model-turn `/quota` reading, or a typed refusal."""
+USAGE_KEYS = ("input_tokens", "output_tokens", "thinking_tokens", "cache_read_tokens", "total_tokens")
+
+
+def clean_usage(raw: Any) -> dict[str, int] | None:
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, int] = {}
+    for k in USAGE_KEYS:
+        if k in raw:
+            v = raw[k]
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                return None
+            out[k] = v
+    if not out or "total_tokens" not in out:
+        return None
+    return out
+
+
+def read_quota_buckets(agy: str, alias: str, env: dict[str, str], allow_zero: bool = False) -> list[dict[str, Any]]:
     try:
         done = subprocess.run([agy, "-p", "/quota", "--output-format", "json"], capture_output=True, text=True,
                               timeout=QUOTA_TIMEOUT, env=env, check=False)
@@ -209,12 +230,119 @@ def quota_preflight(agy: str, alias: str, env: dict[str, str]) -> list[dict[str,
     target = [b for b in buckets(reading) if b.get("id") in wanted]
     for bucket in target:
         fraction = bucket.get("remaining_fraction")
-        if bucket.get("disabled") is True or isinstance(fraction, bool) or not isinstance(fraction, int | float) \
-                or fraction <= 0:
+        if (bucket.get("disabled") is True or isinstance(fraction, bool)
+                or not isinstance(fraction, int | float) or not math.isfinite(fraction)
+                or fraction > 1 or fraction < 0 or (not allow_zero and fraction <= 0)):
             raise Refused("quota_exhausted", str(bucket.get("id")))
     if len(target) != len(wanted) or {b.get("id") for b in target} != set(wanted):
         raise Refused("quota_bucket_missing", "missing " + ", ".join(sorted(set(wanted) - {b.get("id") for b in target})))
     return target
+
+
+def quota_preflight(agy: str, alias: str, env: dict[str, str]) -> list[dict[str, Any]]:
+    """Target buckets of a no-model-turn `/quota` reading, or a typed refusal."""
+    return read_quota_buckets(agy, alias, env, allow_zero=False)
+
+
+def read_quota_after(agy: str, alias: str, env: dict[str, str]) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Target buckets of a no-model-turn `/quota` reading after the run. Never raises."""
+    try:
+        return read_quota_buckets(agy, alias, env, allow_zero=True), None
+    except Refused as exc:
+        reason = exc.reason + (f": {exc.detail}" if exc.detail else "")
+        return None, reason
+    except Exception as exc:  # noqa: BLE001
+        return None, str(exc)
+
+
+def activity_log_path() -> Path:
+    configured = os.environ.get("JARVISOS_AGY_ACTIVITY_LOG")
+    if configured:
+        return Path(configured)
+    return Path.home() / "jarvis-control" / "work" / "evidence" / ".worker_runs.jsonl"
+
+
+def log_run_start(path: Path, run_id: str, started_at: datetime, ts: float) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {"run_id": run_id, "event": "start", "started_at": iso(started_at), "ts": ts}
+        line = (json.dumps(entry, sort_keys=True) + "\n").encode("utf-8")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
+        return True
+    except OSError:
+        return False
+
+
+def log_run_end(path: Path, run_id: str, finished_at: datetime, ts: float) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {"run_id": run_id, "event": "end", "finished_at": iso(finished_at), "ts": ts}
+        line = (json.dumps(entry, sort_keys=True) + "\n").encode("utf-8")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
+        return True
+    except OSError:
+        return False
+
+
+def check_overlap(path: Path, run_id: str, this_start: float, this_end: float) -> bool | None:
+    try:
+        if not path.is_file():
+            return None
+        runs: dict[str, dict[str, float]] = {}
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                rid = data.get("run_id")
+                if not isinstance(rid, str) or not rid:
+                    continue
+                ev = data.get("event")
+                ts = data.get("ts")
+                if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+                    continue
+                info = runs.setdefault(rid, {})
+                if ev == "start":
+                    info["start"] = float(ts)
+                elif ev == "end":
+                    info["end"] = float(ts)
+    except OSError:
+        return None
+
+    if "start" not in runs.get(run_id, {}):
+        return None
+
+    s1 = this_start
+    e1 = max(this_end, this_start + 1e-6)
+
+    for peer_id, info in runs.items():
+        if peer_id == run_id or "start" not in info:
+            continue
+        s2 = info["start"]
+        if "end" in info:
+            e2 = max(info["end"], s2 + 1e-6)
+        else:
+            e2 = s2 + MAX_TIMEOUT + KILL_MARGIN
+            if s1 >= e2:
+                continue
+        if max(s1, s2) < min(e1, e2):
+            return True
+
+    return False
 
 
 def run_argv(agy: str, task: str, model: str, timeout: int, resume: str | None = None) -> list[str]:
@@ -255,32 +383,58 @@ def execute(args: argparse.Namespace, sandbox_check: Callable[[], bool] | None =
     result: dict[str, Any] = {
         "schema": SCHEMA, "status": "refused", "reason": None, "model": None, "alias": None,
         "worktree": str(worktree), "start_head": None, "exit_code": None, "started_at": iso(started),
-        "finished_at": None, "quota": [], "argv": None}
+        "finished_at": None, "quota": [], "quota_after": None, "usage": None, "overlap": None, "argv": None}
     try:
         evidence.mkdir(parents=True, exist_ok=True)
     except OSError as error:
         result["reason"] = f"evidence_dir_uncreatable: {error}"
         return None, result
+    run_id = secrets.token_hex(8)
+    log_path = activity_log_path()
+    started_ts = 0.0
+    start_logged = False
     try:
-        _run(args, result, evidence, sandbox_check or in_sandbox)
+        if not (sandbox_check or in_sandbox)():
+            raise Refused("not_sandbox")
+        alias, model = resolve_model(args.model, args.coordinator_fallback)
+        result.update(alias=alias, model=model)
+        task, digest = read_task(Path(args.task_file))
+        result["start_head"], git_dir, common = check_worktree(worktree)
+        if not 0 < args.timeout <= MAX_TIMEOUT:
+            raise Refused("timeout_out_of_range", f"{args.timeout} not in 1..{MAX_TIMEOUT}")
+        started = now_utc()
+        started_ts = datetime.now(UTC).timestamp()
+        result["started_at"] = iso(started)
+        start_logged = log_run_start(log_path, run_id, started, started_ts)
+        _run(args, result, evidence, sandbox_check or in_sandbox, alias=alias, model=model,
+             task=task, digest=digest, git_dir=git_dir, common=common)
     except Refused as refusal:
         result.update(status="refused", reason=refusal.reason + (f": {refusal.detail}" if refusal.detail else ""))
-    result["finished_at"] = iso(now_utc())
+    finished = now_utc()
+    finished_ts = datetime.now(UTC).timestamp()
+    result["finished_at"] = iso(finished)
+    if start_logged:
+        end_logged = log_run_end(log_path, run_id, finished, finished_ts)
+        result["overlap"] = check_overlap(log_path, run_id, started_ts, finished_ts) if end_logged else None
     path = evidence / "result.json"
     write_json(path, result)
     return path, result
 
 
-def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandbox_check: Callable[[], bool]) -> None:
-    if not sandbox_check():
-        raise Refused("not_sandbox")
-    alias, model = resolve_model(args.model, args.coordinator_fallback)
-    result.update(alias=alias, model=model)
-    task, digest = read_task(Path(args.task_file))
+def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandbox_check: Callable[[], bool],
+         alias: str | None = None, model: str | None = None, task: str | None = None,
+         digest: str | None = None, git_dir: Path | None = None, common: Path | None = None) -> None:
     worktree = Path(args.worktree).expanduser()
-    result["start_head"], git_dir, common = check_worktree(worktree)
-    if not 0 < args.timeout <= MAX_TIMEOUT:
-        raise Refused("timeout_out_of_range", f"{args.timeout} not in 1..{MAX_TIMEOUT}")
+    if alias is None:
+        if not sandbox_check():
+            raise Refused("not_sandbox")
+        alias, model = resolve_model(args.model, args.coordinator_fallback)
+        result.update(alias=alias, model=model)
+        task, digest = read_task(Path(args.task_file))
+        result["start_head"], git_dir, common = check_worktree(worktree)
+        if not 0 < args.timeout <= MAX_TIMEOUT:
+            raise Refused("timeout_out_of_range", f"{args.timeout} not in 1..{MAX_TIMEOUT}")
+    assert model is not None and task is not None and digest is not None and git_dir is not None and common is not None
     agy = agy_binary()
     gh_config = evidence / "gh-config-empty"
     gh_config.mkdir(exist_ok=True)
@@ -326,6 +480,12 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     if reason != "git_metadata_modified":  # never run git over planted config or hooks
         diff = collect_diff(worktree, result["start_head"])
         (evidence / "diff.patch").write_text(diff, encoding="utf-8")
+    if not (reason or "").startswith("spawn_failed"):
+        quota_after, quota_after_error = read_quota_after(agy, alias, env)
+        result["quota_after"] = quota_after
+        if quota_after_error is not None:
+            result["quota_after_error"] = quota_after_error
+    result["usage"] = clean_usage(document.get("usage")) if isinstance(document, dict) else None
     if reason != "git_metadata_modified" and status != "timeout" and not (reason or "").startswith("spawn_failed"):
         runner_cause = relay_argon.harness_cause(relay_argon.native_error(stderr))
         if document is not None:

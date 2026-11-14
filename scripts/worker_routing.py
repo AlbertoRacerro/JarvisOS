@@ -29,6 +29,7 @@ import os
 import queue
 import shlex
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -100,26 +101,28 @@ class Model:
     model: str
     pool: str
     capability: int  # 1..3, the highest required tier it may take
-    cost: int  # relative cost, informational (the ordering uses capability surplus, then headroom)
 
 
 # Capability is provisional and per effort, never per brand (spec 255, directive L20261109084309-afcd): until
 # measured, Flash and Argon at high take tier 3. Effort follows the task: the smallest adequate tier is chosen first.
-# agy keys are agy_worker.py aliases.
+# agy keys are agy_worker.py aliases. Order comes from capability, pools and measured spend.
 MODELS: tuple[Model, ...] = (
-    Model("luna", "codex", "gpt-6-luna", "codex", 1, 1),
-    Model("flash", "agy", "gemini-3.8-flash-low", "gemini", 1, 1),
-    Model("copilot-auto", "copilot", "auto", "copilot", 1, 1),
-    Model("haiku", "claude", "claude-haiku-5-5", "claude", 1, 2),
-    Model("flash-medium", "agy", "gemini-3.8-flash-medium", "gemini", 2, 2),
-    Model("argon-medium", "agy", "gemini-4-argon-medium", "argon", 2, 3),
-    Model("terra", "codex", "gpt-6.1-terra", "codex", 2, 3),
-    Model("sonnet", "claude", "claude-sonnet-5-5", "claude", 2, 5),
-    Model("flash-high", "agy", "gemini-3.8-flash-high", "gemini", 3, 3),
-    Model("argon-high", "agy", "gemini-4-argon-high", "argon", 3, 5),
-    Model("agy-sonnet", "agy", "claude-sonnet-5-5-high", "agy3p", 3, 6),
-    Model("agy-opus", "agy", "claude-opus-5-5-high", "agy3p", 3, 8),
-    Model("sol", "codex", "gpt-6-sol", "codex", 3, 8),
+    Model("luna", "codex", "gpt-6-luna", "codex", 1),
+    Model("flash", "agy", "gemini-3.8-flash-low", "gemini", 1),
+    Model("hydrogen-low", "agy", "gemini-4-hydrogen-low", "gemini", 1),
+    Model("copilot-auto", "copilot", "auto", "copilot", 1),
+    Model("haiku", "claude", "claude-haiku-5-5", "claude", 1),
+    Model("flash-medium", "agy", "gemini-3.8-flash-medium", "gemini", 2),
+    Model("hydrogen-medium", "agy", "gemini-4-hydrogen-medium", "gemini", 2),
+    Model("argon-medium", "agy", "gemini-4-argon-medium", "argon", 2),
+    Model("terra", "codex", "gpt-6.1-terra", "codex", 2),
+    Model("sonnet", "claude", "claude-sonnet-5-5", "claude", 2),
+    Model("flash-high", "agy", "gemini-3.8-flash-high", "gemini", 3),
+    Model("hydrogen-high", "agy", "gemini-4-hydrogen-high", "gemini", 3),
+    Model("argon-high", "agy", "gemini-4-argon-high", "argon", 3),
+    Model("agy-sonnet", "agy", "claude-sonnet-5-5-high", "agy3p", 3),
+    Model("agy-opus", "agy", "claude-opus-5-5-high", "agy3p", 3),
+    Model("sol", "codex", "gpt-6-sol", "codex", 3),
 )
 
 
@@ -667,8 +670,8 @@ def load_records(path: Path | None = None) -> list[dict[str, Any]]:
 def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_first_pass: str = "n/a",
            findings: Any = "0,0,0,0", rework_rounds: int = 0, escalated: bool = False,
            salvage: str = "n/a", reason: str | None = None, failure: str = "none",
-           coordinator_tokens: int | None = None, record_file: Path | None = None,
-           now: datetime | None = None) -> dict[str, Any]:
+           coordinator_tokens: int | None = None, evidence: list[str | Path] | str | Path | None = None,
+           record_file: Path | None = None, now: datetime | None = None) -> dict[str, Any]:
     """Append one worker outcome record atomically. Refuses invalid input."""
     by_key = {m.key: m for m in MODELS}
     if worker not in by_key:
@@ -713,6 +716,69 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
         except (TypeError, ValueError) as exc:
             raise ValueError(f"invalid coordinator_tokens: {coordinator_tokens}") from exc
 
+    spend_data: dict[str, Any] | None = None
+    if evidence is not None:
+        raw_list = [evidence] if isinstance(evidence, (str, Path)) else list(evidence)
+        if raw_list:
+            seen_evidence: set[Path] = set()
+            total_tokens = 0
+            clean_tokens = 0
+            sum_quota = 0.0
+            quota_runs = 0
+            overlap_runs = 0
+            for item in raw_list:
+                item_path = Path(item)
+                res_path = item_path / "result.json" if item_path.is_dir() else item_path
+                if not res_path.is_file():
+                    raise ValueError(f"evidence result missing or unreadable: {item}")
+                resolved = res_path.resolve()
+                if resolved in seen_evidence:
+                    raise ValueError(f"duplicate evidence path: {item}")
+                seen_evidence.add(resolved)
+                try:
+                    res_dict = json.loads(res_path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    raise ValueError(f"evidence result missing or unreadable: {item}") from exc
+                if not isinstance(res_dict, dict):
+                    raise ValueError(f"evidence result missing or unreadable: {item}")
+                usage = res_dict.get("usage")
+                run_tokens = 0
+                if isinstance(usage, dict):
+                    tot = usage.get("total_tokens", 0)
+                    if isinstance(tot, int) and not isinstance(tot, bool) and tot >= 0:
+                        run_tokens = tot
+                        total_tokens += tot
+                overlap = res_dict.get("overlap")
+                if overlap is True:
+                    overlap_runs += 1
+                elif overlap is False:
+                    qb = res_dict.get("quota")
+                    qa = res_dict.get("quota_after")
+                    if isinstance(qb, list) and isinstance(qa, list):
+                        bb = next((b for b in qb if isinstance(b, dict) and b.get("id") == "gemini-weekly"), None)
+                        ba = next((b for b in qa if isinstance(b, dict) and b.get("id") == "gemini-weekly"), None)
+                        if bb and ba:
+                            fb = bb.get("remaining_fraction")
+                            fa = ba.get("remaining_fraction")
+                            if (isinstance(fb, (int, float)) and not isinstance(fb, bool) and math.isfinite(fb)
+                                    and 0.0 <= float(fb) <= 1.0
+                                    and isinstance(fa, (int, float)) and not isinstance(fa, bool) and math.isfinite(fa)
+                                    and 0.0 <= float(fa) <= 1.0):
+                                delta = float(fb) - float(fa)
+                                if delta >= 0.0:
+                                    sum_quota += delta
+                                    quota_runs += 1
+                                    clean_tokens += run_tokens
+            spend_data = {
+                "runs": len(raw_list),
+                "tokens": total_tokens,
+                "quota": round(sum_quota, 6),
+                "quota_runs": quota_runs,
+                "overlap_runs": overlap_runs,
+            }
+            if 0 < quota_runs < len(raw_list):
+                spend_data["clean_tokens"] = clean_tokens
+
     moment = now or datetime.now(UTC)
     entry: dict[str, Any] = {
         "at": _iso(moment),
@@ -731,10 +797,12 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
     }
     if tokens_val is not None:
         entry["coordinator_tokens"] = tokens_val
+    if spend_data is not None:
+        entry["spend"] = spend_data
 
     target = resolve_record_path(record_file)
     target.parent.mkdir(parents=True, exist_ok=True)
-    line = (json.dumps(entry, sort_keys=True) + "\n").encode("utf-8")
+    line = (json.dumps(entry, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
     fd = os.open(target, flags, 0o644)
     try:
@@ -765,6 +833,7 @@ def cmd_record(args: argparse.Namespace) -> int:
             reason=args.reason,
             failure=args.failure,
             coordinator_tokens=args.coordinator_tokens,
+            evidence=args.evidence,
             record_file=args.record_file,
         )
         return 0
@@ -879,6 +948,85 @@ def pct(value: float) -> str:
     return f"{round(value * 100)}%"
 
 
+def _is_clean_spend(spend: dict[str, Any]) -> bool:
+    runs = spend.get("runs", 0)
+    quota_runs = spend.get("quota_runs", 0)
+    overlap_runs = spend.get("overlap_runs", 0)
+    return (isinstance(runs, int) and isinstance(quota_runs, int) and isinstance(overlap_runs, int)
+            and overlap_runs == 0 and quota_runs == runs and runs > 0)
+
+
+def _clean_quota_and_tokens(spend: dict[str, Any]) -> tuple[float, int] | None:
+    if _is_clean_spend(spend):
+        tokens = spend.get("tokens")
+        if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) and math.isfinite(tokens) and int(tokens) > 0:
+            quota = spend.get("quota", 0.0)
+            if isinstance(quota, (int, float)) and not isinstance(quota, bool) and math.isfinite(quota) and float(quota) >= 0.0:
+                return float(quota), int(tokens)
+        return None
+    quota_runs = spend.get("quota_runs", 0)
+    clean_tok = spend.get("clean_tokens")
+    if (isinstance(quota_runs, int) and not isinstance(quota_runs, bool) and quota_runs > 0
+            and isinstance(clean_tok, (int, float)) and not isinstance(clean_tok, bool) and math.isfinite(clean_tok) and int(clean_tok) > 0):
+        quota = spend.get("quota", 0.0)
+        if isinstance(quota, (int, float)) and not isinstance(quota, bool) and math.isfinite(quota) and float(quota) >= 0.0:
+            return float(quota), int(clean_tok)
+    return None
+
+
+def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[dict[str, Any]] | None) -> tuple[float | None, int]:
+    """Median measured quota per accepted task of the requested kind (or across all records when kind is None;
+    failure != harness, with spend). Returns (median_cost or None, count of costed records). Measured when count >= 5."""
+    if candidate.kind != "agy" or not outcomes:
+        return None, 0
+
+    c_records = [
+        r for r in outcomes
+        if (r.get("worker") == candidate.key or r.get("model") == candidate.model)
+        and (kind is None or r.get("kind") == kind)
+        and r.get("failure") != "harness"
+        and isinstance(r.get("spend"), dict)
+    ]
+    if not c_records:
+        return None, 0
+
+    all_spend_records = [
+        r for r in outcomes
+        if (r.get("worker") == candidate.key or r.get("model") == candidate.model)
+        and isinstance(r.get("spend"), dict)
+    ]
+    clean_pairs = [
+        pair for r in all_spend_records
+        if (pair := _clean_quota_and_tokens(r["spend"])) is not None
+    ]
+    clean_quota = sum(q for q, _ in clean_pairs)
+    clean_tokens = sum(t for _, t in clean_pairs)
+    ratio = (clean_quota / clean_tokens) if (clean_pairs and clean_tokens > 0) else None
+
+    costs: list[float] = []
+    for r in c_records:
+        if r.get("failure") == "model" or bool(r.get("escalated")):
+            costs.append(math.inf)
+        elif _is_clean_spend(r["spend"]):
+            quota_val = r["spend"].get("quota", 0.0)
+            if isinstance(quota_val, (int, float)) and not isinstance(quota_val, bool) and math.isfinite(quota_val) and float(quota_val) >= 0.0:
+                costs.append(float(quota_val))
+        elif ratio is not None:
+            raw_tok = r["spend"].get("tokens")
+            tokens = int(raw_tok) if isinstance(raw_tok, (int, float)) and not isinstance(raw_tok, bool) and math.isfinite(raw_tok) else 0
+            if tokens > 0:
+                costs.append(tokens * ratio)
+        else:
+            # no clean run -> that record has no cost
+            pass
+
+    count = len(costs)
+    if count < 5:
+        return None, count
+
+    return float(statistics.median(costs)), count
+
+
 def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODELS, review_of: str | None = None,
          now: datetime | None = None, task: str | None = None, kind: str | None = None,
          outcomes: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -946,9 +1094,11 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
         if model.capability < required:
             continue
         pool = pools.get(model.pool) or unreadable(model.pool, "no_reading")
+        cost, count = candidate_measured_cost(model, kind, outcomes)
         entry: dict[str, Any] = {"worker": model.key, "kind": model.kind, "model": model.model, "pool": model.pool,
-                                 "family": family(model), "capability": model.capability, "cost": model.cost,
-                                 "free": None if pool.free is None else round(pool.free, 4), "source": pool.source}
+                                 "family": family(model), "capability": model.capability,
+                                 "free": None if pool.free is None else round(pool.free, 4), "source": pool.source,
+                                 "measured_cost": cost, "record_count": count}
         if pool.free is None:
             skipped.append({**entry, "skipped": pool.reason or "unreadable"})
         elif below_reserve(pool, now):
@@ -959,10 +1109,35 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
             skipped.append({**entry, "skipped": "measured_inadequate"})
         else:
             same = int(review_of is not None and family(model) == review_of)
+            entry["same"] = same
             first = 0 if model.pool in FIRST_POOLS else 1
             eligible.append(((same, model.capability - required, first, -expiry_score(pool, now), -pool.free, index),
                              entry))
-    return [entry for _, entry in sorted(eligible, key=lambda item: item[0])], skipped
+
+    today_sorted = [entry for _, entry in sorted(eligible, key=lambda item: item[0])]
+    result_list = list(today_sorted)
+
+    for same_val in (0, 1):
+        pools_in_partition = dict.fromkeys(e["pool"] for e in result_list if e.get("same", 0) == same_val)
+        for p in pools_in_partition:
+            measured_indices = [
+                i for i, e in enumerate(result_list)
+                if e.get("same", 0) == same_val and e["pool"] == p and e.get("measured_cost") is not None
+            ]
+            if len(measured_indices) <= 1:
+                continue
+            measured_entries = [result_list[i] for i in measured_indices]
+            sorted_entries = sorted(
+                measured_entries,
+                key=lambda item: (item["measured_cost"], measured_indices[measured_entries.index(item)])
+            )
+            for idx, entry in zip(measured_indices, sorted_entries, strict=True):
+                result_list[idx] = entry
+
+    for e in result_list:
+        e.pop("same", None)
+
+    return result_list, skipped
 
 
 def bare_command(model: Model) -> str:
@@ -992,7 +1167,7 @@ def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | 
     required = tier(difficulty, risk)
     eligible, skipped = rank(required, pools, review_of=review_of, now=now, task=task, kind=kind, outcomes=outcomes)
     decision: dict[str, Any] = {"difficulty": difficulty, "risk": risk, "required_tier": required,
-                                "review": REVIEW[risk], "reserves": RESERVES}
+                                "kind": kind, "review": REVIEW[risk], "reserves": RESERVES}
     by_key = {m.key: m for m in MODELS}
     if not eligible:
         reason = "wait_for_escalation_pool" if any(s.get("skipped") == "escalated_from_family" for s in skipped) else "no_worker"
@@ -1002,6 +1177,7 @@ def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | 
     return {**decision, "status": "ok", "worker": chosen["worker"], "model": chosen["model"], "pool": chosen["pool"],
             "source": chosen["source"], "command": launch_command(by_key[chosen["worker"]]),
             "claude_pool_low": low, **({"note": CLAUDE_LOW_NOTE} if low else {}),
+            "measured_cost": chosen.get("measured_cost"), "record_count": chosen.get("record_count", 0),
             "alternatives": eligible[1:], "skipped": skipped}
 
 
@@ -1044,6 +1220,14 @@ def cached_summary(ttl: float = CACHE_TTL, clock: Callable[[], float] = time.mon
     return line
 
 
+def _format_cost(cost: float | None, count: int) -> str:
+    if cost is None:
+        return f"cost unmeasured, {count} records"
+    if math.isinf(cost):
+        return f"cost inf, {count} records"
+    return f"cost {round(cost, 4)}, {count} records"
+
+
 def render(decision: dict[str, Any]) -> str:
     if decision["status"] != "ok":
         skipped = ", ".join(f"{s['worker']}({s['skipped']})" for s in decision["skipped"]) or "none adequate"
@@ -1051,8 +1235,13 @@ def render(decision: dict[str, Any]) -> str:
         return (f"{prefix}: nothing adequate for tier {decision['required_tier']} "
                 f"(difficulty {decision['difficulty']}, risk {decision['risk']}); skipped: {skipped}\n"
                 "The coordinator does the work itself or waits.")
-    lines = [f"worker: {decision['worker']} ({decision['model']}, pool {decision['pool']}"
-             + (", quota from snapshot)" if decision["source"] == "snapshot" else ")"),
+    show_measured = decision.get("kind") is not None or decision.get("measured_cost") is not None or bool(decision.get("record_count"))
+    worker_desc = f"{decision['model']}, pool {decision['pool']}"
+    if decision["source"] == "snapshot":
+        worker_desc += ", quota from snapshot"
+    if show_measured:
+        worker_desc += f", {_format_cost(decision.get('measured_cost'), decision.get('record_count', 0))}"
+    lines = [f"worker: {decision['worker']} ({worker_desc})",
              f"tier: {decision['required_tier']} (difficulty {decision['difficulty']}, risk {decision['risk']})",
              "launch requires exported absolute WORKTREE and TASK_FILE, LABEL (1-80 letters, digits, spaces or _.:/+-), AUTHORITY, SPEC; optional WALL_HOURS (default 1):",
              f"launch: {decision['command']}",
@@ -1060,19 +1249,33 @@ def render(decision: dict[str, Any]) -> str:
     if decision.get("note"):
         lines.append(f"note: {decision['note']}")
     if decision["alternatives"]:
-        lines.append("alternatives: " + ", ".join(
-            f"{a['worker']} ({a['pool']} {pct(a['free'])} free{' snapshot' if a['source'] == 'snapshot' else ''})"
-            for a in decision["alternatives"]))
+        alt_strs = []
+        for a in decision["alternatives"]:
+            entry_desc = f"{a['pool']} {pct(a['free'])} free" + (" snapshot" if a.get("source") == "snapshot" else "")
+            if show_measured:
+                entry_desc += f", {_format_cost(a.get('measured_cost'), a.get('record_count', 0))}"
+            alt_strs.append(f"{a['worker']} ({entry_desc})")
+        lines.append("alternatives: " + ", ".join(alt_strs))
     if decision["skipped"]:
         lines.append("skipped: " + ", ".join(f"{s['worker']}({s['skipped']})" for s in decision["skipped"]))
     return "\n".join(lines)
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return "inf" if value > 0 else ("-inf" if value < 0 else None)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def cmd_pick(args: argparse.Namespace) -> int:
     outcomes = load_records(args.record_file)
     decision = decide(args.difficulty, args.risk, resolve_pools(args.quota_file), args.review_of,
                       task=args.task, kind=args.kind, outcomes=outcomes)
-    print(json.dumps(decision, indent=2, sort_keys=True) if args.json else render(decision))
+    print(json.dumps(_json_safe(decision), indent=2, sort_keys=True, allow_nan=False) if args.json else render(decision))
     return 0 if decision["status"] == "ok" else NO_WORKER_EXIT
 
 
@@ -1175,6 +1378,8 @@ def build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--reason", default=None, help="reason when salvage is restarted")
     rec.add_argument("--failure", default="none", help="none, harness, or model")
     rec.add_argument("--coordinator-tokens", type=int, default=None, help="coordinator tokens recorded on task")
+    rec.add_argument("--evidence", action="append", default=None,
+                     help="result.json directory of an agy worker run contributing to the task")
     rec.add_argument("--record-file", type=Path, default=None,
                      help="record file of worker outcomes (default: main checkout .agent-relay/worker-outcomes.jsonl)")
     rec.set_defaults(func=cmd_record)

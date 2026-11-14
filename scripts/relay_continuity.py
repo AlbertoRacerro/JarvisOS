@@ -20,6 +20,7 @@ import fcntl
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import secrets
@@ -31,6 +32,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import urllib.error
@@ -81,9 +83,9 @@ if "worker_routing" not in sys.modules:
     _ROUTING_SPEC.loader.exec_module(worker_routing)
 
 SCHEMA = "relay-continuity.v1"
-AGENTS = ("claude", "codex", "argon", "agy_opus")
+AGENTS = ("claude", "argon", "agy_opus", "codex", "hydrogen")
 PREFERRED_AGENTS = ("claude", "argon", "agy_opus")
-NATIVE_AGENTS = ("argon", "agy_opus")
+NATIVE_AGENTS = ("argon", "agy_opus", "hydrogen")
 PREFERRED = "claude"
 OUTCOMES = ("success", "quota", "spend_limit", "transient", "auth", "crash", "unknown")
 FAILURES = tuple(o for o in OUTCOMES if o != "success")
@@ -113,6 +115,18 @@ DIRECTIVE_ID_RE = re.compile(r"L\d{14}-[0-9a-f]{4}")
 MAX_TASKS = 20
 MAX_TASK_CHARS = 8000
 MAX_TASK_CHECKPOINTS = 12  # spec 204: durable checkpoints of one task before it holds, across owner restarts
+WAIT_TIMEOUT_SECONDS = 7200  # spec 267: elapsed wall-clock seconds before an external wait terminates (2 hours)
+CI_POLL_INTERVAL_SECONDS = 60  # spec 267: minimum seconds between PR CI check queries
+JOB_POLL_INTERVAL_SECONDS = 15  # spec 267: minimum seconds between job status queries
+MAX_SESSION_RESUMES = 4  # spec 267: consecutive resumes of the same session
+TURN_USAGE_CAP_TOKENS = 2_000_000  # spec 267: cumulative usage cap above which a turn starts a fresh context
+MIN_CHECKPOINT_INTERVAL_SECONDS = 60  # spec 267: minimum seconds between bare checkpoints
+
+JOB_WAIT_LINE_RE = re.compile(r"^JOB-WAIT:\s*(j-\d{8}T\d{6}Z-[0-9a-f]{6})\s*$")
+CI_WAIT_LINE_RE = re.compile(r"^CI-WAIT:\s*([1-9]\d*)@([0-9a-f]{40})\s*$")
+FORBIDDEN_WAIT_CHARS = frozenset("`$;|><&()")
+CI_SUCCESS_CONCLUSIONS = frozenset(("success", "neutral", "skipped"))
+CI_FAILURE_CONCLUSIONS = frozenset(("failure", "timed_out", "action_required", "cancelled", "error"))
 SPEC_ID_RE = re.compile(r"\d{3}[a-z]?")
 SANDBOX_HOSTNAME = "jarvis-sandbox"
 LEGACY_MARKERS = ("jarvis-control/autopilot/run.sh", "jarvis-control/autopilot/watchdog.sh",
@@ -137,6 +151,7 @@ class Limits:
     max_reset_ahead: timedelta = timedelta(days=8)
     min_free_percent: float = 25.0
     reap_grace: float = 5.0  # seconds a leftover process gets to exit on SIGTERM before SIGKILL
+    turn_wall: float = 3600.0  # seconds RelayAdapter.finish waits before terminating the process group
 
 
 def now_utc() -> datetime:
@@ -202,6 +217,7 @@ class TurnReport:
     harness_cause: str | None = None
     spend_cap: bool = False  # the provider message named a spend/credit cap (even if it also printed a reset)
     reaped: list[str] | None = None  # processes the turn left running, stopped at its end; None: not launched here
+    context_used_tokens: int | None = None  # spec 267: cumulative reported tokens per turn
 
     @property
     def in_flight(self) -> list[ToolCall]:
@@ -997,8 +1013,11 @@ def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any 
             ref = now_utc()
     calls: dict[str, ToolCall] = {}
     task_calls: dict[str, str] = {}
+    tokens = state.get("context_used_tokens")
+    used_tok = int(tokens) if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) else None
     report = TurnReport(outcome="crash", agent=agent, detail="no terminal event", bad_lines=bad,
-                        relay_status=state.get("status"), turn_id=f"{turn_dir.parent.parent.name}/{turn_dir.name}")
+                        relay_status=state.get("status"), turn_id=f"{turn_dir.parent.parent.name}/{turn_dir.name}",
+                        context_used_tokens=used_tok)
     if not events:
         report.detail = "output missing" if not output.exists() else ("output unparseable" if bad else "output empty")
         report.no_evidence = not bad
@@ -1124,6 +1143,16 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
     results: list[dict[str, Any]] = []
     initialized = False
     conversation: str | None = None
+    if agent == "hydrogen":
+        allowed_models = relay_argon.HYDROGEN_MODELS
+        expected_label = "Gemini 4 Hydrogen"
+    elif agent == "agy_opus":
+        allowed_models = relay_argon.OPUS_MODELS
+        expected_label = "Claude Opus"
+    else:
+        allowed_models = relay_argon.MODELS
+        expected_label = "Gemini 4 Argon"
+    _ = expected_label
     for index, event in enumerate(events):
         typ = event.get("event")
         if typ == "init":
@@ -1132,7 +1161,7 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
             initialized = True
             conversation = event.get("conversation_id")
             init = event.get("init")
-            if not isinstance(init, dict) or init.get("model") != meta.get("model") or init.get("model") not in (relay_argon.OPUS_MODELS if agent == "agy_opus" else relay_argon.MODELS):
+            if not isinstance(init, dict) or init.get("model") != meta.get("model") or init.get("model") not in allowed_models:
                 report.bad_lines += 1
         elif typ == "step_update":
             step = event.get("step_update")
@@ -1276,6 +1305,9 @@ def no_terminal_evidence(report: TurnReport, turn_dir: Path, diagnostics: str) -
     text = "\n".join(t for t in texts if t)
     if text and classify_text(text, None) == "auth":
         report.outcome, report.detail = "auth", f"{report.detail}; runner reported an authentication failure"
+        report.no_evidence = False
+    elif "wall limit" in text.lower():
+        report.detail = f"{report.detail}; {diagnostics.strip()}"
     return report
 
 
@@ -1333,7 +1365,7 @@ def default_state() -> dict[str, Any]:
         "permissions_digest": None, "permissions_pinned": False, "pending": None, "waiting_since": None, "last_outcome": None,
         "notify": {"sent": {}, "window": [], "last_digest": None, "failures": 0, "retry": None, "dropped": 0},
         "watch": {"seen": {}, "master": None}, "acknowledged": None, "spend_caps": {}, "updated_at": None,
-        "parked_turns": [],
+        "parked_turns": [], "wait": None, "resumes": 0, "last_checkpoint_at": None, "network_outage": False,
     }
 
 
@@ -1343,6 +1375,7 @@ STATE_TYPES: dict[str, tuple[type, ...]] = {
     "permissions_digest": (str, type(None)), "permissions_pinned": (bool,), "pending": (dict, type(None)),
     "waiting_since": (str, type(None)), "last_outcome": (str, type(None)), "notify": (dict,), "watch": (dict,),
     "acknowledged": (dict, type(None)), "spend_caps": (dict,), "updated_at": (str, type(None)),
+    "wait": (dict, type(None)), "resumes": (int,), "last_checkpoint_at": (str, type(None)),
 }
 PENDING_KEYS = ("nonce", "agent", "parent", "started_at", "pid", "pid_start", "fingerprint", "attempt")
 
@@ -1379,6 +1412,39 @@ def validate_state(data: dict[str, Any]) -> str | None:
         return "bad diagnostic attempt"
     if not isinstance(data.get("diagnostics", []), list):
         return "bad type for diagnostics"
+    resumes = data.get("resumes")
+    if isinstance(resumes, bool) or not isinstance(resumes, int) or resumes < 0:
+        return "bad resumes"
+    last_cp = data.get("last_checkpoint_at")
+    if last_cp is not None and (not isinstance(last_cp, str) or parse_ts(last_cp) is None):
+        return "bad last_checkpoint_at"
+    wait = data.get("wait")
+    if wait is not None:
+        if not isinstance(wait, dict):
+            return "bad wait record"
+        jobs = wait.get("jobs")
+        ci = wait.get("ci")
+        if not isinstance(jobs, list) or not isinstance(ci, list) or (not jobs and not ci):
+            return "bad wait record"
+        if any(not isinstance(j, str) or not JOB_WAIT_LINE_RE.match(f"JOB-WAIT: {j}") for j in jobs):
+            return "bad wait record"
+        for item in ci:
+            if not isinstance(item, dict):
+                return "bad wait record"
+            pr = item.get("pr")
+            sha = item.get("sha")
+            if isinstance(pr, bool) or not isinstance(pr, int) or pr <= 0:
+                return "bad wait record"
+            if not isinstance(sha, str) or len(sha) != 40 or not CI_WAIT_LINE_RE.match(f"CI-WAIT: {pr}@{sha}"):
+                return "bad wait record"
+        if not isinstance(wait.get("started_at"), str) or parse_ts(wait.get("started_at")) is None:
+            return "bad wait record"
+        if wait.get("last_job_poll") is not None and (not isinstance(wait.get("last_job_poll"), str)
+                                                      or parse_ts(wait.get("last_job_poll")) is None):
+            return "bad wait record"
+        if wait.get("last_ci_poll") is not None and (not isinstance(wait.get("last_ci_poll"), str)
+                                                     or parse_ts(wait.get("last_ci_poll")) is None):
+            return "bad wait record"
     # Optional (spec 201): present only in a mission's own store.
     mission = data.get("mission")
     if mission is not None and (not isinstance(mission, dict) or not isinstance(mission.get("id"), str)
@@ -1503,7 +1569,7 @@ FIELD_RULES: dict[str, Callable[[str], bool]] = {
     "claude_until": lambda v: v in ("none", "manual") or bool(re.fullmatch(ISO_RE, v)),
     "codex_until": lambda v: v in ("none", "manual") or bool(re.fullmatch(ISO_RE, v)),
     "argon_until": lambda v: v in ("none", "manual") or bool(re.fullmatch(ISO_RE, v)),
-    "reset_source": lambda v: v in ("limits", "message", "estimate", "manual"),
+    "reset_source": lambda v: v in ("limits", "message", "estimate", "manual", "auth"),
     "attempt": lambda v: bool(re.fullmatch(r"\d{1,4}", v)),
     "attempts": lambda v: bool(re.fullmatch(r"\d{1,6}", v)),
     "holds": lambda v: bool(re.fullmatch(r"\d{1,6}", v)),
@@ -1853,15 +1919,25 @@ class RunResult:
     exit_code: int | None
     raw_ok: bool
     diagnostics: str = ""
+    timed_out: bool = False
 
 
 class RelayAdapter:
-    def __init__(self, repo: Path, binary: str = "agent-relay", env: dict[str, str] | None = None):
+    def __init__(self, repo: Path, binary: str = "agent-relay", env: dict[str, str] | None = None,
+                 turn_wall: float = Limits.turn_wall, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], None] = time.sleep, killpg: Callable[[int, int], None] = os.killpg):
         self.repo = repo
         self.binary = binary
         self.env = env  # extra environment for launched runs (the sandboxed mission profile); None: inherited
+        self.turn_wall = turn_wall
+        self.clock = clock
+        self.sleep = sleep
+        self.killpg = killpg
         self._outputs: dict[int, tuple[Any, Any]] = {}
         self._argon_leases: dict[int, Any] = {}
+
+    def conversation_store(self) -> Path:
+        return relay_argon.conversation_store()
 
     def limits(self) -> dict[str, Any] | None:
         try:
@@ -1887,7 +1963,8 @@ class RelayAdapter:
             env = {**os.environ, **(self.env or {})}
             relay_argon.model_for(agent, env)
             reading = relay_argon.read_quota(binary, env, agent=agent)
-            result = {"windows": [{"used_percent": 100 * (1 - b["remaining_fraction"]),
+            result = {"as_of": iso(now_utc()),
+                      "windows": [{"id": b.get("id"), "used_percent": 100 * (1 - b["remaining_fraction"]),
                                    "resets_at": b.get("reset_time"), "disabled": b.get("disabled", False)}
                                   for b in reading]}
         except relay_argon.Refused:
@@ -1946,22 +2023,102 @@ class RelayAdapter:
         if lease:
             lease.close()
 
-    def finish(self, proc: subprocess.Popen) -> RunResult:
-        proc.wait()
-        files = self._outputs.pop(id(proc))
+    def _proc_is_running(self, proc: Any) -> bool:
+        if hasattr(proc, "poll"):
+            try:
+                return proc.poll() is None
+            except Exception:  # noqa: BLE001
+                return False
+        return False
+
+    def _group_is_running(self, pgid: int) -> bool:
+        try:
+            self.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+
+    def finish(self, proc: subprocess.Popen, timeout: float | None = None) -> RunResult:
+        wall_limit = self.turn_wall if timeout is None else timeout
+        start = self.clock()
+        timed_out = False
+        if self.clock is time.monotonic and self.sleep is time.sleep and hasattr(proc, "wait"):
+            try:
+                proc.wait(timeout=max(0.0, wall_limit))
+            except (subprocess.TimeoutExpired, TimeoutError):
+                timed_out = True
+        else:
+            while True:
+                if not self._proc_is_running(proc):
+                    break
+                if self.clock() - start >= wall_limit:
+                    timed_out = True
+                    break
+                self.sleep(min(1.0, max(0.01, wall_limit - (self.clock() - start))))
+
+        if timed_out:
+            pgid = getattr(proc, "pid", None)
+            if pgid:
+                try:
+                    self.killpg(pgid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            term_start = self.clock()
+            if self.clock is time.monotonic and self.sleep is time.sleep and hasattr(proc, "wait"):
+                try:
+                    proc.wait(timeout=30.0)
+                except (subprocess.TimeoutExpired, TimeoutError):
+                    pass
+                while pgid and self._group_is_running(pgid) and self.clock() - term_start < 30.0:
+                    self.sleep(min(1.0, max(0.01, 30.0 - (self.clock() - term_start))))
+            else:
+                while (self._proc_is_running(proc) or (pgid and self._group_is_running(pgid))) and self.clock() - term_start < 30.0:
+                    self.sleep(min(1.0, max(0.01, 30.0 - (self.clock() - term_start))))
+            if pgid and (self._proc_is_running(proc) or self._group_is_running(pgid)):
+                try:
+                    self.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            if hasattr(proc, "wait"):
+                try:
+                    if self.clock is time.monotonic and self.sleep is time.sleep:
+                        proc.wait(timeout=1.0)
+                    else:
+                        proc.wait()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        files = self._outputs.pop(id(proc), None)
         texts = []
-        for handle in files:
-            handle.seek(0)
-            texts.append(handle.read())
-            handle.close()
-        out, err = texts
+        if files:
+            for handle in files:
+                try:
+                    handle.seek(0)
+                    texts.append(handle.read())
+                    handle.close()
+                except Exception:  # noqa: BLE001
+                    texts.append("")
+        out, err = texts if len(texts) == 2 else ("", "")
         diagnostics = (err or "")[-8192:]
+        session_id = None
+        errors: list[str] = []
         try:
             data = json.loads(out)
+            session_id = data.get("session_id")
             errors = [str(data.get(k)) for k in ("run_error", "error", "stop_reason") if data.get(k)]
-            return RunResult(data.get("session_id"), proc.returncode, True, "\n".join([diagnostics, *errors]))
         except (json.JSONDecodeError, TypeError, AttributeError):
-            return RunResult(None, proc.returncode, False, diagnostics)
+            pass
+
+        if timed_out:
+            wall_diag = f"turn wall limit ({int(wall_limit)}s) exceeded"
+            diagnostics = f"{diagnostics}\n{wall_diag}".strip() if diagnostics else wall_diag
+            return RunResult(session_id, getattr(proc, "returncode", None), False, diagnostics, timed_out=True)
+
+        if session_id is not None or errors:
+            return RunResult(session_id, getattr(proc, "returncode", None), True, "\n".join([diagnostics, *errors]))
+        return RunResult(None, getattr(proc, "returncode", None), False, diagnostics)
 
     def sessions_dir(self) -> Path:
         return self.repo / ".agent-relay" / "sessions"
@@ -1969,7 +2126,7 @@ class RelayAdapter:
     def find_by_nonce(self, nonce: str, since: datetime) -> str | None:
         root = self.sessions_dir()
         floor = (since - timedelta(minutes=2)).strftime("%Y%m%d-%H%M%S")
-        marker = re.compile(r"\[relay-continuity attempt (rc-[0-9TZ]+-[0-9a-f]+)\]")
+        marker = re.compile(r"\[relay-continuity (?:attempt|resume) (rc-[0-9TZ]+-[0-9a-f]+)\]")
         found = []
         for session in sorted(root.glob("*-*-*"), reverse=True):
             if session.name[:15] < floor:
@@ -2200,6 +2357,208 @@ def final_text(turn_dir: Path) -> str:
         elif e.get("type") == "item.completed" and (e.get("item") or {}).get("type") == "agent_message":
             text = str(e["item"].get("text") or "")
     return text
+
+
+def parse_wait_directives(text: str) -> tuple[list[str], list[tuple[int, str]]]:
+    """Parse strict JOB-WAIT and CI-WAIT directives from text, deduplicated.
+    Reject lines with backticks, shell operators, or non-matching formats."""
+    jobs: list[str] = []
+    ci_waits: list[tuple[int, str]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("JOB-WAIT:"):
+            if any(ch in line for ch in FORBIDDEN_WAIT_CHARS):
+                continue
+            m = JOB_WAIT_LINE_RE.match(line)
+            if m:
+                jobs.append(m.group(1))
+        elif line.startswith("CI-WAIT:"):
+            if any(ch in line for ch in FORBIDDEN_WAIT_CHARS):
+                continue
+            m = CI_WAIT_LINE_RE.match(line)
+            if m:
+                ci_waits.append((int(m.group(1)), m.group(2)))
+    return list(dict.fromkeys(jobs)), list(dict.fromkeys(ci_waits))
+
+
+def turn_context_tokens(turn_dir: Path | None) -> int | None:
+    """Read context_used_tokens from turn's state.json if present and numeric."""
+    if turn_dir is None:
+        return None
+    try:
+        data = json.loads((turn_dir / "state.json").read_text(encoding="utf-8"))
+        val = data.get("context_used_tokens")
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            return int(val)
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def default_pr_ci_status(repo: Path, pr_number: int, expected_head: str, run: Runner = devctx.run) -> dict[str, Any]:
+    """Query GitHub CLI for PR state, required status checks, and check run outcomes."""
+    code, out = run(["gh", "pr", "view", str(pr_number), "--json", "state,headRefOid,baseRefName,statusCheckRollup"],
+                    cwd=repo, timeout=30)
+    if code != 0:
+        return {"unreadable": True}
+    try:
+        data = json.loads(out)
+        if not isinstance(data, dict):
+            return {"unreadable": True}
+        raw_head = data.get("headRefOid")
+        if not isinstance(raw_head, str):
+            return {"unreadable": True}
+        observed_head = raw_head.strip()
+        if not observed_head:
+            return {"unreadable": True}
+        state = str(data.get("state") or "OPEN").lower()
+        base_ref = str(data.get("baseRefName") or "master").strip() or "master"
+        checks = []
+        for c in data.get("statusCheckRollup") or []:
+            if not isinstance(c, dict):
+                continue
+            name = str(c.get("name") or c.get("context") or "")
+            status = str(c.get("status") or c.get("state") or "").lower()
+            conclusion = str(c.get("conclusion") or c.get("state") or "").lower()
+            checks.append({"name": name, "status": status, "conclusion": conclusion})
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        return {"unreadable": True}
+
+    required: set[str] = set()
+    saw_required_checks = False
+
+    r_code, r_out = run(["gh", "api", f"repos/:owner/:repo/rules/branches/{base_ref}"], cwd=repo, timeout=30)
+    if r_code == 0:
+        try:
+            rules = json.loads(r_out)
+            if isinstance(rules, list):
+                for rule in rules:
+                    if isinstance(rule, dict) and rule.get("type") == "required_status_checks":
+                        params = rule.get("parameters")
+                        if isinstance(params, dict):
+                            raw_checks = params.get("required_status_checks")
+                            if isinstance(raw_checks, list):
+                                for rc in raw_checks:
+                                    if isinstance(rc, dict) and isinstance(rc.get("context"), str):
+                                        required.add(rc["context"])
+                                    elif isinstance(rc, str):
+                                        required.add(rc)
+                                saw_required_checks = True
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+
+    if not saw_required_checks:
+        p_code, p_out = run(["gh", "api", f"repos/:owner/:repo/branches/{base_ref}/protection/required_status_checks"],
+                            cwd=repo, timeout=30)
+        if p_code == 0:
+            try:
+                prot = json.loads(p_out)
+                if isinstance(prot, dict):
+                    raw_contexts = prot.get("contexts")
+                    if isinstance(raw_contexts, list):
+                        for ctx in raw_contexts:
+                            if isinstance(ctx, str):
+                                required.add(ctx)
+                    raw_checks = prot.get("checks")
+                    if isinstance(raw_checks, list):
+                        for chk in raw_checks:
+                            if isinstance(chk, dict) and isinstance(chk.get("context"), str):
+                                required.add(chk["context"])
+                    if required or prot.get("enforcement_level") not in (None, "off"):
+                        saw_required_checks = True
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+
+    if not required:
+        return {"unreadable": True}
+
+    return {
+        "observed_head": observed_head,
+        "state": state,
+        "base_ref": base_ref,
+        "required_checks": sorted(required),
+        "checks": checks,
+    }
+
+
+def evaluate_pr_ci(ci_info: dict[str, Any], expected_head: str, elapsed_wait: float) -> tuple[str, str]:
+    """Evaluate PR status and required checks against acceptance criteria.
+    Returns (status_type, detail) where status_type is 'immediate_wake', 'completed', 'pending', or 'unreadable'."""
+    if not isinstance(ci_info, dict) or ci_info.get("unreadable"):
+        return "unreadable", "remote_unreadable"
+
+    observed_head = ci_info.get("observed_head")
+    if not isinstance(observed_head, str) or not observed_head.strip():
+        return "unreadable", "remote_unreadable"
+    observed_head = observed_head.strip()
+    if observed_head != expected_head:
+        return "immediate_wake", "head_changed"
+
+    pr_state = str(ci_info.get("state") or "").lower()
+    if pr_state in ("closed", "merged"):
+        return "immediate_wake", "pr_closed"
+
+    required_checks = ci_info.get("required_checks")
+    if not isinstance(required_checks, (list, tuple, set)) or not required_checks:
+        return "unreadable", "remote_unreadable"
+
+    checks = ci_info.get("checks")
+    if not isinstance(checks, list):
+        return "unreadable", "remote_unreadable"
+
+    if not checks:
+        if elapsed_wait >= 120.0:
+            return "immediate_wake", "no_checks_reported"
+        return "pending", "no_checks_reported"
+
+    check_map: dict[str, dict[str, Any]] = {}
+    for c in checks:
+        if isinstance(c, dict) and "name" in c:
+            check_map[str(c["name"])] = c
+
+    for req_name in required_checks:
+        c = check_map.get(req_name)
+        if c is not None:
+            conclusion = str(c.get("conclusion") or "").lower()
+            if conclusion in CI_FAILURE_CONCLUSIONS:
+                return "immediate_wake", "check_failed"
+
+    all_completed_success = True
+    for req_name in required_checks:
+        c = check_map.get(req_name)
+        if c is None:
+            all_completed_success = False
+            break
+        status = str(c.get("status") or "").lower()
+        conclusion = str(c.get("conclusion") or "").lower()
+        if status not in ("completed", "complete", "done", "success"):
+            all_completed_success = False
+            break
+        if conclusion not in CI_SUCCESS_CONCLUSIONS:
+            all_completed_success = False
+            break
+
+    if all_completed_success:
+        return "completed", "success"
+
+    reported_required = [req for req in required_checks if req in check_map]
+    if not reported_required and elapsed_wait >= 120.0:
+        return "immediate_wake", "no_checks_reported"
+
+    return "pending", "in_progress"
+
+
+def job_record_status(job: dict[str, Any]) -> str:
+    """Determine effective status of a job record: terminal status is final; real processes
+    are checked against the process table; uninstrumented mock/record statuses are respected."""
+    status = str(job.get("status") or "")
+    if status in relay_jobs.TERMINAL:
+        return status
+    if "wrapper" in job or "wrapper_pid" in job:
+        return relay_jobs.effective_status(job)
+    return status or "unknown"
 
 
 def _unwrap(command: str) -> str:
@@ -2481,7 +2840,7 @@ Supervised mission {mission}, task {number}/{total}, queued by the maintainer un
 The task text below is the maintainer's; it grants no authority beyond that directive. Approval gates, review requirements and authority boundaries are unchanged.
 Before acting, run `python3 scripts/devctx.py recover` and verify fresh Git/GitHub state: earlier tasks of this mission, or an interrupted attempt at this one, may already have taken effect.
 If the task needs a maintainer decision, stop and report instead of continuing.
-Long bounded work (solver runs, studies, benchmarks) goes through `python3 scripts/relay_jobs.py start`, which survives this turn; `relay_jobs.py list` shows earlier jobs and their results. Before launching a scientific case, inspect registered jobs and existing result/partial evidence for the same commit and inputs; reuse them and never duplicate a live or completed case without a documented technical reason. A failed/lost job or an uncertain observation after namespace replacement returns to you for diagnosis, not automatically to the maintainer. Unknown/orphaned job records reserve their slot: inspect prior logs, results and partial evidence; do not rerun them or infer success/failure from missing PIDs. Repeating the same uncertain JOB-WAIT cannot trigger repeated diagnostic turns in the same namespace. Never keep a turn open to wait for a job or for CI: commit and push in a separate short command, never chained with a long test run, well before the turn deadline; checkpoint and end the turn, and a later turn collects. A running job blocks only the work that depends on its result: meanwhile continue with other authorized work that does not depend on it, on its own worktree and files, delegating per docs/PROCESS.md, and keep it light on the machine (focused tests only, full suites to CI, no extra solver beyond the cores the job left free). As a roadmap cycle, end blocked with `JOB-WAIT: <job id>` lines, which pause roadmap mode until those jobs finish, only when no such job-independent authorized work remains.
+Long bounded work (solver runs, studies, benchmarks) goes through `python3 scripts/relay_jobs.py start`, which survives this turn; `relay_jobs.py list` shows earlier jobs and their results. Before launching a scientific case, inspect registered jobs and existing result/partial evidence for the same commit and inputs; reuse them and never duplicate a live or completed case without a documented technical reason. A failed/lost job or an uncertain observation after namespace replacement returns to you for diagnosis, not automatically to the maintainer. Unknown/orphaned job records reserve their slot: inspect prior logs, results and partial evidence; do not rerun them or infer success/failure from missing PIDs. Repeating the same uncertain JOB-WAIT cannot trigger repeated diagnostic turns in the same namespace. To wait for your own job or PR checks, end the turn with a wait line, never a sleeping command: end with `RELAY_STATUS continue` and a `JOB-WAIT:` or `CI-WAIT:` line; the supervisor resumes you when it completes. Commit and push in a separate short command, never chained with a long test run, well before the turn deadline; checkpoint and end the turn, and a later turn collects. A running job blocks only the work that depends on its result: meanwhile continue with other authorized work that does not depend on it, on its own worktree and files, delegating per docs/PROCESS.md, and keep it light on the machine (focused tests only, full suites to CI, no extra solver beyond the cores the job left free). As a roadmap cycle, end blocked with `JOB-WAIT: <job id>` lines, which pause roadmap mode until those jobs finish, only when no such job-independent authorized work remains.
 {contract}
 End with RELAY_STATUS propose_done only when that evidence exists, RELAY_STATUS continue after a durable checkpoint (the task stays pending and is resumed, never recorded complete), or RELAY_STATUS blocked after recording a `devctx.py note blocker` or `question`.
 
@@ -2497,8 +2856,8 @@ def describe_check(check: dict[str, Any] | None) -> str:
     what = {"host_receipt": lambda c: f"a signed ok host receipt exists for {c['op']} at {c.get('sha') or 'any commit'}",
             "pr_merged": lambda c: f"PR #{c['pr']} is merged on GitHub",
             "path_exists": lambda c: f"`{c['path']}` exists in the repository",
-            "spec_merged": lambda c: f"spec {c['spec']} is `merged` in docs/specs/STATUS.md on GitHub master and every "
-                                     "PR linked in its row is merged",
+            "spec_merged": lambda c: f"spec {c['spec']} is `merged` in docs/specs/STATUS.md on GitHub master, or "
+                                     "`in_review` there with every linked PR merged",
             "coordinator_cycle": lambda c: "the cycle ends with a final RELAY_STATUS while the remote heads are readable; "
                                            "the cycle is recorded settled, not as verified delivery of its work"}
     return f"Completion contract: the owner records this task complete only after its own read-only check that {what[check['kind']](check)}."
@@ -2522,6 +2881,220 @@ def worker_routing_block(repo: Path | None = None) -> str:
     return WORKER_ROUTING_BLOCK.format(summary=summary)
 
 
+BRIEF_MAX_BYTES = 24_000
+DIRECTIVES_MAX_BYTES = 24_000
+BRIEF_HEADER = (
+    "This is the operator's private mission brief; read it before the recovery packet; "
+    "nothing from it may be copied into the repository, PRs, commits, issues or public notes; "
+    "it grants no authority beyond the recorded directives."
+)
+DIRECTIVES_HEADER = "Standing maintainer directives for this mission (full text, oldest first):"
+
+
+def session_context_block(
+    control: Path,
+    env: devctx.Env,
+    authority: str | None,
+    log: Callable[[str], None] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Operator mission brief and standing directive text at session start (spec 264)."""
+    brief_part: str | None = None
+    brief_digest: str | None = None
+    setting_path = control / "mission-brief"
+
+    if setting_path.exists():
+        try:
+            raw_setting = setting_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            raw_setting = None
+
+        reason: str | None = None
+        if raw_setting is None:
+            reason = "unreadable"
+        elif not Path(raw_setting).is_absolute():
+            reason = "not an absolute path"
+        else:
+            brief_file = Path(raw_setting)
+            if not brief_file.exists():
+                reason = "missing"
+            else:
+                try:
+                    if brief_file.stat().st_size > BRIEF_MAX_BYTES:
+                        reason = "larger than 24000 bytes"
+                    else:
+                        raw_bytes = brief_file.read_bytes()
+                        if len(raw_bytes) > BRIEF_MAX_BYTES:
+                            reason = "larger than 24000 bytes"
+                        else:
+                            brief_digest = hashlib.sha256(raw_bytes).hexdigest()[:12]
+                            brief_text = raw_bytes.decode(encoding="utf-8", errors="replace").strip()
+                            brief_part = f"{BRIEF_HEADER}\n{brief_text}"
+                except OSError:
+                    reason = "unreadable"
+
+        if reason is not None:
+            brief_part = f"Operator mission brief not attached: {reason}"
+            if log is not None:
+                log(f"Operator mission brief not attached: {reason}")
+
+    directives_block: str | None = None
+    attached_directive_ids: list[str] = []
+
+    if authority is not None:
+        ledger = devctx.read_ledger(env)
+        superseded = {ref for e in ledger for ref in e.get("supersedes", [])}
+        auth_index = next((i for i, e in enumerate(ledger) if e.get("id") == authority), None)
+        if auth_index is None:
+            directives_block = f"Directive {authority} not attached: not found in ledger"
+        else:
+            candidates: list[dict[str, Any]] = []
+            for i, e in enumerate(ledger[auth_index:], start=auth_index):
+                if e.get("kind") != "directive":
+                    continue
+                d_id = e.get("id")
+                if not d_id:
+                    continue
+                if i != auth_index and d_id in superseded:
+                    continue
+                d_info = e.get("directive") if isinstance(e.get("directive"), dict) else {}
+                raw_path = d_info.get("path")
+                expected_sha = d_info.get("sha256")
+                path = Path(raw_path) if raw_path else None
+                if path is None or not path.exists():
+                    missing_msg = f"Directive {d_id} not attached: file missing"
+                    candidates.append({
+                        "id": d_id,
+                        "text": missing_msg,
+                        "attached": False,
+                        "body_bytes": len(missing_msg.encode("utf-8")),
+                        "index": i,
+                    })
+                else:
+                    try:
+                        content_bytes = path.read_bytes()
+                    except OSError:
+                        missing_msg = f"Directive {d_id} not attached: file missing"
+                        candidates.append({
+                            "id": d_id,
+                            "text": missing_msg,
+                            "attached": False,
+                            "body_bytes": len(missing_msg.encode("utf-8")),
+                            "index": i,
+                        })
+                    else:
+                        actual_sha = hashlib.sha256(content_bytes).hexdigest()
+                        if actual_sha != expected_sha:
+                            tampered_msg = f"Directive {d_id} not attached: file modified after recording"
+                            candidates.append({
+                                "id": d_id,
+                                "text": tampered_msg,
+                                "attached": False,
+                                "body_bytes": len(tampered_msg.encode("utf-8")),
+                                "index": i,
+                            })
+                        else:
+                            d_text = content_bytes.decode(encoding="utf-8", errors="replace").strip()
+                            candidates.append({
+                                "id": d_id,
+                                "text": f"### Directive {d_id}\n{d_text}",
+                                "attached": True,
+                                "body_bytes": len(d_text.encode("utf-8")),
+                                "index": i,
+                            })
+
+            if candidates:
+                total_bytes = 0
+                kept_rev: list[dict[str, Any]] = []
+                cap_reached = False
+                older_omitted_rev: list[str] = []
+                oversize_omitted_rev: list[str] = []
+                for c in reversed(candidates):
+                    # Count directive body against the limit, excluding the heading (spec 264)
+                    body_bytes = c["body_bytes"]
+                    if body_bytes > DIRECTIVES_MAX_BYTES:
+                        oversize_omitted_rev.append(c["id"])
+                    elif not cap_reached and total_bytes + body_bytes <= DIRECTIVES_MAX_BYTES:
+                        kept_rev.append(c)
+                        total_bytes += body_bytes
+                    else:
+                        cap_reached = True
+                        older_omitted_rev.append(c["id"])
+
+                kept = list(reversed(kept_rev))
+                older_omitted = list(reversed(older_omitted_rev))
+                oversize_omitted = list(reversed(oversize_omitted_rev))
+
+                lines = [DIRECTIVES_HEADER]
+                if oversize_omitted:
+                    if kept:
+                        lines.append(f"Newer standing directives omitted for length: {', '.join(oversize_omitted)} (devctx.py show <id>)")
+                    else:
+                        lines.append(f"Standing directives omitted for length: {', '.join(oversize_omitted)} (devctx.py show <id>)")
+                if older_omitted:
+                    lines.append(f"Older standing directives omitted for length: {', '.join(older_omitted)} (devctx.py show <id>)")
+                for c in kept:
+                    lines.append(c["text"])
+                directives_block = "\n\n".join(lines)
+                attached_directive_ids = [c["id"] for c in kept if c["attached"]]
+
+    parts = []
+    if brief_part:
+        parts.append(brief_part)
+    if directives_block:
+        parts.append(directives_block)
+
+    text_block = "\n\n".join(parts)
+    journal_fields = {
+        "brief": brief_digest,
+        "directives": attached_directive_ids,
+    }
+    return text_block, journal_fields
+
+
+def _connect_endpoint(host: str, port: int, timeout: float, result: list[bool], done: threading.Event) -> None:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            result[0] = True
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        done.set()
+
+
+def default_reachable(host: str = "github.com", port: int = 443, timeout: float = 5.0) -> bool:
+    result = [False]
+    done = threading.Event()
+    bound = max(0.0, timeout)
+    threading.Thread(target=_connect_endpoint, args=(host, port, max(0.01, bound), result, done), daemon=True).start()
+    done.wait(timeout=bound)
+    return result[0]
+
+
+def _valid_percent(value: Any) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and (isinstance(value, int) or math.isfinite(value))
+            and 0 <= value <= 100)
+
+
+def _safe_auth_detail(detail: str | None) -> str:
+    text = (detail or "").strip()
+    if text in ("output missing; runner reported an authentication failure",
+                "output empty; runner reported an authentication failure",
+                "output unparseable; runner reported an authentication failure"):
+        return text
+    if text.startswith("native preflight refused: "):
+        reason = text.removeprefix("native preflight refused: ").strip()
+        if reason in ("login_state_missing", "login_path_conflict", "agy_missing", "not_sandbox"):
+            return text
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,40} status=(?:None|\d{1,3})", text):
+        return text
+    if re.fullmatch(r"codex [A-Za-z0-9_.-]{1,40}", text):
+        return text
+    if re.fullmatch(r"native [A-Za-z0-9_.-]{1,20} failed or empty result", text):
+        return text
+    return "classified auth failure"
+
+
 @dataclass
 class Host:
     relay: Any
@@ -2530,13 +3103,67 @@ class Host:
     fingerprint: Callable[[], str] = lambda: ""
     conflicts: Callable[[set[int]], list[str]] = lambda own: []
     pid_alive: Callable[[int, int | None], bool] = lambda pid, start: devctx.pid_start(pid) == start and start is not None
-    ledger: Callable[[str, str], None] = lambda kind, text: None
+    ledger: Callable[[str, str], Any] = lambda kind, text: None
     permissions_digest: Callable[[], str | None] = lambda: None
     log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True)
     probe: Callable[[ToolCall], tuple[str, str] | None] = lambda call: None
     reap: Callable[[], list[str]] = lambda: []  # stops what a finished turn left running; returns process names
     task_check: Callable[[dict[str, Any]], str | None] = lambda check: None  # spec 201: None when the check passes
     worker_routing: Callable[[], str] | None = None  # text appended to every launched prompt
+    session_context: Callable[[str | None], tuple[str, dict[str, Any]]] | None = None
+    job_status: Callable[[str], dict[str, Any] | None] | None = None  # spec 267: None when unregistered
+    pr_ci_status: Callable[[int, str], dict[str, Any] | None] | None = None  # spec 267: check results for (pr, head_sha)
+    reachable: Callable[[], bool] = default_reachable
+    read_ledger: Callable[[], list[dict[str, Any]]] | None = None
+
+
+def _parse_iso_timestamp(value: str | None) -> datetime | None:
+    return parse_ts(value)
+
+
+def usable_reading(reading: Any) -> bool:
+    if not isinstance(reading, dict):
+        return False
+    windows = reading.get("windows")
+    if not isinstance(windows, list) or not windows:
+        return False
+    for w in windows:
+        if not isinstance(w, dict) or w.get("disabled"):
+            return False
+        used = w.get("used_percent")
+        if not _valid_percent(used):
+            return False
+    return True
+
+
+def free_percent(reading: Any) -> float | None:
+    if not usable_reading(reading):
+        return None
+    return min(100.0 - float(w["used_percent"]) for w in reading["windows"])
+
+
+class _DecisionSnapshot:
+    """A per-decision snapshot of provider quota readings so availability, headroom,
+    and coordinator ranking evaluate against a single consistent observation per agent."""
+
+    def __init__(self, sup: Supervisor):
+        self.sup = sup
+        self._entries: dict[str, Any] = {}
+        self._rooms: dict[str, float | None] = {}
+
+    def get_entry(self, agent: str) -> Any:
+        if agent not in self._entries:
+            if agent in NATIVE_AGENTS:
+                self._entries[agent] = self.sup.host.relay.argon_limits(agent)
+            else:
+                self._entries[agent] = self.sup._raw_reading(agent)
+        return self._entries[agent]
+
+    def free_room(self, agent: str) -> float | None:
+        if agent not in self._rooms:
+            entry = self.get_entry(agent)
+            self._rooms[agent] = self.sup._calculate_free_room(agent, entry)
+        return self._rooms[agent]
 
 
 class Supervisor:
@@ -2556,6 +3183,7 @@ class Supervisor:
         self.deciding: str | None = None
         self._reading: dict[str, Any] | None = None
         self._reading_at: datetime | None = None
+        self._snapshot: _DecisionSnapshot | None = None
         self.mission: dict[str, Any] | None = None  # spec 201: the validated mission this store executes
 
     # -- persistence helpers
@@ -2570,11 +3198,26 @@ class Supervisor:
         except Exception as exc:  # noqa: BLE001 - notification can never interrupt supervision
             self.host.log(f"notify: internal error {type(exc).__name__}")
 
-    def record(self, kind: str, text: str) -> None:
+    def record(self, kind: str, text: str) -> str | None:
         try:
-            self.host.ledger(kind, text)
+            return self.host.ledger(kind, text)
         except Exception as exc:  # noqa: BLE001
             self.host.log(f"ledger: append failed {type(exc).__name__}")
+            return None
+
+    def _read_ledger(self) -> list[dict[str, Any]]:
+        if getattr(self.host, "read_ledger", None) is not None:
+            try:
+                return self.host.read_ledger() or []
+            except Exception:  # noqa: BLE001
+                return []
+        try:
+            repo = getattr(getattr(self.host, "relay", None), "repo", None)
+            if repo:
+                return devctx.read_ledger(devctx.default_env(repo))
+        except Exception:  # noqa: BLE001
+            pass
+        return []
 
     def stop_requested(self) -> bool:
         return self.signalled or self.store.stop_path.exists()
@@ -2611,7 +3254,7 @@ class Supervisor:
         return "held"
 
     # -- provider availability
-    def reading(self, agent: str) -> dict[str, Any] | None:
+    def _raw_reading(self, agent: str) -> dict[str, Any] | None:
         now = self.host.now()
         if self._reading is None or self._reading_at is None or now - self._reading_at > timedelta(minutes=2):
             self._reading = self.host.relay.limits() or {}
@@ -2623,6 +3266,12 @@ class Supervisor:
         if as_of is None or abs(now - as_of) > self.limits.reading_freshness:
             return None
         return entry
+
+    def reading(self, agent: str) -> dict[str, Any] | None:
+        """A validated limits reading for `agent` if one was fetched recently, else fetch a fresh one."""
+        if self._snapshot is not None and agent not in NATIVE_AGENTS:
+            return self._snapshot.get_entry(agent)
+        return self._raw_reading(agent)
 
     def exhausted_until(self, agent: str) -> datetime | None | bool:
         """Validated reset time when a fresh reading shows the agent out of quota; False when it shows room."""
@@ -2636,7 +3285,7 @@ class Supervisor:
             return None  # no usage windows: no evidence either way
         for window in windows:
             used = window.get("used_percent") if isinstance(window, dict) else None
-            if isinstance(used, bool) or not isinstance(used, (int, float)):
+            if not _valid_percent(used):
                 return None  # an unusable window is not evidence of room
             reset = parse_ts(window.get("resets_at"))
             if used >= 99.5:
@@ -2654,11 +3303,69 @@ class Supervisor:
         now = self.host.now()
         cooldown = self.state["cooldowns"].get(agent)
         if cooldown:
-            until = parse_ts(cooldown.get("until"))
-            if until is None or now < until:
-                return False
+            source = cooldown.get("source")
+            if source == "auth":
+                qid = cooldown.get("question")
+                cleared = False
+                if qid:
+                    for entry in reversed(self._read_ledger()):
+                        if entry.get("kind") == "decision" and entry.get("status") == "accepted" and qid in (entry.get("supersedes") or []):
+                            text = str(entry.get("text") or "")
+                            if ": " in text:
+                                _, ans = text.split(": ", 1)
+                                if ans.strip().startswith("1"):
+                                    cleared = True
+                            break
+                if cleared:
+                    self.state["cooldowns"].pop(agent, None)
+                    cooldown = None
+                else:
+                    return False
+            else:
+                until = parse_ts(cooldown.get("until"))
+                if until is not None and now < until:
+                    if source in ("limits", "message"):
+                        counters = self.state["counters"]
+                        if counters.get(f"reading_clear_{agent}", 0) == 0:
+                            since = parse_ts(cooldown.get("since"))
+                            if since is not None:
+                                if agent in NATIVE_AGENTS:
+                                    native = self._snapshot.get_entry(agent) if self._snapshot is not None else self.host.relay.argon_limits(agent)
+                                    if isinstance(native, dict):
+                                        as_of = parse_ts(native.get("as_of"))
+                                        windows = native.get("windows")
+                                        plausible = (isinstance(windows, list) and len(windows) > 0 and
+                                                     all(isinstance(w, dict) and
+                                                         _valid_percent(w.get("used_percent")) for w in windows))
+                                        fresh = as_of is not None and abs(now - as_of) <= self.limits.reading_freshness
+                                        room = plausible and all(not w.get("disabled") and w["used_percent"] < 100 for w in windows)
+                                        if fresh and as_of > since and room:
+                                            self.state["cooldowns"].pop(agent, None)
+                                            counters[f"reading_clear_{agent}"] = 1
+                                            self.record("finding", f"relay-continuity: cleared {source} cooldown for {agent} via fresh limits reading")
+                                            return True
+                                else:
+                                    entry = self.reading(agent)
+                                    if entry is not None and (as_of := parse_ts(entry.get("as_of"))) is not None and as_of <= since:
+                                        self._reading = None
+                                        self._reading_at = None
+                                        if self._snapshot is not None:
+                                            self._snapshot._entries.pop(agent, None)
+                                            self._snapshot._rooms.pop(agent, None)
+                                        entry = self.reading(agent)
+                                    if entry is not None:
+                                        as_of = parse_ts(entry.get("as_of"))
+                                        room = (self.exhausted_until(agent) is False)
+                                        if as_of is not None and as_of > since and room:
+                                            self.state["cooldowns"].pop(agent, None)
+                                            counters[f"reading_clear_{agent}"] = 1
+                                            self.record("finding", f"relay-continuity: cleared {source} cooldown for {agent} via fresh limits reading")
+                                            return True
+                    return False
+                if until is None:
+                    return False
         if agent in NATIVE_AGENTS:
-            native = self.host.relay.argon_limits(agent)
+            native = self._snapshot.get_entry(agent) if self._snapshot is not None else self.host.relay.argon_limits(agent)
             if native is None:
                 return False
             windows = native["windows"]
@@ -2681,26 +3388,37 @@ class Supervisor:
             self.state["cooldowns"].pop(agent, None)
         return True
 
-    def low_headroom(self, agent: str) -> bool:
-        """Whether a usable quota reading shows less than the minimum free room in any window."""
+    def _calculate_free_room(self, agent: str, entry: Any) -> float | None:
         native = agent in NATIVE_AGENTS
-        entry = self.host.relay.argon_limits(agent) if native else self.reading(agent)
         if not isinstance(entry, dict) or not isinstance(entry.get("windows"), list) or not entry["windows"]:
-            return False
+            return None
         now = self.host.now()
         used_values = []
         for window in entry["windows"]:
             if not isinstance(window, dict):
-                return False
+                return None
             used = window.get("used_percent")
-            if isinstance(used, bool) or not isinstance(used, (int, float)) or not 0 <= used <= 100:
-                return False
+            if not _valid_percent(used):
+                return None
             if not native:
                 reset = parse_ts(window.get("resets_at"))
                 if reset is None or not now < reset <= now + self.limits.max_reset_ahead:
-                    return False
+                    return None
             used_values.append(used)
-        return any(100 - used < self.limits.min_free_percent for used in used_values)
+        return min(100 - used for used in used_values)
+
+    def free_room(self, agent: str) -> float | None:
+        """The smallest free room (100 - used_percent) over windows of a usable reading, or None."""
+        if self._snapshot is not None:
+            return self._snapshot.free_room(agent)
+        native = agent in NATIVE_AGENTS
+        entry = self.host.relay.argon_limits(agent) if native else self.reading(agent)
+        return self._calculate_free_room(agent, entry)
+
+    def low_headroom(self, agent: str) -> bool:
+        """Whether a usable quota reading shows less than the minimum free room in any window."""
+        room = self.free_room(agent)
+        return room is not None and room < self.limits.min_free_percent
 
     def set_cooldown(self, agent: str, report: TurnReport) -> None:
         now = self.host.now()
@@ -2718,7 +3436,33 @@ class Supervisor:
         if report.spend_cap:
             caps[agent] = {"turn": report.turn_id, "at": iso(now)}
         counters = self.state["counters"]
-        if report.outcome == "spend_limit":
+        if report.outcome == "auth":
+            until, source = None, "auth"
+            existing = self.state["cooldowns"].get(agent)
+            if isinstance(existing, dict) and existing.get("source") == "auth":
+                qid = existing.get("question")
+            else:
+                safe_detail = _safe_auth_detail(report.detail)
+                q_text = (
+                    f"Autenticazione fallita per l'agente {agent} ({safe_detail}). Come procedere?\n"
+                    f"1. (consigliata) Accesso ripristinato per {agent}, riprova — conseguenza: riprova l'agente al prossimo turno\n"
+                    f"2. Mantieni {agent} escluso — conseguenza: l'agente resta escluso fino al comando release"
+                )
+                self.state["cooldowns"][agent] = {
+                    "until": None, "source": "auth", "reason": report.outcome,
+                    "since": iso(now), "turn": report.turn_id, "question": None,
+                }
+                self.save()
+                qid = self.record("question", q_text)
+            self.state["cooldowns"][agent] = {
+                "until": None, "source": "auth", "reason": report.outcome,
+                "since": iso(now), "turn": report.turn_id, "question": qid,
+            }
+            self.save()
+            self.notify("provider_exhausted", dedupe_key=f"exhausted|{agent}|auth", agent=agent,
+                        outcome=report.outcome, reset_at="manual", reset_source=source)
+            return
+        elif report.outcome == "spend_limit":
             until, source = None, "manual"
         elif report.outcome == "transient":
             # An outage: back off this agent briefly (the other one may still be reachable).
@@ -2777,9 +3521,10 @@ class Supervisor:
             self.host.log(f"a launched attempt from chain {head} is unresolved; resume that chain first")
             return "held"
         if head != session and session not in self.state.get("chain", []):
+            kept_clears = {k: v for k, v in (self.state.get("counters") or {}).items() if k.startswith("reading_clear_")}
             self.state.update({"head_session": session, "chain": [session], "agent": self.state.get("agent") if head is None else None, "switches": [],
                                "last_switch_at": None, "waiting_since": None, "last_attempt": None,
-                               "counters": {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0}})
+                               "counters": {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0, **kept_clears}})
         if isinstance(legacy := self.state.pop("reconcile", None), dict) and isinstance(legacy.get("diag"), dict):
             # A read-only diagnosis of the earlier controller (it could change nothing): abandoned, never adopted.
             self.store.journal({"event": "settle", "purpose": "diagnostic", "outcome": "abandoned",
@@ -2794,7 +3539,7 @@ class Supervisor:
             return self.hold("permissions_changed")
         self.state["permissions_digest"] = digest
         self.state["permissions_pinned"] = True
-        self.state["phase"] = "running"
+        self.state["phase"] = "waiting" if self.state.get("wait") else "running"
         self.save()
         self.notify("supervisor_started", dedupe_key=f"start|{self.state['head_session']}|{iso(now)[:13]}",
                     session=self.state["head_session"], agent=self.state.get("agent") or PREFERRED)
@@ -2840,10 +3585,22 @@ class Supervisor:
             self.state["hold"] = {**(self.resumed_hold or {}), "resumable": False}
             self.save()
             return "held"
+        if self.state.get("wait"):
+            self.state["phase"] = "waiting"
+            wait = self.state["wait"]
+            session_id = self.state.get("head_session")
+            turn = last_turn_dir(self.host.relay.sessions_dir() / session_id) if session_id else None
+            report = classify_turn(turn) if turn else TurnReport(outcome="success", agent=self.state.get("agent"), detail="restored wait")
+            report.agent = report.agent or self.state.get("agent")
+            wait_res = self._poll_external_wait(wait, report)
+            if isinstance(wait_res, str):
+                return wait_res
+            agent, prompt = wait_res
+            new_report = self._launch(agent, prompt, report)
+            if isinstance(new_report, str):
+                return new_report
+            report = new_report
         while True:
-            if self.stop_requested():
-                self.state["phase"] = "stopped"
-                return "signal" if self.signalled else "stopped"
             self.state["last_outcome"] = report.outcome
             self.state["agent"] = report.agent or self.state.get("agent") or PREFERRED
             self.deciding = report.turn_id
@@ -2851,6 +3608,9 @@ class Supervisor:
             acknowledged = None
             if isinstance(decision, str):
                 return decision
+            if self.stop_requested():
+                self.state["phase"] = "stopped"
+                return "signal" if self.signalled else "stopped"
             agent, prompt = decision
             task = None
             new_report = self._launch(agent, prompt, report)
@@ -2887,12 +3647,15 @@ class Supervisor:
             # like any interrupted operation, before anything is advanced or completed.
             parked: list[ToolCall] = []
             if "gate" not in waive:
+                if (reason := gate(report)) is not None:
+                    return self.hold(reason, None, report.turn_id)
                 _verdicts, parked = self._settle_external(report)
                 if parked:
                     self._park(report, parked)
             counters.update({"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0})
             counters.pop(f"estimated_{failed_agent}", None)
             counters.pop(f"transient_{failed_agent}", None)
+            counters.pop(f"reading_clear_{failed_agent}", None)
             self.state["spend_caps"].pop(failed_agent, None)
             self.state["waiting_since"] = None
             if task is None and self.mission is not None:
@@ -2901,6 +3664,28 @@ class Supervisor:
                 task = self._mission_task()
                 if task is None:
                     return self._mission_complete()
+
+            session_id = self.state.get("head_session")
+            turn = last_turn_dir(self.host.relay.sessions_dir() / session_id) if session_id else None
+            reply = final_text(turn) if turn else ""
+            status = final_relay_status(self.host.relay.repo, session_id)
+            jobs, ci_waits = parse_wait_directives(reply)
+
+            if status == "continue" and (jobs or ci_waits):
+                if "gate" not in waive and parked:
+                    return self.hold("effects_uncertain", None, report.turn_id)
+                wait = {
+                    "jobs": jobs,
+                    "ci": [{"pr": pr, "sha": sha} for pr, sha in ci_waits],
+                    "started_at": iso(self.host.now()),
+                    "last_job_poll": None,
+                    "last_ci_poll": None,
+                    "turn": report.turn_id,
+                }
+                self.state["wait"] = wait
+                self.state["phase"] = "waiting"
+                self.save()
+                return self._poll_external_wait(wait, report)
             if task is None:
                 self.state["phase"] = "idle"
                 self.save()
@@ -3020,31 +3805,108 @@ class Supervisor:
                                         if op.id in verdicts))
         return verdicts, uncertain
 
+    def is_hydrogen_spend_down(self, now: datetime | None = None) -> bool:
+        if now is None:
+            now = self.host.now()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        if not self.available("hydrogen"):
+            return False
+        reading = None
+        if hasattr(self.limits, "read") and callable(self.limits.read):
+            try:
+                reading = self.limits.read("hydrogen", now=now)
+            except TypeError:
+                reading = self.limits.read("hydrogen")
+        if reading is None:
+            if self._snapshot is not None:
+                reading = self._snapshot.get_entry("hydrogen")
+            else:
+                reading = self.host.relay.argon_limits("hydrogen")
+        if not usable_reading(reading):
+            return False
+        fp = free_percent(reading)
+        if fp is None or fp < self.limits.min_free_percent:
+            return False
+        for w in reading.get("windows", []):
+            if not isinstance(w, dict) or w.get("id") != "gemini-weekly":
+                continue
+            if w.get("disabled"):
+                return False
+            resets_at = _parse_iso_timestamp(w.get("resets_at"))
+            if resets_at is None:
+                return False
+            if resets_at.tzinfo is None:
+                resets_at = resets_at.replace(tzinfo=UTC)
+            diff = resets_at - now
+            if not (timedelta(0) < diff <= worker_routing.SPEND_DOWN):
+                return False
+            used = float(w.get("used_percent", 0.0))
+            return 100.0 - used >= self.limits.min_free_percent
+        return False
+
+    hydrogen_spend_down = is_hydrogen_spend_down
+    _hydrogen_spend_down = is_hydrogen_spend_down
+
     def _choose(self, current: str) -> str | None:
         """Prefer available coordinators with quota room, retaining the first available if all are low."""
-        # A completed mission rotates the next mission's seed; Codex follows the preferred routes in this order.
-        order = ([current] + [a for a in PREFERRED_AGENTS if a != current]) if current in PREFERRED_AGENTS else list(PREFERRED_AGENTS)
-        first_available = None
-        for agent in [*order, "codex"]:
-            if self.available(agent):
-                first_available = first_available or agent
-                if self.low_headroom(agent):
-                    continue
-                break
-        else:
-            agent = first_available
-        if agent is not None:
-            if agent != current:
-                now = self.host.now()
-                self.state["switches"] = [t for t in self.state["switches"]
-                                          if (ts := parse_ts(t)) and now - ts < timedelta(days=1)] + [iso(now)]
-                self.state["last_switch_at"] = iso(now)
-                self.notify("provider_switched", session=self.state["head_session"], from_agent=current,
-                            agent=agent, outcome=self.state.get("last_outcome") or "success")
-                self.record("decision", f"relay-continuity: switched coordinator {current} -> {agent} "
-                                        f"after {self.state.get('last_outcome')} on {self.state['head_session']}.")
-            return agent
-        return None
+        prev = self._snapshot
+        self._snapshot = _DecisionSnapshot(self)
+        try:
+            first_available = None
+            spend_down_applied = False
+            if current in PREFERRED_AGENTS and self.available(current):
+                first_available = current
+                room = self.free_room(current)
+                if room is None or room >= self.limits.min_free_percent:
+                    agent = current
+                else:
+                    agent = None
+            else:
+                agent = None
+
+            if agent is None:
+                spend_down = self.is_hydrogen_spend_down()
+                remaining = [a for a in PREFERRED_AGENTS if a != current] if current in PREFERRED_AGENTS else list(PREFERRED_AGENTS)
+                avail = {a: self.available(a) for a in remaining}
+                rooms = {a: self.free_room(a) for a in remaining}
+                sorted_remaining = sorted(
+                    remaining,
+                    key=lambda a: ((0, -rooms[a]) if rooms[a] is not None else (1, 0.0)),
+                )
+                if spend_down:
+                    candidates = ["hydrogen", *sorted_remaining, "codex"]
+                else:
+                    candidates = [*sorted_remaining, "codex", "hydrogen"]
+
+                for candidate in candidates:
+                    is_avail = avail[candidate] if candidate in avail else self.available(candidate)
+                    if is_avail:
+                        first_available = first_available or candidate
+                        room = rooms[candidate] if candidate in rooms else self.free_room(candidate)
+                        if room is not None and room < self.limits.min_free_percent:
+                            continue
+                        agent = candidate
+                        if spend_down and candidate == "hydrogen":
+                            spend_down_applied = True
+                        break
+                else:
+                    agent = first_available
+            if agent is not None:
+                if agent != current:
+                    now = self.host.now()
+                    self.state["switches"] = [t for t in self.state["switches"]
+                                              if (ts := parse_ts(t)) and now - ts < timedelta(days=1)] + [iso(now)]
+                    self.state["last_switch_at"] = iso(now)
+                    self.notify("provider_switched", session=self.state["head_session"], from_agent=current,
+                                agent=agent, outcome=self.state.get("last_outcome") or "success")
+                    spend_tag = " (gemini_spend_down)" if (agent == "hydrogen" and spend_down_applied) else ""
+                    self.record("decision", f"relay-continuity: switched coordinator {current} -> {agent}{spend_tag} "
+                                            f"after {self.state.get('last_outcome')} on {self.state['head_session']}.")
+                return agent
+            return None
+        finally:
+            self._snapshot = prev
 
     def _wait_or_hold(self, make_prompt: Callable[[str], str]) -> tuple[str, str] | str:
         """No agent can run now: sleep until the earliest cooldown ends (at most one recheck interval at a time),
@@ -3078,6 +3940,203 @@ class Supervisor:
                 self.state["waiting_since"] = None
                 return agent, make_prompt(agent)
 
+    def _get_job(self, job_id: str) -> dict[str, Any] | None:
+        if self.host.job_status is not None:
+            return self.host.job_status(job_id)
+        job = relay_jobs.load(job_id)
+        if job is not None:
+            return job
+        alt_path = Path.home() / "jarvis-control" / "work" / "jobs" / f"{job_id}.json"
+        if alt_path.exists():
+            try:
+                return json.loads(alt_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                pass
+        return None
+
+    def _get_ci(self, pr_number: int, expected_head: str) -> dict[str, Any]:
+        if self.host.pr_ci_status is not None:
+            res = self.host.pr_ci_status(pr_number, expected_head)
+            if res is not None:
+                return res
+            return {"unreadable": True}
+        return default_pr_ci_status(self.host.relay.repo, pr_number, expected_head)
+
+    def _wake_wait(self, reason: str, wait: dict[str, Any], report: TurnReport,
+                   job_statuses: dict[str, str], ci_statuses: dict[str, str],
+                   failed_job: str | None = None, failed_pr: str | None = None) -> tuple[str, str]:
+        self.state["wait"] = None
+        self.state["phase"] = "running"
+        self.save()
+
+        lines = []
+        for j in wait.get("jobs", []):
+            st = job_statuses.get(j)
+            if j == failed_job:
+                lines.append(f"- JOB {j}: {reason} (uncertain)")
+            elif st in relay_jobs.TERMINAL:
+                lines.append(f"- JOB {j}: {st}")
+            elif reason == "satisfied":
+                lines.append(f"- JOB {j}: {st or 'succeeded'}")
+            elif reason in ("wait_timeout", "remote_unreadable"):
+                lines.append(f"- JOB {j}: {reason} (uncertain)")
+            else:
+                lines.append(f"- JOB {j}: uncertain")
+
+        for item in wait.get("ci", []):
+            pr_key = f"{item['pr']}@{item['sha']}"
+            st = ci_statuses.get(pr_key)
+            if pr_key == failed_pr:
+                if reason == "check_failed":
+                    lines.append(f"- CI PR #{item['pr']}@{item['sha']}: failure")
+                else:
+                    lines.append(f"- CI PR #{item['pr']}@{item['sha']}: {reason} (uncertain)")
+            elif st == "success" or reason == "satisfied":
+                lines.append(f"- CI PR #{item['pr']}@{item['sha']}: success")
+            elif reason in ("wait_timeout", "remote_unreadable"):
+                lines.append(f"- CI PR #{item['pr']}@{item['sha']}: {reason} (uncertain)")
+            else:
+                lines.append(f"- CI PR #{item['pr']}@{item['sha']}: uncertain")
+
+        items_text = "\n".join(lines)
+        outcome_header = ("External wait satisfied:" if reason == "satisfied"
+                          else f"External wait terminated ({reason}):")
+
+        rec = self.state.get("mission")
+        if rec and self.mission:
+            mission_line = f"Resume work on mission {self.mission['id']} task {rec['next'] + 1}/{rec['total']}."
+        else:
+            mission_line = "Resume work."
+
+        short_resume_prompt = (
+            f"[relay-continuity resume {{nonce}}]\n"
+            f"{outcome_header}\n"
+            f"{items_text}\n"
+            f"{mission_line}"
+        )
+
+        failed_agent = report.agent or self.state.get("agent") or PREFERRED
+        agent = self._choose(failed_agent) or failed_agent
+        parent_candidate = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
+                            or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
+                            else self.state.get("head_session"))
+
+        resumes = self.state.get("resumes", 0)
+        turn_dir = last_turn_dir(self.host.relay.sessions_dir() / self.state["head_session"]) if self.state.get("head_session") else None
+        tokens = turn_context_tokens(turn_dir)
+
+        if (parent_candidate is not None
+                and resumes < MAX_SESSION_RESUMES
+                and (tokens is None or tokens <= TURN_USAGE_CAP_TOKENS)):
+            self.state["resumes"] = resumes + 1
+            self.save()
+            return agent, short_resume_prompt
+        else:
+            self.state["resumes"] = 0
+            self.state["force_fresh_context"] = True
+            self.save()
+            task_text = self._mission_task() if (self.mission and rec) else None
+            handoff = f"{outcome_header}\n{items_text}"
+            if task_text:
+                full_prompt = f"{task_text}\n\n[Durable handoff summary]\n{handoff}"
+            else:
+                full_prompt = f"[relay-continuity attempt {{nonce}}]\n[Durable handoff summary]\n{handoff}"
+            return agent, full_prompt
+
+    def _poll_external_wait(self, wait: dict[str, Any], report: TurnReport) -> tuple[str, str] | str:
+        wait_started_at = parse_ts(wait.get("started_at")) or self.host.now()
+        jobs = wait.get("jobs", [])
+        ci_items = wait.get("ci", [])
+        job_statuses = dict(wait.get("job_statuses", {}))
+        ci_statuses = dict(wait.get("ci_statuses", {}))
+        last_job_poll = parse_ts(wait.get("last_job_poll"))
+        last_ci_poll = parse_ts(wait.get("last_ci_poll"))
+
+        while True:
+            if self.stop_requested():
+                self.state["phase"] = "stopped"
+                self.save()
+                return "signal" if self.signalled else "stopped"
+
+            now = self.host.now()
+            elapsed = (now - wait_started_at).total_seconds()
+            if elapsed >= WAIT_TIMEOUT_SECONDS:
+                unreadable_all = wait.get("unreadable_streak", False)
+                reason = "remote_unreadable" if unreadable_all else "wait_timeout"
+                return self._wake_wait(reason, wait, report, job_statuses, ci_statuses)
+
+            job_poll_needed = bool(jobs and any(job_statuses.get(j) not in relay_jobs.TERMINAL for j in jobs))
+            if job_poll_needed and (last_job_poll is None or (now - last_job_poll).total_seconds() >= JOB_POLL_INTERVAL_SECONDS):
+                last_job_poll = now
+                wait["last_job_poll"] = iso(now)
+                for job_id in jobs:
+                    if job_statuses.get(job_id) in relay_jobs.TERMINAL:
+                        continue
+                    job = self._get_job(job_id)
+                    if job is None:
+                        return self._wake_wait("unregistered_job", wait, report, job_statuses, ci_statuses, failed_job=job_id)
+                    st = job_record_status(job)
+                    job_statuses[job_id] = st
+
+            ci_poll_needed = bool(ci_items and any(ci_statuses.get(f"{item['pr']}@{item['sha']}") != "success" for item in ci_items))
+            if ci_poll_needed and (last_ci_poll is None or (now - last_ci_poll).total_seconds() >= CI_POLL_INTERVAL_SECONDS):
+                last_ci_poll = now
+                wait["last_ci_poll"] = iso(now)
+                unreadable_this_round = False
+                for item in ci_items:
+                    pr_key = f"{item['pr']}@{item['sha']}"
+                    if ci_statuses.get(pr_key) == "success":
+                        continue
+                    ci_info = self._get_ci(item["pr"], item["sha"])
+                    st_type, reason = evaluate_pr_ci(ci_info, item["sha"], elapsed)
+                    if st_type == "immediate_wake":
+                        return self._wake_wait(reason, wait, report, job_statuses, ci_statuses, failed_pr=pr_key)
+                    elif st_type == "unreadable":
+                        unreadable_this_round = True
+                    elif st_type == "completed":
+                        ci_statuses[pr_key] = "success"
+                if unreadable_this_round:
+                    wait["unreadable_streak"] = True
+                else:
+                    wait.pop("unreadable_streak", None)
+
+            wait["job_statuses"] = job_statuses
+            wait["ci_statuses"] = ci_statuses
+            self.save()
+
+            all_jobs_done = all(job_statuses.get(j) in relay_jobs.TERMINAL for j in jobs)
+            all_ci_done = all(ci_statuses.get(f"{item['pr']}@{item['sha']}") == "success" for item in ci_items)
+            if all_jobs_done and all_ci_done:
+                return self._wake_wait("satisfied", wait, report, job_statuses, ci_statuses)
+
+            now = self.host.now()
+            sleeps = []
+            if any(job_statuses.get(j) not in relay_jobs.TERMINAL for j in jobs):
+                if last_job_poll:
+                    rem_job = JOB_POLL_INTERVAL_SECONDS - (now - last_job_poll).total_seconds()
+                    sleeps.append(max(0.1, rem_job))
+                else:
+                    sleeps.append(JOB_POLL_INTERVAL_SECONDS)
+            if any(ci_statuses.get(f"{item['pr']}@{item['sha']}") != "success" for item in ci_items):
+                if last_ci_poll:
+                    rem_ci = CI_POLL_INTERVAL_SECONDS - (now - last_ci_poll).total_seconds()
+                    sleeps.append(max(0.1, rem_ci))
+                else:
+                    sleeps.append(CI_POLL_INTERVAL_SECONDS)
+            rem_timeout = WAIT_TIMEOUT_SECONDS - (now - wait_started_at).total_seconds()
+            sleeps.append(max(0.1, rem_timeout))
+            if ci_items and (now - wait_started_at).total_seconds() < 120.0:
+                rem_120 = 120.0 - (now - wait_started_at).total_seconds()
+                sleeps.append(max(0.1, rem_120))
+
+            sleep_sec = min(sleeps)
+            self.state["phase"] = "waiting"
+            self.save()
+            if self._sleep(sleep_sec):
+                self.state["phase"] = "stopped"
+                self.save()
+                return "signal" if self.signalled else "stopped"
+
     def _sleep(self, seconds: float) -> bool:
         """Interruptible sleep in short chunks against the host clock; True when a stop was requested."""
         deadline = self.host.now() + timedelta(seconds=seconds)
@@ -3100,6 +4159,20 @@ class Supervisor:
             self.state["phase"] = "waiting"
             self.save()
             return "waiting"
+        reachable_fn = getattr(self.host, "reachable", None) or default_reachable
+        try:
+            reachable = bool(reachable_fn())
+        except Exception:  # noqa: BLE001
+            reachable = False
+        if not reachable:
+            if not self.state.get("network_outage", False):
+                self.state["network_outage"] = True
+                self.record("finding", "relay-continuity: pre-launch probe failed (github.com:443 unreachable); waiting for network")
+            self.host.log("pre-launch network probe failed (github.com:443 unreachable); waiting")
+            self.state["phase"] = "waiting"
+            self.save()
+            return "waiting"
+        self.state["network_outage"] = False
         digest = self.host.permissions_digest()
         if digest != self.state.get("permissions_digest"):
             return self.hold("permissions_changed")
@@ -3107,13 +4180,22 @@ class Supervisor:
         self.attempts += 1
         nonce = f"rc-{now.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}"
         text = prompt.replace("{nonce}", nonce)
+        if agent not in NATIVE_AGENTS:
+            limit_min = int(self.limits.turn_wall // 60)
+            wall_sentence = f"Your turn has a hard limit of {limit_min} minutes."
+            if f"hard limit of {limit_min} minutes" not in text:
+                attempt_hdr = f"[relay-continuity attempt {nonce}]"
+                resume_hdr = f"[relay-continuity resume {nonce}]"
+                if attempt_hdr in text:
+                    text = text.replace(attempt_hdr, f"{attempt_hdr}\n{wall_sentence}", 1)
+                elif resume_hdr in text:
+                    text = text.replace(resume_hdr, f"{resume_hdr}\n{wall_sentence}", 1)
+                else:
+                    text = f"{text}\n\n{wall_sentence}"
         # A takeover starts a new native provider context; the task and durable chain carry recovery.
         # A Claude -> Codex takeover must start a new native Codex context. Relay's --continue otherwise
         # revives its prior thread, which reached 1.5-2.7M input tokens in the measured roadmap cycles.
         # The recovery prompt and mission task carry the handoff; the supervisor keeps its own exact chain.
-        parent = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
-                  or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
-                  else self.state["head_session"])
         # A native agent retried after its own unsuccessful turn resumes that agy conversation (its full context and
         # scratch artifacts, which the retained stream does not carry); a new task or another agent starts fresh.
         resume = None
@@ -3121,18 +4203,52 @@ class Supervisor:
                 and previous.outcome != "success" and previous.turn_id:
             try:
                 session_id, _, turn_name = previous.turn_id.partition("/")  # "<session>/<turn>"
-                resume = relay_argon.conversation_of(self.host.relay.sessions_dir() / session_id / "turns" / turn_name)
+                candidate = relay_argon.conversation_of(self.host.relay.sessions_dir() / session_id / "turns" / turn_name)
+                if candidate is not None:
+                    # Resume only what prepare_resume will accept; otherwise this turn needs the session context.
+                    size = (self.host.relay.conversation_store() / f"{candidate}.db").stat().st_size
+                    if size > relay_argon.RESUME_MAX_BYTES:
+                        self.host.log(f"native conversation {candidate} oversize ({size} bytes); starting fresh context")
+                    else:
+                        resume = candidate
+            except OSError:
+                self.host.log("native conversation store missing; starting fresh context")
             except Exception:  # noqa: BLE001 - resuming is an optimisation; the turn launches fresh without it
                 resume = None
+        force_fresh = self.state.pop("force_fresh_context", False)
+        turn_dir = last_turn_dir(self.host.relay.sessions_dir() / self.state["head_session"]) if self.state.get("head_session") else None
+        tokens = turn_context_tokens(turn_dir)
+        parent = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
+                  or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
+                  or force_fresh
+                  or (tokens is not None and tokens > TURN_USAGE_CAP_TOKENS)
+                  else self.state["head_session"])
+        if parent is None:
+            self.state["resumes"] = 0
+        fresh = resume is None and (parent is None or self.state.get("agent") != agent)
         pending = {"nonce": nonce, "agent": agent, "parent": parent, "started_at": iso(now),
                    "pid": None, "pid_start": None, "fingerprint": self.host.fingerprint(), "attempt": self.attempts}
         if (rec := self.state.get("mission")) is not None and self.mission is not None:
             # Every launch until the task completes (recoveries and failovers included) serves that task.
             pending["task"] = rec["next"]
-            if MISSION_HEADER not in text:
+            if MISSION_HEADER not in text and not text.startswith("[relay-continuity resume "):
                 task = self.mission["tasks"][rec["next"]]["text"]
                 text += (f"\n\nThe interrupted work is mission {self.mission['id']} task {rec['next'] + 1}/{rec['total']}, "
                          f"which has not been recorded complete:\n{MISSION_HEADER}\n{task}")
+        session_journal: dict[str, Any] = {}
+        if self.host.session_context is not None:
+            session_journal = {"brief": None, "directives": []}
+            if fresh:
+                authority = self.mission["authority"] if self.mission is not None else None
+                try:
+                    ctx_text, fields = self.host.session_context(authority)
+                    if ctx_text:
+                        text += "\n\n" + ctx_text
+                    if isinstance(fields, dict):
+                        session_journal["brief"] = fields.get("brief")
+                        session_journal["directives"] = fields.get("directives", [])
+                except Exception as exc:  # noqa: BLE001 - session context is optional; the turn still launches
+                    self.host.log(f"session context skipped: {type(exc).__name__}")
         if self.host.worker_routing is not None:
             try:
                 text += "\n\n" + self.host.worker_routing()
@@ -3142,8 +4258,11 @@ class Supervisor:
         self.state["acknowledged"] = None  # the reviewed turn is now behind the chain
         self.state["agent"] = agent
         self.save()
-        self.store.journal({"event": "launch", **{k: v for k, v in pending.items() if k != "fingerprint"},
-                            **({"resume": resume} if resume else {})})
+        launch_journal = {"event": "launch", **{k: v for k, v in pending.items() if k != "fingerprint"},
+                          **({"resume": resume} if resume else {})}
+        if self.host.session_context is not None:
+            launch_journal.update(session_journal)
+        self.store.journal(launch_journal)
         try:
             proc = self.host.relay.start(agent, parent, text, self.turns, **({"resume": resume} if resume else {}))
         except OSError:
@@ -3155,14 +4274,23 @@ class Supervisor:
         pending["pid_start"] = devctx.pid_start(pending["pid"]) if pending["pid"] else None
         self.save()
         try:
-            result = self.host.relay.finish(proc)
+            try:
+                result = self.host.relay.finish(proc, timeout=getattr(self.limits, "turn_wall", None))
+            except TypeError:
+                result = self.host.relay.finish(proc)
+            timed_out = getattr(result, "timed_out", False) or (not result.raw_ok and "wall limit" in (result.diagnostics or "").lower())
+            if timed_out:
+                pending["timed_out"] = True
+                if result.diagnostics:
+                    pending["diagnostics"] = result.diagnostics
+                self.save()
             reaped = self._reap()
         finally:
             self.host.relay.release_turn(proc)
         if reaped is None:
             # Stopped while a process of the turn still survived: the attempt stays pending, and a restart adopts it.
             return "signal" if self.signalled else "stopped"
-        return self._settle(pending, result.session_id, result.diagnostics, reaped)
+        return self._settle(pending, result.session_id, result.diagnostics, reaped, timed_out=timed_out)
 
     def _reap(self) -> list[str] | None:
         """Stop whatever the finished turn left running, so nothing of it overlaps the next turn. While a process
@@ -3185,7 +4313,7 @@ class Supervisor:
         return sorted(names)
 
     def _settle(self, pending: dict[str, Any], session_id: str | None, diagnostics: str = "",
-                reaped: list[str] | None = None) -> TurnReport | str:
+                reaped: list[str] | None = None, timed_out: bool = False) -> TurnReport | str:
         session_id = session_id or self.host.relay.find_by_nonce(pending["nonce"], parse_ts(pending["started_at"]) or self.host.now())
         self.state["last_attempt"] = {k: pending[k] for k in ("nonce", "agent", "attempt", "fingerprint")}
         if "task" in pending:
@@ -3200,8 +4328,14 @@ class Supervisor:
             return result
         turn = last_turn_dir(self.host.relay.sessions_dir() / session_id)
         report = classify_turn(turn, diagnostics=diagnostics) if turn else TurnReport(
-            outcome="crash", agent=pending["agent"], detail="session without turns", no_evidence=True,
-            turn_id=f"{session_id}/none")
+            outcome="crash", agent=pending["agent"],
+            detail=f"session without turns ({diagnostics.strip()})" if diagnostics else "session without turns",
+            no_evidence=True, turn_id=f"{session_id}/none")
+        if timed_out:
+            if report.outcome in ("success", "quota", "spend_limit", "auth", "transient"):
+                report.outcome = "crash"
+            if diagnostics and diagnostics.strip() not in report.detail:
+                report.detail = f"{report.detail}; {diagnostics.strip()}" if report.detail else diagnostics.strip()
         report.agent = pending["agent"]
         report.reaped = reaped
         self.state["head_session"] = session_id
@@ -3270,11 +4404,31 @@ class Supervisor:
             self.store.journal({"event": "task_check_failed", **event, "problem": problem[:240]})
         elif status != "continue":
             self.store.journal({"event": "task_report_unverified", **event, "reported_status": str(status)[:40]})
-        counts = rec.setdefault("checkpoints", {})
-        counts[str(index)] = counts.get(str(index), 0) + 1
-        self.store.journal({"event": "task_checkpointed", **event, "checkpoints": counts[str(index)]})
-        if counts[str(index)] >= MAX_TASK_CHECKPOINTS:
-            return self.hold("task_checkpoint_limit", pending.get("attempt"), report.turn_id)
+
+        turn = last_turn_dir(self.host.relay.sessions_dir() / session_id) if session_id else None
+        reply = final_text(turn) if turn else ""
+        jobs, ci_waits = parse_wait_directives(reply)
+        is_external_wait = status == "continue" and bool(jobs or ci_waits)
+
+        if not is_external_wait:
+            counts = rec.setdefault("checkpoints", {})
+            counts[str(index)] = counts.get(str(index), 0) + 1
+            self.store.journal({"event": "task_checkpointed", **event, "checkpoints": counts[str(index)]})
+            if counts[str(index)] >= MAX_TASK_CHECKPOINTS:
+                return self.hold("task_checkpoint_limit", pending.get("attempt"), report.turn_id)
+
+            last_cp = parse_ts(self.state.get("last_checkpoint_at") or rec.get("last_checkpoint_at") or pending.get("started_at"))
+            now = self.host.now()
+            if last_cp is not None:
+                elapsed = (now - last_cp).total_seconds()
+                if elapsed < MIN_CHECKPOINT_INTERVAL_SECONDS and self._sleep(MIN_CHECKPOINT_INTERVAL_SECONDS - elapsed):
+                    return "signal" if self.signalled else "stopped"
+            now_iso = iso(self.host.now())
+            rec["last_checkpoint_at"] = now_iso
+            self.state["last_checkpoint_at"] = now_iso
+        else:
+            self.store.journal({"event": "task_wait_suspended", **event, "jobs": jobs, "ci": [f"{pr}@{sha}" for pr, sha in ci_waits]})
+
         return None
 
     def _verify(self, index: int) -> str | None:
@@ -3356,14 +4510,65 @@ class Supervisor:
         if not pending:
             return None
         self.host.log(f"resolving unsettled attempt {pending['nonce']}")
-        if pending.get("pid") and self.host.pid_alive(pending["pid"], pending.get("pid_start")):
-            self.host.log(f"attempt still running as pid {pending['pid']}; waiting for it (never relaunched)")
-            while self.host.pid_alive(pending["pid"], pending.get("pid_start")):
-                if self._sleep(30.0):
+        started = parse_ts(pending.get("started_at")) or self.host.now()
+        timed_out = bool(pending.get("timed_out"))
+        diagnostics = pending.get("diagnostics") or ""
+        killpg_fn = getattr(self.host.relay, "killpg", os.killpg)
+        group_running_fn = getattr(self.host.relay, "_group_is_running", None)
+
+        def group_alive(pgid: int) -> bool:
+            if callable(group_running_fn):
+                return bool(group_running_fn(pgid))
+            try:
+                killpg_fn(pgid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+            except (PermissionError, OSError):
+                return True
+
+        pid = pending.get("pid")
+        pid_start = pending.get("pid_start")
+        if pid and self.host.pid_alive(pid, pid_start):
+            self.host.log(f"attempt still running as pid {pid}; waiting for it (never relaunched)")
+            wall_limit = getattr(self.limits, "turn_wall", Limits.turn_wall)
+            while self.host.pid_alive(pid, pid_start):
+                elapsed = (self.host.now() - started).total_seconds()
+                if elapsed >= wall_limit:
+                    timed_out = True
+                    wall_diag = f"turn wall limit ({int(wall_limit)}s) exceeded"
+                    diagnostics = f"{diagnostics}\n{wall_diag}".strip() if diagnostics else wall_diag
+                    pending["timed_out"] = True
+                    pending["diagnostics"] = diagnostics
+                    self.save()
+                    try:
+                        killpg_fn(pid, signal.SIGTERM)
+                    except (ProcessLookupError, PermissionError, OSError):
+                        pass
+                    term_deadline = self.host.now() + timedelta(seconds=30.0)
+                    while (self.host.pid_alive(pid, pid_start) or group_alive(pid)) and self.host.now() < term_deadline:
+                        rem = max(0.01, (term_deadline - self.host.now()).total_seconds())
+                        if self._sleep(min(1.0, rem)):
+                            return "signal" if self.signalled else "stopped"
+                    if self.host.pid_alive(pid, pid_start) or group_alive(pid):
+                        try:
+                            killpg_fn(pid, signal.SIGKILL)
+                        except (ProcessLookupError, PermissionError, OSError):
+                            pass
+                    break
+                rem_wall = max(0.01, wall_limit - elapsed)
+                if self._sleep(min(30.0, rem_wall)):
                     return "signal" if self.signalled else "stopped"
-        session_id = self.host.relay.find_by_nonce(pending["nonce"], parse_ts(pending["started_at"]) or self.host.now())
-        # An adopted run was started by an earlier owner: what it left behind is not this process's to stop.
-        return self._settle(pending, session_id)
+        if timed_out:
+            reaped = self._reap()
+            if reaped is None:
+                return "signal" if self.signalled else "stopped"
+        else:
+            reaped = None
+        session_id = self.host.relay.find_by_nonce(pending["nonce"], started)
+        # An adopted run was started by an earlier owner: unless it was terminated under the wall limit,
+        # what it left behind is not this process's to stop.
+        return self._settle(pending, session_id, diagnostics, reaped, timed_out=timed_out)
 
 
 # ---------------------------------------------------------------------------
@@ -3560,8 +4765,10 @@ def make_host(repo: Path, relay_env: dict[str, str] | None = None) -> Host:
     env = devctx.default_env(repo)
     author = f"relay-continuity pid {os.getpid()}"
 
-    def ledger(kind: str, text: str) -> None:
-        devctx.append_entry(env, devctx.make_entry(env, kind, text, refs={"spec": "195"}, author=author))
+    def ledger(kind: str, text: str) -> str | None:
+        entry = devctx.make_entry(env, kind, text, refs={"spec": "195"}, author=author)
+        devctx.append_entry(env, entry)
+        return entry.get("id")
 
     def permissions() -> str | None:
         return permissions_digest(repo / ".agent-relay" / "permissions.toml")
@@ -3570,7 +4777,14 @@ def make_host(repo: Path, relay_env: dict[str, str] | None = None) -> Host:
                 conflicts=lambda own: live_conflicts(repo, own), ledger=ledger, permissions_digest=permissions,
                 probe=lambda call: probe_call(call, repo),
                 reap=lambda: reap_descendants(keep=relay_jobs.live_roots),
-                task_check=lambda check: check_task(repo, check), worker_routing=lambda: worker_routing_block(repo))
+                task_check=lambda check: check_task(repo, check), worker_routing=lambda: worker_routing_block(repo),
+                session_context=lambda authority: session_context_block(
+                    control_root(), env, authority, log=lambda msg: print(msg, file=sys.stderr, flush=True)
+                ),
+                job_status=lambda jid: relay_jobs.load(jid),
+                pr_ci_status=lambda pr, sha: default_pr_ci_status(repo, pr, sha),
+                reachable=default_reachable,
+                read_ledger=lambda: devctx.read_ledger(env))
 
 
 # ---------------------------------------------------------------------------
@@ -3758,7 +4972,7 @@ def check_task(repo: Path, check: dict[str, Any], run: Runner = devctx.run) -> s
                 and len(cells := [c.strip() for c in line.strip().strip("|").split("|")]) >= 3 and cells[0] == check["spec"]]
         if len(rows) != 1:
             return f"spec {check['spec']} has {len(rows)} STATUS.md rows"
-        if rows[0][1] != "merged":
+        if rows[0][1] not in ("merged", "in_review"):
             return f"spec {check['spec']} is {rows[0][1] or 'unknown'} in STATUS.md"
         prs = sorted({int(n) for n in re.findall(r"\[#(\d+)\]", rows[0][2])})
         if not prs:
@@ -3863,8 +5077,7 @@ def serve_step(root: Path, factory: Callable[[Store, dict[str, Any]], Supervisor
                 return f"waiting:{mission_id}:{'repl_active' if 'repl_active' in found else 'legacy_autopilot'}"
             if state is None and last_completed_agent:
                 state = default_state()
-                state["agent"] = (PREFERRED_AGENTS[(PREFERRED_AGENTS.index(last_completed_agent) + 1) % len(PREFERRED_AGENTS)]
-                                  if last_completed_agent in PREFERRED_AGENTS else PREFERRED)
+                state["agent"] = last_completed_agent if last_completed_agent in PREFERRED_AGENTS else PREFERRED
             state = init_mission_state(store, mission, state, now)
             if not state.get("pending") and (reopened := reopen_unverified(state)):
                 store.save(state, now())
@@ -3888,11 +5101,12 @@ ROADMAP_LOCK_WAIT = 120.0  # seconds `roadmap start|stop` waits for an owner ste
 ROADMAP_TASK = (
     "Roadmap continuation cycle {cycle}. Act as the coordinator described in docs/PROCESS.md for this repository. "
     "Fresh GitHub state and docs/specs/STATUS.md are the backlog; the maintainer directives and holds shown by `devctx.py recover` bind you. "
+    "When an operator mission brief is attached, it states what the work is for: judge value against it, and say in the cycle note when you depart from its suggested order. "
     "Recover existing PRs, worktrees and claims before creating new ones. Choose the highest-value authorized work "
     "and drive it to a verified, merged and reconciled result, or to a durable checkpoint (a pushed branch or PR "
-    "and a ledger note) when it cannot finish in this turn. A running registered job never idles the cycle: while it runs, take job-independent authorized work. Run `devctx.py recover` once at cycle start (never in "
+    "and a ledger note) when it cannot finish in this turn. While a registered job runs, take the next item in the order the standing directives give; only when none is left, other authorized work. To wait for your own job or PR checks, end with `RELAY_STATUS continue` and a `JOB-WAIT:` or `CI-WAIT:` line; the supervisor resumes you when it completes. End the turn with a wait line, never a sleeping command. Run `devctx.py recover` once at cycle start (never in "
     "parallel) and start from its Last cycle handoff; before ending, record a `devctx.py note` naming the head, "
-    "remaining items and next step. Do not submit missions or change roadmap mode: the "
+    "remaining items, the next directive item and next step. Do not submit missions or change roadmap mode: the "
     "mission owner schedules the next cycle. End with RELAY_STATUS propose_done when this cycle's work is merged "
     "or checkpointed. End with RELAY_STATUS blocked, after recording a `devctx.py note question` or `blocker`, "
     "only when no authorized useful work remains across the relevant lanes. A human-dependent step blocks only "
@@ -4631,7 +5845,7 @@ def command_status(args: argparse.Namespace) -> int:
         print(f"state corrupt: {exc}")
         return 4
     view = {k: state.get(k) for k in ("phase", "head_session", "agent", "hold", "cooldowns", "counters",
-                                      "pending", "last_outcome", "switches", "updated_at")}
+                                      "pending", "last_outcome", "switches", "updated_at", "wait")}
     view["chain_length"] = len(state.get("chain") or [])
     view["stop_requested"] = store.stop_path.exists()
     view["notify"] = {k: state["notify"].get(k) for k in ("failures", "dropped", "last_digest")}
@@ -4689,7 +5903,9 @@ def command_release(args: argparse.Namespace) -> int:
             previous["cleared"] = sorted(set(previous.get("cleared") or []) | set(args.clear_cooldown))
         state["hold"] = None
         state["phase"] = "idle"
-        state["counters"] = {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0}
+        kept_clears = {k: v for k, v in (state.get("counters") or {}).items()
+                       if k.startswith("reading_clear_") and k.removeprefix("reading_clear_") not in (args.clear_cooldown or [])}
+        state["counters"] = {"consecutive_failures": 0, "transient_streak": 0, "crash_retries": 0, **kept_clears}
         for agent in args.clear_cooldown or []:
             state["cooldowns"].pop(agent, None)
             state["spend_caps"].pop(agent, None)  # e.g. the maintainer raised a spend cap

@@ -2,6 +2,7 @@ import sqlite3
 
 from fastapi import APIRouter, HTTPException
 
+from app.core.database import open_sqlite_connection
 from app.modules.memory.replacement import ParameterReplacementError
 from app.modules.modeling.parameter_lifecycle import ParameterLifecycleError
 from app.modules.modeling.project_knowledge_owner import ProjectKnowledgeOwnerError
@@ -51,6 +52,16 @@ from app.modules.project_knowledge.sim_results import (
     list_simulation_result_notifications,
     resolve_simulation_result_exception,
 )
+from app.modules.project_knowledge.value_history import (
+    RunInputsManifestRead,
+    ValueComparisonRead,
+    ValueHistoryError,
+    ValueVersionChainRead,
+    compare_value_versions,
+    get_parameter_version_chain,
+    get_run_inputs_manifest,
+    get_sim_result_value_version_chain,
+)
 
 router = APIRouter(prefix="/project-knowledge", tags=["project-knowledge"])
 
@@ -91,6 +102,11 @@ def _http_error(exc: Exception) -> HTTPException:
         code = "persistence_conflict"
         message = "Persistence constraint rejected the requested state transition."
     return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+def _value_history_error(exc: ValueHistoryError) -> HTTPException:
+    status_code = 404 if "not_found" in exc.code else 400
+    return HTTPException(status_code=status_code, detail={"code": exc.code, "message": exc.message})
 
 
 _DOMAIN_ERRORS = (
@@ -251,3 +267,77 @@ def resolve_result_exception_endpoint(value_id: str, payload: SimulationResultRe
         return resolve_simulation_result_exception(value_id, payload)
     except _DOMAIN_ERRORS as exc:
         raise _http_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/simulation-runs/{simulation_run_id}/values-used",
+    response_model=RunInputsManifestRead,
+)
+def get_run_inputs_manifest_endpoint(
+    workspace_id: str,
+    simulation_run_id: str,
+) -> RunInputsManifestRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return get_run_inputs_manifest(connection, workspace_id, simulation_run_id)
+        except ValueHistoryError as exc:
+            raise _value_history_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/parameters/{parameter_id}/history",
+    response_model=ValueVersionChainRead,
+)
+def get_parameter_history_endpoint(
+    workspace_id: str,
+    parameter_id: str,
+) -> ValueVersionChainRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return get_parameter_version_chain(connection, workspace_id, parameter_id)
+        except ValueHistoryError as exc:
+            raise _value_history_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/result-values/{value_id}/history",
+    response_model=ValueVersionChainRead,
+)
+def get_result_value_history_endpoint(
+    workspace_id: str,
+    value_id: str,
+) -> ValueVersionChainRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return get_sim_result_value_version_chain(connection, workspace_id, value_id)
+        except ValueHistoryError as exc:
+            raise _value_history_error(exc) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/values/compare",
+    response_model=ValueComparisonRead,
+)
+def compare_values_get_endpoint(
+    workspace_id: str,
+    value_kind: str | None = None,
+    value_id: str | None = None,
+    version_a: str | None = None,
+    version_b: str | None = None,
+    parameter_a_id: str | None = None,
+    parameter_b_id: str | None = None,
+) -> ValueComparisonRead:
+    with open_sqlite_connection() as connection:
+        try:
+            return compare_value_versions(
+                connection,
+                workspace_id=workspace_id,
+                value_kind=value_kind,
+                value_id=value_id,
+                version_a=version_a,
+                version_b=version_b,
+                parameter_a_id=parameter_a_id,
+                parameter_b_id=parameter_b_id,
+            )
+        except ValueHistoryError as exc:
+            raise _value_history_error(exc) from exc

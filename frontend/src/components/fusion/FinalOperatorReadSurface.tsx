@@ -18,6 +18,7 @@ import {
 } from "../../api/client";
 
 import ProjectKnowledgePanel from "./ProjectKnowledgePanel";
+import ValueHistoryModal, { type HistoryTarget } from "./ValueHistoryModal";
 
 type ReadKind = "project-basis" | "models" | "runtime";
 
@@ -52,7 +53,9 @@ function JarvisReadBoundary({ detail }: Readonly<{ detail: string }>) {
 
 function ProjectBasis({ readOnly, records, workspaces, workspaceId, onWorkspaceChange, loading, error, searchPanel, requestedRecordRef, jarvis, onRecordSelect, onChanged }: Readonly<{ readOnly: boolean; records: WorkspaceRecords; workspaces: FinalWorkspace[]; workspaceId: string | null; onWorkspaceChange: (id: string) => void; loading: boolean; error: string | null; searchPanel?: React.ReactNode; requestedRecordRef?: string | null; jarvis?: React.ReactNode; onRecordSelect?: (ref: string | null, label?: string) => void; onChanged: () => void }>) {
   const [editing, setEditing] = useState<FinalRequirement | null>(null);
+  const [activeHistoryTarget, setActiveHistoryTarget] = useState<HistoryTarget | null>(null);
   useEffect(() => { setEditing(null); }, [workspaceId]);
+  useEffect(() => { setActiveHistoryTarget(null); }, [workspaceId]);
   const [open, setOpen] = useState<Set<string>>(new Set());
   useEffect(() => { setOpen(new Set(requestedRecordRef ? [requestedRecordRef] : [])); }, [workspaceId, requestedRecordRef]);
   const groups = [
@@ -80,6 +83,7 @@ function ProjectBasis({ readOnly, records, workspaces, workspaceId, onWorkspaceC
               {open.has(row.id) && <div className="basis-record-detail">
                 <dl>{Object.entries(row.data).filter(([key, value]) => value !== null && value !== "" && !["id", "workspace_id", "created_at", "updated_at", "statement", "name", "title"].includes(key) && !/digest|token|schema|_id$/.test(key)).map(([key,value]) => <div key={key}><dt>{key.replace(/_/g, " ")}</dt><dd>{typeof value === "object" ? JSON.stringify(value) : String(value)}</dd></div>)}</dl>
                 {!readOnly && row.id.startsWith("requirement:") && <button type="button" onClick={() => setEditing(row.data as FinalRequirement)}>Edit</button>}
+                {row.id.startsWith("parameter:") && <button type="button" onClick={() => setActiveHistoryTarget({ kind: "parameter", id: (row.data as FinalParameter).id, name: (row.data as FinalParameter).name })}>History</button>}
                 <p>Select this record in Jarvis to prepare a proposal with its exact context.</p>
                 <details><summary>Technical details</summary><pre>{JSON.stringify(row.data, null, 2)}</pre></details>
               </div>}
@@ -88,6 +92,13 @@ function ProjectBasis({ readOnly, records, workspaces, workspaceId, onWorkspaceC
         </>}
       </div>
       <ProjectKnowledgePanel key={workspaceId} workspaceId={workspaceId} readOnly={readOnly} onChanged={onChanged} editing={editing} onCancelEdit={() => setEditing(null)} />
+      {activeHistoryTarget && workspaceId && (
+        <ValueHistoryModal
+          workspaceId={workspaceId}
+          target={activeHistoryTarget}
+          onClose={() => setActiveHistoryTarget(null)}
+        />
+      )}
     </Panel>
     <section className="final-fusion__panel final-fusion__jarvis" aria-label="Jarvis">{jarvis}</section>
   </div>;

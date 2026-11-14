@@ -378,7 +378,7 @@ def pr_lookup(env: Env, gh_state: dict[str, Any], number: int,
 STATUS_ROW = re.compile(r"^\| (\w+) \| (\w+) \| ([^|]*) \| ([^|]*) \| ([^|]*) \|")
 
 
-def status_state(env: Env) -> dict[str, Any]:
+def status_state(env: Env, gh_state: dict[str, Any] | None = None) -> dict[str, Any]:
     text = env.git("show", "origin/master:docs/specs/STATUS.md")
     if text is None:
         return {"ok": False, "rows": []}
@@ -389,9 +389,19 @@ def status_state(env: Env) -> dict[str, Any]:
             spec, status, pr, name, deps = (g.strip() for g in match.groups())
             rows.append({"spec": spec, "status": status, "prs": re.findall(r"#(\d+)", pr), "name": name,
                          "deps": [d.strip() for d in deps.split(",") if d.strip() and d.strip() != "—"]})
-    merged = {row["spec"] for row in rows if row["status"] == "merged"}
+    gh_ok = bool(gh_state and gh_state.get("ok"))
+    merged_prs = {str(p["number"]) for p in gh_state.get("merged", [])} if gh_ok else set()
     for row in rows:
-        row["deps_merged"] = all(dep in merged for dep in row["deps"])
+        if gh_ok:
+            row["done"] = (row["status"] == "merged"
+                           or (row["status"] == "in_review"
+                               and bool(row["prs"])
+                               and all(p in merged_prs for p in row["prs"])))
+        else:
+            row["done"] = row["status"] == "merged"
+    done_specs = {row["spec"] for row in rows if row["done"]}
+    for row in rows:
+        row["deps_merged"] = all(dep in done_specs for dep in row["deps"])
     return {"ok": True, "rows": rows}
 
 
@@ -575,6 +585,45 @@ def _freshness(env: Env, entry: dict[str, Any], gh_state: dict[str, Any], cache:
     return {"verdict": "stale", "why": f"{len(files)} changed in {scope} since {sha[:8]}; {how}", "changed": files[:8]}
 
 
+def maintainer_prompt_text(raw_text: str) -> str | None:
+    """Extract maintainer-authored prompt text from a Relay prompt.
+
+    Returns None for supervisor-generated attempt prompts. For maintainer prompts,
+    unwraps any Relay harness envelope and strips supervisor-injected blocks
+    (operator mission brief, standing directives, worker routing).
+    """
+    if re.search(r"\[relay-continuity attempt\b", raw_text):
+        return None
+
+    text = raw_text
+    if "You are participating in a Relay-managed" in text and "## Task" in text:
+        text = text.split("## Task", 1)[1]
+    if "\n## Continuation Context" in text:
+        text = text.split("\n## Continuation Context", 1)[0]
+
+    # Strip supervisor-injected brief block
+    text = re.sub(
+        r"(?:^|\n+)(?:This is the operator's private mission brief;[^\n]*|Operator mission brief not attached:[^\n]*)"
+        r"(?:\n[\s\S]*?)?(?=\n+(?:Standing maintainer directives for this mission|Directive \S+ not attached:|(?:## )?Worker routing(?:\n|\Z))|\Z)",
+        "",
+        text,
+    )
+    # Strip supervisor-injected standing directives block
+    text = re.sub(
+        r"(?:^|\n+)(?:Standing maintainer directives for this mission \(full text, oldest first\):|Directive \S+ not attached:[^\n]*)"
+        r"(?:\n[\s\S]*?)?(?=\n+(?:## )?Worker routing(?:\n|\Z)|\Z)",
+        "",
+        text,
+    )
+    # Strip supervisor-injected worker routing block
+    text = re.sub(
+        r"(?:^|\n+)(?:## )?Worker routing(?:\n[\s\S]*)?\Z",
+        "",
+        text,
+    )
+    return text.strip()
+
+
 def directive_provenance(entry: dict[str, Any], relay_texts: list[tuple[str, str]]) -> str:
     """A directive is maintainer-verified only when Relay's verbatim prompt store contains it."""
     path = Path(entry["directive"]["path"])
@@ -583,8 +632,9 @@ def directive_provenance(entry: dict[str, Any], relay_texts: list[tuple[str, str
     body = path.read_text(encoding="utf-8", errors="replace").strip()
     if hashlib.sha256(path.read_bytes()).hexdigest() != entry["directive"]["sha256"]:
         return "directive file modified after recording"
-    for name, text in relay_texts:
-        if body and body in text:
+    for name, raw_text in relay_texts:
+        cleaned = maintainer_prompt_text(raw_text)
+        if cleaned is not None and body and body in cleaned:
             return f"relay-verified ({name})"
     return f"unverified source (recorded by {entry['author']}; source {entry['directive'].get('source') or 'unstated'})"
 
@@ -603,7 +653,7 @@ def build_packet(env: Env, *, fetch: bool = True) -> dict[str, Any]:
     fetched = fetch_origin(env, fetch)
     procs = env.processes() if env.processes else []
     gh_state = github_state(env)
-    status = status_state(env)
+    status = status_state(env, gh_state)
     ledger = read_ledger(env)
     superseded = {ref for item in ledger for ref in item.get("supersedes", [])}
     cache: dict[int, Any] = {}
@@ -649,9 +699,19 @@ def build_packet(env: Env, *, fetch: bool = True) -> dict[str, Any]:
             "complete evidence / undraft" if pr.get("isDraft") else "merge decision for"
         candidates.append(f"{verb} PR #{pr['number']} ({pr['title'][:70]})")
     open_numbers = {str(pr["number"]) for pr in open_prs}
+    merged_numbers = {str(pr["number"]) for pr in gh_state.get("merged", [])}
     for row in in_flight:
         if row["status"] == "in_review" and not set(row["prs"]) & open_numbers:
-            candidates.append(f"spec {row['spec']} is in_review but none of its PRs is open: reconcile STATUS")
+            if not gh_state["ok"]:
+                candidates.append(f"spec {row['spec']} is in_review but none of its PRs is open: reconcile STATUS")
+            elif not row["done"]:
+                closed = [p for p in row["prs"] if p not in open_numbers and p not in merged_numbers]
+                if closed:
+                    prs_str = ", ".join(f"#{p}" for p in closed)
+                    label = f"PRs {prs_str} are" if len(closed) > 1 else f"PR {prs_str} is"
+                    candidates.append(f"spec {row['spec']} is in_review but {label} closed unmerged: reconcile STATUS")
+                else:
+                    candidates.append(f"spec {row['spec']} is in_review but none of its PRs is open: reconcile STATUS")
     for row in ready:
         if row["deps_merged"] and not set(row["prs"]) & open_numbers:
             linked = [pr["number"] for pr in open_prs if re.search(rf"/{re.escape(row['spec'])}-", pr["headRefName"])]
@@ -810,6 +870,86 @@ def render(packet: dict[str, Any], budget: int = DEFAULT_BUDGET_CHARS) -> str:
 # CLI
 
 
+# Punctuation right after a digit is a date, time or version ("2026-11-13.", "16:07."), not an option separator.
+_SEP_CHARS = r"(?:\s|(?<!\d)[,(;:—/|\\–\)\-?!])"
+_CONJ = r"\b(?:e|o|and|or|oppure)\b"
+_SEP = rf"(?:^|{_SEP_CHARS}|{_CONJ})"
+
+# An option marker: "2)", "(2)" or "2." followed by text. A dot needs a space or a letter after it, so decimals,
+# versions and times ("3.12", "10.30") are not markers; "[1]" is a citation, not a marker.
+_MARKER = r"(?:(?:\d+\)|\(\d+\))\s*\S|\d+\.(?:\s+\S|[a-zA-Z]))"
+_INLINE_OPTION_RE = re.compile(rf"{_SEP}\s*{_MARKER}")
+
+_PROMPT_END_SEP = r"(?:^|(?<!\d)[?!:;—/|\\–\-])"
+_PROMPT_EMBEDDED_RE = re.compile(rf"{_PROMPT_END_SEP}\s*{_MARKER}")
+
+
+def has_inline_alternatives_in_body(body: str) -> bool:
+    """Return True if an option body contains embedded/inline alternatives."""
+    return bool(_INLINE_OPTION_RE.search(body))
+
+
+def has_inline_alternatives_in_prompt(line: str) -> bool:
+    """Return True if a prompt line contains embedded/inline alternatives."""
+    if _PROMPT_EMBEDDED_RE.search(line):
+        return True
+    return len(_INLINE_OPTION_RE.findall(line)) >= 2
+
+
+def validate_question(text: str) -> None:
+    """Validate a new structured maintainer question.
+
+    Must contain 2 to 4 separate sequential numbered option lines (1. ... to 4. ...).
+    Inline alternatives are rejected.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("question text is empty; format requires 2 to 4 separate sequential numbered option lines")
+    options: list[int] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.match(r"^(\d+)[.)]\s+(.+)$", line)
+        if match:
+            num = int(match.group(1))
+            body = match.group(2).strip()
+            expected = len(options) + 1
+            if num != expected:
+                raise ValueError(
+                    f"question options must be sequentially numbered starting at 1 (expected {expected}, got {num}). "
+                    "Format: 2 to 4 separate option lines like '1. Option — conseguenza: ...'"
+                )
+            if has_inline_alternatives_in_body(body):
+                raise ValueError(
+                    "inline alternatives are not allowed; each option must be on its own separate line. "
+                    "Format: 2 to 4 separate option lines like '1. Option — conseguenza: ...'"
+                )
+            options.append(num)
+        else:
+            if options:
+                raise ValueError(
+                    "question options must be at the end of the text, one line per option. "
+                    "Format: short prompt followed by 2 to 4 separate sequential numbered option lines"
+                )
+            if has_inline_alternatives_in_prompt(line):
+                raise ValueError(
+                    "inline alternatives are not allowed; options must be on separate sequential lines. "
+                    "Format: short prompt followed by 2 to 4 separate lines like '1. Option — conseguenza: ...'"
+                )
+
+    if len(options) < 2:
+        raise ValueError(
+            f"question requires 2 to 4 separate sequential numbered option lines (found {len(options)}); "
+            "inline alternatives are not allowed. "
+            "Format: short prompt followed by 2 to 4 lines like '1. (consigliata) Option — conseguenza: ...'"
+        )
+    if len(options) > 4:
+        raise ValueError(
+            f"question requires 2 to 4 separate sequential numbered option lines (found {len(options)}, maximum is 4). "
+            "Format: short prompt followed by 2 to 4 lines like '1. (consigliata) Option — conseguenza: ...'"
+        )
+
+
 def command_note(env: Env, args: argparse.Namespace) -> None:
     refs = {"pr": args.pr, "sha": args.sha, "branch": args.branch, "worktree": args.worktree,
             "lane": args.lane, "spec": args.spec, "paths": args.path, "evidence": args.evidence}
@@ -820,6 +960,8 @@ def command_note(env: Env, args: argparse.Namespace) -> None:
             raise ValueError(f"claim holder pid {pid} is not running")
         claim = {"expires": iso(env.now + timedelta(hours=args.ttl_hours)), "pid": pid,
                  "pid_start": pid_start(pid) if pid else None}
+    if args.kind == "question":
+        validate_question(args.text)
     entry = make_entry(env, args.kind, args.text, status=args.status, refs=refs, supersedes=args.supersedes,
                        conflicts=args.conflicts, claim=claim)
     append_entry(env, entry)

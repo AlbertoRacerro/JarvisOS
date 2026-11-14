@@ -1,4 +1,14 @@
 import { API_BASE_URL } from "./client";
+import type {
+  RunLinkedParameterItem,
+  RunInputsManifestRead,
+  ValueVersionItem,
+  ValueVersionChainRead,
+  BoundRunRef,
+  BoundRequirementCheckRef,
+  ValueComparisonSide,
+  ValueComparisonRead
+} from "./generated/projectKnowledge";
 
 export type ProjectKnowledgeOperation = {
   operation_id?: string | null;
@@ -307,4 +317,65 @@ export function evaluateProjectKnowledgeRequirement(
   payload: ProjectKnowledgeValidationRequest
 ): Promise<ProjectKnowledgeValidationRead> {
   return requestJson<ProjectKnowledgeValidationRead>("/project-knowledge/validation", jsonInit("POST", payload));
+}
+
+export type {
+  RunLinkedParameterItem,
+  RunInputsManifestRead,
+  ValueVersionItem,
+  ValueVersionChainRead,
+  BoundRunRef,
+  BoundRequirementCheckRef,
+  ValueComparisonSide,
+  ValueComparisonRead
+} from "./generated/projectKnowledge";
+
+export function getRunInputsManifest(
+  workspaceId: string,
+  simulationRunId: string
+): Promise<RunInputsManifestRead> {
+  return requestJson<RunInputsManifestRead>(
+    `/project-knowledge/workspaces/${encodeURIComponent(workspaceId)}/simulation-runs/${encodeURIComponent(simulationRunId)}/values-used`
+  );
+}
+
+export function getParameterHistory(
+  workspaceId: string,
+  parameterId: string
+): Promise<ValueVersionChainRead> {
+  return requestJson<ValueVersionChainRead>(
+    `/project-knowledge/workspaces/${encodeURIComponent(workspaceId)}/parameters/${encodeURIComponent(parameterId)}/history`
+  );
+}
+
+export function getResultValueHistory(
+  workspaceId: string,
+  valueId: string
+): Promise<ValueVersionChainRead> {
+  return requestJson<ValueVersionChainRead>(
+    `/project-knowledge/workspaces/${encodeURIComponent(workspaceId)}/result-values/${encodeURIComponent(valueId)}/history`
+  );
+}
+
+export function compareValues(
+  workspaceId: string,
+  params: {
+    value_kind?: string;
+    value_id?: string;
+    version_a?: string | number;
+    version_b?: string | number;
+    parameter_a_id?: string;
+    parameter_b_id?: string;
+  }
+): Promise<ValueComparisonRead> {
+  const query = new URLSearchParams();
+  if (params.value_kind) query.set("value_kind", params.value_kind);
+  if (params.value_id) query.set("value_id", params.value_id);
+  if (params.version_a !== undefined) query.set("version_a", String(params.version_a));
+  if (params.version_b !== undefined) query.set("version_b", String(params.version_b));
+  if (params.parameter_a_id) query.set("parameter_a_id", params.parameter_a_id);
+  if (params.parameter_b_id) query.set("parameter_b_id", params.parameter_b_id);
+  return requestJson<ValueComparisonRead>(
+    `/project-knowledge/workspaces/${encodeURIComponent(workspaceId)}/values/compare?${query.toString()}`
+  );
 }

@@ -35,6 +35,9 @@ from app.modules.project_knowledge.service import (
     _extract_scalar_from_run_payload,
     _require_workspace,
 )
+from app.modules.project_knowledge.sim_result_versions import (
+    backfill_simulation_result_value_versions,
+)
 
 CHECK_NAMES = (
     "source_presence_and_digest",
@@ -661,6 +664,29 @@ def ingest_validated_calc_v0_run(
                         now,
                     ),
                 )
+                connection.execute(
+                    """
+                    INSERT INTO simulation_result_value_versions (
+                        id, value_id, version_index, value_text, unit,
+                        conditions_json, status, action, reason, actor,
+                        created_at, origin
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid4()),
+                        value_id,
+                        0,
+                        val_text,
+                        val_unit,
+                        _canonical_json(conds),
+                        status,
+                        "ingest",
+                        None,
+                        None,
+                        now,
+                        "recorded",
+                    ),
+                )
                 for check_name, outcome, reason_code in checks:
                     connection.execute(
                         """
@@ -893,6 +919,15 @@ def resolve_simulation_result_exception(
             orig_conds = json.loads(orig_conds_json)
             internal_unvalidated = orig_conds.get("_unvalidated_input_value_ids") if isinstance(orig_conds, dict) else None
 
+            # If the value has no version rows yet (legacy value created before the migration),
+            # first run the backfill for that value inside the same transaction, then append.
+            has_versions = connection.execute(
+                "SELECT 1 FROM simulation_result_value_versions WHERE value_id = ? LIMIT 1",
+                (value_id,),
+            ).fetchone()
+            if not has_versions:
+                backfill_simulation_result_value_versions(connection, value_id=value_id)
+
             now = utc_now()
             run_id = str(row["run_id"])
             batch_id = str(row["batch_id"])
@@ -1083,6 +1118,36 @@ def resolve_simulation_result_exception(
                 (value_id,),
             ).fetchone()
             assert updated_row is not None
+
+            max_v_row = connection.execute(
+                "SELECT MAX(version_index) AS max_v FROM simulation_result_value_versions WHERE value_id = ?",
+                (value_id,),
+            ).fetchone()
+            next_version_index = (int(max_v_row["max_v"]) + 1) if (max_v_row and max_v_row["max_v"] is not None) else 0
+
+            connection.execute(
+                """
+                INSERT INTO simulation_result_value_versions (
+                    id, value_id, version_index, value_text, unit,
+                    conditions_json, status, action, reason, actor,
+                    created_at, origin
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    value_id,
+                    next_version_index,
+                    str(updated_row["value_text"]),
+                    str(updated_row["unit"]),
+                    str(updated_row["conditions_json"]),
+                    str(updated_row["status"]),
+                    payload.action,
+                    payload.reason.strip(),
+                    "operator",
+                    now,
+                    "recorded",
+                ),
+            )
             run_row = connection.execute(
                 "SELECT input_payload FROM simulation_runs WHERE id = ?",
                 (run_id,),

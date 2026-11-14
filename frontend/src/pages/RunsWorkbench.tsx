@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { listWorkspaces, type Workspace } from "../api/client";
+import {
+  getRunInputsManifest,
+  type RunInputsManifestRead
+} from "../api/projectKnowledge";
 import { RunsRequestError, getRun, listRunArtifacts, listRunLogs, listRuns, type RunArtifact, type RunLog, type SimulationRunDetail, type SimulationRunSummary } from "../api/runs";
 import { parseSourceRunTarget, type SourceRunTarget } from "../components/analytics/variantComparisonNavigation";
 import type { EngineeringPropertiesController } from "../components/engineering/EngineeringProperties";
+import ValueHistoryModal, { type HistoryTarget } from "../components/fusion/ValueHistoryModal";
 import { acceptsResponse, chooseSelection, projectPayload, visibleRuns } from "../components/runs/state";
 
 type Props = {
@@ -42,6 +47,10 @@ function RunsWorkbench({ workspaceId, onWorkspaceChange, engineeringProperties }
   const [artifacts, setArtifacts] = useState<RunArtifact[]>([]);
   const [artifactsState, setArtifactsState] = useState<LoadState>("idle");
   const [artifactsError, setArtifactsError] = useState<string | null>(null);
+  const [manifest, setManifest] = useState<RunInputsManifestRead | null>(null);
+  const [manifestState, setManifestState] = useState<LoadState>("idle");
+  const [manifestError, setManifestError] = useState<string | null>(null);
+  const [activeHistoryTarget, setActiveHistoryTarget] = useState<HistoryTarget | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [previousRunConfirmation, setPreviousRunConfirmation] = useState<PreviousRunConfirmation | null>(null);
@@ -52,6 +61,7 @@ function RunsWorkbench({ workspaceId, onWorkspaceChange, engineeringProperties }
   const detailGeneration = useRef(0);
   const logsGeneration = useRef(0);
   const artifactsGeneration = useRef(0);
+  const manifestGeneration = useRef(0);
   const currentWorkspace = useRef(workspaceId);
   const currentRun = useRef(selectedId);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -66,19 +76,24 @@ function RunsWorkbench({ workspaceId, onWorkspaceChange, engineeringProperties }
     detailGeneration.current += 1;
     logsGeneration.current += 1;
     artifactsGeneration.current += 1;
+    manifestGeneration.current += 1;
     setRuns([]);
     setSelectedId(null);
     setDetail(null);
     setLogs([]);
     setArtifacts([]);
+    setManifest(null);
     setRunsState("idle");
     setDetailState("idle");
     setLogsState("idle");
     setArtifactsState("idle");
+    setManifestState("idle");
     setRunsError(null);
     setDetailError(null);
     setLogsError(null);
     setArtifactsError(null);
+    setManifestError(null);
+    setActiveHistoryTarget(null);
     setPreviousRunConfirmation(null);
     setPreviousRunMessage(null);
     pendingRefreshFocus.current = null;
@@ -220,19 +235,44 @@ function RunsWorkbench({ workspaceId, onWorkspaceChange, engineeringProperties }
     });
   };
 
+  const loadManifest = (targetWorkspace: string, runId: string) => {
+    const identity = `${targetWorkspace}:${runId}`;
+    const generation = ++manifestGeneration.current;
+    setManifestState("loading");
+    setManifestError(null);
+    void getRunInputsManifest(targetWorkspace, runId).then((value) => {
+      const currentIdentity = `${currentWorkspace.current ?? ""}:${currentRun.current ?? ""}`;
+      if (!acceptsResponse({ generation, identity }, manifestGeneration.current, currentIdentity)) return;
+      setManifest(value);
+      setManifestState("ready");
+    }).catch((error: Error) => {
+      const currentIdentity = `${currentWorkspace.current ?? ""}:${currentRun.current ?? ""}`;
+      if (!acceptsResponse({ generation, identity }, manifestGeneration.current, currentIdentity)) return;
+      setManifest(null);
+      setManifestState("error");
+      setManifestError(error.message);
+    });
+  };
+
   useEffect(() => {
     detailGeneration.current += 1;
     logsGeneration.current += 1;
     artifactsGeneration.current += 1;
+    manifestGeneration.current += 1;
     setDetail(null);
     setLogs([]);
     setArtifacts([]);
+    setManifest(null);
+    setManifestState("idle");
+    setManifestError(null);
+    setActiveHistoryTarget(null);
     setPreviousRunConfirmation(null);
     setPreviousRunMessage(null);
     if (workspaceId && selectedId) {
       loadDetail(workspaceId, selectedId);
       loadLogs(workspaceId, selectedId);
       loadArtifacts(workspaceId, selectedId);
+      loadManifest(workspaceId, selectedId);
     }
   }, [workspaceId, selectedId]);
 
@@ -283,7 +323,7 @@ function RunsWorkbench({ workspaceId, onWorkspaceChange, engineeringProperties }
   return (
     <section className="runs-workbench" aria-labelledby="runs-title">
       <header className="runs-toolbar">
-        <div><p className="eyebrow">Execution evidence</p><h1 id="runs-title">Runs</h1></div>        <button type="button" disabled={!workspaceId || runsState === "loading"} onClick={() => { if (workspaceId) { loadRuns(workspaceId); if (selectedId) loadDetail(workspaceId, selectedId); } }}>Refresh</button>
+        <div><p className="eyebrow">Execution evidence</p><h1 id="runs-title">Runs</h1></div>        <button type="button" disabled={!workspaceId || runsState === "loading"} onClick={() => { if (workspaceId) { loadRuns(workspaceId); if (selectedId) { loadDetail(workspaceId, selectedId); loadManifest(workspaceId, selectedId); } } }}>Refresh</button>
       </header>
 
       <div className="runs-grid">
@@ -325,6 +365,90 @@ function RunsWorkbench({ workspaceId, onWorkspaceChange, engineeringProperties }
             </section>
             {detail.notes && <p className="run-notes">{detail.notes}</p>}
             <details className="run-technical"><summary>Technical details</summary><dl className="run-facts"><div><dt>Run id</dt><dd className="technical-token">{detail.id}</dd></div><div><dt>Model version id</dt><dd className="technical-token">{detail.model_version_id ?? "—"}</dd></div></dl></details>
+
+            <section className="run-evidence" aria-label="Values used">
+              <header>
+                <h3>Values used</h3>
+                {manifestState === "error" && (
+                  <button
+                    type="button"
+                    onClick={() => workspaceId && selectedId && loadManifest(workspaceId, selectedId)}
+                  >
+                    Retry
+                  </button>
+                )}
+              </header>
+              {manifestState === "loading" && <p>Loading values used…</p>}
+              {manifestState === "error" && <p>Values used unavailable: {manifestError}</p>}
+              {manifestState === "ready" && manifest && (
+                <>
+                  {manifest.history_not_recorded ? (
+                    <p className="runs-note" role="status">
+                      {manifest.reason || "History not recorded for this run."}
+                    </p>
+                  ) : manifest.items.length === 0 ? (
+                    <p>No parameter values recorded for this run.</p>
+                  ) : (
+                    <div className="runs-values-used">
+                      <table className="values-used-table" style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+                        <thead>
+                          <tr style={{ borderBottom: "1px solid #ccc" }}>
+                            <th style={{ padding: "6px" }}>Parameter</th>
+                            <th style={{ padding: "6px" }}>Value</th>
+                            <th style={{ padding: "6px" }}>Unit</th>
+                            <th style={{ padding: "6px" }}>Status</th>
+                            <th style={{ padding: "6px" }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {manifest.items.map((item) => (
+                            <tr key={item.id} data-parameter-id={item.id} style={{ borderBottom: "1px solid #eee" }}>
+                              <td style={{ padding: "6px" }}>
+                                <strong>{item.name}</strong>
+                                {item.newer_version_exists && (
+                                  <span
+                                    className="runs-marker"
+                                    role="status"
+                                    style={{
+                                      marginLeft: "8px",
+                                      color: "#b06000",
+                                      backgroundColor: "#fff3e0",
+                                      padding: "2px 6px",
+                                      borderRadius: "4px",
+                                      fontSize: "12px",
+                                      fontWeight: 600
+                                    }}
+                                  >
+                                    newer version exists
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ padding: "6px" }}>{item.value != null ? String(item.value) : "—"}</td>
+                              <td style={{ padding: "6px" }}>{item.unit || "—"}</td>
+                              <td style={{ padding: "6px" }}>{item.status}</td>
+                              <td style={{ padding: "6px" }}>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setActiveHistoryTarget({
+                                      kind: "parameter",
+                                      id: item.id,
+                                      name: item.name
+                                    })
+                                  }
+                                >
+                                  History
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+            </section>
             <Payload title="Inputs" projection={projectPayload(detail.input_payload, "input")} />
             <Payload title="Bindings" projection={projectPayload(detail.parameter_payload, "binding")} />
             <Payload title="Results" projection={projectPayload(detail.output_payload, "result")} />
@@ -335,6 +459,14 @@ function RunsWorkbench({ workspaceId, onWorkspaceChange, engineeringProperties }
           </>}
         </main>
       </div>
+
+      {activeHistoryTarget && workspaceId && (
+        <ValueHistoryModal
+          workspaceId={workspaceId}
+          target={activeHistoryTarget}
+          onClose={() => setActiveHistoryTarget(null)}
+        />
+      )}
     </section>
   );
 }
