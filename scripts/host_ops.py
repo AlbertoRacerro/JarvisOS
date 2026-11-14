@@ -2683,6 +2683,7 @@ class Executor:
         try:
             names = [n for n in os.listdir(fd) if REQUEST_NAME_RE.fullmatch(n)]
             for name in names:
+                complete = True
                 try:
                     request = json.loads(read_regular(fd, name, MAX_REQUEST_BYTES))
                 except (OSError, ValueError):
@@ -2705,17 +2706,18 @@ class Executor:
                                     request.setdefault("args", {})["sha"] = receipt["sha"]
                                 if not request.get("requester") and receipt.get("requester"):
                                     request["requester"] = receipt["requester"]
-                            self._recover_unsuccessful_install(request, outcome or "failed", error)
+                            complete = self._recover_unsuccessful_install(request, outcome or "failed", error)
                     else:
                         self._finish(request, "interrupted", {}, "the executor stopped while this request was running",
                                      started=None)
                         if isinstance(request, dict) and request.get("op") == "release.install":
-                            self._recover_unsuccessful_install(
+                            complete = self._recover_unsuccessful_install(
                                 request, "interrupted", "the executor stopped while this request was running"
                             )
                 finally:
                     os.close(done_fd)
-                unlink_at(fd, name)
+                if complete:
+                    unlink_at(fd, name)
         finally:
             os.close(fd)
 
@@ -2887,7 +2889,7 @@ class Executor:
         error: str | None,
         *,
         ctx: Context | None = None,
-    ) -> None:
+    ) -> bool:
         candidate = (request.get("args") or {}).get("sha") or request.get("sha")
         pub_curr = self.paths.published / "current"
         if pub_curr.is_symlink() or pub_curr.exists():
@@ -2910,6 +2912,7 @@ class Executor:
 
         p_marker: dict[str, Any] | None = None
         restart_req = ctx.restart_required if ctx is not None else False
+        complete = True
         if not restart_req:
             moved_install_back = False
             inst_curr = self.paths.install / "current"
@@ -2928,25 +2931,40 @@ class Executor:
                         moved_install_back = True
                 except OSError:
                     pass
+            if ctx is None and moved_install_back:
+                self.restart_requested = True
+
             if self.paths.release_pending.exists():
                 try:
                     p_marker = load_release_pending(self.paths)
-                    if p_marker and p_marker.get("candidate_sha") == candidate:
-                        self.paths.release_pending.unlink(missing_ok=True)
-                    else:
+                    if not (p_marker and p_marker.get("candidate_sha") == candidate):
                         p_marker = None
                 except MalformedPendingRelease:
                     _quarantine_pending_marker(self.paths)
                     p_marker = None
 
-            if ctx is None and moved_install_back:
+            if ctx is not None:
+                if p_marker:
+                    self.paths.release_pending.unlink(missing_ok=True)
+            else:
                 if p_marker and p_marker.get("watcher_active"):
                     unit = "jarvisos-relay-watch.service"
+                    watcher_ok = False
                     try:
-                        self.run(["systemctl", "--user", "restart", unit], timeout=60)
-                    except Exception:  # noqa: BLE001
-                        pass
-                self.restart_requested = True
+                        proc = self.run(["systemctl", "--user", "restart", unit], timeout=60)
+                        if proc.returncode == 0:
+                            watcher_ok = True
+                        else:
+                            self.log(f"hostops: watcher restart returned {proc.returncode}")
+                    except Exception as exc:  # noqa: BLE001
+                        self.log(f"hostops: watcher restart failed: {exc}")
+                    if watcher_ok:
+                        self.paths.release_pending.unlink(missing_ok=True)
+                    else:
+                        self.restart_requested = True
+                        complete = False
+                elif p_marker:
+                    self.paths.release_pending.unlink(missing_ok=True)
 
         if candidate and SHA_RE.fullmatch(str(candidate)):
             already_recorded = any(
@@ -2993,6 +3011,8 @@ class Executor:
                 if inst:
                     return_published_release(self.paths, inst)
             self._start_owner()
+
+        return complete
 
     def _handle_owner_timeout(self, marker: dict[str, Any], candidate: str) -> None:
         reason = "owner release sha not reported within deadline"

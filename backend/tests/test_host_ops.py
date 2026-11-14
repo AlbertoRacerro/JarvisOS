@@ -5637,6 +5637,216 @@ def test_interrupted_install_links_not_on_candidate_does_not_request_restart(hos
     assert len(watcher_restarts) == 0
 
 
+def test_interrupted_install_second_crash_restarts_watcher_and_removes_marker(host):
+    """(a) second-crash idempotency: links already on previous, marker present with watcher_active true,
+    inflight + done receipt present -> recover() restarts the watcher, then removes marker and inflight; single history entry."""
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+    (paths.published / "current").unlink(missing_ok=True)
+    (paths.published / "current").symlink_to(paths.published / "releases" / prev_sha)
+    h._pin_guard(paths, paths.install / "releases" / prev_sha, prev_sha)
+
+    d_cand = paths.install / "releases" / cand_sha / "scripts"
+    d_cand.mkdir(parents=True)
+    (d_cand / "host_ops.py").write_text("# cand\n")
+    h.publish_release(paths, cand_sha)
+
+    req = h.make_request("release.install", {"sha": cand_sha}, None, "relay-continuity:owner", t0)
+
+    # Pending marker present with watcher_active=True
+    deadline = h.iso(t0 + timedelta(minutes=10))
+    h.write_release_pending(
+        paths,
+        previous_sha=prev_sha,
+        candidate_sha=cand_sha,
+        deadline=deadline,
+        request_id=req["id"],
+        attempts=0,
+        watcher_active=True,
+        owner_active=True,
+        now=t0,
+    )
+
+    # Inflight + done receipt present
+    ifd = ex._state_fd("inflight")
+    try:
+        h.write_at(ifd, f"{req['id']}.json", h.canonical(req))
+    finally:
+        os.close(ifd)
+    ex._finish(req, "failed", {}, "command failed", started=t0)
+    calls.clear()
+
+    # recover() runs
+    ex.recover()
+
+    # restarts the watcher
+    watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
+    assert len(watcher_restarts) >= 1
+
+    # removes marker and inflight
+    assert not paths.release_pending.exists()
+    assert not (paths.state / "inflight" / f"{req['id']}.json").exists()
+
+    # single history entry
+    history = [entry for entry in h.read_release_history(paths) if entry.get("candidate_sha") == cand_sha]
+    assert len(history) == 1
+    assert history[0]["status"] == "refused"
+
+    # links unchanged on previous
+    assert (paths.install / "current").resolve().name == prev_sha
+    assert (paths.published / "current").resolve().name == prev_sha
+
+
+def test_interrupted_install_watcher_restart_fails_retries_on_next_recover(host):
+    """(b) watcher restart fails (fake systemctl returns nonzero for that unit) -> marker kept, inflight kept,
+    restart_requested True; a second recover() with a succeeding systemctl completes: marker and inflight removed, one
+    history entry, one receipt."""
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+    (paths.published / "current").unlink(missing_ok=True)
+    (paths.published / "current").symlink_to(paths.published / "releases" / prev_sha)
+    h._pin_guard(paths, paths.install / "releases" / prev_sha, prev_sha)
+
+    d_cand = paths.install / "releases" / cand_sha / "scripts"
+    d_cand.mkdir(parents=True)
+    (d_cand / "host_ops.py").write_text("# cand\n")
+    h.publish_release(paths, cand_sha)
+
+    req = h.make_request("release.install", {"sha": cand_sha}, None, "relay-continuity:owner", t0)
+
+    deadline = h.iso(t0 + timedelta(minutes=10))
+    h.write_release_pending(
+        paths,
+        previous_sha=prev_sha,
+        candidate_sha=cand_sha,
+        deadline=deadline,
+        request_id=req["id"],
+        attempts=0,
+        watcher_active=True,
+        owner_active=True,
+        now=t0,
+    )
+
+    ifd = ex._state_fd("inflight")
+    try:
+        h.write_at(ifd, f"{req['id']}.json", h.canonical(req))
+    finally:
+        os.close(ifd)
+
+    # Fake systemctl returns nonzero for jarvisos-relay-watch.service
+    orig_run = ex.run
+
+    def failing_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if "restart" in argv and "jarvisos-relay-watch.service" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "Failed to restart unit\n")
+        return orig_run(argv, **kwargs)
+
+    ex.run = failing_run
+    calls.clear()
+
+    # First recover: watcher restart fails
+    ex.recover()
+
+    # marker kept, inflight kept, restart_requested True
+    assert paths.release_pending.exists()
+    assert (paths.state / "inflight" / f"{req['id']}.json").exists()
+    assert ex.restart_requested is True
+
+    # A second recover with succeeding systemctl
+    ex.run = orig_run
+    calls.clear()
+    ex.recover()
+
+    # marker and inflight removed, one history entry, one receipt
+    assert not paths.release_pending.exists()
+    assert not (paths.state / "inflight" / f"{req['id']}.json").exists()
+
+    history = [entry for entry in h.read_release_history(paths) if entry.get("candidate_sha") == cand_sha]
+    assert len(history) == 1
+    assert history[0]["status"] == "refused"
+
+    receipt_files = list(paths.receipts.glob(f"{req['id']}.json"))
+    assert len(receipt_files) == 1
+
+
+def test_interrupted_install_watcher_active_false_no_restart_removes_marker(host):
+    """(c) watcher_active false -> no watcher restart, marker removed."""
+    paths, ex, calls = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    ex.now = lambda: t0
+    cand_sha = "7" * 40
+    prev_sha = "8" * 40
+
+    d_prev = paths.install / "releases" / prev_sha / "scripts"
+    d_prev.mkdir(parents=True)
+    (d_prev / "host_ops.py").write_text("# prev\n")
+    h.publish_release(paths, prev_sha)
+    (paths.install / "current").unlink(missing_ok=True)
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+    (paths.published / "current").unlink(missing_ok=True)
+    (paths.published / "current").symlink_to(paths.published / "releases" / prev_sha)
+    h._pin_guard(paths, paths.install / "releases" / prev_sha, prev_sha)
+
+    d_cand = paths.install / "releases" / cand_sha / "scripts"
+    d_cand.mkdir(parents=True)
+    (d_cand / "host_ops.py").write_text("# cand\n")
+    h.publish_release(paths, cand_sha)
+
+    req = h.make_request("release.install", {"sha": cand_sha}, None, "relay-continuity:owner", t0)
+
+    # watcher_active=False
+    deadline = h.iso(t0 + timedelta(minutes=10))
+    h.write_release_pending(
+        paths,
+        previous_sha=prev_sha,
+        candidate_sha=cand_sha,
+        deadline=deadline,
+        request_id=req["id"],
+        attempts=0,
+        watcher_active=False,
+        owner_active=True,
+        now=t0,
+    )
+
+    ifd = ex._state_fd("inflight")
+    try:
+        h.write_at(ifd, f"{req['id']}.json", h.canonical(req))
+    finally:
+        os.close(ifd)
+
+    calls.clear()
+    ex.recover()
+
+    # no watcher restart
+    watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
+    assert len(watcher_restarts) == 0
+
+    # marker removed, inflight removed
+    assert not paths.release_pending.exists()
+    assert not (paths.state / "inflight" / f"{req['id']}.json").exists()
+
+
 def test_serve_returns_75_when_recover_requests_restart(tmp_path, monkeypatch):
     paths = h.Paths(tmp_path)
     monkeypatch.delenv("JARVIS_SANDBOX", raising=False)
