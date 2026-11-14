@@ -37,7 +37,7 @@ low = docs, tests, copy; medium = feature code covered by tests; high = security
 loss, supervisor/relay/sandbox, irreversible operations), then runs
 
 ```bash
-python3 scripts/worker_routing.py pick --difficulty D --risk R
+python3 scripts/worker_routing.py pick --difficulty D --risk R --kind K
 ```
 
 and delegates to the worker it returns: the cheapest adequate one whose subscription pool has headroom. `no_worker`

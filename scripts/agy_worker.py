@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import secrets
 import shutil
@@ -229,8 +230,9 @@ def read_quota_buckets(agy: str, alias: str, env: dict[str, str], allow_zero: bo
     target = [b for b in buckets(reading) if b.get("id") in wanted]
     for bucket in target:
         fraction = bucket.get("remaining_fraction")
-        if bucket.get("disabled") is True or isinstance(fraction, bool) or not isinstance(fraction, int | float) \
-                or (not allow_zero and fraction <= 0):
+        if (bucket.get("disabled") is True or isinstance(fraction, bool)
+                or not isinstance(fraction, int | float) or not math.isfinite(fraction)
+                or fraction > 1 or fraction < 0 or (not allow_zero and fraction <= 0)):
             raise Refused("quota_exhausted", str(bucket.get("id")))
     if len(target) != len(wanted) or {b.get("id") for b in target} != set(wanted):
         raise Refused("quota_bucket_missing", "missing " + ", ".join(sorted(set(wanted) - {b.get("id") for b in target})))

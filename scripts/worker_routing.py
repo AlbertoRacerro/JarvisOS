@@ -750,8 +750,10 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
                         if bb and ba:
                             fb = bb.get("remaining_fraction")
                             fa = ba.get("remaining_fraction")
-                            if isinstance(fb, (int, float)) and not isinstance(fb, bool) and \
-                                    isinstance(fa, (int, float)) and not isinstance(fa, bool):
+                            if (isinstance(fb, (int, float)) and not isinstance(fb, bool) and math.isfinite(fb)
+                                    and 0.0 <= float(fb) <= 1.0
+                                    and isinstance(fa, (int, float)) and not isinstance(fa, bool) and math.isfinite(fa)
+                                    and 0.0 <= float(fa) <= 1.0):
                                 delta = float(fb) - float(fa)
                                 if delta >= 0.0:
                                     sum_quota += delta
@@ -790,7 +792,7 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
 
     target = resolve_record_path(record_file)
     target.parent.mkdir(parents=True, exist_ok=True)
-    line = (json.dumps(entry, sort_keys=True) + "\n").encode("utf-8")
+    line = (json.dumps(entry, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
     fd = os.open(target, flags, 0o644)
     try:
@@ -947,31 +949,31 @@ def _is_clean_spend(spend: dict[str, Any]) -> bool:
 def _clean_quota_and_tokens(spend: dict[str, Any]) -> tuple[float, int] | None:
     if _is_clean_spend(spend):
         tokens = spend.get("tokens")
-        if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) and int(tokens) > 0:
+        if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) and math.isfinite(tokens) and int(tokens) > 0:
             quota = spend.get("quota", 0.0)
-            if isinstance(quota, (int, float)) and not isinstance(quota, bool) and float(quota) >= 0.0:
+            if isinstance(quota, (int, float)) and not isinstance(quota, bool) and math.isfinite(quota) and float(quota) >= 0.0:
                 return float(quota), int(tokens)
         return None
     quota_runs = spend.get("quota_runs", 0)
     clean_tok = spend.get("clean_tokens")
     if (isinstance(quota_runs, int) and not isinstance(quota_runs, bool) and quota_runs > 0
-            and isinstance(clean_tok, (int, float)) and not isinstance(clean_tok, bool) and int(clean_tok) > 0):
+            and isinstance(clean_tok, (int, float)) and not isinstance(clean_tok, bool) and math.isfinite(clean_tok) and int(clean_tok) > 0):
         quota = spend.get("quota", 0.0)
-        if isinstance(quota, (int, float)) and not isinstance(quota, bool) and float(quota) >= 0.0:
+        if isinstance(quota, (int, float)) and not isinstance(quota, bool) and math.isfinite(quota) and float(quota) >= 0.0:
             return float(quota), int(clean_tok)
     return None
 
 
 def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[dict[str, Any]] | None) -> tuple[float | None, int]:
-    """Median measured quota per accepted task of the requested kind (failure != harness, with spend).
-    Returns (median_cost or None, count of costed records). Measured when count >= 5."""
-    if candidate.kind != "agy" or kind is None or not outcomes:
+    """Median measured quota per accepted task of the requested kind (or across all records when kind is None;
+    failure != harness, with spend). Returns (median_cost or None, count of costed records). Measured when count >= 5."""
+    if candidate.kind != "agy" or not outcomes:
         return None, 0
 
     c_records = [
         r for r in outcomes
         if (r.get("worker") == candidate.key or r.get("model") == candidate.model)
-        and r.get("kind") == kind
+        and (kind is None or r.get("kind") == kind)
         and r.get("failure") != "harness"
         and isinstance(r.get("spend"), dict)
     ]
@@ -996,9 +998,12 @@ def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[d
         if r.get("failure") == "model" or bool(r.get("escalated")):
             costs.append(math.inf)
         elif _is_clean_spend(r["spend"]):
-            costs.append(float(r["spend"].get("quota", 0.0)))
+            quota_val = r["spend"].get("quota", 0.0)
+            if isinstance(quota_val, (int, float)) and not isinstance(quota_val, bool) and math.isfinite(quota_val) and float(quota_val) >= 0.0:
+                costs.append(float(quota_val))
         elif ratio is not None:
-            tokens = int(r["spend"]["tokens"]) if isinstance(r["spend"].get("tokens"), (int, float)) and not isinstance(r["spend"]["tokens"], bool) else 0
+            raw_tok = r["spend"].get("tokens")
+            tokens = int(raw_tok) if isinstance(raw_tok, (int, float)) and not isinstance(raw_tok, bool) and math.isfinite(raw_tok) else 0
             if tokens > 0:
                 costs.append(tokens * ratio)
         else:

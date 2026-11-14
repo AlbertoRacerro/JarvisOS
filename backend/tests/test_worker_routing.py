@@ -973,7 +973,7 @@ def test_measured_ordering_hydrogen_medium_cheaper_than_flash_medium_ranks_first
         for i in range(5)
     ]
 
-    # With 5 records for both: hydrogen-medium is cheaper and measured -> ranked first
+    # With 5 records for both: hydrogen-medium is cheaper and measured -> ranked first (with or without explicit kind)
     ranked, _ = wr.rank(2, pools(), kind="feature", outcomes=records_flash_5 + records_hydrogen_5)
     assert ranked[0]["worker"] == "hydrogen-medium"
     assert ranked[0]["measured_cost"] == pytest.approx(0.015)
@@ -981,6 +981,10 @@ def test_measured_ordering_hydrogen_medium_cheaper_than_flash_medium_ranks_first
     assert ranked[1]["worker"] == "flash-medium"
     assert ranked[1]["measured_cost"] == pytest.approx(0.03)
     assert ranked[1]["record_count"] == 5
+
+    ranked_no_kind, _ = wr.rank(2, pools(), kind=None, outcomes=records_flash_5 + records_hydrogen_5)
+    assert ranked_no_kind[0]["worker"] == "hydrogen-medium"
+    assert ranked_no_kind[1]["worker"] == "flash-medium"
 
     # With 4 records for hydrogen: unmeasured -> today's order (flash-medium first)
     ranked_4, _ = wr.rank(2, pools(), kind="feature", outcomes=records_flash_5 + records_hydrogen_5[:4])
@@ -1327,3 +1331,18 @@ def test_pick_json_with_infinite_measured_cost_is_strict_rfc8259_json(
     parsed = json.loads(out, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f"non-standard constant: {c}")))
     assert parsed["worker"] == "flash-medium"
     assert parsed["measured_cost"] == "inf"
+
+
+def test_record_ignores_non_finite_or_out_of_range_quota_fractions(tmp_path: Path) -> None:
+    dir_bad = tmp_path / "run_bad"
+    dir_bad.mkdir()
+    (dir_bad / "result.json").write_text(
+        '{"usage": {"total_tokens": 500}, "quota": [{"id": "gemini-weekly", "remaining_fraction": 0.8}], '
+        '"quota_after": [{"id": "gemini-weekly", "remaining_fraction": -Infinity}], "overlap": false}\n',
+        encoding="utf-8",
+    )
+    rf = tmp_path / "worker-outcomes.jsonl"
+    entry = wr.record(task="t_bad_q", kind="feature", worker="flash-medium", evidence=[dir_bad], record_file=rf)
+    assert entry["spend"] == {"runs": 1, "tokens": 500, "quota": 0.0, "quota_runs": 0, "overlap_runs": 0}
+    raw_line = rf.read_text(encoding="utf-8").strip()
+    json.loads(raw_line, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f"non-standard constant: {c}")))

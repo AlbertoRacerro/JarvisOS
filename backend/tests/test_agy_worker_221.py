@@ -607,3 +607,22 @@ def test_sequential_subsecond_runs_do_not_report_overlap(env: Env, monkeypatch: 
     _, res2 = worker.execute(args2, sandbox_check=lambda: True)
     assert res1["overlap"] is False
     assert res2["overlap"] is False
+
+
+@pytest.mark.parametrize("bad_fraction", [1.5, -0.1, "Infinity"])
+def test_quota_after_rejects_out_of_range_or_non_finite_fraction(env: Env, bad_fraction: Any) -> None:
+    if bad_fraction == "Infinity":
+        raw_after = '{"command": {"data": {"groups": [{"buckets": [{"id": "gemini-5h", "remaining_fraction": 0.5}, {"id": "gemini-weekly", "remaining_fraction": Infinity}]}]}}}'
+    else:
+        raw_after = json.dumps({"command": {"data": {"groups": [{"buckets": [
+            {"id": "gemini-5h", "remaining_fraction": 0.5},
+            {"id": "gemini-weekly", "remaining_fraction": bad_fraction},
+        ]}]}}})
+    env.set(
+        run_out=json.dumps({"status": "SUCCESS", "response": "done"}),
+        quota_after_out=raw_after,
+    )
+    result = env.run()
+    assert result["status"] == "succeeded"
+    assert result["quota_after"] is None
+    assert "quota_exhausted" in (result.get("quota_after_error") or "")
