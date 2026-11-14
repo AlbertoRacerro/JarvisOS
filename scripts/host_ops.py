@@ -11,8 +11,9 @@ receipt with the published public key; nobody without the host-only private key 
     host_ops.py cancel ID                                               (sandbox or host)
     host_ops.py status                                                   (sandbox or host)
     host_ops.py serve                                                    (host executor; systemd unit)
-    host_ops.py install --sha SHA [--with-watch]                           (host; maintainer/host session only)
+    host_ops.py install --sha SHA [--with-watch] [--self-install]         (host; maintainer/host session only)
     host_ops.py health                                                   (host)
+    host_ops.py preflight                                                (host)
 
 Stdlib only: the installed copy must not import anything from a checkout an agent can write.
 """
@@ -45,7 +46,7 @@ import urllib.request
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -145,8 +146,24 @@ class Paths:
         return self.home / ".local" / "share" / "jarvisos-hostops"
 
     @property
+    def guard(self) -> Path:
+        return self.install / "guard"
+
+    @property
     def state(self) -> Path:
         return self.install / "state"
+
+    @property
+    def release_pending(self) -> Path:
+        return self.state / "release-pending.json"
+
+    @property
+    def release_watcher_restore(self) -> Path:
+        return self.state / "release-watcher-restore.json"
+
+    @property
+    def release_history(self) -> Path:
+        return self.state / "release-history.jsonl"
 
     @property
     def published(self) -> Path:  # read-only inside the sandbox
@@ -155,6 +172,13 @@ class Paths:
     @property
     def allowed_signers(self) -> Path:
         return self.published / "allowed_signers"
+
+    @property
+    def owner_serve_state(self) -> Path:
+        continuity_dir = os.environ.get("RELAY_CONTINUITY_DIR")
+        if continuity_dir:
+            return Path(continuity_dir).expanduser() / "serve" / "state.json"
+        return self.home / "jarvis-control" / "work" / "continuity" / "serve" / "state.json"
 
 
 # ---------------------------------------------------------------------------
@@ -430,14 +454,15 @@ def _args(ctx: Context, allowed: set[str]) -> dict[str, Any]:
     return args
 
 
-def _systemctl(ctx: Context, *argv: str, timeout: float = 60) -> subprocess.CompletedProcess:
-    return ctx.run(["systemctl", "--user", *argv], timeout=timeout)
+def _systemctl(target: Context | Executor, *argv: str, timeout: float = 60) -> subprocess.CompletedProcess:
+    return target.run(["systemctl", "--user", *argv], timeout=timeout)
 
 
-def _unit_state(ctx: Context, unit: str, *, timeout: float = 30) -> dict[str, str]:
+def _unit_state(target: Context | Executor, unit: str, *, timeout: float = 30) -> dict[str, str]:
     props = "ActiveState,SubState,UnitFileState,MainPID,NRestarts,ExecMainStatus,ActiveEnterTimestamp"
-    out = _systemctl(ctx, "show", unit, "-p", props, timeout=timeout).stdout
-    return {k: v for k, _, v in (line.partition("=") for line in str(out).splitlines()) if k}
+    raw = _systemctl(target, "show", unit, "-p", props, timeout=timeout).stdout
+    out = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+    return {k: v for k, _, v in (line.partition("=") for line in out.splitlines()) if k}
 
 
 def _unit_arg(ctx: Context, args: dict[str, Any], allowed: Any) -> str:
@@ -508,6 +533,12 @@ UNIT_TEMPLATES = {
         "[Service]\nWorkingDirectory=%h/src/JarvisOS\n"
         "ExecStart=/usr/bin/python3 -I %h/.local/share/jarvisos-hostops/current/scripts/relay_continuity.py watch --digest-hours 2\n"
         "Restart=on-failure\nRestartPreventExitStatus=2 3\nRestartSec=60\n"
+        "[Install]\nWantedBy=default.target\n"),
+    "jarvisos-mission-owner": (
+        "[Unit]\nDescription=JarvisOS supervised mission owner (spec 201)\n"
+        "[Service]\nWorkingDirectory=%h/src/JarvisOS\n"
+        "ExecStart=%h/.local/bin/jarvis-sandbox python3 %h/.local/share/jarvisos/hostops/current/scripts/relay_continuity.py serve --interval 60\n"
+        "KillMode=process\nRestart=on-failure\nRestartPreventExitStatus=2 3\nRestartSec=120\n"
         "[Install]\nWantedBy=default.target\n"),
 }
 
@@ -1955,13 +1986,736 @@ def executor_version() -> str:
     return here if SHA_RE.fullmatch(here) else "uninstalled"
 
 
+TZ_OFFSETS: dict[str, int] = {
+    "UTC": 0,
+    "GMT": 0,
+    "Z": 0,
+    "CET": 3600,
+    "CEST": 7200,
+    "BST": 3600,
+    "EET": 7200,
+    "EEST": 10800,
+    "WET": 0,
+    "WEST": 3600,
+    "EST": -18000,
+    "EDT": -14400,
+    "CST": -21600,
+    "CDT": -18000,
+    "MST": -25200,
+    "MDT": -21600,
+    "PST": -28800,
+    "PDT": -25200,
+}
+
+
+def parse_systemd_ts(val: str) -> datetime | None:
+    if not isinstance(val, str) or not val.strip():
+        return None
+    val = val.strip()
+    parts = val.split()
+    if len(parts) >= 3 and len(parts[0]) == 3 and parts[0].isalpha():
+        val = " ".join(parts[1:])
+    tokens = val.split()
+    if len(tokens) >= 3:
+        tz_str = tokens[-1]
+        base = " ".join(tokens[:-1])
+        offset = None
+        if tz_str in TZ_OFFSETS:
+            offset = TZ_OFFSETS[tz_str]
+        elif hasattr(time, "tzname"):
+            if tz_str == time.tzname[0]:
+                offset = -time.timezone
+            elif time.daylight and len(time.tzname) > 1 and tz_str == time.tzname[1]:
+                offset = -getattr(time, "altzone", time.timezone)
+        if offset is not None:
+            for date_fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    dt = datetime.strptime(base, date_fmt)
+                    return dt.replace(tzinfo=timezone(timedelta(seconds=offset))).astimezone(UTC)
+                except ValueError:
+                    pass
+    for fmt in ("%Y-%m-%d %H:%M:%S %z", "%Y-%m-%d %H:%M:%S"):
+        try:
+            dt = datetime.strptime(val, fmt)
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
+        except ValueError:
+            pass
+    if val.isdigit():
+        try:
+            return datetime.fromtimestamp(int(val), tz=UTC)
+        except (ValueError, OSError):
+            pass
+    return None
+
+
+def switch_published_release(paths: Paths, sha: str) -> None:
+    pub_release_dir = paths.published / "releases" / sha
+    if not pub_release_dir.is_dir():
+        raise Refused(f"published release directory missing for {sha}")
+    tmp_link = paths.published / f".current.{secrets.token_hex(4)}"
+    try:
+        os.symlink(f"releases/{sha}", tmp_link)
+        os.replace(tmp_link, paths.published / "current")
+    finally:
+        tmp_link.unlink(missing_ok=True)
+
+
+def switch_install_release(paths: Paths, sha: str) -> None:
+    release_dir = paths.install / "releases" / sha
+    if not release_dir.is_dir():
+        raise Refused(f"install release directory missing for {sha}")
+    tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
+    try:
+        os.symlink(release_dir, tmp_link)
+        os.replace(tmp_link, paths.install / "current")
+    finally:
+        tmp_link.unlink(missing_ok=True)
+
+
+def publish_release(paths: Paths, sha: str, *, switch_current: bool = True) -> Path:
+    source_scripts = paths.install / "releases" / sha / "scripts"
+    if not source_scripts.is_dir():
+        raise Refused(f"installed release scripts missing for {sha}")
+    pub_releases = paths.published / "releases"
+    pub_releases.mkdir(parents=True, exist_ok=True)
+    target_release = pub_releases / sha
+
+    if not target_release.exists():
+        with tempfile.TemporaryDirectory(dir=pub_releases, prefix=".publish-") as tmp:
+            stage_dir = Path(tmp) / sha
+            stage_scripts = stage_dir / "scripts"
+            shutil.copytree(source_scripts, stage_scripts, symlinks=True)
+            for root, dirs, files in os.walk(stage_dir):
+                for f in files:
+                    p = Path(root) / f
+                    mode = p.stat().st_mode
+                    p.chmod(0o555 if mode & 0o111 else 0o444)
+                for d in dirs:
+                    (Path(root) / d).chmod(0o755)
+            stage_dir.chmod(0o755)
+            os.rename(stage_dir, target_release)
+
+    if switch_current:
+        switch_published_release(paths, sha)
+    return target_release
+
+
+def return_published_release(paths: Paths, previous_sha: str) -> bool:
+    target_release = paths.published / "releases" / previous_sha
+    if not target_release.is_dir():
+        if (paths.install / "releases" / previous_sha / "scripts").is_dir():
+            try:
+                publish_release(paths, previous_sha, switch_current=True)
+                return True
+            except Exception:  # noqa: BLE001
+                return False
+        return False
+    try:
+        switch_published_release(paths, previous_sha)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def restore_release_links(paths: Paths, previous_sha: str | None) -> None:
+    if previous_sha and (paths.install / "releases" / previous_sha).is_dir():
+        try:
+            switch_install_release(paths, previous_sha)
+        except Exception:  # noqa: BLE001
+            (paths.install / "current").unlink(missing_ok=True)
+    else:
+        (paths.install / "current").unlink(missing_ok=True)
+
+    if previous_sha:
+        ok = return_published_release(paths, previous_sha)
+        if not ok:
+            (paths.published / "current").unlink(missing_ok=True)
+    else:
+        (paths.published / "current").unlink(missing_ok=True)
+
+
+def write_release_pending(
+    paths: Paths,
+    *,
+    previous_sha: str | None,
+    candidate_sha: str,
+    deadline: str,
+    request_id: str | None,
+    attempts: int = 0,
+    watcher_active: bool = False,
+    owner_active: bool = False,
+    now: datetime | None = None,
+    kind: str | None = None,
+) -> dict[str, Any]:
+    ts = now or now_utc()
+    marker = {
+        "previous_sha": previous_sha,
+        "candidate_sha": candidate_sha,
+        "deadline": deadline,
+        "request_id": request_id,
+        "attempts": attempts,
+        "watcher_active": bool(watcher_active),
+        "created_at": iso(ts),
+    }
+    if owner_active:
+        marker["owner_active"] = True
+    if kind is not None:
+        marker["kind"] = kind
+    state_fd = open_dir(paths.state, create=True)
+    try:
+        write_at(state_fd, "release-pending.json", canonical(marker))
+    finally:
+        os.close(state_fd)
+    return marker
+
+
+class MalformedPendingRelease(Exception):
+    """Raised when release-pending.json exists but is corrupt, unreadable or malformed."""
+
+    def __init__(self, message: str, raw_data: bytes | None = None):
+        super().__init__(message)
+        self.raw_data = raw_data
+
+
+def load_release_pending(paths: Paths) -> dict[str, Any] | None:
+    path = paths.release_pending
+    if not path.exists():
+        return None
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise MalformedPendingRelease(f"cannot read pending marker: {exc}") from exc
+    try:
+        marker = json.loads(data)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise MalformedPendingRelease(f"unparseable JSON in pending marker: {exc}", raw_data=data) from exc
+    if not isinstance(marker, dict):
+        raise MalformedPendingRelease(f"pending marker is not a JSON object ({type(marker).__name__})", raw_data=data)
+    candidate = marker.get("candidate_sha")
+    if not candidate or not isinstance(candidate, str) or not SHA_RE.fullmatch(candidate):
+        raise MalformedPendingRelease(f"pending marker missing valid candidate_sha: {candidate!r}", raw_data=data)
+    return marker
+
+
+def _quarantine_pending_marker(paths: Paths) -> Path | None:
+    path = paths.release_pending
+    if not path.exists():
+        return None
+    quarantine_name = f"release-pending.corrupt.{secrets.token_hex(4)}"
+    dest = paths.state / quarantine_name
+    try:
+        path.rename(dest)
+        return dest
+    except OSError:
+        path.unlink(missing_ok=True)
+        return None
+
+
+def notify_return(
+    paths: Paths,
+    candidate_sha: str,
+    reason: str,
+    *,
+    post: Callable[[str, bytes], int] | None = None,
+    kind: str | None = None,
+) -> bool:
+    for h_entry in read_release_history(paths):
+        if h_entry.get("candidate_sha") == candidate_sha and h_entry.get("notified") is True:
+            return False
+    short_sha = candidate_sha[:8] if isinstance(candidate_sha, str) else "unknown"
+    if kind == "return":
+        text = f":warning: *host-ops* returned release {short_sha} failed confirmation: {reason}."
+    else:
+        text = f":warning: *host-ops* release {short_sha} failed: {reason}. Returned to previous release."
+    poster = post or webhook_poster(paths)
+    try:
+        status = poster(text, b"")
+        return 200 <= status < 300
+    except Exception:  # noqa: BLE001 - failure to notify must not block rollback
+        return False
+
+
+def persist_owed_watcher_restore(
+    paths: Paths,
+    unit: str = "jarvisos-relay-watch.service",
+    reason: str = "watcher restart failed",
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    ts = now or now_utc()
+    record = {
+        "unit": unit,
+        "reason": reason,
+        "timestamp": iso(ts),
+    }
+    state_fd = open_dir(paths.state, create=True)
+    try:
+        write_at(state_fd, "release-watcher-restore.json", canonical(record))
+    finally:
+        os.close(state_fd)
+    return record
+
+
+def retry_owed_watcher_restore(
+    paths: Paths,
+    run: Callable[..., subprocess.CompletedProcess] = real_run,
+) -> bool:
+    record_path = paths.release_watcher_restore
+    try:
+        if not record_path.exists():
+            return False
+    except OSError:
+        return False
+    # The unit is fixed: the record only says a restore is owed, it never names what to restart.
+    try:
+        proc = run(["systemctl", "--user", "restart", "jarvisos-relay-watch.service"], timeout=60)
+        if proc.returncode == 0:
+            try:
+                record_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+def return_release(
+    paths: Paths,
+    *,
+    marker: dict[str, Any] | None = None,
+    reason: str = "unhealthy",
+    post: Callable[[str, bytes], int] | None = None,
+    run: Callable[..., subprocess.CompletedProcess] = real_run,
+    now: datetime | None = None,
+    confirm_previous: bool = False,
+) -> bool:
+    current_time = now or now_utc()
+    candidate_sha = marker.get("candidate_sha") if marker else None
+    previous_sha = marker.get("previous_sha") if marker else None
+    is_return_marker = bool(marker and marker.get("kind") == "return")
+
+    # Resolve candidate if not in marker
+    if not candidate_sha:
+        current = paths.install / "current"
+        if current.exists():
+            try:
+                candidate_sha = current.resolve().name
+            except OSError:
+                candidate_sha = None
+
+    # Resolve previous_sha if not in marker (e.g. from guard RELEASE file), but never for a return confirmation
+    if not is_return_marker and not previous_sha and (paths.guard / "RELEASE").is_file():
+        try:
+            pinned = (paths.guard / "RELEASE").read_text(encoding="utf-8").strip()
+            if SHA_RE.fullmatch(pinned) and (paths.install / "releases" / pinned).is_dir():
+                previous_sha = pinned
+        except OSError:
+            pass
+
+    # Move current back to previous release if available (keep current where it is when kind == "return")
+    if not is_return_marker:
+        restore_release_links(paths, previous_sha)
+
+    # Restore watcher if it was active
+    if marker and marker.get("watcher_active"):
+        unit = "jarvisos-relay-watch.service"
+        watcher_ok = False
+        try:
+            proc = run(["systemctl", "--user", "restart", unit], timeout=60)
+            if proc.returncode == 0:
+                watcher_ok = True
+        except Exception:  # noqa: BLE001
+            pass
+        if not watcher_ok:
+            persist_owed_watcher_restore(paths, unit, reason, now=current_time)
+        else:
+            try:
+                paths.release_watcher_restore.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    # Start owner on previous release if it was active
+    if marker and marker.get("owner_active"):
+        owner_unit = "jarvisos-mission-owner.service"
+        try:
+            run(["systemctl", "--user", "start", owner_unit], timeout=60)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    # Notification
+    notified = False
+    if candidate_sha and not (marker and marker.get("notified") is True):
+        notified = notify_return(paths, candidate_sha, reason, post=post,
+                                 kind=marker.get("kind") if marker else None)
+    elif marker and marker.get("notified") is True:
+        notified = True
+
+    # Append refusal or return_unconfirmed to history
+    entry = dict(marker) if marker else {}
+    status = "return_unconfirmed" if is_return_marker else "refused"
+    entry.update({
+        "candidate_sha": candidate_sha,
+        "previous_sha": previous_sha,
+        "status": status,
+        "reason": reason,
+        "returned_at": iso(current_time),
+        "notified": notified,
+    })
+    state_fd = open_dir(paths.state, create=True)
+    try:
+        with open(paths.release_history, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        os.close(state_fd)
+    sync_published_release_history(paths)
+
+    # Clean up or quarantine pending marker
+    if marker is None and paths.release_pending.exists():
+        _quarantine_pending_marker(paths)
+    else:
+        paths.release_pending.unlink(missing_ok=True)
+
+    # Optionally set up confirmation for previous release (never when returning a return or missing previous release)
+    if not is_return_marker and confirm_previous and previous_sha and (paths.install / "releases" / previous_sha).is_dir():
+        deadline = iso(current_time + timedelta(minutes=10))
+        write_release_pending(paths, previous_sha=None, candidate_sha=previous_sha,
+                              deadline=deadline, request_id=None,
+                              attempts=0, watcher_active=bool(marker and marker.get("watcher_active")),
+                              now=current_time, kind="return")
+
+    return True
+
+
+def _guard_impl(
+    paths: Paths,
+    *,
+    force_return: bool = False,
+    reason: str | None = None,
+    post: Callable[[str, bytes], int] | None = None,
+    run: Callable[..., subprocess.CompletedProcess] = real_run,
+    now: datetime | None = None,
+) -> int:
+    current_time = now or now_utc()
+    try:
+        retry_owed_watcher_restore(paths, run=run)
+    except Exception:  # noqa: BLE001
+        pass
+    if force_return:
+        if not paths.release_pending.exists():
+            print("refusal: no release is pending", file=sys.stderr)
+            return 2
+        try:
+            marker = load_release_pending(paths)
+        except MalformedPendingRelease as exc:
+            return_release(paths, reason=f"corrupt pending marker: {exc}", post=post, run=run, now=current_time)
+            return 0
+        return_release(
+            paths,
+            marker=marker,
+            reason=reason or "manual return",
+            post=post,
+            run=run,
+            now=current_time,
+            confirm_previous=bool(marker and marker.get("previous_sha") and marker.get("kind") != "return"),
+        )
+        return 0
+
+    if not paths.release_pending.exists():
+        return 0
+
+    try:
+        marker = load_release_pending(paths)
+    except MalformedPendingRelease as exc:
+        return_release(paths, reason=f"corrupt pending marker: {exc}", post=post, run=run, now=current_time)
+        return 0
+
+    if marker is None:
+        return 0
+
+    # If candidate recorded failure, perform return_release now
+    if unhealthy_reason := marker.get("unhealthy_reason"):
+        return_release(
+            paths,
+            marker=marker,
+            reason=str(unhealthy_reason),
+            post=post,
+            run=run,
+            now=current_time,
+            confirm_previous=bool(marker.get("previous_sha") and marker.get("kind") != "return"),
+        )
+        return 0
+
+    # Increment attempts
+    attempts = int(marker.get("attempts", 0)) + 1
+    marker["attempts"] = attempts
+    state_fd = open_dir(paths.state, create=True)
+    try:
+        write_at(state_fd, "release-pending.json", canonical(marker))
+    finally:
+        os.close(state_fd)
+
+    # Start count check
+    if attempts > 3:
+        return_release(
+            paths,
+            marker=marker,
+            reason=f"start count exceeded ({attempts})",
+            post=post,
+            run=run,
+            now=current_time,
+            confirm_previous=bool(marker.get("previous_sha") and marker.get("kind") != "return"),
+        )
+        return 0
+
+    # Deadline check
+    deadline_str = marker.get("deadline")
+    if deadline_str:
+        deadline_dt = parse_ts(deadline_str)
+        if deadline_dt and current_time > deadline_dt:
+            return_release(
+                paths,
+                marker=marker,
+                reason="deadline expired",
+                post=post,
+                run=run,
+                now=current_time,
+                confirm_previous=bool(marker.get("previous_sha") and marker.get("kind") != "return"),
+            )
+            return 0
+
+    return 0
+
+
+def guard(
+    paths: Paths,
+    *,
+    force_return: bool = False,
+    reason: str | None = None,
+    post: Callable[[str, bytes], int] | None = None,
+    run: Callable[..., subprocess.CompletedProcess] = real_run,
+    now: datetime | None = None,
+) -> int:
+    try:
+        return _guard_impl(paths, force_return=force_return, reason=reason, post=post, run=run, now=now)
+    except Exception as exc:  # noqa: BLE001 - guard must never fail unit start
+        print(f"hostops: guard error {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return 0
+
+
+def _pin_guard(paths: Paths, source_dir: Path, source_sha: str) -> None:
+    guard_dir = paths.guard
+    paths.install.mkdir(parents=True, exist_ok=True)
+    tmp_guard = paths.install / f".guard-{secrets.token_hex(4)}"
+    old_aside = paths.install / f".guard-old-{secrets.token_hex(4)}"
+    shutil.copytree(source_dir, tmp_guard, symlinks=False)
+    (tmp_guard / "RELEASE").write_text(f"{source_sha}\n", encoding="utf-8")
+    has_old = False
+    if guard_dir.exists() or guard_dir.is_symlink():
+        os.rename(guard_dir, old_aside)
+        has_old = True
+    try:
+        os.rename(tmp_guard, guard_dir)
+    except BaseException:
+        if has_old and not (guard_dir.exists() or guard_dir.is_symlink()):
+            try:
+                os.rename(old_aside, guard_dir)
+            except OSError:
+                # A partial copy could pass for a real guard and let the cleanup below delete the only good one;
+                # a symlink either exists whole or not at all, and keeps the old copy in place.
+                try:
+                    guard_dir.symlink_to(old_aside)
+                except OSError:
+                    pass
+        raise
+    finally:
+        if tmp_guard.exists() or tmp_guard.is_symlink():
+            if tmp_guard.is_dir() and not tmp_guard.is_symlink():
+                shutil.rmtree(tmp_guard, ignore_errors=True)
+            else:
+                tmp_guard.unlink(missing_ok=True)
+        # Only clean up old_aside if guard_dir is safely in place as a real directory
+        if (
+            has_old
+            and (guard_dir.exists() and not guard_dir.is_symlink())
+            and (old_aside.exists() or old_aside.is_symlink())
+        ):
+            if old_aside.is_dir() and not old_aside.is_symlink():
+                shutil.rmtree(old_aside, ignore_errors=True)
+            else:
+                old_aside.unlink(missing_ok=True)
+
+
+def sync_published_release_history(paths: Paths) -> None:
+    try:
+        if paths.release_history.exists():
+            paths.published.mkdir(parents=True, exist_ok=True)
+            tmp = paths.published / f".release-history.{secrets.token_hex(4)}"
+            tmp.write_bytes(paths.release_history.read_bytes())
+            os.replace(tmp, paths.published / "release-history.jsonl")
+    except OSError:
+        pass
+
+
+def read_release_history(paths: Paths) -> list[dict[str, Any]]:
+    for candidate_file in (paths.release_history, paths.published / "release-history.jsonl"):
+        try:
+            lines = candidate_file.read_text(encoding="utf-8").splitlines()
+            break
+        except OSError:
+            continue
+    else:
+        return []
+    out = []
+    for line in lines:
+        try:
+            parsed = json.loads(line)
+            if isinstance(parsed, dict):
+                out.append(parsed)
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def _collect_symlink_targets(paths: Paths) -> set[Path]:
+    targets: set[Path] = set()
+    bases = (
+        paths.install,
+        paths.published,
+        paths.install / "releases",
+        paths.published / "releases",
+    )
+    for base in bases:
+        if not base.is_dir():
+            continue
+        try:
+            for item in base.iterdir():
+                if item.is_symlink():
+                    try:
+                        targets.add(item.resolve())
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return targets
+
+
+def prune_releases(paths: Paths, *, now: datetime | None = None) -> list[dict[str, Any]]:
+    """Prune releases/ in install and published dirs to current, previous, and guard source releases.
+
+    Never fewer, never while a marker is pending, never the target of any symlink.
+    Each pruned directory gets a line in release-history.jsonl.
+    """
+    if paths.release_pending.exists():
+        return []
+
+    keep_shas: set[str] = set()
+
+    for link in (paths.install / "current", paths.published / "current"):
+        if link.is_symlink() or link.exists():
+            try:
+                name = link.resolve().name
+                if SHA_RE.fullmatch(name):
+                    keep_shas.add(name)
+            except OSError:
+                pass
+
+    guard_release = paths.guard / "RELEASE"
+    if guard_release.is_file():
+        try:
+            g_sha = guard_release.read_text(encoding="utf-8").strip()
+            if SHA_RE.fullmatch(g_sha):
+                keep_shas.add(g_sha)
+        except OSError:
+            pass
+
+    history = read_release_history(paths)
+    confirmed = [h for h in history if h.get("status") == "confirmed"]
+    if confirmed:
+        latest = confirmed[-1]
+        c_sha = latest.get("candidate_sha")
+        if c_sha and SHA_RE.fullmatch(str(c_sha)):
+            keep_shas.add(str(c_sha))
+        p_sha = latest.get("previous_sha")
+        if p_sha and SHA_RE.fullmatch(str(p_sha)):
+            keep_shas.add(str(p_sha))
+        if len(confirmed) >= 2:
+            prev_cand = confirmed[-2].get("candidate_sha")
+            if prev_cand and SHA_RE.fullmatch(str(prev_cand)):
+                keep_shas.add(str(prev_cand))
+
+    symlink_targets = _collect_symlink_targets(paths)
+    pruned: list[dict[str, Any]] = []
+    t_now = now or now_utc()
+
+    for base, kind in ((paths.install / "releases", "install"), (paths.published / "releases", "published")):
+        if not base.is_dir():
+            continue
+        try:
+            entries = sorted(base.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.is_dir() or entry.is_symlink():
+                continue
+            sha = entry.name
+            if not SHA_RE.fullmatch(sha):
+                continue
+            if sha in keep_shas:
+                continue
+            try:
+                if entry.resolve() in symlink_targets:
+                    continue
+            except OSError:
+                continue
+            try:
+                shutil.rmtree(entry)
+            except OSError:
+                continue
+
+            line = {
+                "candidate_sha": sha,
+                "dir": kind,
+                "path": str(entry),
+                "pruned_at": iso(t_now),
+                "sha": sha,
+                "status": "pruned",
+            }
+            pruned.append(line)
+            state_fd = open_dir(paths.state, create=True)
+            try:
+                with open(paths.release_history, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(line, sort_keys=True) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            finally:
+                os.close(state_fd)
+
+    if pruned:
+        sync_published_release_history(paths)
+
+    return pruned
+
+
 class Executor:
     def __init__(self, paths: Paths, *, run: Callable[..., subprocess.CompletedProcess] = real_run,
                  post: Callable[[str, bytes], int] | None = None, now: Callable[[], datetime] = now_utc,
-                 log: Callable[[str], None] = lambda m: print(m, file=sys.stderr, flush=True)):
+                 log: Callable[[str], None] = lambda m: print(m, file=sys.stderr, flush=True),
+                 version: str | None = None):
         self.paths, self.run, self.now, self.log = paths, run, now, log
         self.post = post or webhook_poster(paths)
         self.restart_requested = False
+        self._version = version
+        self._watcher_seen_at: datetime | None = None
+        self._watcher_initial_restarts: int | None = None
+
+    @property
+    def version(self) -> str:
+        return self._version or executor_version()
 
     # Host-only durable state: one file per handled request id (replay protection and idempotency), an in-flight
     # marker (recovery) and a journal (rate limits, audit).
@@ -1988,10 +2742,13 @@ class Executor:
 
     def recover(self) -> None:
         """A request in flight when the executor died gets an `interrupted` receipt; it is never re-executed."""
+        if retry_owed_watcher_restore(self.paths, self.run):
+            self.restart_requested = True
         fd = self._state_fd("inflight")
         try:
             names = [n for n in os.listdir(fd) if REQUEST_NAME_RE.fullmatch(n)]
             for name in names:
+                complete = True
                 try:
                     request = json.loads(read_regular(fd, name, MAX_REQUEST_BYTES))
                 except (OSError, ValueError):
@@ -1999,20 +2756,40 @@ class Executor:
                 done_fd = self._state_fd("done")
                 try:
                     if exists_at(done_fd, name[:-5]):
-                        self._republish(done_fd, name[:-5])
+                        data = self._republish(done_fd, name[:-5])
+                        receipt: dict[str, Any] = {}
+                        try:
+                            receipt = json.loads(data)
+                        except (OSError, ValueError):
+                            pass
+                        op = receipt.get("op") or (request.get("op") if isinstance(request, dict) else None)
+                        outcome = receipt.get("outcome") if isinstance(receipt, dict) else None
+                        error = receipt.get("error") if isinstance(receipt, dict) else None
+                        if op == "release.install" and outcome != "ok":
+                            if isinstance(request, dict):
+                                if not (request.get("args") or {}).get("sha") and receipt.get("sha"):
+                                    request.setdefault("args", {})["sha"] = receipt["sha"]
+                                if not request.get("requester") and receipt.get("requester"):
+                                    request["requester"] = receipt["requester"]
+                            complete = self._recover_unsuccessful_install(request, outcome or "failed", error)
                     else:
                         self._finish(request, "interrupted", {}, "the executor stopped while this request was running",
                                      started=None)
+                        if isinstance(request, dict) and request.get("op") == "release.install":
+                            complete = self._recover_unsuccessful_install(
+                                request, "interrupted", "the executor stopped while this request was running"
+                            )
                 finally:
                     os.close(done_fd)
-                unlink_at(fd, name)
+                if complete:
+                    unlink_at(fd, name)
         finally:
             os.close(fd)
 
     def heartbeat(self, policy_sha: str | None, problem: str | None) -> None:
         fd = open_dir(self.paths.spool, create=True)
         try:
-            write_at(fd, "heartbeat.json", canonical({"at": iso(self.now()), "version": executor_version(),
+            write_at(fd, "heartbeat.json", canonical({"at": iso(self.now()), "version": self.version,
                                                        "policy_sha256": policy_sha, "problem": problem,
                                                        "operations": sorted(OPERATIONS)}))
         finally:
@@ -2028,6 +2805,13 @@ class Executor:
         if not self.paths.key.is_file():
             problem = "signing key missing"
         self.heartbeat(policy_sha, problem)
+        if problem is not None and self.paths.release_pending.exists():
+            try:
+                marker = load_release_pending(self.paths)
+            except MalformedPendingRelease as exc:
+                marker = None
+                self.log(f"hostops: corrupt pending release state: {exc}")
+            self._record_unhealthy(marker, reason=f"unhealthy heartbeat: {problem}")
         if problem == "signing key missing":
             return 0
         rfd = open_dir(self.paths.requests, create=True)
@@ -2052,6 +2836,8 @@ class Executor:
                     break
         finally:
             os.close(rfd)
+        if problem is None and not self.restart_requested:
+            self.maybe_confirm_release()
         return handled
 
     def _handle(self, rfd: int, request_id: str, name: str, policy: dict[str, Any], policy_sha: str | None) -> None:
@@ -2083,11 +2869,15 @@ class Executor:
                         "args": {}, "sha": None, "requested_at": None}
                 self._finish(stub, "refused", {}, problem or "id does not match the file name", started=now,
                              policy_sha=policy_sha, request_raw=raw)
+                if isinstance(request, dict) and request.get("op") == "release.install":
+                    self._recover_unsuccessful_install(request, "refused", problem or "id does not match the file name")
                 return
             if exists_at(rfd, cancel):
                 unlink_at(rfd, cancel)
                 self._finish(request, "cancelled", {}, "cancelled before it started", started=now,
                              policy_sha=policy_sha, request_raw=raw)
+                if isinstance(request, dict) and request.get("op") == "release.install":
+                    self._recover_unsuccessful_install(request, "cancelled", "cancelled before it started")
                 return
             ifd = self._state_fd("inflight")
             try:
@@ -2112,6 +2902,8 @@ class Executor:
                 outcome, error = "failed", f"executor error {type(exc).__name__}"
             unlink_at(rfd, cancel)
             self._finish(request, outcome, detail, error, started=now, policy_sha=policy_sha, request_raw=raw)
+            if request.get("op") == "release.install" and outcome != "ok":
+                self._recover_unsuccessful_install(request, outcome, error, ctx=ctx)
             self.restart_requested = ctx.restart_required
             ifd = self._state_fd("inflight")
             try:
@@ -2129,7 +2921,7 @@ class Executor:
                    "request_sha256": hashlib.sha256(request_raw).hexdigest() if request_raw else None,
                    "started_at": iso(started) if started else None, "finished_at": iso(self.now()),
                    "outcome": outcome, "error": error, "detail": detail,
-                   "executor": {"version": executor_version(), "host": socket.gethostname(),
+                   "executor": {"version": self.version, "host": socket.gethostname(),
                                 "policy_sha256": policy_sha}}
         data = canonical(receipt)
         signature = sign(self.paths.key, data)
@@ -2143,6 +2935,162 @@ class Executor:
                               "finished_at": receipt["finished_at"], "sha": request.get("sha")})
         self.log(f"hostops: {request['id'][:8]} {request.get('op')} {outcome}" + (f" ({error})" if error else ""))
 
+    def _start_owner(self) -> bool:
+        unit = "jarvisos-mission-owner.service"
+        try:
+            proc = self.run(["systemctl", "--user", "start", unit], timeout=60)
+            if proc.returncode != 0:
+                self.log(f"hostops: owner start returned {proc.returncode}")
+                return False
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"hostops: owner start failed: {exc}")
+            return False
+
+    def _recover_unsuccessful_install(
+        self,
+        request: dict[str, Any],
+        outcome: str,
+        error: str | None,
+        *,
+        ctx: Context | None = None,
+    ) -> bool:
+        candidate = (request.get("args") or {}).get("sha") or request.get("sha")
+        pub_curr = self.paths.published / "current"
+        if pub_curr.is_symlink() or pub_curr.exists():
+            try:
+                if pub_curr.resolve().name == candidate:
+                    prev = None
+                    if (self.paths.guard / "RELEASE").is_file():
+                        try:
+                            g_sha = (self.paths.guard / "RELEASE").read_text(encoding="utf-8").strip()
+                            if SHA_RE.fullmatch(g_sha) and g_sha != candidate:
+                                prev = g_sha
+                        except OSError:
+                            pass
+                    if prev:
+                        return_published_release(self.paths, prev)
+                    else:
+                        pub_curr.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        p_marker: dict[str, Any] | None = None
+        restart_req = ctx.restart_required if ctx is not None else False
+        complete = True
+        if not restart_req:
+            moved_install_back = False
+            inst_curr = self.paths.install / "current"
+            if inst_curr.is_symlink() or inst_curr.exists():
+                try:
+                    if inst_curr.resolve().name == candidate:
+                        prev = None
+                        if (self.paths.guard / "RELEASE").is_file():
+                            try:
+                                g_sha = (self.paths.guard / "RELEASE").read_text(encoding="utf-8").strip()
+                                if SHA_RE.fullmatch(g_sha) and g_sha != candidate:
+                                    prev = g_sha
+                            except OSError:
+                                pass
+                        restore_release_links(self.paths, prev)
+                        moved_install_back = True
+                except OSError:
+                    pass
+            if ctx is None and moved_install_back:
+                self.restart_requested = True
+
+            if self.paths.release_pending.exists():
+                try:
+                    p_marker = load_release_pending(self.paths)
+                    if not (p_marker and p_marker.get("candidate_sha") == candidate):
+                        p_marker = None
+                except MalformedPendingRelease:
+                    _quarantine_pending_marker(self.paths)
+                    p_marker = None
+
+            if ctx is not None:
+                if p_marker:
+                    self.paths.release_pending.unlink(missing_ok=True)
+            else:
+                if p_marker and p_marker.get("watcher_active"):
+                    unit = "jarvisos-relay-watch.service"
+                    watcher_ok = False
+                    try:
+                        proc = self.run(["systemctl", "--user", "restart", unit], timeout=60)
+                        if proc.returncode == 0:
+                            watcher_ok = True
+                        else:
+                            self.log(f"hostops: watcher restart returned {proc.returncode}")
+                    except Exception as exc:  # noqa: BLE001
+                        self.log(f"hostops: watcher restart failed: {exc}")
+                    if watcher_ok:
+                        self.paths.release_pending.unlink(missing_ok=True)
+                    else:
+                        self.restart_requested = True
+                        complete = False
+                elif p_marker:
+                    self.paths.release_pending.unlink(missing_ok=True)
+
+        if candidate and SHA_RE.fullmatch(str(candidate)):
+            already_recorded = any(
+                h.get("candidate_sha") == candidate and h.get("status") in ("refused", "returned")
+                for h in read_release_history(self.paths)
+            )
+            if not already_recorded:
+                entry = {
+                    "candidate_sha": candidate,
+                    "status": "refused",
+                    "reason": error or outcome,
+                    "returned_at": iso(self.now()),
+                    "notified": False,
+                }
+                state_fd = open_dir(self.paths.state, create=True)
+                try:
+                    with open(self.paths.release_history, "a", encoding="utf-8") as handle:
+                        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                finally:
+                    os.close(state_fd)
+                sync_published_release_history(self.paths)
+
+        if (
+            request.get("requester") == "relay-continuity:owner"
+            or (request.get("args") or {}).get("owner_active") is True
+            or (p_marker and p_marker.get("owner_active") is True)
+        ):
+            if not (self.paths.published / "current").exists():
+                inst = None
+                if (self.paths.install / "current").exists():
+                    try:
+                        inst = (self.paths.install / "current").resolve().name
+                    except OSError:
+                        pass
+                if not inst and (self.paths.guard / "RELEASE").is_file():
+                    try:
+                        g_sha = (self.paths.guard / "RELEASE").read_text(encoding="utf-8").strip()
+                        if SHA_RE.fullmatch(g_sha):
+                            inst = g_sha
+                    except OSError:
+                        pass
+                if inst:
+                    return_published_release(self.paths, inst)
+            self._start_owner()
+
+        return complete
+
+    def _handle_owner_timeout(self, marker: dict[str, Any], candidate: str) -> None:
+        reason = "owner release sha not reported within deadline"
+        if not marker.get("previous_sha") and (self.paths.guard / "RELEASE").is_file():
+            try:
+                g_sha = (self.paths.guard / "RELEASE").read_text(encoding="utf-8").strip()
+                if SHA_RE.fullmatch(g_sha) and g_sha != candidate:
+                    marker["previous_sha"] = g_sha
+            except OSError:
+                pass
+        self._record_unhealthy(marker, reason=reason)
+        self.log(f"hostops: candidate {candidate} owner release sha not reported within deadline")
+
     def _publish(self, request_id: str, data: bytes, signature: bytes) -> None:
         fd = open_dir(self.paths.receipts, create=True)
         try:
@@ -2151,10 +3099,219 @@ class Executor:
         finally:
             os.close(fd)
 
-    def _republish(self, done_fd: int, request_id: str) -> None:
+    def _republish(self, done_fd: int, request_id: str) -> bytes:
         stored = read_regular(done_fd, request_id, 2 << 20)
         data, _, signature = stored.partition(b"\x00")
         self._publish(request_id, data, signature)
+        return data
+
+    def _record_unhealthy(self, marker: dict[str, Any] | None, reason: str) -> None:
+        self.restart_requested = True
+        if marker is not None:
+            marker["unhealthy_reason"] = reason
+            marker["unhealthy_at"] = iso(self.now())
+            state_fd = open_dir(self.paths.state, create=True)
+            try:
+                write_at(state_fd, "release-pending.json", canonical(marker))
+            finally:
+                os.close(state_fd)
+
+    def maybe_confirm_release(self) -> bool:
+        try:
+            marker = load_release_pending(self.paths)
+        except MalformedPendingRelease as exc:
+            self.log(f"hostops: corrupt pending release state: {exc}")
+            self._record_unhealthy(None, reason=f"corrupt pending marker: {exc}")
+            return False
+        if marker is None:
+            return False
+        candidate = marker.get("candidate_sha")
+        if not candidate or not SHA_RE.fullmatch(str(candidate)):
+            self._record_unhealthy(marker, reason="invalid candidate sha in pending marker")
+            return False
+        if self.version != candidate:
+            self.log(f"hostops: executor version {self.version} != candidate {candidate}")
+            self._record_unhealthy(marker, reason=f"version mismatch ({self.version} != {candidate})")
+            return False
+
+        # Crash recovery window: check if already confirmed in release_history
+        for h_entry in read_release_history(self.paths):
+            if (h_entry.get("status") == "confirmed"
+                    and h_entry.get("candidate_sha") == candidate
+                    and h_entry.get("created_at") == marker.get("created_at")):
+                state_fd = open_dir(self.paths.state, create=True)
+                try:
+                    unlink_at(state_fd, "release-pending.json")
+                finally:
+                    os.close(state_fd)
+                prune_releases(self.paths, now=self.now())
+                return True
+
+        if not marker.get("owner_active"):
+            deadline_str = marker.get("deadline")
+            if deadline_str:
+                deadline_dt = parse_ts(deadline_str)
+                if deadline_dt and self.now() > deadline_dt:
+                    self.log(f"hostops: candidate {candidate} confirmation deadline expired")
+                    self._record_unhealthy(marker, reason="deadline expired")
+                    return False
+
+        try:
+            load_policy(self.paths)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.log(f"hostops: policy unusable during confirmation: {exc}")
+            self._record_unhealthy(marker, reason=f"policy unusable: {exc}")
+            return False
+
+        beat = _heartbeat(self.paths)
+        if not beat or beat.get("problem") is not None:
+            prob = (beat or {}).get("problem") or "heartbeat missing"
+            self.log(f"hostops: candidate {candidate} heartbeat unhealthy: {prob}")
+            self._record_unhealthy(marker, reason=f"unhealthy heartbeat: {prob}")
+            return False
+        if beat.get("version") != candidate:
+            self.log(f"hostops: heartbeat version {beat.get('version')} != candidate {candidate}")
+            self._record_unhealthy(marker, reason=f"heartbeat version mismatch ({beat.get('version')} != {candidate})")
+            return False
+        beat_at = parse_ts(beat.get("at"))
+        if not beat_at or abs((self.now() - beat_at).total_seconds()) > 120:
+            self.log(f"hostops: candidate {candidate} heartbeat stale")
+            self._record_unhealthy(marker, reason="heartbeat stale")
+            return False
+
+        if marker.get("watcher_active"):
+            unit = "jarvisos-relay-watch.service"
+            state = _unit_state(self, unit)
+            active_state = state.get("ActiveState")
+            if active_state in ("failed", "dead"):
+                self.log(f"hostops: candidate {candidate} watcher service failed ({active_state})")
+                self._record_unhealthy(marker, reason=f"watcher service failed ({active_state})")
+                return False
+            if active_state != "active":
+                self._watcher_seen_at = None
+                if "watcher_seen_at" in marker:
+                    marker.pop("watcher_seen_at", None)
+                    state_fd = open_dir(self.paths.state, create=True)
+                    try:
+                        write_at(state_fd, "release-pending.json", canonical(marker))
+                    finally:
+                        os.close(state_fd)
+                return False
+
+            raw_restarts = state.get("NRestarts", "0")
+            current_restarts = int(raw_restarts) if raw_restarts.isdecimal() else 0
+            if self._watcher_initial_restarts is None:
+                if (saved_restarts := marker.get("watcher_initial_restarts")) is not None:
+                    self._watcher_initial_restarts = int(saved_restarts)
+                else:
+                    self._watcher_initial_restarts = current_restarts
+                    marker["watcher_initial_restarts"] = current_restarts
+                    state_fd = open_dir(self.paths.state, create=True)
+                    try:
+                        write_at(state_fd, "release-pending.json", canonical(marker))
+                    finally:
+                        os.close(state_fd)
+
+            if current_restarts > self._watcher_initial_restarts:
+                self._watcher_initial_restarts = current_restarts
+                marker["watcher_initial_restarts"] = current_restarts
+                self._watcher_seen_at = self.now()
+                marker["watcher_seen_at"] = iso(self.now())
+                state_fd = open_dir(self.paths.state, create=True)
+                try:
+                    write_at(state_fd, "release-pending.json", canonical(marker))
+                finally:
+                    os.close(state_fd)
+                return False
+
+            enter_ts = parse_systemd_ts(state.get("ActiveEnterTimestamp", ""))
+            marker_created = parse_ts(marker.get("created_at"))
+
+            if self._watcher_seen_at is None:
+                if saved_seen := parse_ts(marker.get("watcher_seen_at")):
+                    self._watcher_seen_at = saved_seen
+                elif (enter_ts is not None and marker_created is not None
+                      and enter_ts >= marker_created - timedelta(seconds=5)
+                      and enter_ts <= self.now()):
+                    self._watcher_seen_at = enter_ts
+                    marker["watcher_seen_at"] = iso(enter_ts)
+                    state_fd = open_dir(self.paths.state, create=True)
+                    try:
+                        write_at(state_fd, "release-pending.json", canonical(marker))
+                    finally:
+                        os.close(state_fd)
+                else:
+                    self._watcher_seen_at = self.now()
+                    marker["watcher_seen_at"] = iso(self.now())
+                    state_fd = open_dir(self.paths.state, create=True)
+                    try:
+                        write_at(state_fd, "release-pending.json", canonical(marker))
+                    finally:
+                        os.close(state_fd)
+                    return False
+
+            if (self.now() - self._watcher_seen_at).total_seconds() < 60:
+                return False
+            if enter_ts is not None and (self.now() - enter_ts).total_seconds() < 60:
+                return False
+
+        if marker.get("owner_active"):
+            if not marker.get("owner_started"):
+                t_before = self.now()
+                if not self._start_owner():
+                    self.log(f"hostops: candidate {candidate} owner start failed")
+                    deadline_str = marker.get("deadline")
+                    deadline_dt = parse_ts(deadline_str) if deadline_str else None
+                    if deadline_dt and self.now() > deadline_dt:
+                        self._handle_owner_timeout(marker, candidate)
+                    return False
+                marker["owner_started"] = True
+                marker["owner_started_at"] = iso(t_before)
+                state_fd = open_dir(self.paths.state, create=True)
+                try:
+                    write_at(state_fd, "release-pending.json", canonical(marker))
+                finally:
+                    os.close(state_fd)
+
+            owner_reported = False
+            state_path = self.paths.owner_serve_state
+            if state_path.is_file():
+                try:
+                    s_data = json.loads(state_path.read_text(encoding="utf-8"))
+                    if isinstance(s_data, dict) and s_data.get("release_sha") == candidate:
+                        started_at = parse_ts(marker.get("owner_started_at"))
+                        updated_at = parse_ts(s_data.get("release_updated_at"))
+                        if started_at is not None and updated_at is not None and updated_at >= started_at:
+                            owner_reported = True
+                except (OSError, json.JSONDecodeError):
+                    pass
+
+            if not owner_reported:
+                deadline_str = marker.get("deadline")
+                deadline_dt = parse_ts(deadline_str) if deadline_str else None
+                if deadline_dt and self.now() > deadline_dt:
+                    self._handle_owner_timeout(marker, candidate)
+                    return False
+                return False
+
+            marker["owner_reported_at"] = iso(self.now())
+
+        entry = dict(marker)
+        entry["status"] = "confirmed"
+        entry["confirmed_at"] = iso(self.now())
+        state_fd = open_dir(self.paths.state, create=True)
+        try:
+            with open(self.paths.release_history, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            unlink_at(state_fd, "release-pending.json")
+        finally:
+            os.close(state_fd)
+        sync_published_release_history(self.paths)
+        self.log(f"hostops: release {candidate} confirmed")
+        prune_releases(self.paths, now=self.now())
+        return True
 
 
 def serve(paths: Paths, interval: float) -> int:
@@ -2178,7 +3335,11 @@ def serve(paths: Paths, interval: float) -> int:
     signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
     executor = Executor(paths)
     executor.recover()
-    executor.log(f"hostops: executor {executor_version()} serving")
+    if executor.restart_requested:
+        os.close(lock_fd)
+        return 75
+    version_str = getattr(executor, "version", None) or executor_version()
+    executor.log(f"hostops: executor {version_str} serving")
     while not stop["flag"]:
         try:
             executor.step()
@@ -2208,7 +3369,7 @@ DEFAULT_POLICY: dict[str, Any] = {
                                      "jarvisos-hostops.service", "agent-relay.service"]},
         "service.control": {"units": ["jarvisos-relay-watch.service", "jarvisos-mission-owner.service"],
                             "actions": OWNER_ACTIONS},
-        "service.install": {"templates": ["jarvisos-relay-watch"]},
+        "service.install": {"templates": ["jarvisos-relay-watch", "jarvisos-mission-owner"]},
         "wsl.probe": {},
         "wsl.handoff": {"dir": "/mnt/c/Users/user/JarvisOS-print", "open": True, "max_bytes": 200 << 20,
                         "extensions": [".3mf", ".stl", ".step", ".glb", ".png", ".pdf"]},
@@ -2224,6 +3385,7 @@ DEFAULT_POLICY: dict[str, Any] = {
 SERVICE_UNIT = (
     "[Unit]\nDescription=JarvisOS host operations executor (spec 207)\n"
     "[Service]\nWorkingDirectory=%h\n"
+    "ExecStartPre=/usr/bin/python3 -I %h/.local/share/jarvisos-hostops/guard/scripts/host_ops.py guard\n"
     "ExecStart=/usr/bin/python3 -I %h/.local/share/jarvisos-hostops/current/scripts/host_ops.py serve\n"
     "Restart=on-failure\nRestartPreventExitStatus=2 3\nRestartSec=30\n"
     "NoNewPrivileges=yes\nMemoryMax=2G\nTasksMax=256\nCPUQuota=200%\nRestartForceExitStatus=75\n"
@@ -2237,14 +3399,267 @@ def _gh(args: list[str], timeout: float = 60) -> str:
     return proc.stdout
 
 
-def install_release(paths: Paths, sha: str) -> None:
+def _item_id(item: dict[str, Any]) -> int:
+    val = item.get("id")
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return int(val)
+    if isinstance(val, str) and val.isdigit():
+        return int(val)
+    return 0
+
+
+def _parse_check_runs(raw: str) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    raw = raw.strip()
+    if not raw:
+        return runs
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(raw):
+        while idx < len(raw) and raw[idx].isspace():
+            idx += 1
+        if idx >= len(raw):
+            break
+        obj, end = decoder.raw_decode(raw, idx)
+        idx = end
+        if isinstance(obj, dict):
+            cr = obj.get("check_runs")
+            if isinstance(cr, list):
+                runs.extend(item for item in cr if isinstance(item, dict))
+        elif isinstance(obj, list):
+            runs.extend(item for item in obj if isinstance(item, dict))
+    return runs
+
+
+def _parse_statuses(raw: str) -> list[dict[str, Any]]:
+    statuses: list[dict[str, Any]] = []
+    raw = raw.strip()
+    if not raw:
+        return statuses
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(raw):
+        while idx < len(raw) and raw[idx].isspace():
+            idx += 1
+        if idx >= len(raw):
+            break
+        obj, end = decoder.raw_decode(raw, idx)
+        idx = end
+        if isinstance(obj, list):
+            statuses.extend(item for item in obj if isinstance(item, dict) and "context" in item and "state" in item)
+        elif isinstance(obj, dict):
+            if "context" in obj and "state" in obj:
+                statuses.append(obj)
+            elif isinstance(obj.get("statuses"), list):
+                statuses.extend(item for item in obj["statuses"] if isinstance(item, dict) and "context" in item and "state" in item)
+    return statuses
+
+
+def required_checks_problem(sha: str) -> str | None:
+    if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+        return "invalid commit sha"
+    try:
+        raw_rules = _gh([f"repos/{REPO}/rules/branches/master"])
+        rules = json.loads(raw_rules)
+    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as exc:
+        return f"unreadable ruleset: {exc}"
+    if not isinstance(rules, list):
+        return "unreadable ruleset: rules response is not a list"
+
+    req_checks: set[tuple[str, int | None]] = set()
+    for entry in rules:
+        if isinstance(entry, dict) and entry.get("type") == "required_status_checks":
+            params = entry.get("parameters")
+            if isinstance(params, dict):
+                checks = params.get("required_status_checks")
+                if isinstance(checks, list):
+                    for check in checks:
+                        if isinstance(check, dict) and isinstance(check.get("context"), str):
+                            iid = check.get("integration_id")
+                            integration_id = int(iid) if (isinstance(iid, int) and not isinstance(iid, bool)) else None
+                            req_checks.add((check["context"], integration_id))
+                        elif isinstance(check, str):
+                            req_checks.add((check, None))
+    if not req_checks:
+        return "empty ruleset: no required status checks found on master"
+
+    try:
+        raw_runs = _gh([f"repos/{REPO}/commits/{sha}/check-runs?per_page=100", "--paginate"])
+        check_runs = _parse_check_runs(raw_runs)
+    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as exc:
+        return f"unreadable check runs: {exc}"
+
+    try:
+        raw_statuses = _gh([f"repos/{REPO}/commits/{sha}/statuses?per_page=100", "--paginate"])
+        commit_statuses = _parse_statuses(raw_statuses)
+    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as exc:
+        return f"unreadable commit statuses: {exc}"
+
+    for context, req_integration_id in sorted(req_checks, key=lambda c: (c[0], c[1] or -1)):
+        matching_runs = [
+            r for r in check_runs
+            if r.get("name") == context and (
+                req_integration_id is None
+                or (isinstance(r.get("app"), dict) and r["app"].get("id") == req_integration_id)
+            )
+        ]
+        if not matching_runs:
+            return f"required check {context!r} is missing"
+
+        for r in matching_runs:
+            status = r.get("status")
+            if status != "completed":
+                return f"required check {context!r} is not completed ({status})"
+
+        latest = max(matching_runs, key=_item_id)
+        conclusion = latest.get("conclusion")
+        if conclusion != "success":
+            return f"required check {context!r} did not succeed ({conclusion})"
+
+        matching_statuses = [s for s in commit_statuses if s.get("context") == context]
+        if matching_statuses:
+            latest_status = max(matching_statuses, key=_item_id)
+            state = latest_status.get("state")
+            if state != "success":
+                return f"required check {context!r} commit status did not succeed ({state})"
+
+    return None
+
+
+def _run_preflight(argv: list[str], timeout: float = 60) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def _preflight_release(release_dir: Path, paths: Paths) -> None:
+    for name in ("host_ops.py", "relay_continuity.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+        if not (release_dir / "scripts" / name).is_file():
+            raise Refused(f"release missing {name}")
+    cmd = [sys.executable, "-I", str(release_dir / "scripts" / "host_ops.py"), "--home", str(paths.home), "preflight"]
+    try:
+        proc_pf = _run_preflight(cmd, timeout=60)
+    except subprocess.TimeoutExpired:
+        raise Refused("candidate preflight failed: timeout after 60s") from None
+    if proc_pf.returncode != 0:
+        stderr_text = proc_pf.stderr.decode() if isinstance(proc_pf.stderr, bytes) else (proc_pf.stderr or "")
+        lines = stderr_text.strip().splitlines()
+        first_line = lines[0].strip() if lines else f"exit code {proc_pf.returncode}"
+        raise Refused(f"candidate preflight failed: {first_line}")
+
+
+def _scan_release_tree(root: Path) -> tuple[dict[Path, int], set[Path]]:
+    if not root.is_dir() or root.is_symlink():
+        raise Refused(f"release path is not a directory: {root.name}")
+    files: dict[Path, int] = {}
+    directories: set[Path] = set()
+
+    def walk(current: Path, rel: Path) -> None:
+        try:
+            entries = list(os.scandir(current))
+        except OSError as exc:
+            raise Refused(f"unreadable release directory: {exc}") from None
+        for entry in sorted(entries, key=lambda e: e.name):
+            child_rel = rel / entry.name if rel != Path(".") else Path(entry.name)
+            try:
+                st = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise Refused(f"cannot stat release member {child_rel}: {exc}") from None
+            mode = st.st_mode
+            if stat.S_ISLNK(mode):
+                raise Refused(f"unsafe release member: {child_rel}")
+            if stat.S_ISDIR(mode):
+                directories.add(child_rel)
+                walk(Path(entry.path), child_rel)
+            elif stat.S_ISREG(mode):
+                files[child_rel] = mode & 0o777
+            else:
+                raise Refused(f"unsafe release member: {child_rel}")
+
+    walk(root, Path("."))
+    return files, directories
+
+
+def _verify_existing_release(release: Path, stage: Path) -> None:
+    stage_files, stage_dirs = _scan_release_tree(stage)
+    release_files, release_dirs = _scan_release_tree(release)
+
+    if stage_dirs != release_dirs:
+        extra_dirs = release_dirs - stage_dirs
+        missing_dirs = stage_dirs - release_dirs
+        if extra_dirs:
+            raise Refused(f"existing release has extra directory: {min(extra_dirs, key=str)}")
+        raise Refused(f"existing release missing directory: {min(missing_dirs, key=str)}")
+
+    if set(stage_files) != set(release_files):
+        extra_files = set(release_files) - set(stage_files)
+        missing_files = set(stage_files) - set(release_files)
+        if extra_files:
+            raise Refused(f"existing release has extra file: {min(extra_files, key=str)}")
+        raise Refused(f"existing release missing file: {min(missing_files, key=str)}")
+
+    for rel_path, stage_mode in sorted(stage_files.items(), key=lambda item: str(item[0])):
+        release_mode = release_files[rel_path]
+        if release_mode != stage_mode:
+            raise Refused(f"existing release file mode mismatch for {rel_path} ({oct(release_mode)} != {oct(stage_mode)})")
+        try:
+            rel_bytes = (release / rel_path).read_bytes()
+            stage_bytes = (stage / rel_path).read_bytes()
+        except OSError as exc:
+            raise Refused(f"cannot read release file {rel_path}: {exc}") from None
+        if rel_bytes != stage_bytes:
+            raise Refused(f"existing release content mismatch for {rel_path}")
+
+
+def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
+                    watcher_active: bool = False, owner_active: bool = False, now: datetime | None = None) -> None:
     if os.environ.get("JARVIS_SANDBOX") or socket.gethostname() == "jarvis-sandbox":
         raise Refused("installation is host-only")
     if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
         raise Refused("sha must be a full commit id")
+    for h_entry in read_release_history(paths):
+        if h_entry.get("candidate_sha") == sha and h_entry.get("status") in ("refused", "returned"):
+            reason = h_entry.get("reason", "unhealthy")
+            raise Refused(f"candidate {sha} was previously refused ({reason})")
+    pending = None
+    if paths.release_pending.exists():
+        try:
+            pending = load_release_pending(paths)
+            confirmed = False
+            if pending:
+                p_cand = pending.get("candidate_sha")
+                p_created = pending.get("created_at")
+                for h_entry in read_release_history(paths):
+                    if (h_entry.get("status") == "confirmed"
+                            and h_entry.get("candidate_sha") == p_cand
+                            and h_entry.get("created_at") == p_created):
+                        paths.release_pending.unlink(missing_ok=True)
+                        confirmed = True
+                        pending = None
+                        break
+            if not confirmed and pending:
+                p_sha = pending.get("candidate_sha")
+                if p_sha != sha:
+                    raise Refused(f"another release is already pending ({p_sha})")
+        except MalformedPendingRelease as exc:
+            raise Refused("malformed pending release marker exists") from exc
     status = _gh([f"repos/{REPO}/compare/{sha}...master", "--jq", ".status"]).strip()
     if status not in ("ahead", "identical"):
         raise Refused(f"{sha} is not on GitHub master ({status})")
+    if problem := required_checks_problem(sha):
+        raise Refused(problem)
+    current = paths.install / "current"
+    installed = None
+    resolved = None
+    if current.is_symlink() or current.exists():
+        try:
+            resolved = current.resolve(strict=True)
+            installed = resolved.name
+        except OSError as exc:
+            raise Refused(f"cannot resolve current release: {exc}") from None
+        if not resolved.is_dir() or not SHA_RE.fullmatch(installed):
+            raise Refused(f"current release is not a valid commit sha directory ({installed!r})")
+        cmp_status = _gh([f"repos/{REPO}/compare/{installed}...{sha}", "--jq", ".status"]).strip()
+        if cmp_status not in ("ahead", "identical"):
+            raise Refused(f"candidate {sha} is not ahead or identical to installed {installed} ({cmp_status})")
     proc = subprocess.run(["gh", "api", f"repos/{REPO}/tarball/{sha}"],
                           capture_output=True, timeout=120, check=True)
     releases = paths.install / "releases"
@@ -2267,14 +3682,71 @@ def install_release(paths: Paths, sha: str) -> None:
                     with archive.extractfile(member) as source:
                         target.write_bytes(source.read())
                     target.chmod(0o755 if member.mode & 0o111 else 0o644)
-        for name in ("host_ops.py", "relay_continuity.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
-            if not (stage / "scripts" / name).is_file():
-                raise Refused(f"release missing {name}")
+        _preflight_release(stage, paths)
         if not release.exists():
             os.rename(stage, release)
-    tmp_link = paths.install / f".current.{secrets.token_hex(4)}"
-    os.symlink(release, tmp_link)
-    os.replace(tmp_link, paths.install / "current")
+        else:
+            _verify_existing_release(release, stage)
+            _preflight_release(release, paths)
+
+    # Pin previous release (or candidate if first install) to guard
+    source_dir = resolved if installed and resolved and resolved.is_dir() else release
+    source_sha = installed or sha
+    _pin_guard(paths, source_dir, source_sha)
+
+    # Ensure installed release is published
+    if installed and (paths.install / "releases" / installed / "scripts").is_dir():
+        if not (paths.published / "releases" / installed).is_dir():
+            try:
+                publish_release(paths, installed, switch_current=False)
+            except Exception:  # noqa: BLE001, S110
+                pass
+        if not (paths.published / "current").exists():
+            try:
+                switch_published_release(paths, installed)
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+    # Stage files for candidate under published/releases/sha without switching published/current
+    publish_release(paths, sha, switch_current=False)
+
+    ts = now or now_utc()
+    deadline = (pending.get("deadline") if pending and pending.get("candidate_sha") == sha
+                else iso(ts + timedelta(minutes=10)))
+    p_prev = (pending.get("previous_sha") if pending and pending.get("candidate_sha") == sha
+              else installed)
+    p_req = (request_id or (pending.get("request_id") if pending and pending.get("candidate_sha") == sha else None))
+    p_attempts = (pending.get("attempts", 0) if pending and pending.get("candidate_sha") == sha else 0)
+    p_watch = bool(watcher_active or (pending and pending.get("watcher_active")))
+    p_owner = bool(owner_active or (pending and pending.get("owner_active")))
+
+    pending_written = False
+    install_switched = False
+    published_switched = False
+    try:
+        write_release_pending(paths, previous_sha=p_prev, candidate_sha=sha,
+                              deadline=deadline, request_id=p_req,
+                              attempts=p_attempts, watcher_active=p_watch,
+                              owner_active=p_owner, now=ts)
+        pending_written = True
+
+        switch_install_release(paths, sha)
+        install_switched = True
+
+        switch_published_release(paths, sha)
+        published_switched = True
+    except BaseException:
+        if install_switched or published_switched:
+            restore_release_links(paths, p_prev)
+        elif p_prev and (paths.published / "current").exists():
+            try:
+                if (paths.published / "current").resolve().name != p_prev:
+                    restore_release_links(paths, p_prev)
+            except OSError:
+                restore_release_links(paths, p_prev)
+        if pending_written:
+            paths.release_pending.unlink(missing_ok=True)
+        raise
 
 
 def op_release_install(ctx: Context) -> dict[str, Any]:
@@ -2282,20 +3754,45 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
     args = _args(ctx, {"sha"})
     if conf.get("trust_master") is not True:
         raise Refused("release.install requires trust_master: true in the host policy")
-    install_release(ctx.paths, args.get("sha"))
-    ctx.restart_required = True
     unit = "jarvisos-relay-watch.service"
-    if _unit_state(ctx, unit).get("ActiveState") == "active" and _systemctl(ctx, "restart", unit).returncode:
+    watcher_active = _unit_state(ctx, unit).get("ActiveState") == "active"
+    owner_active = (ctx.request.get("requester") == "relay-continuity:owner"
+                    or (ctx.request.get("args") or {}).get("owner_active") is True)
+    kwargs: dict[str, Any] = {"request_id": ctx.request.get("id"),
+                              "watcher_active": watcher_active,
+                              "now": ctx.now()}
+    if owner_active:
+        kwargs["owner_active"] = True
+
+    current_link = ctx.paths.install / "current"
+    installed_before = None
+    if current_link.is_symlink() or current_link.exists():
+        try:
+            installed_before = current_link.resolve().name
+        except OSError:
+            installed_before = None
+
+    install_release(ctx.paths, args["sha"], **kwargs)
+    ctx.restart_required = True
+    if watcher_active and _systemctl(ctx, "restart", unit).returncode:
+        # If watcher restart failed, the install request failed.
+        # Return both links through the pinned guard and settle the pending marker
+        # before restarting the previous release.
+        if ctx.paths.release_pending.exists():
+            guard(ctx.paths, force_return=True, reason="watcher restart failed", post=ctx.post, run=ctx.run, now=ctx.now())
+        else:
+            restore_release_links(ctx.paths, installed_before)
         raise Failed("watcher restart failed")
+
     return {"sha": args["sha"], "executor_restart": True}
 
 
 OPERATIONS["release.install"] = op_release_install
 
 
-def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
+def install(paths: Paths, sha: str, with_watch: bool = False, self_install: bool = False) -> int:
     try:
-        install_release(paths, sha)
+        install_release(paths, sha, watcher_active=with_watch)
     except Refused as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -2308,12 +3805,33 @@ def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
     paths.published.mkdir(parents=True, exist_ok=True)
     (paths.published / "allowed_signers").write_text(
         f'{SIGNER} namespaces="{SIG_NAMESPACE}" {public[0]} {public[1]}\n')
-    if not paths.policy.exists():
-        paths.policy.write_text(json.dumps(DEFAULT_POLICY, indent=1, sort_keys=True) + "\n")
-        os.chmod(paths.policy, 0o600)
+    if self_install:
+        if paths.policy.exists():
+            try:
+                policy, _ = load_policy(paths)
+            except Exception:
+                policy = json.loads(paths.policy.read_text(encoding="utf-8"))
+        else:
+            policy = json.loads(json.dumps(DEFAULT_POLICY))
+        ops = policy.setdefault("ops", {})
+        if isinstance(ops, dict):
+            rel_inst = ops.setdefault("release.install", {})
+            if isinstance(rel_inst, dict):
+                rel_inst["trust_master"] = True
+        cfd = open_dir(paths.config, create=True)
+        try:
+            write_at(cfd, "policy.json", (json.dumps(policy, indent=1, sort_keys=True) + "\n").encode("utf-8"), mode=0o600)
+        finally:
+            os.close(cfd)
+    else:
+        if not paths.policy.exists():
+            paths.policy.write_text(json.dumps(DEFAULT_POLICY, indent=1, sort_keys=True) + "\n")
+            os.chmod(paths.policy, 0o600)
     paths.units.mkdir(parents=True, exist_ok=True)
     (paths.units / UNIT).write_text(SERVICE_UNIT)
     (paths.units / "jarvisos-relay-watch.service").write_text(UNIT_TEMPLATES["jarvisos-relay-watch"])
+    if self_install:
+        (paths.units / "jarvisos-mission-owner.service").write_text(UNIT_TEMPLATES["jarvisos-mission-owner"])
     env = _host_env()
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, timeout=60, env=env)
     subprocess.run(["systemctl", "--user", "enable", UNIT], check=True, timeout=60, env=env)
@@ -2323,6 +3841,25 @@ def install(paths: Paths, sha: str, with_watch: bool = False) -> int:
                        check=True, timeout=60, env=env)
     print(f"installed host-ops executor {sha} and restarted {UNIT}")
     return 0
+
+
+def preflight(paths: Paths) -> int:
+    try:
+        if paths.policy.exists():
+            policy, _ = load_policy(paths)
+        else:
+            policy = DEFAULT_POLICY
+        ops = policy.get("ops")
+        if not isinstance(ops, dict):
+            raise TypeError("policy ops must be a dict")
+        unknown = set(ops) - set(OPERATIONS)
+        if unknown:
+            raise RuntimeError(f"policy enables unknown operations {sorted(unknown)}")
+        print(json.dumps({"ok": True, "version": executor_version()}))
+        return 0
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
 
 def health(paths: Paths) -> int:
@@ -2386,7 +3923,13 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("install", help="install the executor from a GitHub master commit (host session)")
     p.add_argument("--sha", required=True)
     p.add_argument("--with-watch", action="store_true")
+    p.add_argument("--self-install", action="store_true",
+                   help="enable supervisor self-installation and write owner unit template")
     sub.add_parser("health", help="host-side health check")
+    sub.add_parser("preflight", help="candidate preflight validation")
+    p = sub.add_parser("guard", help="pre-start release guard (systemd ExecStartPre)")
+    p.add_argument("--return", dest="do_return", action="store_true", help="force return to previous release")
+    p.add_argument("--reason", default="manual return", help="reason for return")
     args = parser.parse_args(argv)
     paths = Paths(Path(args.home))
 
@@ -2450,9 +3993,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.action == "serve":
         return serve(paths, args.interval)
     if args.action == "install":
-        return install(paths, args.sha, args.with_watch)
+        return install(paths, args.sha, args.with_watch, self_install=args.self_install)
     if args.action == "health":
         return health(paths)
+    if args.action == "preflight":
+        return preflight(paths)
+    if args.action == "guard":
+        return guard(paths, force_return=args.do_return, reason=args.reason)
     return 2
 
 

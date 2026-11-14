@@ -4655,6 +4655,175 @@ def repo_root() -> Path:
     return Path(out.strip()).parent if code == 0 and out.strip() else Path.cwd()
 
 
+def release_sha() -> str | None:
+    env_sha = os.environ.get("JARVISOS_RELEASE_SHA")
+    if env_sha and host_ops.SHA_RE.fullmatch(env_sha):
+        return env_sha
+    try:
+        here = Path(__file__).resolve().parent.parent.name
+        return here if host_ops.SHA_RE.fullmatch(here) else None
+    except (OSError, ValueError):
+        return None
+
+
+def check_and_request_release_update(
+    repo: Path,
+    root: Path,
+    *,
+    log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
+    run: Runner = devctx.run,
+    now: Callable[[], datetime] = now_utc,
+    paths: host_ops.Paths | None = None,
+    current_sha: str | None = None,
+) -> bool:
+    """At a task boundary, request release.install for origin/master if it is newer than the owner's
+    own release and has green required checks. Returns True if an install was requested and the owner
+    should exit 0 without taking another task."""
+    owner_sha = current_sha if current_sha is not None else release_sha()
+    if not owner_sha:
+        return False
+
+    run(["git", "fetch", "-q", "origin", "master"], cwd=repo, timeout=60)
+    code, out = run(["git", "rev-parse", "--verify", "origin/master"], cwd=repo)
+    if code != 0 or not out.strip():
+        return False
+    candidate_sha = out.strip()
+    if candidate_sha == owner_sha:
+        return False
+
+    code, _ = run(["git", "merge-base", "--is-ancestor", owner_sha, candidate_sha], cwd=repo)
+    is_newer = (code == 0 and candidate_sha != owner_sha)
+    if not is_newer:
+        try:
+            status = host_ops._gh([f"repos/{host_ops.REPO}/compare/{owner_sha}...{candidate_sha}", "--jq", ".status"]).strip()
+            if status == "ahead":
+                is_newer = True
+        except (RuntimeError, subprocess.SubprocessError, OSError):
+            is_newer = False
+
+    if not is_newer:
+        return False
+
+    problem = host_ops.required_checks_problem(candidate_sha)
+    if problem is not None:
+        log(f"owner: candidate {candidate_sha[:12]} checks not green: {problem}")
+        return False
+
+    target_paths = paths or host_ops.Paths(Path.home())
+    for h_entry in host_ops.read_release_history(target_paths):
+        if h_entry.get("candidate_sha") == candidate_sha and h_entry.get("status") in ("refused", "returned"):
+            log(f"owner: candidate {candidate_sha[:12]} was previously refused ({h_entry.get('reason', 'unhealthy')})")
+            return False
+
+    try:
+        for receipt_file in target_paths.receipts.glob("*.json"):
+            if receipt_file.name.endswith(".sig"):
+                continue
+            try:
+                receipt, _ = host_ops.load_receipt(target_paths, receipt_file.stem)
+                if (
+                    receipt
+                    and receipt.get("op") == "release.install"
+                    and (receipt.get("sha") == candidate_sha or (receipt.get("args") or {}).get("sha") == candidate_sha)
+                    and receipt.get("outcome") in ("refused", "failed")
+                ):
+                    log(f"owner: candidate {candidate_sha[:12]} was previously refused in receipt {receipt_file.stem[:8]}")
+                    return False
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        pass
+
+    req = host_ops.make_request(
+        op="release.install",
+        args={"sha": candidate_sha},
+        sha=candidate_sha,
+        requester="relay-continuity:owner",
+        now=now(),
+    )
+    req_id = host_ops.submit(target_paths, req)
+    log(f"owner: requested release.install for {candidate_sha[:12]} (request {req_id[:8]})")
+    return True
+
+
+_LAST_FF_LOGGED: dict[str, str | None] = {"sha": None}
+
+
+def fast_forward_main_checkout(
+    repo: Path,
+    *,
+    log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
+    run: Runner = devctx.run,
+    last_logged: dict[str, str | None] | None = None,
+) -> bool:
+    """At a task boundary, fast-forward a clean main checkout on master to origin/master.
+
+    A dirty tree (tracked modifications), another branch, or a non-fast-forward
+    leaves the checkout untouched and logs once per origin/master sha.
+    """
+    tracker = last_logged if last_logged is not None else _LAST_FF_LOGGED
+
+    def _log_refusal(target_sha: str, reason: str) -> None:
+        if tracker.get("sha") != target_sha:
+            short = target_sha[:8] if host_ops.SHA_RE.fullmatch(target_sha) else target_sha
+            log(f"owner: fast-forward to origin/master ({short}) refused/failed: {reason}")
+            tracker["sha"] = target_sha
+
+    # 1. Fetch origin master
+    code, fetch_out = run(["git", "fetch", "-q", "origin", "master"], cwd=repo, timeout=60.0)
+    if code != 0:
+        _, target_sha = run(["git", "rev-parse", "origin/master"], cwd=repo, timeout=20.0)
+        target_sha = target_sha.strip()
+        ref_sha = target_sha if host_ops.SHA_RE.fullmatch(target_sha) else "unknown"
+        _log_refusal(ref_sha, f"fetch origin master failed ({fetch_out.strip() or 'exit ' + str(code)})")
+        return False
+
+    code, target_sha = run(["git", "rev-parse", "origin/master"], cwd=repo, timeout=20.0)
+    target_sha = target_sha.strip()
+    if code != 0 or not host_ops.SHA_RE.fullmatch(target_sha):
+        ref_sha = target_sha if host_ops.SHA_RE.fullmatch(target_sha) else "unknown"
+        _log_refusal(ref_sha, "rev-parse origin/master failed")
+        return False
+
+    # 2. Check branch is 'master'
+    code, branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, timeout=20.0)
+    branch = branch.strip()
+    if code != 0 or branch != "master":
+        _log_refusal(target_sha, f"checkout is on branch '{branch or 'unknown'}', not 'master'")
+        return False
+
+    # 3. Check tracked files are clean (untracked files are ignored)
+    code, status = run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo, timeout=20.0)
+    if code != 0 or status.strip():
+        count = len(status.strip().splitlines()) if status.strip() else 0
+        _log_refusal(target_sha, f"checkout is dirty ({count} tracked modification{'s' if count != 1 else ''})")
+        return False
+
+    # 4. Check if HEAD is already at origin/master
+    code, head_sha = run(["git", "rev-parse", "HEAD"], cwd=repo, timeout=20.0)
+    head_sha = head_sha.strip()
+    if code == 0 and head_sha == target_sha:
+        return True
+
+    # Re-check tracked files immediately before merge
+    code, status = run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo, timeout=20.0)
+    if code != 0 or status.strip():
+        count = len(status.strip().splitlines()) if status.strip() else 0
+        _log_refusal(target_sha, f"checkout is dirty ({count} tracked modification{'s' if count != 1 else ''})")
+        return False
+
+    # 5. Fast-forward merge only
+    # The remaining window is safe because git merge --ff-only refuses to overwrite local modifications to files the incoming commits touch.
+    code, merge_out = run(["git", "merge", "--ff-only", "origin/master"], cwd=repo, timeout=60.0)
+    if code != 0:
+        _log_refusal(target_sha, f"merge --ff-only failed: {merge_out.strip() or 'exit ' + str(code)}")
+        return False
+
+    log(f"owner: fast-forwarded main checkout to origin/master ({target_sha[:8]})")
+    tracker["sha"] = None
+    return True
+
+
 def permissions_digest(path: Path) -> str | None:
     """Digest of the authority-bearing Relay permission settings. Relay rewrites `model` whenever `--model`
     is passed; a model choice grants no authority, so it is excluded. An unreadable file digests as such."""
@@ -5430,6 +5599,15 @@ def command_serve(args: argparse.Namespace) -> int:
                  "JARVISOS_MISSION_PROFILE": "1", "RELAY_CLAUDE_REAL_BIN": claude,
                  "PATH": str(mission_bin) + os.pathsep + os.environ["PATH"]}
     serve_store = Store(root / "serve")
+    curr_sha = release_sha()
+    try:
+        serve_state = serve_store.load()
+    except StateCorrupt:
+        serve_state = default_state()
+    if curr_sha:
+        serve_state["release_sha"] = curr_sha
+        serve_state["release_updated_at"] = iso(now_utc())
+        serve_store.save(serve_state, now_utc())
 
     def log(msg: str) -> None:
         print(f"{iso(now_utc())} {msg}", file=sys.stderr, flush=True)
@@ -5442,9 +5620,17 @@ def command_serve(args: argparse.Namespace) -> int:
 
     log(f"mission owner serving {missions_dir(root)} (pid {os.getpid()})")
     previous = None
+    last_ff_logged: dict[str, str | None] = {"sha": serve_state.get("last_ff_logged_sha")}
     try:
         while not stop["flag"] and not (root / "STOP").exists():
             _reap_zombies()  # adopted durable wrappers also finish while the owner is idle
+            if check_and_request_release_update(repo, root, log=log):
+                log("owner: release install requested; stopping at task boundary without taking a new task")
+                return 0
+            fast_forward_main_checkout(repo, log=log, last_logged=last_ff_logged)
+            if last_ff_logged.get("sha") != serve_state.get("last_ff_logged_sha"):
+                serve_state["last_ff_logged_sha"] = last_ff_logged.get("sha")
+                serve_store.save(serve_state, now_utc())
             outcome = serve_step(root, factory, conflicts=lambda: live_conflicts(repo, {os.getpid()}), log=log)
             if outcome == "empty":
                 outcome = roadmap_step(root, repo, fingerprint=lambda: remote_fingerprint(repo),

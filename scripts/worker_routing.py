@@ -534,10 +534,20 @@ def _parse_ts(value: Any) -> datetime | None:
         return None
 
 
+def _repo_root() -> Path:
+    root = Path(__file__).resolve().parent.parent
+    if (root / ".git").exists():
+        return root
+    cwd = Path.cwd()
+    if (cwd / ".git").exists():
+        return cwd
+    return root
+
+
 def default_snapshot_paths() -> list[Path]:
     """Where the supervisor's snapshot may be: this checkout's `.agent-relay`, and, when this is a linked
     worktree, the main checkout's (the supervisor runs against the main checkout)."""
-    root = Path(__file__).resolve().parent.parent
+    root = _repo_root()
     paths = [root / SNAPSHOT_NAME]
     marker = root / ".git"
     if marker.is_file():
@@ -554,7 +564,7 @@ def default_snapshot_paths() -> list[Path]:
 
 def default_record_path() -> Path:
     """Where worker outcomes are recorded: in a linked worktree, the main checkout's .agent-relay/worker-outcomes.jsonl."""
-    root = Path(__file__).resolve().parent.parent
+    root = _repo_root()
     marker = root / ".git"
     if marker.is_file():
         try:
