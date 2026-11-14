@@ -6424,3 +6424,106 @@ def test_auth_failure_diagnostic_secret_never_enters_question_or_notification(tm
     assert opts[0]["recommended"] is True
     assert opts[1]["index"] == 2
     assert opts[1]["recommended"] is False
+
+
+def test_timed_out_turn_stopped_during_reap_stays_crash_on_restart(tmp_path: Path) -> None:
+    """When a turn times out and stop arrives during _reap, restart recovery still settles it as a timed-out crash."""
+    env = Env(tmp_path)
+    sid = "20261018-090000-to0001"
+    session_dir = env.relay.sessions_dir() / sid
+
+    def fake_start(agent: str, parent: str | None, text: str, turns: Any, **kw: Any) -> Any:
+        # Include the nonce in prompt.md so find_by_nonce can adopt it on restart
+        write_turn(session_dir, [*SUCCESS], agent=agent, prompt=relay_prompt(text))
+        return FakeProc(4242)
+
+    def fake_finish(proc: Any, timeout: float | None = None) -> rc.RunResult:
+        return rc.RunResult(
+            session_id=sid, exit_code=124, raw_ok=False,
+            diagnostics="turn exceeded wall limit (3600s); process group terminated",
+            timed_out=True,
+        )
+
+    env.relay.start = fake_start  # type: ignore[method-assign]
+    env.relay.finish = fake_finish  # type: ignore[method-assign]
+
+    # Stop arrives while _reap is waiting on a surviving child
+    def failing_reap() -> list[str]:
+        env.store.stop_path.write_text("stop\n", encoding="utf-8")
+        raise RuntimeError("child still alive")
+
+    env.host.reap = failing_reap
+    sup = env.supervisor()
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    prev_rep = rc.TurnReport(outcome="crash", agent="claude", detail="prev", turn_id="t0")
+    res = sup._launch("claude", "[relay-continuity attempt {nonce}]\ndo task", prev_rep)
+    assert res == "stopped"
+    assert sup.state["pending"] is not None
+    assert sup.state["pending"].get("timed_out") is True
+
+    # Restart supervisor: process is now gone, _resolve_pending adopts the pending attempt
+    env.store.stop_path.unlink(missing_ok=True)
+    env.host.pid_alive = lambda pid, start=None: False
+    sup2 = rc.Supervisor(env.store, env.host, env.limits)
+    sup2.state = env.store.load()
+    resolved = sup2._resolve_pending()
+    assert isinstance(resolved, rc.TurnReport)
+    assert resolved.outcome == "crash"
+    assert "wall limit" in resolved.detail
+
+
+def test_malformed_negative_or_nan_quota_reading_never_clears_cooldown(tmp_path: Path) -> None:
+    """Negative, >100, or NaN used_percent in a Relay or native reading never clears a quota cooldown."""
+    env = Env(tmp_path)
+    cooldown_since = T0 - timedelta(minutes=10)
+    cooldown_until = T0 + timedelta(hours=4)
+    as_of = T0 - timedelta(minutes=2)
+
+    for bad_used in (-5.0, 105.0, float("nan"), float("inf"), float("-inf")):
+        sup = env.supervisor()
+        sup.state["cooldowns"]["claude"] = {
+            "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+        }
+        env.relay.readings = lambda u=bad_used: {"claude": reading("claude", u, T0 + timedelta(days=1), as_of)}
+        assert not sup.available("claude")
+        assert "claude" in sup.state["cooldowns"]
+
+        sup_n = env.supervisor()
+        sup_n.state["cooldowns"]["argon"] = {
+            "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+        }
+        env.relay.argon_limits = lambda agent, u=bad_used: {
+            "as_of": rc.iso(as_of),
+            "windows": [{"used_percent": u, "disabled": False}],
+        }
+        assert not sup_n.available("argon")
+        assert "argon" in sup_n.state["cooldowns"]
+
+
+def test_choose_ranks_using_refreshed_reading_when_cooldown_clears(tmp_path: Path) -> None:
+    """When available() refreshes a cached reading older than a cooldown, _choose ranks with the refreshed room."""
+    env = Env(tmp_path)
+    cooldown_since = T0 - timedelta(minutes=5)
+    cooldown_until = T0 + timedelta(hours=4)
+    stale_as_of = cooldown_since - timedelta(minutes=1)
+    fresh_as_of = T0 - timedelta(minutes=1)
+
+    sup = env.supervisor()
+    # Current is argon, which is unavailable so _choose evaluates remaining = ["claude"]
+    sup.state["cooldowns"]["argon"] = {
+        "until": rc.iso(cooldown_until), "source": "estimate", "reason": "transient", "since": rc.iso(cooldown_since),
+    }
+    sup.state["cooldowns"]["claude"] = {
+        "until": rc.iso(cooldown_until), "source": "limits", "reason": "quota", "since": rc.iso(cooldown_since),
+    }
+    # Pre-seed a cached reading for claude that was fetched 1 min ago, with as_of older than cooldown_since
+    # and showing 95% used (5% free room, below min_free_percent=10%).
+    sup._reading = {"claude": reading("claude", 95.0, T0 + timedelta(days=1), stale_as_of)}
+    sup._reading_at = T0 - timedelta(seconds=30)
+
+    # Fresh fetch returns a reading newer than cooldown_since with 80% free room (20% used).
+    env.relay.readings = lambda: {"claude": reading("claude", 20.0, T0 + timedelta(days=1), fresh_as_of)}
+    chosen = sup._choose("argon")
+    assert chosen == "claude"
+    assert "claude" not in sup.state["cooldowns"]
+

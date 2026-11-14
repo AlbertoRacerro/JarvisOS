@@ -20,6 +20,7 @@ import fcntl
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import secrets
@@ -3211,7 +3212,7 @@ class Supervisor:
             return None  # no usage windows: no evidence either way
         for window in windows:
             used = window.get("used_percent") if isinstance(window, dict) else None
-            if isinstance(used, bool) or not isinstance(used, (int, float)):
+            if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used) or not 0 <= used <= 100:
                 return None  # an unusable window is not evidence of room
             reset = parse_ts(window.get("resets_at"))
             if used >= 99.5:
@@ -3264,6 +3265,7 @@ class Supervisor:
                                                      all(isinstance(w, dict) and
                                                          isinstance(w.get("used_percent"), (int, float)) and
                                                          not isinstance(w.get("used_percent"), bool) and
+                                                         math.isfinite(w["used_percent"]) and
                                                          0 <= w["used_percent"] <= 100 for w in windows))
                                         fresh = as_of is not None and abs(now - as_of) <= self.limits.reading_freshness
                                         room = plausible and all(not w.get("disabled") and w["used_percent"] < 100 for w in windows)
@@ -3326,7 +3328,7 @@ class Supervisor:
             if not isinstance(window, dict):
                 return None
             used = window.get("used_percent")
-            if isinstance(used, bool) or not isinstance(used, (int, float)) or not 0 <= used <= 100:
+            if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used) or not 0 <= used <= 100:
                 return None
             if not native:
                 reset = parse_ts(window.get("resets_at"))
@@ -3739,13 +3741,15 @@ class Supervisor:
 
             if agent is None:
                 remaining = [a for a in PREFERRED_AGENTS if a != current] if current in PREFERRED_AGENTS else list(PREFERRED_AGENTS)
+                avail = {a: self.available(a) for a in remaining}
                 rooms = {a: self.free_room(a) for a in remaining}
                 sorted_remaining = sorted(
                     remaining,
                     key=lambda a: ((0, -rooms[a]) if rooms[a] is not None else (1, 0.0)),
                 )
                 for candidate in [*sorted_remaining, "codex"]:
-                    if self.available(candidate):
+                    is_avail = avail[candidate] if candidate in avail else self.available(candidate)
+                    if is_avail:
                         first_available = first_available or candidate
                         room = rooms[candidate] if candidate in rooms else self.free_room(candidate)
                         if room is not None and room < self.limits.min_free_percent:
@@ -4139,13 +4143,18 @@ class Supervisor:
                 result = self.host.relay.finish(proc, timeout=getattr(self.limits, "turn_wall", None))
             except TypeError:
                 result = self.host.relay.finish(proc)
+            timed_out = getattr(result, "timed_out", False) or (not result.raw_ok and "wall limit" in (result.diagnostics or "").lower())
+            if timed_out:
+                pending["timed_out"] = True
+                if result.diagnostics:
+                    pending["diagnostics"] = result.diagnostics
+                self.save()
             reaped = self._reap()
         finally:
             self.host.relay.release_turn(proc)
         if reaped is None:
             # Stopped while a process of the turn still survived: the attempt stays pending, and a restart adopts it.
             return "signal" if self.signalled else "stopped"
-        timed_out = getattr(result, "timed_out", False) or (not result.raw_ok and "wall limit" in (result.diagnostics or "").lower())
         return self._settle(pending, result.session_id, result.diagnostics, reaped, timed_out=timed_out)
 
     def _reap(self) -> list[str] | None:
@@ -4373,7 +4382,7 @@ class Supervisor:
                     return "signal" if self.signalled else "stopped"
         session_id = self.host.relay.find_by_nonce(pending["nonce"], parse_ts(pending["started_at"]) or self.host.now())
         # An adopted run was started by an earlier owner: what it left behind is not this process's to stop.
-        return self._settle(pending, session_id)
+        return self._settle(pending, session_id, pending.get("diagnostics") or "", timed_out=bool(pending.get("timed_out")))
 
 
 # ---------------------------------------------------------------------------
