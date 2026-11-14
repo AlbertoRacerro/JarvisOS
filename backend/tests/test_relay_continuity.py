@@ -160,7 +160,7 @@ class FakeRelay(rc.RelayAdapter):
         if agent in rc.NATIVE_AGENTS and not (turn / "native-result.json").exists():
             (turn / "native-result.json").write_text(
                 json.dumps({"schema": "argon-coordinator.v1", "launched": True, "exit_code": 0, "quota": [], "reason": None,
-                            "model": rc.relay_argon.MODEL})
+                            "model": rc.relay_argon.model_for(agent, {})})
             )
         return rc.RunResult(sid, 0, True)
 
@@ -533,6 +533,189 @@ def test_choose_all_low_fallback_and_codex_last_resort(tmp_path: Path) -> None:
     sup = env.supervisor()
     sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
     assert sup._choose("claude") == "codex"
+
+
+def test_choose_hydrogen_fallback_and_headroom_order(tmp_path: Path) -> None:
+    # Required test 2: Outside the spend-down window, _choose picks claude, argon, agy_opus,
+    # then codex ahead of hydrogen when each in turn has headroom, and picks hydrogen
+    # when the earlier four are below min_free_percent or unavailable.
+    env = Env(tmp_path, readings={
+        "claude": reading("claude", 30, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 30, T0 + timedelta(days=5), T0),
+    })
+    # Reset is 48 hours away (outside spend-down SPEND_DOWN=24h)
+    env.relay.argon_limits = lambda a: {
+        "windows": [
+            {"id": "gemini-5h" if a != "agy_opus" else "3p-5h", "used_percent": 30},
+            {"id": "gemini-weekly" if a != "agy_opus" else "3p-weekly", "used_percent": 30, "resets_at": rc.iso(T0 + timedelta(hours=48))},
+        ]
+    }
+    sup = env.supervisor()
+
+    # When switching from codex, claude has headroom -> picks claude
+    assert sup._choose("codex") == "claude"
+
+    # When claude is low (90% used), argon has headroom -> picks argon
+    env.relay.readings["claude"] = reading("claude", 90, T0 + timedelta(days=5), T0)
+    assert sup._choose("claude") == "argon"
+
+    # When argon is low (90% used), agy_opus has headroom -> picks agy_opus
+    env.relay.argon_limits = lambda a: {
+        "windows": [
+            {"id": "gemini-5h" if a != "agy_opus" else "3p-5h", "used_percent": 90 if a == "argon" else 30},
+            {"id": "gemini-weekly" if a != "agy_opus" else "3p-weekly", "used_percent": 90 if a == "argon" else 30, "resets_at": rc.iso(T0 + timedelta(hours=48))},
+        ]
+    }
+    assert sup._choose("claude") == "agy_opus"
+
+    # When agy_opus is also low (90% used), codex has headroom -> picks codex
+    env.relay.argon_limits = lambda a: {
+        "windows": [
+            {"id": "gemini-5h" if a != "agy_opus" else "3p-5h", "used_percent": 90 if a in ("argon", "agy_opus") else 30},
+            {"id": "gemini-weekly" if a != "agy_opus" else "3p-weekly", "used_percent": 90 if a in ("argon", "agy_opus") else 30, "resets_at": rc.iso(T0 + timedelta(hours=48))},
+        ]
+    }
+    assert sup._choose("claude") == "codex"
+
+    # When codex is also low (90% used), but hydrogen has headroom (30% used) -> picks hydrogen
+    env.relay.readings["codex"] = reading("codex", 90, T0 + timedelta(days=5), T0)
+    assert sup._choose("claude") == "hydrogen"
+
+    # When the earlier 4 are unavailable (in cooldown), hydrogen with headroom is chosen
+    env.relay.readings["claude"] = reading("claude", 30, T0 + timedelta(days=5), T0)
+    env.relay.readings["codex"] = reading("codex", 30, T0 + timedelta(days=5), T0)
+    sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    sup.state["cooldowns"]["argon"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    sup.state["cooldowns"]["agy_opus"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    sup.state["cooldowns"]["codex"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    assert sup._choose("claude") == "hydrogen"
+
+
+def test_choose_hydrogen_spend_down_exception(tmp_path: Path) -> None:
+    # Required test 3: When gemini-weekly resets in 6 hours (<= 24h) and has >= min_free_percent free,
+    # _choose selects hydrogen on the next switch ahead of claude/codex and records gemini_spend_down
+    # in the switch decision.
+    env = Env(tmp_path, readings={
+        "claude": reading("claude", 30, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 30, T0 + timedelta(days=5), T0),
+    })
+    # hydrogen has gemini-weekly resetting in 6 hours with 40% free (60% used)
+    # argon and agy_opus have room
+    env.relay.argon_limits = lambda a: {
+        "windows": [
+            {"id": "gemini-5h", "used_percent": 30},
+            {"id": "gemini-weekly", "used_percent": 60, "resets_at": rc.iso(T0 + timedelta(hours=6))},
+        ]
+    } if a == "hydrogen" else {
+        "windows": [
+            {"id": "3p-5h" if a == "agy_opus" else "gemini-5h", "used_percent": 30},
+            {"id": "3p-weekly" if a == "agy_opus" else "gemini-weekly", "used_percent": 30, "resets_at": rc.iso(T0 + timedelta(days=5))},
+        ]
+    }
+    sup = env.supervisor()
+
+    # Sticky coordinator: if current is claude and available with room, claude is kept
+    assert sup._choose("claude") == "claude"
+
+    # On next switch (e.g. claude in cooldown/unavailable), hydrogen is chosen ahead of argon/agy_opus/codex
+    sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    sup.state["last_outcome"] = "quota"
+    chosen = sup._choose("claude")
+    assert chosen == "hydrogen"
+
+    # Switch decision records gemini_spend_down
+    decisions = [text for kind, text in env.ledger if kind == "decision" and "switched coordinator" in text]
+    assert len(decisions) == 1
+    assert "gemini_spend_down" in decisions[0]
+    assert "switched coordinator claude -> hydrogen (gemini_spend_down)" in decisions[0]
+
+    # One provider_switched notification sent
+    assert any("cambiato assistente" in msg for msg in env.sent)
+
+
+def test_choose_hydrogen_spend_down_not_triggered_when_too_far_or_low_room(tmp_path: Path) -> None:
+    # Required test 4: When gemini-weekly resets in 36 hours (> 24h) or has < min_free_percent free,
+    # _choose does not trigger the spend-down exception.
+    env = Env(tmp_path, readings={
+        "claude": reading("claude", 30, T0 + timedelta(days=5), T0),
+        "codex": reading("codex", 30, T0 + timedelta(days=5), T0),
+    })
+
+    # Case A: reset is 36 hours away (> 24h SPEND_DOWN)
+    env.relay.argon_limits = lambda a: {
+        "windows": [
+            {"id": "gemini-5h", "used_percent": 30},
+            {"id": "gemini-weekly", "used_percent": 40, "resets_at": rc.iso(T0 + timedelta(hours=36))},
+        ]
+    } if a == "hydrogen" else {
+        "windows": [{"id": "gemini-5h", "used_percent": 30}, {"id": "gemini-weekly", "used_percent": 30}]
+    }
+    sup = env.supervisor()
+    sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    # claude is unavailable; argon has room; hydrogen spend-down does NOT trigger, so argon is chosen
+    assert sup._choose("claude") == "argon"
+    decisions = [text for kind, text in env.ledger if kind == "decision" and "switched coordinator" in text]
+    assert not any("gemini_spend_down" in d for d in decisions)
+
+    # Case B: reset is in 6 hours (<= 24h) but free percent is < min_free_percent (e.g. 85% used -> 15% free < 25%)
+    env.ledger.clear()
+    env.relay.argon_limits = lambda a: {
+        "windows": [
+            {"id": "gemini-5h", "used_percent": 30},
+            {"id": "gemini-weekly", "used_percent": 85, "resets_at": rc.iso(T0 + timedelta(hours=6))},
+        ]
+    } if a == "hydrogen" else {
+        "windows": [{"id": "gemini-5h", "used_percent": 30}, {"id": "gemini-weekly", "used_percent": 30}]
+    }
+    sup = env.supervisor()
+    sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    assert sup._choose("claude") == "argon"
+    decisions = [text for kind, text in env.ledger if kind == "decision" and "switched coordinator" in text]
+    assert not any("gemini_spend_down" in d for d in decisions)
+
+
+def test_new_mission_never_seeds_on_hydrogen(tmp_path: Path) -> None:
+    # Acceptance criterion 2: With claude, argon and agy_opus available with room, a new mission
+    # never runs on hydrogen, including after a mission that hydrogen completed (seeded with PREFERRED).
+    root = tmp_path / "control"
+    env = Env(tmp_path, [("claude", SUCCESS, "propose_done")])
+    env.relay.readings = {"claude": reading("claude", 30, T0 + timedelta(days=5), T0)}
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 30}]} if a in ("argon", "agy_opus", "hydrogen") else None
+
+    def factory(store, m):
+        return rc.Supervisor(store, env.host, env.limits, sender=env.sender)
+
+    # 1. Previous mission completed on hydrogen (outside PREFERRED_AGENTS)
+    m_hydrogen = mission_def("cycle hydrogen", mid="m-20261018T080001Z-aabbc1", submitted=T0)
+    _write_mission(root, m_hydrogen)
+    store_hydrogen = rc.mission_store(root, m_hydrogen["id"])
+    state_hydrogen = rc.default_state()
+    state_hydrogen.update({
+        "phase": "idle",
+        "agent": "hydrogen",
+        "mission": {
+            "id": m_hydrogen["id"],
+            "next": 1,
+            "total": 1,
+            "done": [{"task": 0, "outcome": "verified"}],
+            "completed_at": rc.iso(T0),
+        },
+    })
+    store_hydrogen.save(state_hydrogen, T0)
+
+    # 2. Next mission with no initial state definition
+    m_next = mission_def("cycle next", mid="m-20261018T080002Z-aabbc2", submitted=T0 + timedelta(seconds=1))
+    _write_mission(root, m_next)
+
+    mid_next = m_next["id"]
+    outcome = rc.serve_step(root, factory, conflicts=lambda: [], now=lambda: T0 + timedelta(seconds=1))
+    assert outcome == f"ran:{mid_next}:idle"
+
+    # Verify state was seeded with PREFERRED ("claude"), not "hydrogen"
+    next_store = rc.mission_store(root, mid_next)
+    saved_state = next_store.load()
+    assert saved_state["agent"] == rc.PREFERRED
+    assert saved_state["agent"] == "claude"
 
 
 def test_low_headroom_and_free_room_conformance(tmp_path: Path) -> None:

@@ -12,6 +12,11 @@ from test_relay_continuity import SUCCESS, T0, Env, _write_mission, mission_def,
 ra = rc.relay_argon
 
 
+@pytest.fixture(autouse=True)
+def _clean_lease_env(monkeypatch):
+    monkeypatch.delenv("JARVISOS_ARGON_LEASE_FD", raising=False)
+
+
 def stream(command: str = "pwd") -> list[dict]:
     def step(state: str) -> dict:
         return {"event": "step_update", "step_update": {"step_index": 2, "state": state, "conversation_id": "native-test",
@@ -398,6 +403,83 @@ def test_native_opus_runner_preflights_and_launches_the_same_model_family(tmp_pa
     assert meta["agent"] == "agy_opus" and meta["model"] == model
     assert {b["id"] for b in meta["quota"]} == {"3p-5h", "3p-weekly"}
     assert calls[1][calls[1].index("--model") + 1] == model
+    assert rc.classify_turn(turn).outcome == "success"
+
+
+def test_hydrogen_identity_and_quota_family(tmp_path, monkeypatch):
+    assert ra.model_for("hydrogen", {}) == ra.HYDROGEN_MODEL
+    for level in ("low", "medium", "high"):
+        override = f"gemini-4-hydrogen-{level}"
+        assert ra.model_for("hydrogen", {"JARVISOS_AGY_HYDROGEN_MODEL": override}) == override
+    with pytest.raises(ra.Refused, match="model_not_hydrogen"):
+        ra.model_for("hydrogen", {"JARVISOS_AGY_HYDROGEN_MODEL": "gemini-4-argon-low"})
+    with pytest.raises(ra.Refused, match="model_not_allowed"):
+        ra.model_for("argon", {"JARVISOS_AGY_ARGON_MODEL": ra.HYDROGEN_MODEL})
+
+    # read_quota requires exactly the two Gemini buckets (gemini-5h and gemini-weekly)
+    reading = [{"id": name, "remaining_fraction": 0.5} for name in ra.HYDROGEN_BUCKETS] + [
+        {"id": "gemini-argon-wtu-weekly", "remaining_fraction": 0.5},
+        {"id": "3p-5h", "remaining_fraction": 0.5},
+    ]
+    mock_probe(monkeypatch, reading)
+    assert {b["id"] for b in ra.read_quota("agy", agent="hydrogen")} == ra.HYDROGEN_BUCKETS
+
+    # Missing bucket refuses
+    mock_probe(monkeypatch, [{"id": "gemini-5h", "remaining_fraction": 0.5}])
+    with pytest.raises(ra.Refused, match="quota_bucket_missing"):
+        ra.read_quota("agy", agent="hydrogen")
+
+    # Exhausted bucket refuses in require_room
+    mock_probe(monkeypatch, [{"id": "gemini-5h", "remaining_fraction": 0.0}, {"id": "gemini-weekly", "remaining_fraction": 0.5}])
+    with pytest.raises(ra.Refused, match="quota_exhausted"):
+        ra.require_room(ra.read_quota("agy", agent="hydrogen"))
+
+    # Stream classification and model mismatch
+    events = stream()
+    events[0]["init"]["model"] = ra.HYDROGEN_MODEL
+    turn = write_native(tmp_path, events, meta={"model": ra.HYDROGEN_MODEL, "agent": "hydrogen"})
+    (turn / "state.json").write_text(json.dumps({"agent_key": "hydrogen"}))
+    report = rc.classify_turn(turn)
+    assert report.outcome == "success" and report.agent == "hydrogen"
+    assert report.detail == "native hydrogen result SUCCESS"
+
+    # Criterion 5: Hydrogen turn whose stream reports an argon model is classified as model mismatch
+    events[0]["init"]["model"] = ra.MODEL
+    (turn / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    assert rc.classify_turn(turn).outcome != "success"
+
+    # Argon turn whose stream reports hydrogen model is also classified as model mismatch
+    events[0]["init"]["model"] = ra.HYDROGEN_MODEL
+    argon_turn = write_native(tmp_path / "argon_test", events, meta={"model": ra.MODEL, "agent": "argon"})
+    (argon_turn / "state.json").write_text(json.dumps({"agent_key": "argon"}))
+    assert rc.classify_turn(argon_turn).outcome != "success"
+
+
+def test_native_hydrogen_cli_and_runner(tmp_path, monkeypatch):
+    monkeypatch.setenv("JARVISOS_MISSION_PROFILE", "1")
+    monkeypatch.setattr(ra, "sandbox", lambda: True)
+    monkeypatch.setattr(ra, "prepare_login", lambda: None)
+    monkeypatch.setattr(ra, "subscription_settings", lambda: None)
+    monkeypatch.setattr(ra.shutil, "which", lambda _: "agy")
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if "/quota" in argv:
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"status": "SUCCESS", "buckets": [
+                {"id": "gemini-5h", "remaining_fraction": 0.5}, {"id": "gemini-weekly", "remaining_fraction": 0.5}]}))
+        events = stream()
+        events[0]["init"]["model"] = ra.HYDROGEN_MODEL
+        kwargs["stdout"].write("".join(json.dumps(event) + "\n" for event in events))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(ra.subprocess, "run", run)
+    sid, turn = ra.new_session(tmp_path, "bounded hydrogen task", "hydrogen")
+    assert ra.run(tmp_path, sid, "hydrogen") == 0
+    meta = json.loads((turn / "native-result.json").read_text())
+    assert meta["agent"] == "hydrogen" and meta["model"] == ra.HYDROGEN_MODEL
+    assert {b["id"] for b in meta["quota"]} == {"gemini-5h", "gemini-weekly"}
+    assert calls[1][calls[1].index("--model") + 1] == ra.HYDROGEN_MODEL
     assert rc.classify_turn(turn).outcome == "success"
 
 

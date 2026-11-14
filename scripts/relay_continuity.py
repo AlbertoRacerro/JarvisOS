@@ -83,9 +83,9 @@ if "worker_routing" not in sys.modules:
     _ROUTING_SPEC.loader.exec_module(worker_routing)
 
 SCHEMA = "relay-continuity.v1"
-AGENTS = ("claude", "codex", "argon", "agy_opus")
+AGENTS = ("claude", "argon", "agy_opus", "codex", "hydrogen")
 PREFERRED_AGENTS = ("claude", "argon", "agy_opus")
-NATIVE_AGENTS = ("argon", "agy_opus")
+NATIVE_AGENTS = ("argon", "agy_opus", "hydrogen")
 PREFERRED = "claude"
 OUTCOMES = ("success", "quota", "spend_limit", "transient", "auth", "crash", "unknown")
 FAILURES = tuple(o for o in OUTCOMES if o != "success")
@@ -1143,6 +1143,16 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
     results: list[dict[str, Any]] = []
     initialized = False
     conversation: str | None = None
+    if agent == "hydrogen":
+        allowed_models = relay_argon.HYDROGEN_MODELS
+        expected_label = "Gemini 4 Hydrogen"
+    elif agent == "agy_opus":
+        allowed_models = relay_argon.OPUS_MODELS
+        expected_label = "Claude Opus"
+    else:
+        allowed_models = relay_argon.MODELS
+        expected_label = "Gemini 4 Argon"
+    _ = expected_label
     for index, event in enumerate(events):
         typ = event.get("event")
         if typ == "init":
@@ -1151,7 +1161,7 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
             initialized = True
             conversation = event.get("conversation_id")
             init = event.get("init")
-            if not isinstance(init, dict) or init.get("model") != meta.get("model") or init.get("model") not in (relay_argon.OPUS_MODELS if agent == "agy_opus" else relay_argon.MODELS):
+            if not isinstance(init, dict) or init.get("model") != meta.get("model") or init.get("model") not in allowed_models:
                 report.bad_lines += 1
         elif typ == "step_update":
             step = event.get("step_update")
@@ -1954,7 +1964,7 @@ class RelayAdapter:
             relay_argon.model_for(agent, env)
             reading = relay_argon.read_quota(binary, env, agent=agent)
             result = {"as_of": iso(now_utc()),
-                      "windows": [{"used_percent": 100 * (1 - b["remaining_fraction"]),
+                      "windows": [{"id": b.get("id"), "used_percent": 100 * (1 - b["remaining_fraction"]),
                                    "resets_at": b.get("reset_time"), "disabled": b.get("disabled", False)}
                                   for b in reading]}
         except relay_argon.Refused:
@@ -3107,6 +3117,31 @@ class Host:
     read_ledger: Callable[[], list[dict[str, Any]]] | None = None
 
 
+def _parse_iso_timestamp(value: str | None) -> datetime | None:
+    return parse_ts(value)
+
+
+def usable_reading(reading: Any) -> bool:
+    if not isinstance(reading, dict):
+        return False
+    windows = reading.get("windows")
+    if not isinstance(windows, list) or not windows:
+        return False
+    for w in windows:
+        if not isinstance(w, dict) or w.get("disabled"):
+            return False
+        used = w.get("used_percent")
+        if not _valid_percent(used):
+            return False
+    return True
+
+
+def free_percent(reading: Any) -> float | None:
+    if not usable_reading(reading):
+        return None
+    return min(100.0 - float(w["used_percent"]) for w in reading["windows"])
+
+
 class _DecisionSnapshot:
     """A per-decision snapshot of provider quota readings so availability, headroom,
     and coordinator ranking evaluate against a single consistent observation per agent."""
@@ -3770,12 +3805,56 @@ class Supervisor:
                                         if op.id in verdicts))
         return verdicts, uncertain
 
+    def is_hydrogen_spend_down(self, now: datetime | None = None) -> bool:
+        if now is None:
+            now = self.host.now()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        if not self.available("hydrogen"):
+            return False
+        reading = None
+        if hasattr(self.limits, "read") and callable(self.limits.read):
+            try:
+                reading = self.limits.read("hydrogen", now=now)
+            except TypeError:
+                reading = self.limits.read("hydrogen")
+        if reading is None:
+            if self._snapshot is not None:
+                reading = self._snapshot.get_entry("hydrogen")
+            else:
+                reading = self.host.relay.argon_limits("hydrogen")
+        if not usable_reading(reading):
+            return False
+        fp = free_percent(reading)
+        if fp is None or fp < self.limits.min_free_percent:
+            return False
+        for w in reading.get("windows", []):
+            if not isinstance(w, dict) or w.get("id") != "gemini-weekly":
+                continue
+            if w.get("disabled"):
+                return False
+            resets_at = _parse_iso_timestamp(w.get("resets_at"))
+            if resets_at is None:
+                return False
+            if resets_at.tzinfo is None:
+                resets_at = resets_at.replace(tzinfo=UTC)
+            diff = resets_at - now
+            if not (timedelta(0) < diff <= worker_routing.SPEND_DOWN):
+                return False
+            used = float(w.get("used_percent", 0.0))
+            return 100.0 - used >= self.limits.min_free_percent
+        return False
+
+    hydrogen_spend_down = is_hydrogen_spend_down
+    _hydrogen_spend_down = is_hydrogen_spend_down
+
     def _choose(self, current: str) -> str | None:
         """Prefer available coordinators with quota room, retaining the first available if all are low."""
         prev = self._snapshot
         self._snapshot = _DecisionSnapshot(self)
         try:
             first_available = None
+            spend_down_applied = False
             if current in PREFERRED_AGENTS and self.available(current):
                 first_available = current
                 room = self.free_room(current)
@@ -3787,6 +3866,7 @@ class Supervisor:
                 agent = None
 
             if agent is None:
+                spend_down = self.is_hydrogen_spend_down()
                 remaining = [a for a in PREFERRED_AGENTS if a != current] if current in PREFERRED_AGENTS else list(PREFERRED_AGENTS)
                 avail = {a: self.available(a) for a in remaining}
                 rooms = {a: self.free_room(a) for a in remaining}
@@ -3794,7 +3874,12 @@ class Supervisor:
                     remaining,
                     key=lambda a: ((0, -rooms[a]) if rooms[a] is not None else (1, 0.0)),
                 )
-                for candidate in [*sorted_remaining, "codex"]:
+                if spend_down:
+                    candidates = ["hydrogen", *sorted_remaining, "codex"]
+                else:
+                    candidates = [*sorted_remaining, "codex", "hydrogen"]
+
+                for candidate in candidates:
                     is_avail = avail[candidate] if candidate in avail else self.available(candidate)
                     if is_avail:
                         first_available = first_available or candidate
@@ -3802,6 +3887,8 @@ class Supervisor:
                         if room is not None and room < self.limits.min_free_percent:
                             continue
                         agent = candidate
+                        if spend_down and candidate == "hydrogen":
+                            spend_down_applied = True
                         break
                 else:
                     agent = first_available
@@ -3813,7 +3900,8 @@ class Supervisor:
                     self.state["last_switch_at"] = iso(now)
                     self.notify("provider_switched", session=self.state["head_session"], from_agent=current,
                                 agent=agent, outcome=self.state.get("last_outcome") or "success")
-                    self.record("decision", f"relay-continuity: switched coordinator {current} -> {agent} "
+                    spend_tag = " (gemini_spend_down)" if (agent == "hydrogen" and spend_down_applied) else ""
+                    self.record("decision", f"relay-continuity: switched coordinator {current} -> {agent}{spend_tag} "
                                             f"after {self.state.get('last_outcome')} on {self.state['head_session']}.")
                 return agent
             return None
