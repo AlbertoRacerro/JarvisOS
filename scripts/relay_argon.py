@@ -27,9 +27,17 @@ REQUIRED_BUCKETS = frozenset(("gemini-5h", "gemini-weekly", "gemini-argon-wtu-we
 OPUS_MODEL = "claude-opus-5-5-medium"
 OPUS_MODELS = frozenset(f"claude-opus-5-5-{level}" for level in ("low", "medium", "high"))
 OPUS_BUCKETS = frozenset(("3p-5h", "3p-weekly"))
+HYDROGEN_MODEL = "gemini-4-hydrogen-medium"
+HYDROGEN_MODELS = frozenset(f"gemini-4-hydrogen-{level}" for level in ("low", "medium", "high"))
+HYDROGEN_BUCKETS = frozenset(("gemini-5h", "gemini-weekly"))
 
 
 def model_for(agent: str, env: Mapping[str, str]) -> str:
+    if agent == "hydrogen":
+        model = env.get("JARVISOS_AGY_HYDROGEN_MODEL", HYDROGEN_MODEL)
+        if model not in HYDROGEN_MODELS:
+            raise Refused("model_not_hydrogen", f"{model!r} is not a Gemini 4 Hydrogen model")
+        return model
     if agent not in ("argon", "agy_opus"):
         raise Refused("agent_not_allowed")
     model = env.get("JARVISOS_AGY_OPUS_MODEL", OPUS_MODEL) if agent == "agy_opus" else env.get("JARVISOS_AGY_ARGON_MODEL", MODEL)
@@ -170,9 +178,14 @@ def read_quota(binary: str, env: dict[str, str] | None = None, *, agent: str = "
         raise Refused("quota_unreadable") from exc
     if proc.returncode != 0 or not isinstance(data, dict) or data.get("status") != "SUCCESS":
         raise Refused("quota_unreadable")
-    required = OPUS_BUCKETS if agent == "agy_opus" else REQUIRED_BUCKETS
-    found = [b for b in buckets(data) if b.get("id") in required]
-    if len(found) != len(required) or {b.get("id") for b in found} != required:
+    if agent == "hydrogen":
+        wanted = HYDROGEN_BUCKETS
+    elif agent == "agy_opus":
+        wanted = OPUS_BUCKETS
+    else:
+        wanted = REQUIRED_BUCKETS
+    found = [b for b in buckets(data) if b.get("id") in wanted]
+    if len(found) != len(wanted) or {b.get("id") for b in found} != wanted:
         raise Refused("quota_bucket_missing")
     for bucket in found:
         fraction = bucket.get("remaining_fraction")
@@ -329,7 +342,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--session", required=True)
-    parser.add_argument("--agent", choices=("argon", "agy_opus"), default="argon")
+    parser.add_argument("--agent", choices=("argon", "agy_opus", "hydrogen"), default="argon")
     args = parser.parse_args()
     if not all(c in "0123456789-abcdef" for c in args.session) or len(args.session) != 22:
         raise SystemExit("invalid native session id")

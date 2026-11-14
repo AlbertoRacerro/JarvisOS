@@ -30,7 +30,12 @@ from pathlib import Path
 cfg = json.loads(Path({cfg!r}).read_text())
 args = sys.argv[1:]
 if args[:2] == ["-p", "/quota"]:
-    print(cfg["quota_out"]); sys.exit(0)
+    calls = cfg.get("quota_calls", 0) + 1
+    cfg["quota_calls"] = calls
+    Path({cfg!r}).write_text(json.dumps(cfg))
+    out = cfg.get("quota_after_out") if calls > 1 and "quota_after_out" in cfg else cfg["quota_out"]
+    exit_code = cfg.get("quota_after_exit", 0) if calls > 1 and "quota_after_exit" in cfg else 0
+    print(out); sys.exit(exit_code)
 Path(cfg["log"]).write_text(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(),
     "env": {{k: os.environ.get(k) for k in ("GH_TOKEN", "GITHUB_TOKEN", "GH_FOO", "GIT_FOO",
     "GIT_CONFIG_GLOBAL", "GIT_TERMINAL_PROMPT", "SSH_AUTH_SOCK", "GH_CONFIG_DIR", "GIT_CONFIG_NOSYSTEM")}}}}))
@@ -475,3 +480,149 @@ def test_prepare_login_links_gemini_and_refuses_missing_or_conflicting_home(env:
 ])
 def test_failure_class_mapping_all_guards(status: str, reason: str | None, stderr: str, expected: str | None) -> None:
     assert worker.failure_class(status, reason, stderr) == expected
+
+
+# --- Spec 272 (WORKER-COST-1): spend, usage, quota_after, overlap ---------------------
+
+
+def test_usage_and_quota_after_and_overlap_false_written_to_result(env: Env) -> None:
+    usage_data = {
+        "input_tokens": 150,
+        "output_tokens": 40,
+        "thinking_tokens": 10,
+        "cache_read_tokens": 0,
+        "total_tokens": 200,
+        "extra_field": "dropped",
+    }
+    quota_after_reading = {
+        "command": {"data": {"groups": [{"buckets": [
+            {"id": "gemini-5h", "remaining_fraction": 0.78},
+            {"id": "gemini-weekly", "remaining_fraction": 0.47},
+        ]}]}}
+    }
+    env.set(
+        run_out=json.dumps({"status": "SUCCESS", "response": "done", "usage": usage_data}),
+        quota_after_out=json.dumps(quota_after_reading),
+    )
+    result = env.run()
+    assert result["status"] == "succeeded"
+    assert result["usage"] == {
+        "input_tokens": 150,
+        "output_tokens": 40,
+        "thinking_tokens": 10,
+        "cache_read_tokens": 0,
+        "total_tokens": 200,
+    }
+    assert result["quota_after"] == [
+        {"id": "gemini-5h", "remaining_fraction": 0.78},
+        {"id": "gemini-weekly", "remaining_fraction": 0.47},
+    ]
+    assert result["overlap"] is False
+    assert "quota_after_error" not in result
+
+
+def test_quota_after_failure_still_succeeds_with_null_and_error(env: Env) -> None:
+    env.set(
+        run_out=json.dumps({"status": "SUCCESS", "response": "done"}),
+        quota_after_out="Something went wrong",
+        quota_after_exit=1,
+    )
+    result = env.run()
+    assert result["status"] == "succeeded"
+    assert result["quota_after"] is None
+    assert "quota_after_error" in result
+    assert result["quota_after_error"] is not None
+    assert result["overlap"] is False
+
+
+def test_active_intervals_intersect_both_report_overlap_true(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    log_file = env.tmp / ".worker_runs.jsonl"
+    monkeypatch.setenv("JARVISOS_AGY_ACTIVITY_LOG", str(log_file))
+
+    now = time.time()
+    peer_id = "peer123"
+    worker.log_run_start(log_file, peer_id, worker.now_utc(), now - 5)
+
+    res = env.run()
+    assert res["overlap"] is True
+
+    worker.log_run_end(log_file, peer_id, worker.now_utc(), now + 10)
+    peer1_overlap = worker.check_overlap(log_file, peer_id, now - 5, now + 10)
+    assert peer1_overlap is True
+
+
+def test_crashed_peer_older_than_max_timeout_plus_kill_margin_not_overlapping(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log_file = env.tmp / ".worker_runs.jsonl"
+    monkeypatch.setenv("JARVISOS_AGY_ACTIVITY_LOG", str(log_file))
+
+    crashed_time = time.time() - (worker.MAX_TIMEOUT + worker.KILL_MARGIN + 3600)
+    worker.log_run_start(log_file, "crashed_run", worker.now_utc(), crashed_time)
+
+    res = env.run()
+    assert res["overlap"] is False
+
+
+def test_different_evidence_parents_share_default_activity_log(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JARVISOS_AGY_ACTIVITY_LOG", raising=False)
+    default_log = worker.activity_log_path()
+    now = time.time()
+    worker.log_run_start(default_log, "peer_other_dir", worker.now_utc(), now - 5)
+
+    custom_ev = env.tmp / "custom_sub" / "nested" / "ev1"
+    args = argparse.Namespace(
+        task_file=str(env.task), worktree=str(env.wt), model="flash",
+        timeout=30, evidence_dir=str(custom_ev), coordinator_fallback=False,
+    )
+    _, res = worker.execute(args, sandbox_check=lambda: True)
+    assert res["overlap"] is True
+
+
+def test_activity_log_write_failure_reports_overlap_null(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Point activity log at an existing directory so open() fails with EISDIR (OSError)
+    bad_log = env.tmp / "is_a_dir"
+    bad_log.mkdir()
+    monkeypatch.setenv("JARVISOS_AGY_ACTIVITY_LOG", str(bad_log))
+    res = env.run()
+    assert res["status"] == "succeeded"
+    assert res["overlap"] is None
+
+
+def test_sequential_subsecond_runs_do_not_report_overlap(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    log_file = env.tmp / ".worker_runs.jsonl"
+    monkeypatch.setenv("JARVISOS_AGY_ACTIVITY_LOG", str(log_file))
+    ev1 = env.tmp / "ev_seq_1"
+    ev2 = env.tmp / "ev_seq_2"
+    args1 = argparse.Namespace(
+        task_file=str(env.task), worktree=str(env.wt), model="flash",
+        timeout=30, evidence_dir=str(ev1), coordinator_fallback=False,
+    )
+    args2 = argparse.Namespace(
+        task_file=str(env.task), worktree=str(env.wt), model="flash",
+        timeout=30, evidence_dir=str(ev2), coordinator_fallback=False,
+    )
+    _, res1 = worker.execute(args1, sandbox_check=lambda: True)
+    env.clean()
+    _, res2 = worker.execute(args2, sandbox_check=lambda: True)
+    assert res1["overlap"] is False
+    assert res2["overlap"] is False
+
+
+@pytest.mark.parametrize("bad_fraction", [1.5, -0.1, "Infinity"])
+def test_quota_after_rejects_out_of_range_or_non_finite_fraction(env: Env, bad_fraction: Any) -> None:
+    if bad_fraction == "Infinity":
+        raw_after = '{"command": {"data": {"groups": [{"buckets": [{"id": "gemini-5h", "remaining_fraction": 0.5}, {"id": "gemini-weekly", "remaining_fraction": Infinity}]}]}}}'
+    else:
+        raw_after = json.dumps({"command": {"data": {"groups": [{"buckets": [
+            {"id": "gemini-5h", "remaining_fraction": 0.5},
+            {"id": "gemini-weekly", "remaining_fraction": bad_fraction},
+        ]}]}}})
+    env.set(
+        run_out=json.dumps({"status": "SUCCESS", "response": "done"}),
+        quota_after_out=raw_after,
+    )
+    result = env.run()
+    assert result["status"] == "succeeded"
+    assert result["quota_after"] is None
+    assert "quota_exhausted" in (result.get("quota_after_error") or "")

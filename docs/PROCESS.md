@@ -37,13 +37,13 @@ low = docs, tests, copy; medium = feature code covered by tests; high = security
 loss, supervisor/relay/sandbox, irreversible operations), then runs
 
 ```bash
-python3 scripts/worker_routing.py pick --difficulty D --risk R
+python3 scripts/worker_routing.py pick --difficulty D --risk R --kind K
 ```
 
 and delegates to the worker it returns: the cheapest adequate one whose subscription pool has headroom. `no_worker`
 means the coordinator does the work or waits. The router only reads quota; it launches nothing and grants no authority.
 The coordinator reviews the worker's diff in proportion to risk before adopting it, and runs the checks itself.
-Record every worker outcome with `python3 scripts/worker_routing.py record`. On a model failure, escalate with salvage (the next worker starts from the
+Record every worker outcome with `python3 scripts/worker_routing.py record` (pass `--evidence <dir>` for each agy worker run). On a model failure, escalate with salvage (the next worker starts from the
 failed branch or diff plus the findings, unless the coordinator records why the approach is wrong).
 
 Worker routing rules (ADR-062): Gemini first for workers at every tier, with effort from difficulty times risk (Flash
@@ -81,7 +81,8 @@ Rules:
 1. **The coordinator owns spec acceptance.** It drafts or takes the spec, reviews it critically against overengineering
    (section 6: is every part needed for the outcome?), and if it agrees moves the row to `ready` and implements it
    without a maintainer approval step. Implementation starts only from `ready` with every hard dependency merged (or no
-   longer listed).
+   longer listed). The review checks the spec's code facts against the code first; from spec 270 they are
+   `path::Symbol` references that `scripts/check_code_facts.py` keeps resolving while the row is `ready`.
 2. The implementation PR carries `**Spec gate:** implementation NNN` in its body; the row must be `in_review` with this
    PR's number, or `merged` with it when this PR completes the spec (the row reaches the base branch only by that merge, so
    it is never early there). A slice that leaves work open keeps `in_review`. `definition NNN` or `N/A` is used for
