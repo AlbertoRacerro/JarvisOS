@@ -2258,9 +2258,6 @@ def persist_owed_watcher_restore(
     return record
 
 
-write_release_watcher_restore = persist_owed_watcher_restore
-
-
 def retry_owed_watcher_restore(
     paths: Paths,
     run: Callable[..., subprocess.CompletedProcess] = real_run,
@@ -2271,15 +2268,9 @@ def retry_owed_watcher_restore(
             return False
     except OSError:
         return False
-    unit = "jarvisos-relay-watch.service"
+    # The unit is fixed: the record only says a restore is owed, it never names what to restart.
     try:
-        data = json.loads(record_path.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and data.get("unit"):
-            unit = str(data["unit"])
-    except (OSError, ValueError):
-        pass
-    try:
-        proc = run(["systemctl", "--user", "restart", unit], timeout=60)
+        proc = run(["systemctl", "--user", "restart", "jarvisos-relay-watch.service"], timeout=60)
         if proc.returncode == 0:
             try:
                 record_path.unlink(missing_ok=True)
