@@ -710,6 +710,7 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
     if evidence is not None:
         raw_list = [evidence] if isinstance(evidence, (str, Path)) else list(evidence)
         if raw_list:
+            seen_evidence: set[Path] = set()
             total_tokens = 0
             sum_quota = 0.0
             quota_runs = 0
@@ -719,6 +720,10 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
                 res_path = item_path / "result.json" if item_path.is_dir() else item_path
                 if not res_path.is_file():
                     raise ValueError(f"evidence result missing or unreadable: {item}")
+                resolved = res_path.resolve()
+                if resolved in seen_evidence:
+                    raise ValueError(f"duplicate evidence path: {item}")
+                seen_evidence.add(resolved)
                 try:
                     res_dict = json.loads(res_path.read_text(encoding="utf-8"))
                 except Exception as exc:
@@ -744,9 +749,10 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
                             fa = ba.get("remaining_fraction")
                             if isinstance(fb, (int, float)) and not isinstance(fb, bool) and \
                                     isinstance(fa, (int, float)) and not isinstance(fa, bool):
-                                drop = max(0.0, float(fb) - float(fa))
-                                sum_quota += drop
-                                quota_runs += 1
+                                delta = float(fb) - float(fa)
+                                if delta >= 0.0:
+                                    sum_quota += delta
+                                    quota_runs += 1
             spend_data = {
                 "runs": len(raw_list),
                 "tokens": total_tokens,
@@ -954,20 +960,25 @@ def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[d
         and r.get("failure") != "harness"
         and isinstance(r.get("spend"), dict)
     ]
-    clean_records = [r for r in all_spend_records if _is_clean_spend(r["spend"])]
+    clean_records = [
+        r for r in all_spend_records
+        if _is_clean_spend(r["spend"])
+        and (int(r["spend"]["tokens"]) if isinstance(r["spend"].get("tokens"), (int, float)) and not isinstance(r["spend"]["tokens"], bool) else 0) > 0
+    ]
     clean_quota = sum(float(r["spend"].get("quota", 0.0)) for r in clean_records)
-    clean_tokens = sum(int(r["spend"].get("tokens", 0)) for r in clean_records)
+    clean_tokens = sum(int(r["spend"]["tokens"]) for r in clean_records)
     ratio = (clean_quota / clean_tokens) if (clean_records and clean_tokens > 0) else None
 
     costs: list[float] = []
     for r in c_records:
-        if r.get("failure") == "model" or r.get("escalated") is True:
+        if r.get("failure") == "model" or bool(r.get("escalated")):
             costs.append(math.inf)
         elif _is_clean_spend(r["spend"]):
             costs.append(float(r["spend"].get("quota", 0.0)))
         elif ratio is not None:
-            tokens = int(r["spend"].get("tokens", 0))
-            costs.append(tokens * ratio)
+            tokens = int(r["spend"]["tokens"]) if isinstance(r["spend"].get("tokens"), (int, float)) and not isinstance(r["spend"]["tokens"], bool) else 0
+            if tokens > 0:
+                costs.append(tokens * ratio)
         else:
             # no clean run -> that record has no cost
             pass
@@ -1119,7 +1130,7 @@ def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | 
     required = tier(difficulty, risk)
     eligible, skipped = rank(required, pools, review_of=review_of, now=now, task=task, kind=kind, outcomes=outcomes)
     decision: dict[str, Any] = {"difficulty": difficulty, "risk": risk, "required_tier": required,
-                                "review": REVIEW[risk], "reserves": RESERVES}
+                                "kind": kind, "review": REVIEW[risk], "reserves": RESERVES}
     by_key = {m.key: m for m in MODELS}
     if not eligible:
         reason = "wait_for_escalation_pool" if any(s.get("skipped") == "escalated_from_family" for s in skipped) else "no_worker"
@@ -1172,6 +1183,14 @@ def cached_summary(ttl: float = CACHE_TTL, clock: Callable[[], float] = time.mon
     return line
 
 
+def _format_cost(cost: float | None, count: int) -> str:
+    if cost is None:
+        return f"cost unmeasured, {count} records"
+    if math.isinf(cost):
+        return f"cost inf, {count} records"
+    return f"cost {round(cost, 4)}, {count} records"
+
+
 def render(decision: dict[str, Any]) -> str:
     if decision["status"] != "ok":
         skipped = ", ".join(f"{s['worker']}({s['skipped']})" for s in decision["skipped"]) or "none adequate"
@@ -1179,8 +1198,13 @@ def render(decision: dict[str, Any]) -> str:
         return (f"{prefix}: nothing adequate for tier {decision['required_tier']} "
                 f"(difficulty {decision['difficulty']}, risk {decision['risk']}); skipped: {skipped}\n"
                 "The coordinator does the work itself or waits.")
-    lines = [f"worker: {decision['worker']} ({decision['model']}, pool {decision['pool']}"
-             + (", quota from snapshot)" if decision["source"] == "snapshot" else ")"),
+    show_measured = decision.get("kind") is not None or decision.get("measured_cost") is not None or bool(decision.get("record_count"))
+    worker_desc = f"{decision['model']}, pool {decision['pool']}"
+    if decision["source"] == "snapshot":
+        worker_desc += ", quota from snapshot"
+    if show_measured:
+        worker_desc += f", {_format_cost(decision.get('measured_cost'), decision.get('record_count', 0))}"
+    lines = [f"worker: {decision['worker']} ({worker_desc})",
              f"tier: {decision['required_tier']} (difficulty {decision['difficulty']}, risk {decision['risk']})",
              "launch requires exported absolute WORKTREE and TASK_FILE, LABEL (1-80 letters, digits, spaces or _.:/+-), AUTHORITY, SPEC; optional WALL_HOURS (default 1):",
              f"launch: {decision['command']}",
@@ -1188,9 +1212,13 @@ def render(decision: dict[str, Any]) -> str:
     if decision.get("note"):
         lines.append(f"note: {decision['note']}")
     if decision["alternatives"]:
-        lines.append("alternatives: " + ", ".join(
-            f"{a['worker']} ({a['pool']} {pct(a['free'])} free{' snapshot' if a['source'] == 'snapshot' else ''})"
-            for a in decision["alternatives"]))
+        alt_strs = []
+        for a in decision["alternatives"]:
+            entry_desc = f"{a['pool']} {pct(a['free'])} free" + (" snapshot" if a.get("source") == "snapshot" else "")
+            if show_measured:
+                entry_desc += f", {_format_cost(a.get('measured_cost'), a.get('record_count', 0))}"
+            alt_strs.append(f"{a['worker']} ({entry_desc})")
+        lines.append("alternatives: " + ", ".join(alt_strs))
     if decision["skipped"]:
         lines.append("skipped: " + ", ".join(f"{s['worker']}({s['skipped']})" for s in decision["skipped"]))
     return "\n".join(lines)
