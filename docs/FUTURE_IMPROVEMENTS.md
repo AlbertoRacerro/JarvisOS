@@ -148,3 +148,11 @@ Each entry must contain:
 - **Disposition:** PARK; closing it needs the launcher to bind the checkout and the interpreter read-only (or outside the agents' view) for that one run, a sandbox launcher change outside the 243 scope.
 - **Expected benefit:** the prompt export runs exactly the reviewed commit, with no race window.
 - **Likely surface:** `op_local_eval_run` and `_run_benchmark` in `scripts/host_ops.py`; the `jarvis-sandbox` launcher.
+
+### F23 — Host executor unit names bound to one user manager — PARK
+
+- **Origin:** spec 262 criterion 8 planning, 2026-11-15.
+- **Observation:** `scripts/host_ops.py` hard-codes the unit names `jarvisos-hostops.service`, `jarvisos-relay-watch.service` and `jarvisos-mission-owner.service`, and `systemctl --user` reaches the same user manager whatever `HOME` is set to. A second executor (a rehearsal or a proof on a temporary home) therefore cannot run under the maintainer's own user without replacing the live units; the real-environment proof has to use a separate throwaway Linux user.
+- **Disposition:** PARK; one executor per host is the intended setup and the throwaway-user procedure works, so a unit-name prefix is not needed now.
+- **Expected benefit:** host rehearsals without a second Linux user.
+- **Likely surface:** `SERVICE_UNIT`, `UNIT_TEMPLATES` and the unit constants in `scripts/host_ops.py`.
