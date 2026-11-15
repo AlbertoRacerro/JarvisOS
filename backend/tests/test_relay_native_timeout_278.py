@@ -513,4 +513,3 @@ def test_runner_stderr_print_timeout_without_supervisor_flag_does_not_bypass_gat
     assert rep_valid.no_evidence is False
     assert rc.gate(rep_valid) is None
     assert [c.label for c in rep_valid.in_flight] == ["git push"]
-
