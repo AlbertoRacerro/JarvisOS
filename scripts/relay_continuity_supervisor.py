@@ -1577,7 +1577,7 @@ class Supervisor:
                 result = self.host.relay.finish(proc, timeout=wall_limit)
             except TypeError:
                 result = self.host.relay.finish(proc)
-            timed_out = getattr(result, "timed_out", False) or (not result.raw_ok and "wall limit" in (result.diagnostics or "").lower())
+            timed_out = bool(getattr(result, "timed_out", False))
             if timed_out:
                 pending["timed_out"] = True
                 if result.diagnostics:

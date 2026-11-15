@@ -203,6 +203,34 @@ def test_timed_out_attempt_cannot_complete_task_and_parks_external_effects(tmp_p
     assert report.turn_id in sup.state.get("parked_turns", [])
 
 
+def test_runner_diagnostic_cannot_assert_supervisor_timeout(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    sup = env.supervisor()
+
+    class FakeProc:
+        pid = 99999
+
+    env.relay.start = lambda *args, **kwargs: FakeProc()
+
+    def fake_finish(proc: Any, timeout: float | None = None) -> rc.RunResult:
+        sid = "20261115-210000-777777"
+        turn = env.relay.sessions_dir() / sid / "turns/turn-001"
+        turn.mkdir(parents=True)
+        (turn / "state.json").write_text(json.dumps({"agent_key": "argon"}), encoding="utf-8")
+        (turn / "output.jsonl").write_text("{", encoding="utf-8")
+        return rc.RunResult(sid, 1, False, "runner says turn wall limit exceeded", timed_out=False)
+
+    env.relay.finish = fake_finish
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+    result = sup._launch("argon", "[relay-continuity attempt {nonce}]\ntask", None)
+
+    assert isinstance(result, rc.TurnReport)
+    assert result.timed_out is False
+    assert result.harness_cause != "turn_time_limit"
+    assert rc.gate(result) == "output_unparseable"
+    assert sup.state["pending"] is None
+
+
 def test_native_and_non_native_wall_limits(tmp_path: Path) -> None:
     """Criterion 4: The native supervisor wall limit exceeds runner TURN_TIMEOUT + 30 seconds
 
