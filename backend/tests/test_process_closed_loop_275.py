@@ -508,8 +508,25 @@ def test_ac3_free_text_does_not_count_as_property_range_failure() -> None:
 
 
 def test_temperature_diagnosis_none_when_loop_converges_from_below() -> None:
-    history = [{"residuals": {"Rec": {"temperature_K": value}}} for value in (0.8, 0.4, 0.2)]
-    assert mixed_runtime._temperature_diagnosis(history) is None
+    # Shrinking residuals across the observed tail (even slow convergence like 0.8, 0.7, 0.6)
+    for sequence in ((0.8, 0.7, 0.6), (0.8, 0.4, 0.2)):
+        history = [{"residuals": {"Rec": {"temperature_K": value}}} for value in sequence]
+        assert mixed_runtime._temperature_runaway_rise(history) is None
+        assert mixed_runtime._temperature_diagnosis(history) is None
+
+
+def test_temperature_diagnosis_reports_persistent_or_rising_residuals() -> None:
+    # Persistent positive residuals (e.g. constant work input without heat sink)
+    history_persistent = [{"residuals": {"Rec": {"temperature_K": value}}} for value in (0.5, 0.5, 0.5)]
+    assert mixed_runtime._temperature_runaway_rise(history_persistent) == 0.5
+    diag_p = mixed_runtime._temperature_diagnosis(history_persistent)
+    assert diag_p is not None and "temperature rises by 0.5 K per pass around the loop" in diag_p
+
+    # Rising positive residuals
+    history_rising = [{"residuals": {"Rec": {"temperature_K": value}}} for value in (0.5, 0.6, 0.7)]
+    assert mixed_runtime._temperature_runaway_rise(history_rising) == 0.7
+    diag_r = mixed_runtime._temperature_diagnosis(history_rising)
+    assert diag_r is not None and "temperature rises by 0.7 K per pass around the loop" in diag_r
 
 
 def _fed_recycle_document(*, sink: dict[str, Any] | None = None, purge: bool = True) -> dict[str, Any]:
@@ -602,3 +619,94 @@ def test_feedless_seed_uses_explicit_values_and_leaves_unseeded_culture_none() -
     assert state["culture"]["biomass"] == 0.2
     assert any(value is None for value in state["culture"].values())
     assert 0.0 not in [value for name, value in state["culture"].items() if name not in doc["solver"]["seeds"]["Rec"]]
+
+
+def test_feedless_seed_multi_compound_nondefault_phase_and_composition(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Explicit solver seeds for mass_fractions and vapor_fraction reach the tear state in a feedless loop."""
+    workspace_id = new_workspace()
+    doc, _ = _make_closed_loop_fixture(workspace_id, with_heat_sink=True)
+    doc["compounds"] = ["Water", "Ethanol"]
+    explicit_seed = {
+        "mass_flow_kg_s": 0.05,
+        "temperature_K": 310.15,
+        "pressure_Pa": 105000.0,
+        "mass_fractions": {"Water": 0.7, "Ethanol": 0.3},
+        "vapor_fraction": 0.25,
+        "biomass": 0.15,
+    }
+    settings = mixed_runtime.tear_solver.Settings(seeds={"Rec": explicit_seed})
+    part = mixed.partition(doc)
+    seeded = mixed_runtime._seed(doc, part, settings)
+    state = seeded["RecToPump"]
+    assert state["mass_fractions"] == {"Water": 0.7, "Ethanol": 0.3}
+    assert state["vapor_fraction"] == 0.25
+    assert state["mass_flow_kg_s"] == 0.05
+    assert state["temperature_K"] == 310.15
+    assert state["pressure_Pa"] == 105000.0
+    # Culture merge behavior: seeded field is applied, unseeded fields stay None
+    assert state["culture"]["biomass"] == 0.15
+    assert state["culture"]["salinity"] is None
+    assert state["culture"]["nitrogen"] is None
+
+    # Prove that the seeded nondefault phase and composition reach the tear state in solve evaluation
+    captured_tear: dict[str, Any] = {}
+
+    def mock_eval(document, part, tear, **kwargs):
+        captured_tear.update(copy.deepcopy(tear))
+        return {
+            "produced": copy.deepcopy(tear),
+            "streams": {},
+            "units": {},
+            "known": {},
+            "culture_generation": {},
+            "culture_generation_allowance": {},
+            "mixed_findings": [],
+            "segments": [],
+            "max_build_seconds": 0.01,
+            "elapsed_s_by_phase": {"build": 0.01, "solve": 0.01, "culture": 0.01},
+        }
+
+    monkeypatch.setattr(mixed_runtime, "_evaluate", mock_eval)
+    result = mixed_runtime.run(
+        doc,
+        action="run",
+        client=object(),
+        dwsim_version="10.2.9",
+        mcp_sha256="a" * 64,
+        run_dir=tmp_path,
+        workspace_id=workspace_id,
+        initial_tear=seeded,
+        include_tear_state=True,
+    )
+    assert captured_tear["RecToPump"]["mass_fractions"] == {"Water": 0.7, "Ethanol": 0.3}
+    assert captured_tear["RecToPump"]["vapor_fraction"] == 0.25
+    assert result["_tear_state"]["RecToPump"]["mass_fractions"] == {"Water": 0.7, "Ethanol": 0.3}
+    assert result["_tear_state"]["RecToPump"]["vapor_fraction"] == 0.25
+
+
+@pytest.mark.parametrize(
+    ("mass_flow", "temperature"),
+    [
+        (True, 298.15),
+        (False, 298.15),
+        (0.05, True),
+        (0.05, False),
+        (True, True),
+    ],
+)
+def test_feedless_seed_rejects_booleans_for_required_numbers(mass_flow: Any, temperature: Any) -> None:
+    """Booleans for required mass_flow_kg_s or temperature_K seed numbers must be rejected."""
+    workspace_id = new_workspace()
+    doc, _ = _make_closed_loop_fixture(workspace_id, with_heat_sink=True)
+    settings = mixed_runtime.tear_solver.Settings(
+        seeds={"Rec": {"mass_flow_kg_s": mass_flow, "temperature_K": temperature}}
+    )
+    part = mixed.partition(doc)
+    with pytest.raises(mixed_runtime.SegmentFailure) as exc_info:
+        mixed_runtime._seed(doc, part, settings)
+    assert exc_info.value.segment == "initial_guess"
+    assert "A closed loop without a feed needs a solver seed for Rec (mass_flow_kg_s, temperature_K)" in str(
+        exc_info.value.detail
+    )

@@ -444,7 +444,8 @@ def _seed_without_feed(document: dict[str, Any], part: dict[str, Any], settings:
     for uid in part["consumed"]:
         tag = units[uid]["tag"]
         explicit = seeds.get(tag, {})
-        if not all(isinstance(explicit.get(name), (int, float)) for name in ("mass_flow_kg_s", "temperature_K")):
+        if not all(isinstance(explicit.get(name), (int, float)) and not isinstance(explicit.get(name), bool)
+                   for name in ("mass_flow_kg_s", "temperature_K")):
             raise SegmentFailure(
                 "initial_guess",
                 f"A closed loop without a feed needs a solver seed for {tag} (mass_flow_kg_s, temperature_K)")
@@ -463,7 +464,7 @@ def _seed_without_feed(document: dict[str, Any], part: dict[str, Any], settings:
                 state["culture"].update(value)
             elif name in mixed.CULTURE_FIELDS:
                 state["culture"][name] = value
-            elif name not in state:
+            else:
                 state[name] = value
         result[stream["tag"]] = state
     return result
@@ -913,7 +914,7 @@ def _pressure_diagnosis(history: list[dict[str, Any]]) -> str | None:
     common = set.intersection(*(set(row.get("residuals", {})) for row in tail))
     for tag in sorted(common):
         values = [row["residuals"][tag].get("pressure_Pa") for row in tail]
-        if all(isinstance(value, (int, float)) and value != 0 for value in values):
+        if all(isinstance(value, (int, float)) and not isinstance(value, bool) and value != 0 for value in values):
             signs = {value > 0 for value in values}
             if len(signs) == 1 and values[-1] < 0:
                 drop = abs(float(values[-1]))
@@ -937,7 +938,10 @@ def _temperature_runaway_rise(history: list[dict[str, Any]]) -> float | None:
     common = set.intersection(*(set(row.get("residuals", {})) for row in tail))
     for tag in sorted(common):
         values = [row["residuals"][tag].get("temperature_K") for row in tail]
-        if all(isinstance(value, (int, float)) and value > 0 for value in values) and values[-1] >= 0.5 * values[0]:
+        if (
+            all(isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 for value in values)
+            and values[-1] >= values[0]
+        ):
             return float(values[-1])
     return None
 
