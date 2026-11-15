@@ -27,6 +27,27 @@ if "host_ops" not in sys.modules:
     sys.modules["host_ops"] = h
     spec.loader.exec_module(h)
 SHA = "a" * 40
+_RELAY_CONTINUITY_SIBLINGS = (
+    "relay_continuity_common.py",
+    "relay_continuity_turns.py",
+    "relay_continuity_state.py",
+    "relay_continuity_notify.py",
+    "relay_continuity_adapters.py",
+    "relay_continuity_probes.py",
+    "relay_continuity_supervisor.py",
+    "relay_continuity_missions.py",
+    "relay_continuity_roadmap.py",
+)
+_RELEASE_SCRIPTS = (
+    "host_ops.py",
+    "relay_continuity.py",
+    *_RELAY_CONTINUITY_SIBLINGS,
+    "relay_argon.py",
+    "relay_jobs.py",
+    "relay_observe.py",
+    "devctx.py",
+    "worker_routing.py",
+)
 
 
 def key(paths):
@@ -1119,8 +1140,7 @@ def test_eval_tempdir_refuses_unsafe_parent(tmp_path, kind):
 
 
 def release_archive(extra=()):
-    return archive([(f"repo/scripts/{name}", tarfile.REGTYPE) for name in
-                    ("host_ops.py", "relay_continuity.py", "relay_argon.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py")]
+    return archive([(f"repo/scripts/{name}", tarfile.REGTYPE) for name in _RELEASE_SCRIPTS]
                    + [("repo/README.md", tarfile.REGTYPE), *extra])
 
 
@@ -1402,15 +1422,17 @@ def test_install_release_reinstall_damaged_existing_release_refused(tmp_path, mo
     old_sha = "1" * 40
     candidate_sha = "2" * 40
     (paths.install / "releases" / old_sha / "scripts").mkdir(parents=True)
-    for name in ("host_ops.py", "relay_continuity.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
-        (paths.install / "releases" / old_sha / "scripts" / name).write_text("# old")
+    for name in _RELEASE_SCRIPTS:
+        if name != "relay_argon.py":
+            (paths.install / "releases" / old_sha / "scripts" / name).write_text("# old")
     (paths.install / "current").symlink_to(paths.install / "releases" / old_sha)
 
     # Existing candidate release directory already on disk, but damaged (missing worker_routing.py)
     cand_dir = paths.install / "releases" / candidate_sha / "scripts"
     cand_dir.mkdir(parents=True)
-    for name in ("host_ops.py", "relay_continuity.py", "relay_jobs.py", "relay_observe.py", "devctx.py"):
-        (cand_dir / name).write_text("# candidate")
+    for name in _RELEASE_SCRIPTS:
+        if name not in ("relay_argon.py", "worker_routing.py"):
+            (cand_dir / name).write_text("# candidate")
 
     mock_install(monkeypatch, release_archive(), status="ahead")
     monkeypatch.setattr(h, "_run_preflight", lambda argv, timeout=60: subprocess.CompletedProcess(argv, 0, json.dumps({"ok": True}), ""))
@@ -1438,7 +1460,7 @@ def test_install_release_reinstall_damaged_existing_release_refused(tmp_path, mo
     assert not any(str(paths.install / "releases" / candidate_sha) in arg for arg in preflighted)
 
     # Existing release matches the candidate archive
-    for name in ("host_ops.py", "relay_continuity.py", "relay_argon.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+    for name in _RELEASE_SCRIPTS:
         target = cand_dir / name
         target.write_bytes(b"# release\n")
         target.chmod(0o644)
@@ -2328,7 +2350,7 @@ def test_journal_does_not_leak_descriptors(host):
 def test_isolated_copied_scripts(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    for name in ("host_ops.py", "relay_continuity.py", "relay_argon.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+    for name in _RELEASE_SCRIPTS:
         shutil.copyfile(SCRIPT.parent / name, scripts / name)
     for name in ("relay_continuity.py", "relay_observe.py", "devctx.py"):
         proc = subprocess.run([sys.executable, "-I", str(scripts / name), "--help"],
@@ -2459,7 +2481,7 @@ def test_copied_release_discovers_repo_from_cwd(tmp_path):
     subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
     scripts = tmp_path / "release/scripts"
     scripts.mkdir(parents=True)
-    for name in ("host_ops.py", "relay_continuity.py", "relay_argon.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+    for name in _RELEASE_SCRIPTS:
         shutil.copyfile(SCRIPT.parent / name, scripts / name)
     code = ("import runpy,sys; "
             "r=runpy.run_path(sys.argv[1]); "
@@ -4232,7 +4254,7 @@ def test_pin_guard_atomic_and_contains_previous_release_without_candidate_code(t
     def mock_archive_with_text(text: str) -> bytes:
         out = io.BytesIO()
         with tarfile.open(fileobj=out, mode="w:gz") as tar:
-            for name in ("host_ops.py", "relay_continuity.py", "relay_argon.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+            for name in _RELEASE_SCRIPTS:
                 data = f'# {name}\nPAYLOAD = {text!r}\n'.encode() if name == "host_ops.py" else b"# script\n"
                 info = tarfile.TarInfo(f"repo/scripts/{name}")
                 info.type = tarfile.REGTYPE
@@ -4618,6 +4640,7 @@ def test_owner_timeout_returns_executor_and_watcher_to_previous_release(host):
 
     watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
     assert len(watcher_restarts) >= 1
+
 
     owner_starts = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
     assert len(owner_starts) >= 1
@@ -5601,6 +5624,7 @@ def test_interrupted_install_switched_links_with_marker_restarts_watcher_and_req
     watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
     assert len(watcher_restarts) >= 1
 
+
     # 4. Pending marker unlinked
     assert not paths.release_pending.exists()
 
@@ -5692,6 +5716,7 @@ def test_interrupted_install_second_crash_restarts_watcher_and_removes_marker(ho
     # restarts the watcher
     watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
     assert len(watcher_restarts) >= 1
+
 
     # removes marker and inflight
     assert not paths.release_pending.exists()
@@ -5939,6 +5964,7 @@ def test_guard_past_deadline_watcher_restart_fails_persists_owed_record_and_retr
     assert not paths.release_watcher_restore.exists()
     watcher_restarts = [c for c in calls if "restart" in c[0] and "jarvisos-relay-watch.service" in c[0]]
     assert len(watcher_restarts) >= 1
+
     history2 = [e for e in h.read_release_history(paths) if e.get("candidate_sha") == cand_sha]
     assert len(history2) == 1
 
@@ -5979,6 +6005,7 @@ def test_executor_recover_owed_watcher_restore_fails_then_succeeds(host):
     assert len(watcher_restarts) >= 1
 
 
+
 def test_return_release_successful_watcher_restart_creates_no_record(host):
     """(c) A successful return_release watcher restart creates no record."""
     paths, ex, calls = host
@@ -6010,5 +6037,17 @@ def test_return_release_successful_watcher_restart_creates_no_record(host):
     assert len(watcher_restarts) >= 1
 
 
-
-
+def test_preflight_release_requires_all_relay_continuity_siblings(tmp_path):
+    """Spec 265 criterion 4: every scripts/relay_continuity_*.py file on disk must be required by _preflight_release."""
+    on_disk = sorted(p.name for p in SCRIPT.parent.glob("relay_continuity_*.py"))
+    assert on_disk
+    paths = h.Paths(tmp_path / "home")
+    for missing_name in on_disk:
+        release_dir = tmp_path / f"rel-{missing_name}"
+        scripts_dir = release_dir / "scripts"
+        scripts_dir.mkdir(parents=True)
+        for name in _RELEASE_SCRIPTS:
+            if name != missing_name:
+                (scripts_dir / name).write_text("# stub\n", encoding="utf-8")
+        with pytest.raises(h.Refused, match=f"release missing {missing_name}"):
+            h._preflight_release(release_dir, paths)
