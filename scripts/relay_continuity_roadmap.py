@@ -518,9 +518,10 @@ def command_serve(args: argparse.Namespace) -> int:
             state = load_serve_state()
             if alert_key not in state.setdefault("unreadable_alerts", []):
                 safe_mission = bad_id if SAFE_MISSION_FILE_RE.fullmatch(bad_id) else "m-unreadable"
+                bad_hash = hashlib.sha256(bad_id.encode("utf-8")).hexdigest()[:20]
                 if Notifier(state, sender=sender, log=log).send(
                     "release_withheld", now_utc(),
-                    dedupe_key=f"unreadable|{curr_sha}|{safe_mission}",
+                    dedupe_key=f"unreadable|{curr_sha}|{bad_hash}",
                     owner="control-plane", mission=safe_mission, sha=curr_sha,
                 ):
                     state["unreadable_alerts"].append(alert_key)

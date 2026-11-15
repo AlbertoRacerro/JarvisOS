@@ -870,3 +870,59 @@ def test_owner_unreadable_mission_with_safe_file_name_alerts(tmp_path, monkeypat
     assert f"{sha}:m-corrupt-file" in state.get("unreadable_alerts", [])
 
 
+def test_owner_two_malformed_unreadable_missions_alert_and_persist_across_restarts(tmp_path, monkeypatch):
+    sha = "e" * 40
+    root = tmp_path / "continuity"
+    monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+
+    missions_dir = rc.missions_dir(root)
+    missions_dir.mkdir(parents=True, exist_ok=True)
+
+    # Two malformed filenames that both fail SAFE_MISSION_FILE_RE (due to '!')
+    file1 = missions_dir / "m-bad!1.json"
+    file2 = missions_dir / "m-bad!2.json"
+    file1.write_text("{bad json 1", encoding="utf-8")
+    file2.write_text("{bad json 2", encoding="utf-8")
+
+    sent_alerts = []
+    monkeypatch.setattr(rc_roadmap, "webhook_sender", lambda: (lambda text: sent_alerts.append(text) or None))
+    monkeypatch.setattr(rc_roadmap, "roadmap_step", lambda *a, **kw: None)
+
+    args = argparse.Namespace(clear_stop=True, no_notify=False, turns=1, interval=1, once=True)
+
+    # First run: alerts for m-bad!1 (first in lexical sort)
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sent_alerts) == 1
+
+    state_file = root / "serve" / "state.json"
+    assert state_file.is_file()
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert f"{sha}:m-bad!1" in state.get("unreadable_alerts", [])
+    assert f"{sha}:m-bad!2" not in state.get("unreadable_alerts", [])
+
+    # Remove the first malformed file so the owner sees the second malformed file
+    file1.unlink()
+
+    # Second run: m-bad!2 has distinct bad_id hash; dedupe key does not collide with m-bad!1
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sent_alerts) == 2
+
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert f"{sha}:m-bad!2" in state.get("unreadable_alerts", [])
+
+    # Third run (restart behavior with m-bad!2 still present):
+    # Already recorded in unreadable_alerts, so no duplicate alert is sent
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sent_alerts) == 2
+
+
+
