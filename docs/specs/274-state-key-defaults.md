@@ -28,7 +28,9 @@ corrupt. A release whose mission queue it cannot read is not confirmed as health
 ## Scope
 
 1. `Store.load` adds every key of `default_state()` that is absent from the file, with its default value (a fresh
-   copy), before `validate_state`. A present key with a bad type or value is still corrupt.
+   copy), before `validate_state`. A present key with a bad type or value is still corrupt. The guard keys present
+   since the first schema (`pending`, `counters`, `permissions_digest`, `permissions_pinned`) are never filled: a
+   file without one is damaged, and filling `permissions_pinned` would skip the permissions-changed hold.
 2. `command_serve` reports `release_sha`/`release_updated_at` only when no mission of the queue is unreadable: every
    mission definition loads and no mission store loads as corrupt (the same load paths `serve_step` uses). Until then
    it logs the first unreadable mission and retries at each loop iteration, so a fix made during the deadline still

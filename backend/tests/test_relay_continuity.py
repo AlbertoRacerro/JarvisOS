@@ -2083,6 +2083,20 @@ def test_auth_diagnostics_without_terminal_disable_that_provider(tmp_path: Path)
     assert sup.state["cooldowns"]["claude"]["reason"] == "auth"
 
 
+@pytest.mark.parametrize("drop", ["pending", "counters", "permissions_digest", "permissions_pinned"])
+def test_structurally_incomplete_state_is_corrupt_not_repaired(tmp_path: Path, drop: str) -> None:
+    env = Env(tmp_path, [("codex", CODEX_SUCCESS)])
+    env.head(QUOTA)
+    state = rc.default_state()
+    state.update({"phase": "running", "head_session": HEAD, "chain": [HEAD]})
+    del state[drop]
+    env.store.root.mkdir(parents=True, exist_ok=True)
+    env.store.state_path.write_text(json.dumps(state))
+    result, _ = env.run()
+    assert result == "held" and env.relay.launches == []
+    assert any("JarvisOS ha messo in pausa il lavoro e attende una decisione in Jarvis." in text for text in env.sent)
+
+
 @pytest.mark.parametrize("corrupt_key,corrupt_val", [("pending", 123), ("counters", "bad"), ("permissions_pinned", "bad")])
 def test_corrupt_state_type_holds_without_acting(tmp_path: Path, corrupt_key: str, corrupt_val: Any) -> None:
     env = Env(tmp_path, [("codex", CODEX_SUCCESS)])

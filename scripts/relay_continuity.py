@@ -1377,6 +1377,8 @@ STATE_TYPES: dict[str, tuple[type, ...]] = {
     "acknowledged": (dict, type(None)), "spend_caps": (dict,), "updated_at": (str, type(None)),
     "wait": (dict, type(None)), "resumes": (int,), "last_checkpoint_at": (str, type(None)),
 }
+# In every state since the first schema; a file without one is damaged, not older.
+GUARD_STATE_KEYS = ("pending", "counters", "permissions_digest", "permissions_pinned")
 PENDING_KEYS = ("nonce", "agent", "parent", "started_at", "pid", "pid_start", "fingerprint", "attempt")
 
 
@@ -1495,9 +1497,9 @@ class Store:
             raise StateCorrupt(f"state file unreadable: {type(exc).__name__}") from exc
         if not isinstance(data, dict) or data.get("schema") != SCHEMA or data.get("phase") not in PHASES:
             raise StateCorrupt("state file has an unknown schema or phase")
-        defaults = default_state()
-        for key, val in defaults.items():
-            if key not in data:
+        # A key added by a later release is filled with its default; the attempt and permission guards are never.
+        for key, val in default_state().items():
+            if key not in data and key not in GUARD_STATE_KEYS:
                 data[key] = val
         if problem := validate_state(data):
             raise StateCorrupt(f"state file is structurally invalid: {problem}")
