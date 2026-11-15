@@ -49,7 +49,7 @@ corrupt. A release whose mission queue it cannot read is not confirmed as health
 
 ## Acceptance criteria
 
-1. A mission state file written before spec 267 (fixture taken from the live backup, without `wait`, `resumes`,
+1. A mission state file written before spec 267 (synthetic fixture matching the pre-267 schema, without `wait`, `resumes`,
    `last_checkpoint_at`, `parked_turns`, `network_outage`) loads, with those keys at their defaults, and
    `serve_step` does not return `corrupt` for it.
 2. A state whose present key has a bad type still raises `StateCorrupt`.

@@ -6946,7 +6946,7 @@ def test_pre267_mission_state_fixture_loads_and_serves(tmp_path: Path) -> None:
     # With the fixture as a mission store (copy into the missions layout used by existing serve_step tests,
     # with a matching mission definition of total 1, completed) serve_step does not return a corrupt: outcome.
     root = tmp_path / "control"
-    mid = "m-20261021T093535Z-5613b2"
+    mid = "m-20261001T000000Z-aaaaaa"
     mdef = mission_def("task1", mid=mid)
     _write_mission(root, mdef)
     mstore = rc.mission_store(root, mid)
