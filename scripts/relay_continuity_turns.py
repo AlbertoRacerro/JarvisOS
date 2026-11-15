@@ -850,7 +850,7 @@ def read_events(path: Path) -> tuple[list[dict[str, Any]], int]:
 
 
 def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any = None,
-                  diagnostics: str = "") -> TurnReport:
+                  diagnostics: str = "", timed_out: bool = False) -> TurnReport:
     state: dict[str, Any] = {}
     try:
         state = json.loads((turn_dir / "state.json").read_text())
@@ -861,7 +861,7 @@ def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any 
     agent = state.get("agent_key")
     if agent in NATIVE_AGENTS:
         events, bad = relay_argon.read_events(output)
-        return classify_argon_turn(turn_dir, events, bad, agent=agent, ref=ref)
+        return classify_argon_turn(turn_dir, events, bad, agent=agent, ref=ref, timed_out=timed_out)
     if agent not in AGENTS:
         agent = "codex" if any(e.get("type") == "thread.started" for e in events) else (
             "claude" if any(e.get("type") in ("result", "system") for e in events) else None)
@@ -970,7 +970,8 @@ def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any 
 
 
 def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
-                        *, agent: str = "argon", ref: datetime | None = None) -> TurnReport:
+                        *, agent: str = "argon", ref: datetime | None = None,
+                        timed_out: bool = False) -> TurnReport:
     """Classify the retained native protocol, never model prose masquerading as execution evidence."""
     report = TurnReport(outcome="unknown", agent=agent, detail="native turn incomplete", bad_lines=bad,
                         turn_id=f"{turn_dir.parent.parent.name}/{turn_dir.name}")
@@ -1107,12 +1108,21 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
         native = relay_argon.native_error((turn_dir / "stderr.log").read_text(encoding="utf-8", errors="replace"))
     except OSError:
         native = None
-    cause = relay_argon.harness_cause(native) or (("unknown", "turn_time_limit") if reason == "timeout" else None)
+    cause = relay_argon.harness_cause(native) or (
+        ("unknown", "turn_time_limit") if (reason in ("timeout", "sigterm", "signal") or timed_out) else None
+    )
 
     def harness(report: TurnReport) -> TurnReport:
         if cause is not None and report.outcome != "success":
             report.outcome, report.harness_cause = cause
             report.detail += f"; runner: {cause[1]}"
+        return report
+
+    if timed_out:
+        report.outcome = "unknown"
+        report.harness_cause = "turn_time_limit"
+        if "turn_time_limit" not in report.detail:
+            report.detail += "; harness: turn_time_limit"
         return report
 
     # A failed tool call that cannot act beyond this workstation (a missing file, an edit that did not apply, a
@@ -1189,6 +1199,8 @@ def settle_limit(report: TurnReport, text: str, ref: datetime, local_tz: Any) ->
 
 def gate(report: TurnReport) -> str | None:
     """Hold reason when the turn's own record cannot show what it did, so no operation of it can be judged."""
+    if report.harness_cause == "turn_time_limit":
+        return None
     if report.bad_lines:
         return "output_unparseable"
     if report.no_evidence:

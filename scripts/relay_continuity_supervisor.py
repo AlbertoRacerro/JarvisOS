@@ -1474,8 +1474,13 @@ class Supervisor:
         self.attempts += 1
         nonce = f"rc-{now.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}"
         text = prompt.replace("{nonce}", nonce)
+        wall_limit = (
+            getattr(self.limits, "native_turn_wall", Limits.native_turn_wall)
+            if agent in NATIVE_AGENTS
+            else getattr(self.limits, "turn_wall", Limits.turn_wall)
+        )
         if agent not in NATIVE_AGENTS:
-            limit_min = int(self.limits.turn_wall // 60)
+            limit_min = int(wall_limit // 60)
             wall_sentence = f"Your turn has a hard limit of {limit_min} minutes."
             if f"hard limit of {limit_min} minutes" not in text:
                 attempt_hdr = f"[relay-continuity attempt {nonce}]"
@@ -1569,7 +1574,7 @@ class Supervisor:
         self.save()
         try:
             try:
-                result = self.host.relay.finish(proc, timeout=getattr(self.limits, "turn_wall", None))
+                result = self.host.relay.finish(proc, timeout=wall_limit)
             except TypeError:
                 result = self.host.relay.finish(proc)
             timed_out = getattr(result, "timed_out", False) or (not result.raw_ok and "wall limit" in (result.diagnostics or "").lower())
@@ -1609,7 +1614,7 @@ class Supervisor:
     def _settle(self, pending: dict[str, Any], session_id: str | None, diagnostics: str = "",
                 reaped: list[str] | None = None, timed_out: bool = False) -> TurnReport | str:
         session_id = session_id or self.host.relay.find_by_nonce(pending["nonce"], parse_ts(pending["started_at"]) or self.host.now())
-        self.state["last_attempt"] = {k: pending[k] for k in ("nonce", "agent", "attempt", "fingerprint")}
+        self.state["last_attempt"] = {k: pending.get(k, "") for k in ("nonce", "agent", "attempt", "fingerprint")}
         if "task" in pending:
             self.state["last_attempt"]["task"] = pending["task"]
         self.state["pending"] = None
@@ -1621,12 +1626,17 @@ class Supervisor:
             self.store.journal({"event": "settle", "nonce": pending["nonce"], "session": None, "outcome": "unresolved"})
             return result
         turn = last_turn_dir(self.host.relay.sessions_dir() / session_id)
-        report = classify_turn(turn, diagnostics=diagnostics) if turn else TurnReport(
-            outcome="crash", agent=pending["agent"],
+        report = classify_turn(turn, diagnostics=diagnostics, timed_out=timed_out) if turn else TurnReport(
+            outcome="unknown" if (timed_out and pending.get("agent") in NATIVE_AGENTS) else "crash",
+            agent=pending["agent"],
             detail=f"session without turns ({diagnostics.strip()})" if diagnostics else "session without turns",
-            no_evidence=True, turn_id=f"{session_id}/none")
+            no_evidence=True, turn_id=f"{session_id}/none",
+            harness_cause="turn_time_limit" if (timed_out and pending.get("agent") in NATIVE_AGENTS) else None)
         if timed_out:
-            if report.outcome in ("success", "quota", "spend_limit", "auth", "transient"):
+            if pending.get("agent") in NATIVE_AGENTS or report.agent in NATIVE_AGENTS:
+                report.outcome = "unknown"
+                report.harness_cause = "turn_time_limit"
+            elif report.outcome in ("success", "quota", "spend_limit", "auth", "transient"):
                 report.outcome = "crash"
             if diagnostics and diagnostics.strip() not in report.detail:
                 report.detail = f"{report.detail}; {diagnostics.strip()}" if report.detail else diagnostics.strip()
@@ -1825,7 +1835,11 @@ class Supervisor:
         pid_start = pending.get("pid_start")
         if pid and self.host.pid_alive(pid, pid_start):
             self.host.log(f"attempt still running as pid {pid}; waiting for it (never relaunched)")
-            wall_limit = getattr(self.limits, "turn_wall", Limits.turn_wall)
+            wall_limit = (
+                getattr(self.limits, "native_turn_wall", Limits.native_turn_wall)
+                if pending.get("agent") in NATIVE_AGENTS
+                else getattr(self.limits, "turn_wall", Limits.turn_wall)
+            )
             while self.host.pid_alive(pid, pid_start):
                 elapsed = (self.host.now() - started).total_seconds()
                 if elapsed >= wall_limit:

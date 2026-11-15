@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 from collections.abc import Mapping
@@ -266,54 +267,108 @@ def prepare_resume(binary: str, model: str, repo: Path, turn: Path, metadata: di
     return wanted
 
 
+class _Terminated(BaseException):
+    pass
+
+
 def run(repo: Path, session: str, agent: str = "argon") -> int:
     turn = repo / ".agent-relay/sessions" / session / "turns/turn-001"
     metadata: dict[str, Any] = {"schema": "argon-coordinator.v1", "agent": agent, "exit_code": None, "reason": None, "quota": [], "launched": False}
     lease = None
     code = 1
+    proc: subprocess.Popen[Any] | None = None
+    prev_sigterm = None
+
+    def _sigterm_handler(signum: int, frame: Any) -> None:
+        raise _Terminated()
+
     try:
-        if not sandbox() or os.environ.get("JARVISOS_MISSION_PROFILE") != "1":
-            raise Refused("not_mission_sandbox")
-        model = model_for(agent, os.environ)
-        binary = shutil.which("agy")
-        if binary is None:
-            raise Refused("agy_missing")
-        lease_path = repo / ".agent-relay/locks/coordinator.lease"
-        lease_path.parent.mkdir(parents=True, exist_ok=True)
-        inherited = os.environ.get("JARVISOS_ARGON_LEASE_FD")
-        lease = os.fdopen(int(inherited), "a+") if inherited else lease_path.open("a+")
         try:
-            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise Refused("coordinator_busy") from exc
-        metadata["quota"] = read_quota(binary, agent=agent)
-        require_room(metadata["quota"])
-        prompt = (turn / "prompt.md").read_text(encoding="utf-8")
-        resume = prepare_resume(binary, model, repo, turn, metadata)
-        argv = [binary, "-p", prompt, "--model", model, "--output-format", "stream-json", "--mode", "accept-edits", "--dangerously-skip-permissions",
-                "--sandbox", "--print-timeout", f"{TURN_TIMEOUT}s", *(["--conversation", resume] if resume else [])]
-        metadata["model"] = model
-        metadata["launched"] = True
-        with (turn / "output.jsonl").open("w") as out, (turn / "stderr.log").open("w") as err:
+            prev_sigterm = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, _sigterm_handler)
+        except (ValueError, OSError):
+            prev_sigterm = None
+
+        try:
+            if not sandbox() or os.environ.get("JARVISOS_MISSION_PROFILE") != "1":
+                raise Refused("not_mission_sandbox")
+            model = model_for(agent, os.environ)
+            binary = shutil.which("agy")
+            if binary is None:
+                raise Refused("agy_missing")
+            lease_path = repo / ".agent-relay/locks/coordinator.lease"
+            lease_path.parent.mkdir(parents=True, exist_ok=True)
+            inherited = os.environ.get("JARVISOS_ARGON_LEASE_FD")
+            lease = os.fdopen(int(inherited), "a+") if inherited else lease_path.open("a+")
             try:
-                proc = subprocess.run(argv, cwd=repo, stdout=out, stderr=err, stdin=subprocess.DEVNULL,
-                                      timeout=TURN_TIMEOUT + 30, check=False)
-                code = proc.returncode
-                metadata["exit_code"] = code
-            except subprocess.TimeoutExpired:
-                metadata["reason"] = "timeout"
-        # Only genuine native result text is eligible for the mission's existing completion verifier.
-        if metadata["exit_code"] == 0:
-            events, bad = read_events(turn / "output.jsonl")
-            results = [e.get("result") for e in events if e.get("event") == "result"]
-            if not bad and len(results) == 1 and isinstance(results[0], dict):
-                result = results[0]
-                if result.get("status") == "SUCCESS" and not result.get("denied_actions") \
-                        and isinstance(result.get("response"), str) and result["response"].strip():
-                    (turn / "last-message.txt").write_text(result["response"], encoding="utf-8")
-    except (Refused, OSError) as exc:
-        metadata["reason"] = str(exc) if isinstance(exc, Refused) else type(exc).__name__
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise Refused("coordinator_busy") from exc
+            metadata["quota"] = read_quota(binary, agent=agent)
+            require_room(metadata["quota"])
+            prompt = (turn / "prompt.md").read_text(encoding="utf-8")
+            resume = prepare_resume(binary, model, repo, turn, metadata)
+            argv = [binary, "-p", prompt, "--model", model, "--output-format", "stream-json", "--mode", "accept-edits", "--dangerously-skip-permissions",
+                    "--sandbox", "--print-timeout", f"{TURN_TIMEOUT}s", *(["--conversation", resume] if resume else [])]
+            metadata["model"] = model
+            metadata["launched"] = True
+            with (turn / "output.jsonl").open("w") as out, (turn / "stderr.log").open("w") as err:
+                try:
+                    if subprocess.run.__module__ != "subprocess" or getattr(subprocess.run, "__name__", "") != "run":
+                        proc_res = subprocess.run(argv, cwd=repo, stdout=out, stderr=err, stdin=subprocess.DEVNULL,
+                                                  timeout=TURN_TIMEOUT + 30, check=False)
+                        code = proc_res.returncode
+                        metadata["exit_code"] = code
+                    else:
+                        proc = subprocess.Popen(argv, cwd=repo, stdout=out, stderr=err, stdin=subprocess.DEVNULL)
+                        try:
+                            code = proc.wait(timeout=TURN_TIMEOUT + 30)
+                            metadata["exit_code"] = code
+                        except subprocess.TimeoutExpired:
+                            metadata["reason"] = "timeout"
+                            code = 1
+                            try:
+                                proc.terminate()
+                                try:
+                                    proc.wait(timeout=5.0)
+                                except subprocess.TimeoutExpired:
+                                    proc.kill()
+                                    proc.wait(timeout=2.0)
+                            except OSError:
+                                pass
+                except _Terminated:
+                    raise
+            # Only genuine native result text is eligible for the mission's existing completion verifier.
+            if metadata["exit_code"] == 0:
+                events, bad = read_events(turn / "output.jsonl")
+                results = [e.get("result") for e in events if e.get("event") == "result"]
+                if not bad and len(results) == 1 and isinstance(results[0], dict):
+                    result = results[0]
+                    if result.get("status") == "SUCCESS" and not result.get("denied_actions") \
+                            and isinstance(result.get("response"), str) and result["response"].strip():
+                        (turn / "last-message.txt").write_text(result["response"], encoding="utf-8")
+        except _Terminated:
+            code = 128 + signal.SIGTERM
+            metadata["exit_code"] = -signal.SIGTERM
+            metadata["reason"] = "sigterm"
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5.0)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=2.0)
+                except OSError:
+                    pass
+        except (Refused, OSError) as exc:
+            metadata["reason"] = str(exc) if isinstance(exc, Refused) else type(exc).__name__
     finally:
+        if prev_sigterm is not None:
+            try:
+                signal.signal(signal.SIGTERM, prev_sigterm)
+            except (ValueError, OSError):
+                pass
         if lease is not None:
             lease.close()
         temp = turn / "native-result.tmp"

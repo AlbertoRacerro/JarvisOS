@@ -1,0 +1,364 @@
+"""Spec 278: Native turn timeouts settle without an output hold."""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from test_relay_continuity import Env, mission_def, rc
+
+ra = rc.relay_argon
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures/relay_continuity/argon_wall_timeout"
+
+
+def test_native_runner_sigterm_writes_atomic_result_and_cleans_up(tmp_path: Path) -> None:
+    """Criterion 1: Native runner SIGTERM writes a non-success atomic native-result.json and exits;
+
+    no partial output can count as completion.
+    """
+    repo = tmp_path / "repo"
+    session_id = "20261115-210000-112233"
+    turn_dir = repo / ".agent-relay/sessions" / session_id / "turns/turn-001"
+    turn_dir.mkdir(parents=True)
+    (turn_dir / "prompt.md").write_text("# Native coordinator\nTask\n", encoding="utf-8")
+    (turn_dir / "state.json").write_text(json.dumps({"agent_key": "argon", "status": "continue"}), encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_agy = bin_dir / "agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, json, time\n"
+        "if '-p' in sys.argv and '/quota' in sys.argv:\n"
+        "    print(json.dumps({'status': 'SUCCESS', 'command': {'data': {'groups': [{'buckets': [\n"
+        "        {'id': 'gemini-5h', 'remaining_fraction': 0.8},\n"
+        "        {'id': 'gemini-weekly', 'remaining_fraction': 0.8},\n"
+        "        {'id': 'gemini-argon-wtu-weekly', 'remaining_fraction': 0.8},\n"
+        "    ]}]}}}))\n"
+        "    sys.exit(0)\n"
+        "# In-flight model execution:\n"
+        "print('started in-flight', flush=True)\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    fake_agy.chmod(0o755)
+
+    script = (
+        "import sys, os, signal\n"
+        "from pathlib import Path\n"
+        "import scripts.relay_argon as ra\n"
+        "ra.sandbox = lambda: True\n"
+        "ra.prepare_login = lambda: None\n"
+        "ra.subscription_settings = lambda: None\n"
+        "sys.exit(ra.run(Path(sys.argv[1]), sys.argv[2], sys.argv[3]))\n"
+    )
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+        "JARVISOS_MISSION_PROFILE": "1",
+        "PYTHONPATH": str(Path(__file__).resolve().parent.parent.parent),
+    }
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script, str(repo), session_id, "argon"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    result_file = turn_dir / "native-result.json"
+    for _ in range(50):
+        if (turn_dir / "output.jsonl").exists() or (turn_dir / "stderr.log").exists():
+            break
+        try:
+            proc.wait(timeout=0.1)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+
+    proc.send_signal(signal.SIGTERM)
+    code = proc.wait(timeout=10.0)
+
+    assert code != 0
+    assert result_file.exists()
+    meta = json.loads(result_file.read_text(encoding="utf-8"))
+    assert meta["reason"] == "sigterm"
+    assert meta["exit_code"] == -signal.SIGTERM
+    assert not (turn_dir / "last-message.txt").exists()
+
+
+def test_retained_native_timeout_fixture_settlement_and_gating(tmp_path: Path) -> None:
+    """Criterion 2: Retained shape of a timed-out native turn with no runner result
+
+    and terminal error stream settles as turn_time_limit with durable timeout flag,
+    and gates as output_unparseable without it.
+    """
+    assert FIXTURE_DIR.is_dir()
+    turn_dir = tmp_path / "sessions/20261115-210000-aabbcc/turns/turn-001"
+    turn_dir.mkdir(parents=True)
+    for f in FIXTURE_DIR.iterdir():
+        if f.is_file():
+            shutil.copy(f, turn_dir / f.name)
+
+    # 1. Without supervisor durable timeout flag: gates as output_unparseable
+    report_no_flag = rc.classify_turn(turn_dir, timed_out=False)
+    assert rc.gate(report_no_flag) == "output_unparseable"
+
+    env = Env(tmp_path / "env1")
+    sup = env.supervisor()
+    decision = sup._decide(report_no_flag, "task")
+    assert decision == "held"
+    assert sup.state["hold"]["reason"] == "output_unparseable"
+
+    # 2. With supervisor durable timeout flag: settles as turn_time_limit, never output_unparseable
+    report_flag = rc.classify_turn(turn_dir, timed_out=True)
+    assert report_flag.outcome == "unknown"
+    assert report_flag.harness_cause == "turn_time_limit"
+    assert rc.gate(report_flag) is None
+
+    env2 = Env(tmp_path / "env2")
+    sup2 = env2.supervisor()
+    pending = {
+        "nonce": "rc-20261115T210000Z-aabb",
+        "agent": "argon",
+        "started_at": rc.iso(rc.now_utc()),
+        "timed_out": True,
+        "diagnostics": "turn wall limit (3690s) exceeded",
+        "attempt": 1,
+    }
+    settled_report = sup2._settle(
+        pending,
+        "20261115-210000-aabbcc",
+        diagnostics="turn wall limit (3690s) exceeded",
+        timed_out=True,
+    )
+    assert isinstance(settled_report, rc.TurnReport)
+    assert settled_report.outcome == "unknown"
+    assert settled_report.harness_cause == "turn_time_limit"
+
+    journal_events = [
+        json.loads(line) for line in sup2.store.journal_path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    settle_entry = next(e for e in journal_events if e.get("event") == "settle")
+    assert settle_entry["outcome"] == "unknown"
+    assert settle_entry["harness_cause"] == "turn_time_limit"
+
+
+def test_timed_out_attempt_cannot_complete_task_and_parks_external_effects(tmp_path: Path) -> None:
+    """Criterion 3: Timed-out attempt cannot complete a mission task.
+
+    Its recorded external calls are reconciled or parked before retry,
+    and an unproven call is not repeated automatically.
+    """
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    mission = mission_def("mission 1", mid="m-20261115T210000Z-112233")
+    sup.mission = mission
+    sup.state["mission"] = {"id": mission["id"], "next": 0, "total": 1, "done": []}
+
+    turn_dir = env.repo / ".agent-relay/sessions/20261115-210000-aabbcc/turns/turn-001"
+    turn_dir.mkdir(parents=True)
+    for f in FIXTURE_DIR.iterdir():
+        if f.is_file():
+            shutil.copy(f, turn_dir / f.name)
+
+    # In-flight external call from fixture is 'git push origin HEAD'
+    pending = {
+        "nonce": "rc-20261115T210000Z-aabb",
+        "agent": "argon",
+        "started_at": rc.iso(rc.now_utc()),
+        "timed_out": True,
+        "diagnostics": "turn wall limit (3690s) exceeded",
+        "attempt": 1,
+        "task": 0,
+    }
+    # Probe returns None -> cannot be settled/proven
+    env.host.probe = lambda call: None
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 30}]} if a in ("argon", "agy_opus") else None
+
+    report = sup._settle(pending, "20261115-210000-aabbcc", timed_out=True)
+    assert isinstance(report, rc.TurnReport)
+    assert report.outcome == "unknown"
+    assert report.harness_cause == "turn_time_limit"
+
+    # Mission task 0 was NOT completed
+    assert sup.state["mission"]["next"] == 0
+    assert len(sup.state["mission"]["done"]) == 0
+
+    # Decision on this report reconciles and parks the external call
+    decision = sup._decide(report, "mission task text")
+    assert isinstance(decision, tuple)
+    next_agent, next_prompt = decision
+    assert next_agent == "argon"
+    # The external operation is parked and listed in prompt as UNRESOLVED
+    assert "git push: UNRESOLVED (parked)" in next_prompt
+    assert report.turn_id in sup.state.get("parked_turns", [])
+
+
+def test_native_and_non_native_wall_limits(tmp_path: Path) -> None:
+    """Criterion 4: The native supervisor wall limit exceeds runner TURN_TIMEOUT + 30 seconds
+
+    plus cleanup margin; non-native turns keep their current limit.
+    A restart adopting a native turn uses the same limit.
+    """
+    limits = rc.Limits()
+    assert limits.turn_wall == 3600.0
+    assert limits.native_turn_wall > ra.TURN_TIMEOUT + 30.0
+    assert limits.native_turn_wall >= ra.TURN_TIMEOUT + 30.0 + 30.0
+
+    env = Env(tmp_path)
+    sup = env.supervisor()
+
+    recorded_timeouts: list[float | None] = []
+
+    class FakeProc:
+        pid = 99999
+        returncode = 0
+
+    def fake_start(agent: str, parent: str | None, text: str, turns: int, **kw: Any) -> Any:
+        return FakeProc()
+
+    def fake_finish(proc: Any, timeout: float | None = None) -> rc.RunResult:
+        recorded_timeouts.append(timeout)
+        sid = "20261115-210000-999999"
+        td = env.relay.sessions_dir() / sid / "turns/turn-001"
+        td.mkdir(parents=True, exist_ok=True)
+        (td / "state.json").write_text(json.dumps({"agent_key": "argon"}))
+        (td / "output.jsonl").write_text("")
+        (td / "native-result.json").write_text(json.dumps({"schema": "argon-coordinator.v1", "agent": "argon", "exit_code": 0}))
+        return rc.RunResult(session_id=sid, exit_code=0, raw_ok=True)
+
+    env.relay.start = fake_start
+    env.relay.finish = fake_finish
+    sup.state["permissions_digest"] = env.host.permissions_digest()
+
+    # 1. Launch native turn uses native_turn_wall
+    sup._launch("argon", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert recorded_timeouts[-1] == limits.native_turn_wall
+
+    # 2. Launch non-native turn uses turn_wall and prompt matches outer limit
+    launches: list[str] = []
+
+    def claude_finish(proc: Any, timeout: float | None = None) -> rc.RunResult:
+        recorded_timeouts.append(timeout)
+        sid = "20261115-210000-888888"
+        td = env.relay.sessions_dir() / sid / "turns/turn-001"
+        td.mkdir(parents=True, exist_ok=True)
+        (td / "state.json").write_text(json.dumps({"agent_key": "claude"}))
+        (td / "output.jsonl").write_text("")
+        return rc.RunResult(session_id=sid, exit_code=0, raw_ok=True)
+
+    def fake_start_claude(agent: str, parent: str | None, text: str, turns: int, **kw: Any) -> Any:
+        launches.append(text)
+        return FakeProc()
+
+    env.relay.start = fake_start_claude
+    env.relay.finish = claude_finish
+    sup._launch("claude", "[relay-continuity attempt {nonce}]\ntask", None)
+    assert recorded_timeouts[-1] == limits.turn_wall
+    expected_sentence = f"Your turn has a hard limit of {int(limits.turn_wall // 60)} minutes."
+    assert expected_sentence in launches[0]
+
+    # 3. Adopted native turn in _resolve_pending uses native_turn_wall
+    sim_time = [rc.now_utc()]
+
+    def clock_now():
+        return sim_time[0]
+
+    env.host.now = clock_now
+
+    dead_pid = 88881
+    env.host.pid_alive = lambda pid, start: True
+    killed_signals: list[tuple[int, int]] = []
+    env.relay.killpg = lambda pgid, sig: killed_signals.append((pgid, sig))
+    env.relay._group_is_running = lambda pgid: False
+
+    # Started 3650s ago (exceeds 3600s, but less than native_turn_wall 3690s)
+    started = clock_now()
+    sup.state["pending"] = {
+        "nonce": "rc-20261115T210000Z-adopt1",
+        "agent": "argon",
+        "started_at": rc.iso(started),
+        "pid": dead_pid,
+        "pid_start": 1,
+    }
+    # At 3650s elapsed: native turn is NOT timed out yet
+    sim_time[0] = started + rc.timedelta(seconds=3650)
+    # Give sleep a function that stops pid alive after one check
+    call_count = [0]
+
+    def fake_sleep(secs):
+        sim_time[0] += rc.timedelta(seconds=secs)
+        call_count[0] += 1
+        if call_count[0] >= 1:
+            env.host.pid_alive = lambda pid, start: False
+        return False
+
+    sup._sleep = fake_sleep
+    sup._resolve_pending()
+    # At 3650s, native turn was NOT timed out by wall limit
+    assert (dead_pid, signal.SIGTERM) not in killed_signals
+
+    # For a non-native adopted turn at 3650s: exceeds turn_wall (3600s), so it IS terminated
+    killed_signals.clear()
+    env.host.pid_alive = lambda pid, start: True
+    sup.state["pending"] = {
+        "nonce": "rc-20261115T210000Z-adopt2",
+        "agent": "claude",
+        "started_at": rc.iso(started),
+        "pid": dead_pid,
+        "pid_start": 1,
+    }
+    call_count[0] = 0
+
+    def fake_sleep_term(secs):
+        sim_time[0] += rc.timedelta(seconds=secs)
+        env.host.pid_alive = lambda pid, start: False
+        return False
+
+    sup._sleep = fake_sleep_term
+    sup._resolve_pending()
+    assert (dead_pid, signal.SIGTERM) in killed_signals
+
+
+def test_ordinary_malformed_output_still_gates(tmp_path: Path) -> None:
+    """Ordinary malformed output without supervisor timeout flag still gates."""
+    # 1. Missing metadata without timeout
+    turn1 = tmp_path / "turn1"
+    turn1.mkdir()
+    (turn1 / "state.json").write_text(json.dumps({"agent_key": "argon"}))
+    (turn1 / "output.jsonl").write_text(
+        '{"event":"init","conversation_id":"abc","init":{"model":"gemini-4-argon-low"}}\n'
+    )
+    report1 = rc.classify_turn(turn1, timed_out=False)
+    assert rc.gate(report1) == "output_unparseable"
+
+    # 2. Corrupt JSON line in output without timeout
+    turn2 = tmp_path / "turn2"
+    turn2.mkdir()
+    (turn2 / "state.json").write_text(json.dumps({"agent_key": "argon"}))
+    (turn2 / "native-result.json").write_text(
+        json.dumps({"schema": "argon-coordinator.v1", "agent": "argon", "exit_code": 0, "model": "gemini-4-argon-low"})
+    )
+    (turn2 / "output.jsonl").write_text(
+        '{"event":"init","conversation_id":"abc","init":{"model":"gemini-4-argon-low"}}\n'
+        "{corrupt line\n"
+    )
+    report2 = rc.classify_turn(turn2, timed_out=False)
+    assert rc.gate(report2) == "output_unparseable"
+
+    # 3. Empty output without timeout
+    turn3 = tmp_path / "turn3"
+    turn3.mkdir()
+    (turn3 / "state.json").write_text(json.dumps({"agent_key": "argon"}))
+    (turn3 / "output.jsonl").write_text("")
+    report3 = rc.classify_turn(turn3, timed_out=False)
+    assert rc.gate(report3) == "output_missing"
