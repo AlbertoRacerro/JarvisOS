@@ -53,6 +53,7 @@ from relay_continuity_state import (  # noqa: E402
 
 load_sibling("relay_continuity_notify", "relay_continuity_notify.py")
 from relay_continuity_notify import (  # noqa: E402
+    SAFE_MISSION_FILE_RE,
     Notifier,
 )
 
@@ -494,11 +495,12 @@ def command_serve(args: argparse.Namespace) -> int:
     def log(msg: str) -> None:
         print(f"{iso(now_utc())} {msg}", file=sys.stderr, flush=True)
 
-    try:
-        serve_state = serve_store.load()
-    except StateCorrupt as exc:
-        log(f"serve: state corrupt ({exc}); using defaults")
-        serve_state = default_state()
+    def load_serve_state() -> dict[str, Any]:
+        try:
+            return serve_store.load()
+        except StateCorrupt as exc:
+            log(f"serve: state corrupt ({exc}); using defaults")
+            return default_state()
 
     reported_release = False
     unreadable_logged: set[str] = set()
@@ -512,10 +514,23 @@ def command_serve(args: argparse.Namespace) -> int:
             if bad_id not in unreadable_logged:
                 unreadable_logged.add(bad_id)
                 log(f"owner: release {curr_sha[:12]} not reported: mission {bad_id} unreadable")
+            alert_key = f"{curr_sha}:{bad_id}"
+            state = load_serve_state()
+            if alert_key not in state.setdefault("unreadable_alerts", []):
+                safe_mission = bad_id if SAFE_MISSION_FILE_RE.fullmatch(bad_id) else "m-unreadable"
+                bad_hash = hashlib.sha256(bad_id.encode("utf-8")).hexdigest()[:20]
+                if Notifier(state, sender=sender, log=log).send(
+                    "release_withheld", now_utc(),
+                    dedupe_key=f"unreadable|{curr_sha}|{bad_hash}",
+                    owner="control-plane", mission=safe_mission, sha=curr_sha,
+                ):
+                    state["unreadable_alerts"].append(alert_key)
+                    serve_store.save(state, now_utc())
             return
-        serve_state["release_sha"] = curr_sha
-        serve_state["release_updated_at"] = iso(now_utc())
-        serve_store.save(serve_state, now_utc())
+        state = load_serve_state()
+        state["release_sha"] = curr_sha
+        state["release_updated_at"] = iso(now_utc())
+        serve_store.save(state, now_utc())
         reported_release = True
 
     maybe_report_release()
@@ -528,7 +543,8 @@ def command_serve(args: argparse.Namespace) -> int:
 
     log(f"mission owner serving {missions_dir(root)} (pid {os.getpid()})")
     previous = None
-    last_ff_logged: dict[str, str | None] = {"sha": serve_state.get("last_ff_logged_sha")}
+    last_ff_saved = load_serve_state().get("last_ff_logged_sha")
+    last_ff_logged: dict[str, str | None] = {"sha": last_ff_saved}
     try:
         while not stop["flag"] and not (root / "STOP").exists():
             _reap_zombies()  # adopted durable wrappers also finish while the owner is idle
@@ -536,9 +552,11 @@ def command_serve(args: argparse.Namespace) -> int:
                 log("owner: release install requested; stopping at task boundary without taking a new task")
                 return 0
             fast_forward_main_checkout(repo, log=log, last_logged=last_ff_logged)
-            if last_ff_logged.get("sha") != serve_state.get("last_ff_logged_sha"):
-                serve_state["last_ff_logged_sha"] = last_ff_logged.get("sha")
-                serve_store.save(serve_state, now_utc())
+            if last_ff_logged.get("sha") != last_ff_saved:
+                state = load_serve_state()
+                state["last_ff_logged_sha"] = last_ff_logged.get("sha")
+                serve_store.save(state, now_utc())
+                last_ff_saved = last_ff_logged.get("sha")
             maybe_report_release()
             outcome = serve_step(root, factory, conflicts=lambda: live_conflicts(repo, {os.getpid()}), log=log)
             if outcome == "empty":
@@ -549,21 +567,13 @@ def command_serve(args: argparse.Namespace) -> int:
             if outcome != previous:
                 log(f"owner: {outcome}")
                 if outcome.startswith("roadmap:paused:"):
-                    try:
-                        state = serve_store.load()
-                    except StateCorrupt as exc:
-                        log(f"serve: state corrupt ({exc}); using defaults")
-                        state = default_state()
+                    state = load_serve_state()
                     Notifier(state, sender=sender, log=log).send("roadmap_paused", now_utc(), owner="control-plane",
                                                                  reason=outcome.split(":", 2)[2])
                     serve_store.save(state, now_utc())
                 if outcome.startswith("waiting:"):
                     _, mission_id, reason = outcome.split(":")
-                    try:
-                        state = serve_store.load()
-                    except StateCorrupt as exc:
-                        log(f"serve: state corrupt ({exc}); using defaults")
-                        state = default_state()
+                    state = load_serve_state()
                     Notifier(state, sender=sender, log=log).send(
                         "mission_waiting", now_utc(), dedupe_key=f"wait|{mission_id}|{reason}",
                         owner="control-plane", mission=mission_id,

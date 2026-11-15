@@ -103,6 +103,61 @@ def test_owner_does_not_report_release_sha_when_mission_store_corrupt(tmp_path, 
     assert not state_file.is_file() or "release_sha" not in json.loads(state_file.read_text(encoding="utf-8"))
 
 
+def test_owner_unreadable_mission_alerts_once_across_restarts(tmp_path, monkeypatch):
+    sha = "c" * 40
+    root = tmp_path / "continuity"
+    monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+
+    # Set up one mission in the queue with a corrupt store
+    mid = "m-20261018T075500Z-abc123"
+    missions_dir = rc.missions_dir(root)
+    missions_dir.mkdir(parents=True, exist_ok=True)
+    mission_def_data = {
+        "id": mid,
+        "schema": rc.MISSION_SCHEMA,
+        "submitted_at": "2026-10-18T07:55:00Z",
+        "authority": "L20261020085928-0431",
+        "tasks": [{"text": "task 1"}],
+    }
+    (missions_dir / f"{mid}.json").write_text(json.dumps(mission_def_data), encoding="utf-8")
+
+    mstore = rc.mission_store(root, mid)
+    mstore.root.mkdir(parents=True, exist_ok=True)
+    bad_state = rc.default_state()
+    bad_state["chain"] = "x"  # bad type for chain -> raises StateCorrupt
+    mstore.state_path.write_text(json.dumps(bad_state), encoding="utf-8")
+
+    monkeypatch.setattr(rc_roadmap, "roadmap_step", lambda *a, **kw: None)
+
+    # Track sent alerts via webhook_sender
+    sent_alerts = []
+    monkeypatch.setattr(rc_roadmap, "webhook_sender", lambda: (lambda text: sent_alerts.append(text) or None))
+
+    args = argparse.Namespace(clear_stop=True, no_notify=False, turns=1, interval=1, once=True)
+
+    # First start: unreadable mission at start -> exactly one alert
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sent_alerts) == 1
+
+    # Serve state records the alerted (release sha, mission id)
+    state_file = root / "serve" / "state.json"
+    assert state_file.is_file()
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert f"{sha}:{mid}" in state.get("unreadable_alerts", [])
+
+    # Second start (restart with the same serve state): no second alert
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sent_alerts) == 1
+
+
 def test_command_serve_logs_when_serve_state_corrupt(tmp_path, monkeypatch, capsys):
     root = tmp_path / "continuity"
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
@@ -592,4 +647,282 @@ def test_command_serve_does_not_call_fast_forward_when_release_requested(tmp_pat
     res = rc.command_serve(args)
     assert res == 0
     assert not ff_called
+
+
+def test_owner_unreadable_mission_does_not_record_alert_when_no_sender(tmp_path, monkeypatch):
+    sha = "d" * 40
+    root = tmp_path / "continuity"
+    monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+
+    mid = "m-20261018T075500Z-abc123"
+    missions_dir = rc.missions_dir(root)
+    missions_dir.mkdir(parents=True, exist_ok=True)
+    mission_def_data = {
+        "id": mid,
+        "schema": rc.MISSION_SCHEMA,
+        "submitted_at": "2026-10-18T07:55:00Z",
+        "authority": "L20261020085928-0431",
+        "tasks": [{"text": "task 1"}],
+    }
+    (missions_dir / f"{mid}.json").write_text(json.dumps(mission_def_data), encoding="utf-8")
+
+    mstore = rc.mission_store(root, mid)
+    mstore.root.mkdir(parents=True, exist_ok=True)
+    bad_state = rc.default_state()
+    bad_state["chain"] = "x"
+    mstore.state_path.write_text(json.dumps(bad_state), encoding="utf-8")
+
+    monkeypatch.setattr(rc_roadmap, "roadmap_step", lambda *a, **kw: None)
+
+    # Run with no sender (no_notify=True)
+    args = argparse.Namespace(clear_stop=True, no_notify=True, turns=1, interval=1, once=True)
+    res = rc.command_serve(args)
+    assert res == 0
+
+    state_file = root / "serve" / "state.json"
+    if state_file.is_file():
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        assert f"{sha}:{mid}" not in state.get("unreadable_alerts", [])
+
+    # Next run with sender enabled: alert is sent and recorded
+    sent_alerts = []
+    monkeypatch.setattr(rc_roadmap, "webhook_sender", lambda: (lambda text: sent_alerts.append(text) or None))
+    args_notify = argparse.Namespace(clear_stop=True, no_notify=False, turns=1, interval=1, once=True)
+    res = rc.command_serve(args_notify)
+    assert res == 0
+    assert len(sent_alerts) == 1
+
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert f"{sha}:{mid}" in state.get("unreadable_alerts", [])
+
+
+def test_owner_unreadable_mission_does_not_record_alert_when_sender_fails(tmp_path, monkeypatch):
+    sha = "d" * 40
+    root = tmp_path / "continuity"
+    monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+
+    mid = "m-20261018T075500Z-abc123"
+    missions_dir = rc.missions_dir(root)
+    missions_dir.mkdir(parents=True, exist_ok=True)
+    mission_def_data = {
+        "id": mid,
+        "schema": rc.MISSION_SCHEMA,
+        "submitted_at": "2026-10-18T07:55:00Z",
+        "authority": "L20261020085928-0431",
+        "tasks": [{"text": "task 1"}],
+    }
+    (missions_dir / f"{mid}.json").write_text(json.dumps(mission_def_data), encoding="utf-8")
+
+    mstore = rc.mission_store(root, mid)
+    mstore.root.mkdir(parents=True, exist_ok=True)
+    bad_state = rc.default_state()
+    bad_state["chain"] = "x"
+    mstore.state_path.write_text(json.dumps(bad_state), encoding="utf-8")
+
+    monkeypatch.setattr(rc_roadmap, "roadmap_step", lambda *a, **kw: None)
+
+    # First run with a failing sender (returns error)
+    sender_calls = []
+    monkeypatch.setattr(rc_roadmap, "webhook_sender", lambda: (lambda text: sender_calls.append(text) or "http_500"))
+
+    args = argparse.Namespace(clear_stop=True, no_notify=False, turns=1, interval=1, once=True)
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sender_calls) >= 1
+
+    # State file must NOT record unreadable_alerts for this key
+    state_file = root / "serve" / "state.json"
+    if state_file.is_file():
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        assert f"{sha}:{mid}" not in state.get("unreadable_alerts", [])
+
+    # Second run with working sender: alert is NOT lost, it sends and records
+    working_calls = []
+    monkeypatch.setattr(rc_roadmap, "webhook_sender", lambda: (lambda text: working_calls.append(text) or None))
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(working_calls) == 1
+
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert f"{sha}:{mid}" in state.get("unreadable_alerts", [])
+
+
+def test_command_serve_later_saves_preserve_notify_state(tmp_path, monkeypatch):
+    sha = "f" * 40
+    root = tmp_path / "continuity"
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+
+    sent_alerts = []
+    monkeypatch.setattr(rc_roadmap, "webhook_sender", lambda: (lambda text: sent_alerts.append(text) or None))
+
+    # Simulate serve_step returning roadmap:paused:maintainer_stop on first call,
+    # then on second iteration fast-forward updates last_ff_logged_sha.
+    step_calls = 0
+
+    def fake_serve_step(*a, **kw):
+        nonlocal step_calls
+        step_calls += 1
+        if step_calls == 1:
+            return "roadmap:paused:maintainer_stop"
+        return "empty:stopped"
+
+    monkeypatch.setattr(rc_roadmap, "serve_step", fake_serve_step)
+
+    def fake_ff(repo, log=None, last_logged=None):
+        if step_calls == 1 and last_logged is not None:
+            last_logged["sha"] = "commit_sha_123"
+            return True
+        return False
+
+    monkeypatch.setattr(rc_roadmap, "fast_forward_main_checkout", fake_ff)
+
+    args = argparse.Namespace(clear_stop=True, no_notify=False, turns=1, interval=1, once=False)
+    res = rc.command_serve(args)
+    assert res == 0
+
+    state_file = root / "serve" / "state.json"
+    assert state_file.is_file()
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+
+    # Verify that later save updated last_ff_logged_sha
+    assert state.get("last_ff_logged_sha") == "commit_sha_123"
+
+    # AND verify that notify state from roadmap:paused: was NOT erased!
+    assert state.get("notify", {}).get("sent")
+    assert len(state["notify"]["sent"]) >= 1
+
+
+def test_relay_continuity_notify_validation_and_unreadable_file_handling():
+    rc_notify = sys.modules["relay_continuity_notify"]
+    # Existing events strictly validate mission ID format
+    valid_id = "m-20261018T075500Z-abc123"
+    bad_id = "m-corrupt"
+
+    assert rc_notify.render("mission_completed", {"mission": valid_id, "task": "1/1", "session": "none"}) is not None
+    assert rc_notify.render("mission_completed", {"mission": bad_id, "task": "1/1", "session": "none"}) is None
+
+    assert rc_notify.render("mission_waiting", {
+        "owner": "control-plane", "mission": valid_id, "task": "1/1", "agent": "claude",
+        "reason": "task_blocked", "next_check_at": "none"
+    }) is not None
+    assert rc_notify.render("mission_waiting", {
+        "owner": "control-plane", "mission": bad_id, "task": "1/1", "agent": "claude",
+        "reason": "task_blocked", "next_check_at": "none"
+    }) is None
+
+    # New alert path safely handles unreadable mission file names
+    sha = "a" * 40
+    assert rc_notify.render("release_withheld", {"owner": "control-plane", "mission": valid_id, "sha": sha}) is not None
+    assert rc_notify.render("release_withheld", {"owner": "control-plane", "mission": bad_id, "sha": sha}) is not None
+
+    # Unsafe mission names with forbidden characters are rejected
+    assert rc_notify.render("release_withheld", {"owner": "control-plane", "mission": "m-bad/path", "sha": sha}) is None
+    assert rc_notify.render("release_withheld", {"owner": "control-plane", "mission": "m-bad space", "sha": sha}) is None
+
+
+def test_owner_unreadable_mission_with_safe_file_name_alerts(tmp_path, monkeypatch):
+    sha = "a" * 40
+    root = tmp_path / "continuity"
+    monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+
+    missions_dir = rc.missions_dir(root)
+    missions_dir.mkdir(parents=True, exist_ok=True)
+    (missions_dir / "m-corrupt-file.json").write_text("{corrupt json", encoding="utf-8")
+
+    sent_alerts = []
+    monkeypatch.setattr(rc_roadmap, "webhook_sender", lambda: (lambda text: sent_alerts.append(text) or None))
+    monkeypatch.setattr(rc_roadmap, "roadmap_step", lambda *a, **kw: None)
+
+    args = argparse.Namespace(clear_stop=True, no_notify=False, turns=1, interval=1, once=True)
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sent_alerts) == 1
+
+    state_file = root / "serve" / "state.json"
+    assert state_file.is_file()
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert f"{sha}:m-corrupt-file" in state.get("unreadable_alerts", [])
+
+
+def test_owner_two_malformed_unreadable_missions_alert_and_persist_across_restarts(tmp_path, monkeypatch):
+    sha = "e" * 40
+    root = tmp_path / "continuity"
+    monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+
+    missions_dir = rc.missions_dir(root)
+    missions_dir.mkdir(parents=True, exist_ok=True)
+
+    # Two malformed filenames that both fail SAFE_MISSION_FILE_RE (due to '!')
+    file1 = missions_dir / "m-bad!1.json"
+    file2 = missions_dir / "m-bad!2.json"
+    file1.write_text("{bad json 1", encoding="utf-8")
+    file2.write_text("{bad json 2", encoding="utf-8")
+
+    sent_alerts = []
+    monkeypatch.setattr(rc_roadmap, "webhook_sender", lambda: (lambda text: sent_alerts.append(text) or None))
+    monkeypatch.setattr(rc_roadmap, "roadmap_step", lambda *a, **kw: None)
+
+    args = argparse.Namespace(clear_stop=True, no_notify=False, turns=1, interval=1, once=True)
+
+    # First run: alerts for m-bad!1 (first in lexical sort)
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sent_alerts) == 1
+
+    state_file = root / "serve" / "state.json"
+    assert state_file.is_file()
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert f"{sha}:m-bad!1" in state.get("unreadable_alerts", [])
+    assert f"{sha}:m-bad!2" not in state.get("unreadable_alerts", [])
+
+    # Remove the first malformed file so the owner sees the second malformed file
+    file1.unlink()
+
+    # Second run: m-bad!2 has distinct bad_id hash; dedupe key does not collide with m-bad!1
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sent_alerts) == 2
+
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert f"{sha}:m-bad!2" in state.get("unreadable_alerts", [])
+
+    # Third run (restart behavior with m-bad!2 still present):
+    # Already recorded in unreadable_alerts, so no duplicate alert is sent
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sent_alerts) == 2
+
+
 
