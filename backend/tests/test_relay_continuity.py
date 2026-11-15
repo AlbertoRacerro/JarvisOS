@@ -28,6 +28,8 @@ assert SPEC and SPEC.loader
 rc = importlib.util.module_from_spec(SPEC)
 sys.modules["relay_continuity"] = rc
 SPEC.loader.exec_module(rc)
+rc_missions = sys.modules["relay_continuity_missions"]
+rc_roadmap = sys.modules["relay_continuity_roadmap"]
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "relay_continuity"
 T0 = datetime(2026, 10, 18, 8, 0, tzinfo=UTC)
@@ -1849,7 +1851,7 @@ def test_world_readable_webhook_file_is_refused(tmp_path: Path, monkeypatch: pyt
     hook = tmp_path / "hook"
     hook.write_text(SECRET_URL)
     os.chmod(hook, 0o644)
-    monkeypatch.setattr(rc, "WEBHOOK_FILE", hook)
+    monkeypatch.setattr(rc_missions, "WEBHOOK_FILE", hook)
     assert rc.webhook_sender() is None
     os.chmod(hook, 0o600)
     assert rc.webhook_sender() is not None
@@ -3128,14 +3130,14 @@ def test_cli_submit_requires_a_recorded_directive_and_is_durable(tmp_path: Path,
 
 def test_cli_serve_refuses_outside_the_sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(tmp_path))
-    monkeypatch.setattr(rc, "in_sandbox", lambda: False)
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: False)
     assert rc.main(["serve", "--once", "--no-notify"]) == 2
     assert not (tmp_path / "serve.lock").exists()
 
 
 def test_cli_serve_keeps_an_operator_stop_across_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(tmp_path))
-    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
     (tmp_path / "STOP").write_text("operator stop")
     assert rc.main(["serve", "--once", "--no-notify"]) == 0
     assert (tmp_path / "STOP").read_text() == "operator stop"
@@ -3151,7 +3153,7 @@ def test_cli_serve_pins_the_sandbox_provider_logins(tmp_path: Path, monkeypatch:
     monkeypatch.setenv("CODEX_HOME", str(home / ".codex"))  # what a Claude shell's launcher leaves behind
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(tmp_path / "control"))
-    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
     monkeypatch.setattr(rc.shutil, "which", lambda _name: None)  # stop right after the environment is set
     assert rc.main(["serve", "--once", "--no-notify"]) == 2
     assert os.environ["CODEX_HOME"] == str(home / ".local/share/jarvisos-sandbox/state/codex")
@@ -3274,9 +3276,9 @@ class Roadmap:
         monkeypatch.setattr(rc.host_ops, "Paths", lambda _home: host_paths(tmp_path))
         monkeypatch.setattr(rc.devctx, "read_ledger", lambda env: [{"id": DIRECTIVE, "kind": "directive"}])
         monkeypatch.setattr(rc.devctx, "append_entry", lambda env, entry: None)
-        monkeypatch.setattr(rc, "roadmap_ci_fingerprint", lambda repo: "ci0")
+        monkeypatch.setattr(rc_roadmap, "roadmap_ci_fingerprint", lambda repo: "ci0")
         self.prs: list[int] = []
-        monkeypatch.setattr(rc, "roadmap_pr_ids", lambda repo: self.prs.copy())
+        monkeypatch.setattr(rc_roadmap, "roadmap_pr_ids", lambda repo: self.prs.copy())
         self.refs = list(refs)
         self.minute = 0
 
@@ -3355,7 +3357,7 @@ def test_roadmap_pauses_after_one_cycle_without_commit_pr_merge_or_job(tmp_path:
 def test_roadmap_no_progress_resumes_only_on_a_new_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     road = Roadmap(tmp_path, monkeypatch, "r0", "r0", "r0", "r1")
     ci = {"value": "ci0"}
-    monkeypatch.setattr(rc, "roadmap_ci_fingerprint", lambda repo: ci["value"])
+    monkeypatch.setattr(rc_roadmap, "roadmap_ci_fingerprint", lambda repo: ci["value"])
     rc.main(["roadmap", "start", "--authority", DIRECTIVE])
     first = road.step().split(":")[2]
     road.finish(first)
@@ -3384,8 +3386,8 @@ def test_roadmap_registered_job_counts_as_progress_and_job_result_wakes_it(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     road = Roadmap(tmp_path, monkeypatch, "r0", "r0", "r0", "r0", "r0")
     jobs: dict[str, str] = {}
-    monkeypatch.setattr(rc, "roadmap_job_ids", lambda root: sorted(jobs))
-    monkeypatch.setattr(rc, "roadmap_job_states", lambda root: jobs.copy())
+    monkeypatch.setattr(rc_roadmap, "roadmap_job_ids", lambda root: sorted(jobs))
+    monkeypatch.setattr(rc_roadmap, "roadmap_job_states", lambda root: jobs.copy())
     rc.main(["roadmap", "start", "--authority", DIRECTIVE])
     first = road.step().split(":")[2]
     jobs["j-20261025T094500Z-123456"] = "running"
@@ -3871,8 +3873,8 @@ def test_reaper_escalates_to_sigkill_and_never_reports_arguments(tmp_path: Path)
 
 def test_cli_run_refuses_without_process_ownership(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(tmp_path))
-    monkeypatch.setattr(rc, "become_subreaper", lambda: False)
-    monkeypatch.setattr(rc, "live_conflicts", lambda repo, own: [])
+    monkeypatch.setattr(rc_missions, "become_subreaper", lambda: False)
+    monkeypatch.setattr(rc_missions, "live_conflicts", lambda repo, own: [])
     assert rc.main(["run", "--session", HEAD, "--no-notify"]) == 2
 
 
@@ -4407,17 +4409,17 @@ def test_roadmap_unknown_after_namespace_restart_wakes_once_for_diagnosis(
 
 def test_idle_owner_reaps_adopted_jobs_before_next_mission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(tmp_path / "control"))
-    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
-    monkeypatch.setattr(rc, "become_subreaper", lambda: True)
-    monkeypatch.setattr(rc, "sandbox_provider_env", lambda home: {"CLAUDE_CONFIG_DIR": str(tmp_path / "claude")})
-    monkeypatch.setattr(rc, "link_relay_claude_credentials", lambda *args: None)
-    monkeypatch.setattr(rc, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda home: {"CLAUDE_CONFIG_DIR": str(tmp_path / "claude")})
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *args: None)
+    monkeypatch.setattr(rc_roadmap, "repo_root", lambda: tmp_path)
     monkeypatch.setattr(rc.shutil, "which", lambda name: "/test/claude")
     monkeypatch.setattr(rc.signal, "signal", lambda *args: None)
     calls = []
-    monkeypatch.setattr(rc, "_reap_zombies", lambda: calls.append("reap"))
-    monkeypatch.setattr(rc, "serve_step", lambda *args, **kwargs: calls.append("serve") or "empty")
-    monkeypatch.setattr(rc, "roadmap_step", lambda *args, **kwargs: calls.append("roadmap") or "roadmap:waiting:jobs")
+    monkeypatch.setattr(rc_roadmap, "_reap_zombies", lambda: calls.append("reap"))
+    monkeypatch.setattr(rc_roadmap, "serve_step", lambda *args, **kwargs: calls.append("serve") or "empty")
+    monkeypatch.setattr(rc_roadmap, "roadmap_step", lambda *args, **kwargs: calls.append("roadmap") or "roadmap:waiting:jobs")
     assert rc.main(["serve", "--once", "--no-notify"]) == 0
     assert calls == ["reap", "serve", "roadmap"]
 
@@ -6992,6 +6994,29 @@ def test_command_watch_logs_and_deduplicates_corrupt_state(tmp_path: Path, monke
     assert "; using defaults" in err
     assert err.count("watch: state corrupt") == 1
     assert err.count("supervisor: state corrupt") == 1
+
+
+def test_isolated_entrypoint_from_other_cwd(tmp_path: Path) -> None:
+    """Spec 265: python3 -I scripts/relay_continuity.py --help works from an unrelated working directory."""
+    proc = subprocess.run(
+        [sys.executable, "-I", str(SCRIPT), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "usage: relay_continuity.py" in proc.stdout
+    for subcmd in ("run", "serve", "watch", "status", "roadmap"):
+        sub = subprocess.run(
+            [sys.executable, "-I", str(SCRIPT), subcmd, "--help"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert sub.returncode == 0, f"{subcmd}: {sub.stderr}"
+
 
 
 

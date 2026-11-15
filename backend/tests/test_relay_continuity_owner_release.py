@@ -16,6 +16,7 @@ if rc is None:
     rc = importlib.util.module_from_spec(SPEC)
     sys.modules["relay_continuity"] = rc
     SPEC.loader.exec_module(rc)
+rc_roadmap = sys.modules["relay_continuity_roadmap"]
 
 
 def test_owner_release_sha(tmp_path, monkeypatch):
@@ -33,15 +34,15 @@ def test_owner_reports_release_sha_in_serve_state(tmp_path, monkeypatch):
     sha = "b" * 40
     monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(tmp_path / "continuity"))
-    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
-    monkeypatch.setattr(rc, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
     monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
-    monkeypatch.setattr(rc, "link_relay_claude_credentials", lambda *a: None)
-    monkeypatch.setattr(rc, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
 
     # Mock serve_step to exit after one step
-    monkeypatch.setattr(rc, "serve_step", lambda *a, **kw: "empty")
-    monkeypatch.setattr(rc, "roadmap_step", lambda *a, **kw: None)
+    monkeypatch.setattr(rc_roadmap, "serve_step", lambda *a, **kw: "empty")
+    monkeypatch.setattr(rc_roadmap, "roadmap_step", lambda *a, **kw: None)
 
     args = argparse.Namespace(clear_stop=True, no_notify=True, turns=1, interval=1, once=True)
     res = rc.command_serve(args)
@@ -60,11 +61,11 @@ def test_owner_does_not_report_release_sha_when_mission_store_corrupt(tmp_path, 
     root = tmp_path / "continuity"
     monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
-    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
-    monkeypatch.setattr(rc, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
     monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
-    monkeypatch.setattr(rc, "link_relay_claude_credentials", lambda *a: None)
-    monkeypatch.setattr(rc, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
 
     # Set up one mission in the queue with a corrupt store
     mid = "m-20261018T075500Z-abc123"
@@ -89,7 +90,7 @@ def test_owner_does_not_report_release_sha_when_mission_store_corrupt(tmp_path, 
         assert rc.validate_state(bad_state) is None
     mstore.state_path.write_text(json.dumps(bad_state), encoding="utf-8")
 
-    monkeypatch.setattr(rc, "roadmap_step", lambda *a, **kw: None)
+    monkeypatch.setattr(rc_roadmap, "roadmap_step", lambda *a, **kw: None)
 
     args = argparse.Namespace(clear_stop=True, no_notify=True, turns=1, interval=1, once=True)
     res = rc.command_serve(args)
@@ -105,13 +106,13 @@ def test_owner_does_not_report_release_sha_when_mission_store_corrupt(tmp_path, 
 def test_command_serve_logs_when_serve_state_corrupt(tmp_path, monkeypatch, capsys):
     root = tmp_path / "continuity"
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
-    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
-    monkeypatch.setattr(rc, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
     monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
-    monkeypatch.setattr(rc, "link_relay_claude_credentials", lambda *a: None)
-    monkeypatch.setattr(rc, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
-    monkeypatch.setattr(rc, "serve_step", lambda *a, **kw: "empty")
-    monkeypatch.setattr(rc, "roadmap_step", lambda *a, **kw: None)
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    monkeypatch.setattr(rc_roadmap, "serve_step", lambda *a, **kw: "empty")
+    monkeypatch.setattr(rc_roadmap, "roadmap_step", lambda *a, **kw: None)
 
     # Write corrupt serve store
     serve_dir = root / "serve"
@@ -211,14 +212,14 @@ def test_command_serve_exits_at_task_boundary_without_taking_task(tmp_path, monk
     sha = "e" * 40
     monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(tmp_path / "continuity"))
-    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
-    monkeypatch.setattr(rc, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
     monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
-    monkeypatch.setattr(rc, "link_relay_claude_credentials", lambda *a: None)
-    monkeypatch.setattr(rc, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
 
     # Mock check_and_request_release_update to return True (simulating successful install request at task boundary)
-    monkeypatch.setattr(rc, "check_and_request_release_update", lambda *a, **kw: True)
+    monkeypatch.setattr(rc_roadmap, "check_and_request_release_update", lambda *a, **kw: True)
 
     serve_step_called = False
     def fake_serve_step(*a, **kw):
@@ -226,7 +227,7 @@ def test_command_serve_exits_at_task_boundary_without_taking_task(tmp_path, monk
         serve_step_called = True
         return "empty"
 
-    monkeypatch.setattr(rc, "serve_step", fake_serve_step)
+    monkeypatch.setattr(rc_roadmap, "serve_step", fake_serve_step)
 
     args = argparse.Namespace(clear_stop=True, no_notify=True, turns=1, interval=1, once=False)
     res = rc.command_serve(args)
@@ -246,12 +247,12 @@ def test_owner_does_not_request_install_during_running_turn(tmp_path, monkeypatc
             check_called_during_turn = True
         return False
 
-    monkeypatch.setattr(rc, "check_and_request_release_update", check_hook)
-    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
-    monkeypatch.setattr(rc, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "check_and_request_release_update", check_hook)
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
     monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
-    monkeypatch.setattr(rc, "link_relay_claude_credentials", lambda *a: None)
-    monkeypatch.setattr(rc, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
 
     def fake_serve_step(*a, **kw):
         nonlocal turn_active
@@ -259,7 +260,7 @@ def test_owner_does_not_request_install_during_running_turn(tmp_path, monkeypatc
         turn_active = False
         return "ran:m-1:idle"
 
-    monkeypatch.setattr(rc, "serve_step", fake_serve_step)
+    monkeypatch.setattr(rc_roadmap, "serve_step", fake_serve_step)
 
     args = argparse.Namespace(clear_stop=True, no_notify=True, turns=1, interval=1, once=True)
     res = rc.command_serve(args)
@@ -562,13 +563,13 @@ def test_command_serve_does_not_call_fast_forward_when_release_requested(tmp_pat
     sha = "e" * 40
     monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(tmp_path / "continuity"))
-    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
-    monkeypatch.setattr(rc, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
     monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
-    monkeypatch.setattr(rc, "link_relay_claude_credentials", lambda *a: None)
-    monkeypatch.setattr(rc, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
 
-    monkeypatch.setattr(rc, "check_and_request_release_update", lambda *a, **kw: True)
+    monkeypatch.setattr(rc_roadmap, "check_and_request_release_update", lambda *a, **kw: True)
 
     ff_called = False
 
@@ -577,7 +578,7 @@ def test_command_serve_does_not_call_fast_forward_when_release_requested(tmp_pat
         ff_called = True
         return True
 
-    monkeypatch.setattr(rc, "fast_forward_main_checkout", spy_ff)
+    monkeypatch.setattr(rc_roadmap, "fast_forward_main_checkout", spy_ff)
 
     args = argparse.Namespace(
         action="serve",

@@ -3531,7 +3531,23 @@ def _run_preflight(argv: list[str], timeout: float = 60) -> subprocess.Completed
 
 
 def _preflight_release(release_dir: Path, paths: Paths) -> None:
-    for name in ("host_ops.py", "relay_continuity.py", "relay_jobs.py", "relay_observe.py", "devctx.py", "worker_routing.py"):
+    for name in (
+        "host_ops.py",
+        "relay_continuity.py",
+        "relay_continuity_common.py",
+        "relay_continuity_turns.py",
+        "relay_continuity_state.py",
+        "relay_continuity_notify.py",
+        "relay_continuity_adapters.py",
+        "relay_continuity_probes.py",
+        "relay_continuity_supervisor.py",
+        "relay_continuity_missions.py",
+        "relay_continuity_roadmap.py",
+        "relay_jobs.py",
+        "relay_observe.py",
+        "devctx.py",
+        "worker_routing.py",
+    ):
         if not (release_dir / "scripts" / name).is_file():
             raise Refused(f"release missing {name}")
     cmd = [sys.executable, "-I", str(release_dir / "scripts" / "host_ops.py"), "--home", str(paths.home), "preflight"]
