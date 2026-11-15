@@ -6,6 +6,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "relay_continuity.py"
 rc = sys.modules.get("relay_continuity")
 if rc is None:
@@ -52,7 +54,8 @@ def test_owner_reports_release_sha_in_serve_state(tmp_path, monkeypatch):
     assert "release_updated_at" in state
 
 
-def test_owner_does_not_report_release_sha_when_mission_store_corrupt(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("damage", ["bad_type", "mismatch"])
+def test_owner_does_not_report_release_sha_when_mission_store_corrupt(tmp_path, monkeypatch, capsys, damage):
     sha = "b" * 40
     root = tmp_path / "continuity"
     monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
@@ -79,7 +82,11 @@ def test_owner_does_not_report_release_sha_when_mission_store_corrupt(tmp_path, 
     mstore = rc.mission_store(root, mid)
     mstore.root.mkdir(parents=True, exist_ok=True)
     bad_state = rc.default_state()
-    bad_state["chain"] = "x"  # bad type for chain -> raises StateCorrupt
+    if damage == "bad_type":
+        bad_state["chain"] = "x"  # bad type for chain -> raises StateCorrupt
+    else:  # loads, but serve_step holds the queue: the state belongs to another mission
+        bad_state["mission"] = {"id": "m-20261018T075500Z-other1", "next": 0, "total": 1, "done": []}
+        assert rc.validate_state(bad_state) is None
     mstore.state_path.write_text(json.dumps(bad_state), encoding="utf-8")
 
     monkeypatch.setattr(rc, "roadmap_step", lambda *a, **kw: None)

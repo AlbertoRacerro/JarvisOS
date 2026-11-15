@@ -2083,7 +2083,7 @@ def test_auth_diagnostics_without_terminal_disable_that_provider(tmp_path: Path)
     assert sup.state["cooldowns"]["claude"]["reason"] == "auth"
 
 
-@pytest.mark.parametrize("drop", ["pending", "counters", "permissions_digest", "permissions_pinned"])
+@pytest.mark.parametrize("drop", [k for k in rc.default_state() if k not in rc.ADDED_STATE_KEYS])
 def test_structurally_incomplete_state_is_corrupt_not_repaired(tmp_path: Path, drop: str) -> None:
     env = Env(tmp_path, [("codex", CODEX_SUCCESS)])
     env.head(QUOTA)
@@ -6934,6 +6934,7 @@ def test_pre267_mission_state_fixture_loads_and_serves(tmp_path: Path) -> None:
     assert state["last_checkpoint_at"] is None
     assert state["parked_turns"] == []
     assert state["network_outage"] is False
+    assert set(rc.ADDED_STATE_KEYS) <= set(rc.default_state())
 
     # A state with "resumes": "x" still raises StateCorrupt
     corrupt_state = json.loads(fixture_path.read_text(encoding="utf-8"))

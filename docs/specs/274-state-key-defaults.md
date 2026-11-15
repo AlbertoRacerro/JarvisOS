@@ -27,18 +27,20 @@ corrupt. A release whose mission queue it cannot read is not confirmed as health
 
 ## Scope
 
-1. `Store.load` adds every key of `default_state()` that is absent from the file, with its default value (a fresh
-   copy), before `validate_state`. A present key with a bad type or value is still corrupt. The guard keys present
-   since the first schema (`pending`, `counters`, `permissions_digest`, `permissions_pinned`) are never filled: a
-   file without one is damaged, and filling `permissions_pinned` would skip the permissions-changed hold.
+1. `Store.load` adds each key of `ADDED_STATE_KEYS` (the keys of `default_state()` added after the first schema:
+   `parked_turns`, `wait`, `resumes`, `last_checkpoint_at`, `network_outage`) that is absent from the file, with its
+   default value, before `validate_state`. Any other absent key, and a present key with a bad type or value, is still
+   corrupt: those keys exist in every state since the first schema, and filling one (`cooldowns`, `hold`,
+   `permissions_pinned`) would drop a guard.
 2. `command_serve` reports `release_sha`/`release_updated_at` only when no mission of the queue is unreadable: every
-   mission definition loads and no mission store loads as corrupt (the same load paths `serve_step` uses). Until then
+   mission definition loads, no mission store loads as corrupt, and no open mission's state mismatches its definition
+   (the checks for which `serve_step` returns `corrupt`, shared through `mission_mismatch`). Until then
    it logs the first unreadable mission and retries at each loop iteration, so a fix made during the deadline still
    confirms the release.
 3. `command_watch` and `command_serve` log one line naming the store and the problem when they replace a corrupt state
    with the default.
-4. The runbook states the rule: a new state key always comes with its default in `default_state()`, which `Store.load`
-   fills on load; the release health check includes a readable mission queue.
+4. The runbook states the rule: a new state key always comes with its default in `default_state()` and its name in
+   `ADDED_STATE_KEYS`, which `Store.load` fills on load; the release health check includes a readable mission queue.
 
 ## Non-goals
 

@@ -85,7 +85,7 @@ A release is recorded in the attempt journal and the control ledger. Every hold 
 - **Claude REPL permissions.** On this workstation, `.agent-relay/permissions.toml` selects the REPL launch mode. Keep `[claude.backend].mode = "auto"` for bounded Claude approval and do not set `bypassPermissions` in `.claude/settings.local.json`. That local file allows only `Bash(git status)` and `Bash(python3 scripts/devctx.py recover)` as recovery fallbacks. Relay v0.7.7 runs Claude with `-p`; a `default` mode request outside those rules was denied without an interactive approval prompt in the 2026-10-19 live check. Inspect a fresh turn's `system/init.permissionMode` and its tool results before assuming a mode change worked. The notify-only watcher alerts once per completed REPL turn if the effective mode is `dontAsk`.
 - **Restart safety.** Every launch writes an intent record with a nonce before Relay starts. If the supervisor dies, the Relay turn keeps running in its own session. On restart the supervisor waits for that process (it never relaunches it), then finds the session by nonce and classifies it.
 - **Slack.** Notices use fixed templates with validated fields only. They never include transcripts, provider prompts, tool output, paths or secrets. The webhook is read from `~/.config/jarvis/slack_webhook_url`, which must be mode 600. Delivery failures are counted and retried once, and never interrupt supervision.
-- A new state key always gets its default in `default_state()`; `Store.load` fills absent keys, so a state written by an older release still loads.
+- A new state key always gets its default in `default_state()` and its name in `ADDED_STATE_KEYS`; `Store.load` fills those keys when absent, so a state written by an older release still loads. Any other absent key means a damaged state.
 
 ### Domande e risposte tramite Slack
 
@@ -243,7 +243,7 @@ When a release is installed:
 - A pending marker `~/.local/share/jarvisos-hostops/state/release-pending.json` is created before switching `current`.
 - The outgoing executor pins a copy of the previous release under `~/.local/share/jarvisos-hostops/guard/`.
 - Every executor start runs the pinned guard via `ExecStartPre=`. If the pending marker expires its deadline (10 minutes) or start count exceeds 3, or if the candidate crashes or reports an unhealthy heartbeat, the guard automatically rolls back `current` and the published release symlinks to the previous release, starts the owner on the previous release, notifies Slack once, and marks the failed candidate as refused so it is never retried automatically.
-- Once healthy (successful heartbeat with `problem: null`, active watcher for 60 seconds without restarts, and the owner reporting its release sha within the deadline, only when every mission of its queue loads), the release is confirmed and the pending marker moves to `release-history.jsonl`.
+- Once healthy (successful heartbeat with `problem: null`, active watcher for 60 seconds without restarts, and the owner reporting its release sha within the deadline, only when every mission of its queue loads as `serve_step` would read it), the release is confirmed and the pending marker moves to `release-history.jsonl`.
 - **Manual rollback:** To force an immediate return to the previous release:
   ```bash
   python3 ~/.local/share/jarvisos-hostops/guard/scripts/host_ops.py guard --return --reason "manual rollback"

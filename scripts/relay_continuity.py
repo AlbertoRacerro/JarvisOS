@@ -1377,8 +1377,9 @@ STATE_TYPES: dict[str, tuple[type, ...]] = {
     "acknowledged": (dict, type(None)), "spend_caps": (dict,), "updated_at": (str, type(None)),
     "wait": (dict, type(None)), "resumes": (int,), "last_checkpoint_at": (str, type(None)),
 }
-# In every state since the first schema; a file without one is damaged, not older.
-GUARD_STATE_KEYS = ("pending", "counters", "permissions_digest", "permissions_pinned")
+# Keys added after the first schema: a state written by an older release lacks them and gets their defaults on load.
+# A new key of `default_state()` goes here; any other absent key means a damaged file.
+ADDED_STATE_KEYS = ("parked_turns", "wait", "resumes", "last_checkpoint_at", "network_outage")
 PENDING_KEYS = ("nonce", "agent", "parent", "started_at", "pid", "pid_start", "fingerprint", "attempt")
 
 
@@ -1497,10 +1498,9 @@ class Store:
             raise StateCorrupt(f"state file unreadable: {type(exc).__name__}") from exc
         if not isinstance(data, dict) or data.get("schema") != SCHEMA or data.get("phase") not in PHASES:
             raise StateCorrupt("state file has an unknown schema or phase")
-        # A key added by a later release is filled with its default; the attempt and permission guards are never.
-        for key, val in default_state().items():
-            if key not in data and key not in GUARD_STATE_KEYS:
-                data[key] = val
+        defaults = default_state()
+        for key in ADDED_STATE_KEYS:
+            data.setdefault(key, defaults[key])
         if problem := validate_state(data):
             raise StateCorrupt(f"state file is structurally invalid: {problem}")
         return data
@@ -5006,13 +5006,21 @@ def mission_status(store: Store) -> tuple[str, dict[str, Any] | None]:
     return ("active" if state.get("chain") or state.get("pending") else "queued"), state
 
 
+def mission_mismatch(mission: dict[str, Any], mission_id: str, state: dict[str, Any]) -> bool:
+    rec = state.get("mission")
+    return not isinstance(rec, dict) or rec.get("id") != mission_id or rec.get("total") != len(mission["tasks"])
+
+
 def unreadable_mission(root: Path) -> str | None:
-    """Id of the first mission whose definition fails to load or whose store is corrupt, else None."""
+    """Id of the first mission `serve_step` would report `corrupt`: its definition fails to load, its store is
+    corrupt, or an open mission's state does not match its definition. None when the whole queue loads."""
     for mission, mission_id, _problem in load_missions(root):
         if mission is None:
             return mission_id
-        status, _state = mission_status(mission_store(root, mission_id))
+        status, state = mission_status(mission_store(root, mission_id))
         if status == "corrupt":
+            return mission_id
+        if status not in ("complete", "cancelled") and state is not None and mission_mismatch(mission, mission_id, state):
             return mission_id
     return None
 
@@ -5162,11 +5170,9 @@ def serve_step(root: Path, factory: Callable[[Store, dict[str, Any]], Supervisor
                 continue
             if status == "corrupt" or (status == "held" and not redecidable(state)):
                 return f"{status}:{mission_id}"
-            if state is not None:
-                rec = state.get("mission")
-                if not isinstance(rec, dict) or rec.get("id") != mission_id or rec.get("total") != len(mission["tasks"]):
-                    log(f"mission {mission_id}: state does not match its definition; queue held")
-                    return f"corrupt:{mission_id}"
+            if state is not None and mission_mismatch(mission, mission_id, state):
+                log(f"mission {mission_id}: state does not match its definition; queue held")
+                return f"corrupt:{mission_id}"
             if found := conflicts():
                 # A live REPL or legacy autopilot on the repository: never a concurrent writer, so wait.
                 return f"waiting:{mission_id}:{'repl_active' if 'repl_active' in found else 'legacy_autopilot'}"
