@@ -2083,13 +2083,13 @@ def test_auth_diagnostics_without_terminal_disable_that_provider(tmp_path: Path)
     assert sup.state["cooldowns"]["claude"]["reason"] == "auth"
 
 
-@pytest.mark.parametrize("drop", ["pending", "counters", "permissions_pinned"])
-def test_structurally_incomplete_state_is_corrupt_not_repaired(tmp_path: Path, drop: str) -> None:
+@pytest.mark.parametrize("corrupt_key,corrupt_val", [("pending", 123), ("counters", "bad"), ("permissions_pinned", "bad")])
+def test_corrupt_state_type_holds_without_acting(tmp_path: Path, corrupt_key: str, corrupt_val: Any) -> None:
     env = Env(tmp_path, [("codex", CODEX_SUCCESS)])
     env.head(QUOTA)
     state = rc.default_state()
     state.update({"phase": "running", "head_session": HEAD, "chain": [HEAD]})
-    del state[drop]
+    state[corrupt_key] = corrupt_val
     env.store.root.mkdir(parents=True, exist_ok=True)
     env.store.state_path.write_text(json.dumps(state))
     result, _ = env.run()
@@ -6900,4 +6900,83 @@ def test_adopted_pending_turn_enforces_wall_limit_on_restart(tmp_path: Path) -> 
     assert (42424, signal.SIGKILL) in signals
     assert reap_called[0] >= 1
     assert "claude" not in sup.state["cooldowns"]
+
+
+# ---------------------------------------------------------------------------
+# Spec 274: Supervisor state keys default on load
+
+
+def test_pre267_mission_state_fixture_loads_and_serves(tmp_path: Path) -> None:
+    fixture_path = FIXTURES / "pre267_mission_state.json"
+    assert fixture_path.is_file()
+
+    # Load the fixture via Store(tmp) (copy to tmp/state.json):
+    # loads, wait None, resumes 0, last_checkpoint_at None, parked_turns [], network_outage False
+    store = rc.Store(tmp_path)
+    shutil.copyfile(fixture_path, store.state_path)
+    state = store.load()
+    assert state["wait"] is None
+    assert state["resumes"] == 0
+    assert state["last_checkpoint_at"] is None
+    assert state["parked_turns"] == []
+    assert state["network_outage"] is False
+
+    # A state with "resumes": "x" still raises StateCorrupt
+    corrupt_state = json.loads(fixture_path.read_text(encoding="utf-8"))
+    corrupt_state["resumes"] = "x"
+    store.state_path.write_text(json.dumps(corrupt_state), encoding="utf-8")
+    with pytest.raises(rc.StateCorrupt):
+        store.load()
+
+    # With the fixture as a mission store (copy into the missions layout used by existing serve_step tests,
+    # with a matching mission definition of total 1, completed) serve_step does not return a corrupt: outcome.
+    root = tmp_path / "control"
+    mid = "m-20261021T093535Z-5613b2"
+    mdef = mission_def("task1", mid=mid)
+    _write_mission(root, mdef)
+    mstore = rc.mission_store(root, mid)
+    mstore.root.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(fixture_path, mstore.state_path)
+    outcome = rc.serve_step(root, lambda *_: pytest.fail("should not execute"), conflicts=lambda: [])
+    assert not outcome.startswith("corrupt:")
+
+
+def test_command_watch_logs_and_deduplicates_corrupt_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                           capsys: pytest.CaptureFixture[str]) -> None:
+    root = tmp_path / "continuity"
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
+    monkeypatch.setattr(rc, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(rc, "load_observe", lambda: type("Obs", (), {
+        "snapshot": lambda *a: {}, "observe_step": lambda *a, **kw: None
+    })())
+    monkeypatch.setattr(rc, "mission_sessions", lambda root: set())
+    monkeypatch.setattr(rc, "watch_once", lambda *a, **kw: None)
+
+    watch_dir = root / "watch"
+    watch_dir.mkdir(parents=True, exist_ok=True)
+    (watch_dir / "state.json").write_text("{not json", encoding="utf-8")
+    (root / "state.json").write_text("{not json", encoding="utf-8")
+
+    iterations = 0
+
+    def fake_sleep(_: float) -> None:
+        nonlocal iterations
+        iterations += 1
+        if iterations >= 2:
+            os.kill(os.getpid(), signal.SIGINT)
+
+    monkeypatch.setattr(rc.time, "sleep", fake_sleep)
+
+    args = rc.argparse.Namespace(digest_hours=2, no_notify=True, once=False, interval=1)
+    res = rc.command_watch(args)
+    assert res == 0
+
+    err = capsys.readouterr().err
+    assert "watch: state corrupt" in err
+    assert "supervisor: state corrupt" in err
+    assert "; using defaults" in err
+    assert err.count("watch: state corrupt") == 1
+    assert err.count("supervisor: state corrupt") == 1
+
+
 

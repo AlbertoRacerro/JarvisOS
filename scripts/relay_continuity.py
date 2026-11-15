@@ -1495,6 +1495,10 @@ class Store:
             raise StateCorrupt(f"state file unreadable: {type(exc).__name__}") from exc
         if not isinstance(data, dict) or data.get("schema") != SCHEMA or data.get("phase") not in PHASES:
             raise StateCorrupt("state file has an unknown schema or phase")
+        defaults = default_state()
+        for key, val in defaults.items():
+            if key not in data:
+                data[key] = val
         if problem := validate_state(data):
             raise StateCorrupt(f"state file is structurally invalid: {problem}")
         return data
@@ -5000,6 +5004,17 @@ def mission_status(store: Store) -> tuple[str, dict[str, Any] | None]:
     return ("active" if state.get("chain") or state.get("pending") else "queued"), state
 
 
+def unreadable_mission(root: Path) -> str | None:
+    """Id of the first mission whose definition fails to load or whose store is corrupt, else None."""
+    for mission, mission_id, _problem in load_missions(root):
+        if mission is None:
+            return mission_id
+        status, _state = mission_status(mission_store(root, mission_id))
+        if status == "corrupt":
+            return mission_id
+    return None
+
+
 def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Unique per write: an owner in a fresh PID namespace reuses its PID, so a temp file left by a killed write
@@ -5600,17 +5615,35 @@ def command_serve(args: argparse.Namespace) -> int:
                  "PATH": str(mission_bin) + os.pathsep + os.environ["PATH"]}
     serve_store = Store(root / "serve")
     curr_sha = release_sha()
-    try:
-        serve_state = serve_store.load()
-    except StateCorrupt:
-        serve_state = default_state()
-    if curr_sha:
-        serve_state["release_sha"] = curr_sha
-        serve_state["release_updated_at"] = iso(now_utc())
-        serve_store.save(serve_state, now_utc())
 
     def log(msg: str) -> None:
         print(f"{iso(now_utc())} {msg}", file=sys.stderr, flush=True)
+
+    try:
+        serve_state = serve_store.load()
+    except StateCorrupt as exc:
+        log(f"serve: state corrupt ({exc}); using defaults")
+        serve_state = default_state()
+
+    reported_release = False
+    unreadable_logged: set[str] = set()
+
+    def maybe_report_release() -> None:
+        nonlocal reported_release
+        if reported_release or not curr_sha:
+            return
+        bad_id = unreadable_mission(root)
+        if bad_id is not None:
+            if bad_id not in unreadable_logged:
+                unreadable_logged.add(bad_id)
+                log(f"owner: release {curr_sha[:12]} not reported: mission {bad_id} unreadable")
+            return
+        serve_state["release_sha"] = curr_sha
+        serve_state["release_updated_at"] = iso(now_utc())
+        serve_store.save(serve_state, now_utc())
+        reported_release = True
+
+    maybe_report_release()
 
     def factory(store: Store, mission: dict[str, Any]) -> Supervisor:
         supervisor = Supervisor(store, make_host(repo, relay_env), turns=args.turns, sender=sender)
@@ -5631,6 +5664,7 @@ def command_serve(args: argparse.Namespace) -> int:
             if last_ff_logged.get("sha") != serve_state.get("last_ff_logged_sha"):
                 serve_state["last_ff_logged_sha"] = last_ff_logged.get("sha")
                 serve_store.save(serve_state, now_utc())
+            maybe_report_release()
             outcome = serve_step(root, factory, conflicts=lambda: live_conflicts(repo, {os.getpid()}), log=log)
             if outcome == "empty":
                 outcome = roadmap_step(root, repo, fingerprint=lambda: remote_fingerprint(repo),
@@ -5642,7 +5676,8 @@ def command_serve(args: argparse.Namespace) -> int:
                 if outcome.startswith("roadmap:paused:"):
                     try:
                         state = serve_store.load()
-                    except StateCorrupt:
+                    except StateCorrupt as exc:
+                        log(f"serve: state corrupt ({exc}); using defaults")
                         state = default_state()
                     Notifier(state, sender=sender, log=log).send("roadmap_paused", now_utc(), owner="control-plane",
                                                                  reason=outcome.split(":", 2)[2])
@@ -5651,7 +5686,8 @@ def command_serve(args: argparse.Namespace) -> int:
                     _, mission_id, reason = outcome.split(":")
                     try:
                         state = serve_store.load()
-                    except StateCorrupt:
+                    except StateCorrupt as exc:
+                        log(f"serve: state corrupt ({exc}); using defaults")
                         state = default_state()
                     Notifier(state, sender=sender, log=log).send(
                         "mission_waiting", now_utc(), dedupe_key=f"wait|{mission_id}|{reason}",
@@ -6073,17 +6109,27 @@ def command_watch(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
     signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
     log = lambda m: print(f"{iso(now_utc())} {m}", file=sys.stderr, flush=True)  # noqa: E731
+    logged_corrupt: set[str] = set()
+
+    def log_corrupt(where: str, exc: Exception) -> None:
+        msg = f"{where}: state corrupt ({exc}); using defaults"
+        if msg not in logged_corrupt:
+            logged_corrupt.add(msg)
+            log(msg)
+
     try:
         while not stop["flag"]:
             now = now_utc()
             try:
                 state = store.load()
-            except StateCorrupt:
+            except StateCorrupt as exc:
+                log_corrupt("watch", exc)
                 state = default_state()
             notifier = Notifier(state, sender=None if args.no_notify else webhook_sender(), log=log)
             try:
                 supervised_state = Store(root).load()
-            except StateCorrupt:
+            except StateCorrupt as exc:
+                log_corrupt("supervisor", exc)
                 supervised_state = default_state()
             try:
                 owned = mission_sessions(root)
