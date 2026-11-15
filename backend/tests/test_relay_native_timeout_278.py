@@ -10,11 +10,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
 from test_relay_continuity import Env, mission_def, rc
 
 ra = rc.relay_argon
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures/relay_continuity/argon_wall_timeout"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JARVISOS_ARGON_LEASE_FD", raising=False)
 
 
 def test_native_runner_sigterm_writes_atomic_result_and_cleans_up(tmp_path: Path) -> None:
@@ -65,9 +71,11 @@ def test_native_runner_sigterm_writes_atomic_result_and_cleans_up(tmp_path: Path
         "JARVISOS_MISSION_PROFILE": "1",
         "PYTHONPATH": str(Path(__file__).resolve().parent.parent.parent),
     }
+    env.pop("JARVISOS_ARGON_LEASE_FD", None)
 
     proc = subprocess.Popen(
         [sys.executable, "-c", script, str(repo), session_id, "argon"],
+        cwd=repo,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
