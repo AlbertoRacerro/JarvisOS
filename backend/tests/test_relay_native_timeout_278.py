@@ -362,3 +362,68 @@ def test_ordinary_malformed_output_still_gates(tmp_path: Path) -> None:
     (turn3 / "output.jsonl").write_text("")
     report3 = rc.classify_turn(turn3, timed_out=False)
     assert rc.gate(report3) == "output_missing"
+
+
+def test_sigterm_without_supervisor_timeout_flag_retains_output_gate(tmp_path: Path) -> None:
+    """Regression test for Spec 278 contract:
+
+    native-result reason 'sigterm' with malformed/incomplete stream:
+    - timed_out=False -> gate holds (does not bypass output gate on non-timeout signals);
+    - timed_out=True -> outcome is unknown, harness_cause is turn_time_limit, no gate.
+    """
+    # 1. Torn / malformed stream with native-result reason="sigterm"
+    turn_malformed = tmp_path / "turn_malformed"
+    turn_malformed.mkdir()
+    (turn_malformed / "state.json").write_text(json.dumps({"agent_key": "argon"}))
+    (turn_malformed / "native-result.json").write_text(
+        json.dumps({
+            "schema": "argon-coordinator.v1",
+            "agent": "argon",
+            "reason": "sigterm",
+            "exit_code": -15,
+            "model": "gemini-4-argon-low",
+        })
+    )
+    (turn_malformed / "output.jsonl").write_text(
+        '{"event":"init","conversation_id":"c1","init":{"model":"gemini-4-argon-low"}}\n'
+        '{"event":"step_update","step_update":{"conversation_id":"c1","step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"ls"}}}}\n'
+        "{torn_incomplete_line\n"
+    )
+
+    # timed_out=False: gate holds as output_unparseable; harness_cause is NOT turn_time_limit
+    rep_malformed_no_flag = rc.classify_turn(turn_malformed, timed_out=False)
+    assert rep_malformed_no_flag.harness_cause != "turn_time_limit"
+    assert rc.gate(rep_malformed_no_flag) == "output_unparseable"
+
+    # timed_out=True: unknown turn_time_limit, gate is bypassed
+    rep_malformed_flag = rc.classify_turn(turn_malformed, timed_out=True)
+    assert rep_malformed_flag.outcome == "unknown"
+    assert rep_malformed_flag.harness_cause == "turn_time_limit"
+    assert rc.gate(rep_malformed_flag) is None
+
+    # 2. Incomplete / missing evidence stream with native-result reason="sigterm"
+    turn_empty = tmp_path / "turn_empty"
+    turn_empty.mkdir()
+    (turn_empty / "state.json").write_text(json.dumps({"agent_key": "argon"}))
+    (turn_empty / "native-result.json").write_text(
+        json.dumps({
+            "schema": "argon-coordinator.v1",
+            "agent": "argon",
+            "reason": "sigterm",
+            "exit_code": -15,
+            "model": "gemini-4-argon-low",
+            "launched": True,
+        })
+    )
+    (turn_empty / "output.jsonl").write_text("")
+
+    # timed_out=False: gate holds as output_missing; harness_cause is NOT turn_time_limit
+    rep_empty_no_flag = rc.classify_turn(turn_empty, timed_out=False)
+    assert rep_empty_no_flag.harness_cause != "turn_time_limit"
+    assert rc.gate(rep_empty_no_flag) == "output_missing"
+
+    # timed_out=True: unknown turn_time_limit, gate is bypassed
+    rep_empty_flag = rc.classify_turn(turn_empty, timed_out=True)
+    assert rep_empty_flag.outcome == "unknown"
+    assert rep_empty_flag.harness_cause == "turn_time_limit"
+    assert rc.gate(rep_empty_flag) is None

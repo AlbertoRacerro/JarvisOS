@@ -1108,9 +1108,7 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
         native = relay_argon.native_error((turn_dir / "stderr.log").read_text(encoding="utf-8", errors="replace"))
     except OSError:
         native = None
-    cause = relay_argon.harness_cause(native) or (
-        ("unknown", "turn_time_limit") if (reason in ("timeout", "sigterm", "signal") or timed_out) else None
-    )
+    cause = relay_argon.harness_cause(native) or (("unknown", "turn_time_limit") if reason == "timeout" else None)
 
     def harness(report: TurnReport) -> TurnReport:
         if cause is not None and report.outcome != "success":
