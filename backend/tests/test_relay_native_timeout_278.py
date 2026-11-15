@@ -513,3 +513,142 @@ def test_runner_stderr_print_timeout_without_supervisor_flag_does_not_bypass_gat
     assert rep_valid.no_evidence is False
     assert rc.gate(rep_valid) is None
     assert [c.label for c in rep_valid.in_flight] == ["git push"]
+
+
+def test_session_without_turns_timeout_settlement_and_gating(tmp_path: Path) -> None:
+    """Session without turns:
+
+    1. Native agent with supervisor durable timed_out=True settles as unknown turn_time_limit,
+       sets report.timed_out=True, bypasses the output gate, and preserves external-effect safety.
+    2. Native agent with timed_out=False settles as crash without harness_cause or timed_out=True,
+       and gates as output_missing (does not bypass without flag).
+    3. Non-native agent with timed_out=True does not get native timeout bypass and gates as output_missing.
+    4. External-effect safety: an in-flight external operation is parked, not repeated or advanced.
+    """
+    mission = mission_def("mission 1", mid="m-20261115T220000Z-112233")
+
+    # 1. Native agent with supervisor timeout flag
+    env1 = Env(tmp_path / "env1")
+    sup1 = env1.supervisor()
+    sup1.mission = mission
+    sup1.state["mission"] = {"id": mission["id"], "next": 0, "total": 1, "done": []}
+    env1.relay.argon_limits = lambda a: {"windows": [{"used_percent": 30}]} if a in ("argon", "agy_opus") else None
+
+    sid1 = "20261115-220000-native-timeout"
+    (env1.relay.sessions_dir() / sid1).mkdir(parents=True)
+    pending1 = {
+        "nonce": "rc-20261115T220000Z-t1",
+        "agent": "argon",
+        "started_at": rc.iso(rc.now_utc()),
+        "timed_out": True,
+        "diagnostics": "turn wall limit (3690s) exceeded",
+        "attempt": 1,
+        "task": 0,
+    }
+    report1 = sup1._settle(pending1, sid1, diagnostics="turn wall limit (3690s) exceeded", timed_out=True)
+    assert isinstance(report1, rc.TurnReport)
+    assert report1.outcome == "unknown"
+    assert report1.harness_cause == "turn_time_limit"
+    assert report1.no_evidence is True
+    assert report1.timed_out is True
+    assert report1.turn_id == f"{sid1}/none"
+    assert report1.in_flight == []
+    assert report1.effects == []
+    assert rc.gate(report1) is None
+    # Task is not completed
+    assert sup1.state["mission"]["next"] == 0
+    assert len(sup1.state["mission"]["done"]) == 0
+
+    # Decision on report1 does not hold on output_missing
+    decision1 = sup1._decide(report1, "task 1")
+    assert isinstance(decision1, tuple)
+    assert sup1.state.get("hold") is None
+
+    # Journal verification
+    journal1 = [
+        json.loads(line) for line in sup1.store.journal_path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    settle1 = next(e for e in journal1 if e.get("event") == "settle")
+    assert settle1["outcome"] == "unknown"
+    assert settle1["harness_cause"] == "turn_time_limit"
+    assert settle1["effects"] == []
+    assert settle1["in_flight"] == []
+
+    # 2. Native agent without supervisor timeout flag: gates as output_missing
+    env2 = Env(tmp_path / "env2")
+    sup2 = env2.supervisor()
+    sup2.mission = mission
+    sup2.state["mission"] = {"id": mission["id"], "next": 0, "total": 1, "done": []}
+
+    sid2 = "20261115-220000-native-notimeout"
+    (env2.relay.sessions_dir() / sid2).mkdir(parents=True)
+    pending2 = {
+        "nonce": "rc-20261115T220000Z-t2",
+        "agent": "argon",
+        "started_at": rc.iso(rc.now_utc()),
+        "timed_out": False,
+        "attempt": 1,
+        "task": 0,
+    }
+    report2 = sup2._settle(pending2, sid2, timed_out=False)
+    assert isinstance(report2, rc.TurnReport)
+    assert report2.outcome == "crash"
+    assert report2.harness_cause is None
+    assert report2.no_evidence is True
+    assert report2.timed_out is False
+    assert rc.gate(report2) == "output_missing"
+
+    decision2 = sup2._decide(report2, "task 1")
+    assert decision2 == "held"
+    assert sup2.state["hold"]["reason"] == "output_missing"
+
+    # 3. Non-native agent with timed_out=True does not bypass gate
+    env3 = Env(tmp_path / "env3")
+    sup3 = env3.supervisor()
+    sup3.mission = mission
+    sup3.state["mission"] = {"id": mission["id"], "next": 0, "total": 1, "done": []}
+
+    sid3 = "20261115-220000-claude-timeout"
+    (env3.relay.sessions_dir() / sid3).mkdir(parents=True)
+    pending3 = {
+        "nonce": "rc-20261115T220000Z-t3",
+        "agent": "claude",
+        "started_at": rc.iso(rc.now_utc()),
+        "timed_out": True,
+        "diagnostics": "turn wall limit (3600s) exceeded",
+        "attempt": 1,
+        "task": 0,
+    }
+    report3 = sup3._settle(pending3, sid3, diagnostics="turn wall limit (3600s) exceeded", timed_out=True)
+    assert isinstance(report3, rc.TurnReport)
+    assert report3.outcome == "crash"
+    assert report3.harness_cause is None
+    assert report3.no_evidence is True
+    assert report3.timed_out is False
+    assert rc.gate(report3) == "output_missing"
+
+    decision3 = sup3._decide(report3, "task 1")
+    assert decision3 == "held"
+    assert sup3.state["hold"]["reason"] == "output_missing"
+
+    # 4. External-effect safety: unproven in-flight external operations are parked
+    env4 = Env(tmp_path / "env4")
+    sup4 = env4.supervisor()
+    sup4.mission = mission
+    sup4.state["mission"] = {"id": mission["id"], "next": 0, "total": 1, "done": []}
+    env4.relay.argon_limits = lambda a: {"windows": [{"used_percent": 30}]} if a in ("argon", "agy_opus") else None
+    env4.host.probe = lambda call: None
+
+    report4 = sup4._settle(pending1, sid1, diagnostics="turn wall limit (3690s) exceeded", timed_out=True)
+    assert isinstance(report4, rc.TurnReport)
+    # Attach an interrupted in-flight external operation to the report
+    push_call = rc.ToolCall(id="call_push_1", tool="run_command", kind="external", label="git push", done=False)
+    report4.calls.append(push_call)
+    assert push_call in report4.in_flight
+
+    decision4 = sup4._decide(report4, "task 1")
+    assert isinstance(decision4, tuple)
+    _agent, next_prompt = decision4
+    assert "git push: UNRESOLVED (parked)" in next_prompt
+    assert report4.turn_id in sup4.state.get("parked_turns", [])
+    assert sup4.state["mission"]["next"] == 0

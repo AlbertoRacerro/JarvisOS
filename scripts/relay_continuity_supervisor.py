@@ -1631,11 +1631,13 @@ class Supervisor:
             agent=pending["agent"],
             detail=f"session without turns ({diagnostics.strip()})" if diagnostics else "session without turns",
             no_evidence=True, turn_id=f"{session_id}/none",
-            harness_cause="turn_time_limit" if (timed_out and pending.get("agent") in NATIVE_AGENTS) else None)
+            harness_cause="turn_time_limit" if (timed_out and pending.get("agent") in NATIVE_AGENTS) else None,
+            timed_out=bool(timed_out and pending.get("agent") in NATIVE_AGENTS))
         if timed_out:
             if pending.get("agent") in NATIVE_AGENTS or report.agent in NATIVE_AGENTS:
                 report.outcome = "unknown"
                 report.harness_cause = "turn_time_limit"
+                report.timed_out = True
             elif report.outcome in ("success", "quota", "spend_limit", "auth", "transient"):
                 report.outcome = "crash"
             if diagnostics and diagnostics.strip() not in report.detail:
