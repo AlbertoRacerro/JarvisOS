@@ -12,4 +12,4 @@ Sanitized fixtures for offline relay continuity tests. Payload text, command arg
   - `output.jsonl`: Claude Code JSONL stream event shape with `message.usage`. The final assistant event carries the exact measured numeric triple from a retained under-cap turn: `input_tokens: 2`, `cache_creation_input_tokens: 209`, and `cache_read_input_tokens: 60189`, yielding a measured per-call context size of 60,400 tokens (<= 150,000 cap).
 - `codex_context_cumulative/`:
   - `state.json`: Real Codex turn state shape with measured `metadata.context_used_tokens: 2901816`.
-  - `output.jsonl`: Codex CLI turn event shape (`thread.started`, `turn.started`, `item.completed`, `turn.completed`), showing cumulative `turn.completed` usage of 2,901,816 tokens without per-call assistant usage.
+  - `output.jsonl`: Codex CLI turn event shape (`thread.started`, `turn.started`, `item.completed`, `turn.completed`), showing cumulative `turn.completed` usage with exact measured event values `input_tokens: 2891987` and `output_tokens: 9829` (totaling 2,901,816 tokens) without per-call assistant usage.
