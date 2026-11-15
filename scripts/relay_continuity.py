@@ -1377,6 +1377,9 @@ STATE_TYPES: dict[str, tuple[type, ...]] = {
     "acknowledged": (dict, type(None)), "spend_caps": (dict,), "updated_at": (str, type(None)),
     "wait": (dict, type(None)), "resumes": (int,), "last_checkpoint_at": (str, type(None)),
 }
+# Keys added after the first schema: a state written by an older release lacks them and gets their defaults on load.
+# A new key of `default_state()` goes here; any other absent key means a damaged file.
+ADDED_STATE_KEYS = ("parked_turns", "wait", "resumes", "last_checkpoint_at", "network_outage")
 PENDING_KEYS = ("nonce", "agent", "parent", "started_at", "pid", "pid_start", "fingerprint", "attempt")
 
 
@@ -1495,6 +1498,9 @@ class Store:
             raise StateCorrupt(f"state file unreadable: {type(exc).__name__}") from exc
         if not isinstance(data, dict) or data.get("schema") != SCHEMA or data.get("phase") not in PHASES:
             raise StateCorrupt("state file has an unknown schema or phase")
+        defaults = default_state()
+        for key in ADDED_STATE_KEYS:
+            data.setdefault(key, defaults[key])
         if problem := validate_state(data):
             raise StateCorrupt(f"state file is structurally invalid: {problem}")
         return data
@@ -5000,6 +5006,25 @@ def mission_status(store: Store) -> tuple[str, dict[str, Any] | None]:
     return ("active" if state.get("chain") or state.get("pending") else "queued"), state
 
 
+def mission_mismatch(mission: dict[str, Any], mission_id: str, state: dict[str, Any]) -> bool:
+    rec = state.get("mission")
+    return not isinstance(rec, dict) or rec.get("id") != mission_id or rec.get("total") != len(mission["tasks"])
+
+
+def unreadable_mission(root: Path) -> str | None:
+    """Id of the first mission `serve_step` would report `corrupt`: its definition fails to load, its store is
+    corrupt, or an open mission's state does not match its definition. None when the whole queue loads."""
+    for mission, mission_id, _problem in load_missions(root):
+        if mission is None:
+            return mission_id
+        status, state = mission_status(mission_store(root, mission_id))
+        if status == "corrupt":
+            return mission_id
+        if status not in ("complete", "cancelled") and state is not None and mission_mismatch(mission, mission_id, state):
+            return mission_id
+    return None
+
+
 def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Unique per write: an owner in a fresh PID namespace reuses its PID, so a temp file left by a killed write
@@ -5145,11 +5170,9 @@ def serve_step(root: Path, factory: Callable[[Store, dict[str, Any]], Supervisor
                 continue
             if status == "corrupt" or (status == "held" and not redecidable(state)):
                 return f"{status}:{mission_id}"
-            if state is not None:
-                rec = state.get("mission")
-                if not isinstance(rec, dict) or rec.get("id") != mission_id or rec.get("total") != len(mission["tasks"]):
-                    log(f"mission {mission_id}: state does not match its definition; queue held")
-                    return f"corrupt:{mission_id}"
+            if state is not None and mission_mismatch(mission, mission_id, state):
+                log(f"mission {mission_id}: state does not match its definition; queue held")
+                return f"corrupt:{mission_id}"
             if found := conflicts():
                 # A live REPL or legacy autopilot on the repository: never a concurrent writer, so wait.
                 return f"waiting:{mission_id}:{'repl_active' if 'repl_active' in found else 'legacy_autopilot'}"
@@ -5600,17 +5623,35 @@ def command_serve(args: argparse.Namespace) -> int:
                  "PATH": str(mission_bin) + os.pathsep + os.environ["PATH"]}
     serve_store = Store(root / "serve")
     curr_sha = release_sha()
-    try:
-        serve_state = serve_store.load()
-    except StateCorrupt:
-        serve_state = default_state()
-    if curr_sha:
-        serve_state["release_sha"] = curr_sha
-        serve_state["release_updated_at"] = iso(now_utc())
-        serve_store.save(serve_state, now_utc())
 
     def log(msg: str) -> None:
         print(f"{iso(now_utc())} {msg}", file=sys.stderr, flush=True)
+
+    try:
+        serve_state = serve_store.load()
+    except StateCorrupt as exc:
+        log(f"serve: state corrupt ({exc}); using defaults")
+        serve_state = default_state()
+
+    reported_release = False
+    unreadable_logged: set[str] = set()
+
+    def maybe_report_release() -> None:
+        nonlocal reported_release
+        if reported_release or not curr_sha:
+            return
+        bad_id = unreadable_mission(root)
+        if bad_id is not None:
+            if bad_id not in unreadable_logged:
+                unreadable_logged.add(bad_id)
+                log(f"owner: release {curr_sha[:12]} not reported: mission {bad_id} unreadable")
+            return
+        serve_state["release_sha"] = curr_sha
+        serve_state["release_updated_at"] = iso(now_utc())
+        serve_store.save(serve_state, now_utc())
+        reported_release = True
+
+    maybe_report_release()
 
     def factory(store: Store, mission: dict[str, Any]) -> Supervisor:
         supervisor = Supervisor(store, make_host(repo, relay_env), turns=args.turns, sender=sender)
@@ -5631,6 +5672,7 @@ def command_serve(args: argparse.Namespace) -> int:
             if last_ff_logged.get("sha") != serve_state.get("last_ff_logged_sha"):
                 serve_state["last_ff_logged_sha"] = last_ff_logged.get("sha")
                 serve_store.save(serve_state, now_utc())
+            maybe_report_release()
             outcome = serve_step(root, factory, conflicts=lambda: live_conflicts(repo, {os.getpid()}), log=log)
             if outcome == "empty":
                 outcome = roadmap_step(root, repo, fingerprint=lambda: remote_fingerprint(repo),
@@ -5642,7 +5684,8 @@ def command_serve(args: argparse.Namespace) -> int:
                 if outcome.startswith("roadmap:paused:"):
                     try:
                         state = serve_store.load()
-                    except StateCorrupt:
+                    except StateCorrupt as exc:
+                        log(f"serve: state corrupt ({exc}); using defaults")
                         state = default_state()
                     Notifier(state, sender=sender, log=log).send("roadmap_paused", now_utc(), owner="control-plane",
                                                                  reason=outcome.split(":", 2)[2])
@@ -5651,7 +5694,8 @@ def command_serve(args: argparse.Namespace) -> int:
                     _, mission_id, reason = outcome.split(":")
                     try:
                         state = serve_store.load()
-                    except StateCorrupt:
+                    except StateCorrupt as exc:
+                        log(f"serve: state corrupt ({exc}); using defaults")
                         state = default_state()
                     Notifier(state, sender=sender, log=log).send(
                         "mission_waiting", now_utc(), dedupe_key=f"wait|{mission_id}|{reason}",
@@ -6073,17 +6117,27 @@ def command_watch(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
     signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
     log = lambda m: print(f"{iso(now_utc())} {m}", file=sys.stderr, flush=True)  # noqa: E731
+    logged_corrupt: set[str] = set()
+
+    def log_corrupt(where: str, exc: Exception) -> None:
+        msg = f"{where}: state corrupt ({exc}); using defaults"
+        if msg not in logged_corrupt:
+            logged_corrupt.add(msg)
+            log(msg)
+
     try:
         while not stop["flag"]:
             now = now_utc()
             try:
                 state = store.load()
-            except StateCorrupt:
+            except StateCorrupt as exc:
+                log_corrupt("watch", exc)
                 state = default_state()
             notifier = Notifier(state, sender=None if args.no_notify else webhook_sender(), log=log)
             try:
                 supervised_state = Store(root).load()
-            except StateCorrupt:
+            except StateCorrupt as exc:
+                log_corrupt("supervisor", exc)
                 supervised_state = default_state()
             try:
                 owned = mission_sessions(root)

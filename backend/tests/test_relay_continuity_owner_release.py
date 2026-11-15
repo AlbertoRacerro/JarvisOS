@@ -6,6 +6,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "relay_continuity.py"
 rc = sys.modules.get("relay_continuity")
 if rc is None:
@@ -50,6 +52,79 @@ def test_owner_reports_release_sha_in_serve_state(tmp_path, monkeypatch):
     state = json.loads(state_file.read_text(encoding="utf-8"))
     assert state.get("release_sha") == sha
     assert "release_updated_at" in state
+
+
+@pytest.mark.parametrize("damage", ["bad_type", "mismatch"])
+def test_owner_does_not_report_release_sha_when_mission_store_corrupt(tmp_path, monkeypatch, capsys, damage):
+    sha = "b" * 40
+    root = tmp_path / "continuity"
+    monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
+    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
+    monkeypatch.setattr(rc, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+
+    # Set up one mission in the queue with a corrupt store
+    mid = "m-20261018T075500Z-abc123"
+    missions_dir = rc.missions_dir(root)
+    missions_dir.mkdir(parents=True, exist_ok=True)
+    mission_def_data = {
+        "id": mid,
+        "schema": rc.MISSION_SCHEMA,
+        "submitted_at": "2026-10-18T07:55:00Z",
+        "authority": "L20261020085928-0431",
+        "tasks": [{"text": "task 1"}],
+    }
+    (missions_dir / f"{mid}.json").write_text(json.dumps(mission_def_data), encoding="utf-8")
+
+    mstore = rc.mission_store(root, mid)
+    mstore.root.mkdir(parents=True, exist_ok=True)
+    bad_state = rc.default_state()
+    if damage == "bad_type":
+        bad_state["chain"] = "x"  # bad type for chain -> raises StateCorrupt
+    else:  # loads, but serve_step holds the queue: the state belongs to another mission
+        bad_state["mission"] = {"id": "m-20261018T075500Z-other1", "next": 0, "total": 1, "done": []}
+        assert rc.validate_state(bad_state) is None
+    mstore.state_path.write_text(json.dumps(bad_state), encoding="utf-8")
+
+    monkeypatch.setattr(rc, "roadmap_step", lambda *a, **kw: None)
+
+    args = argparse.Namespace(clear_stop=True, no_notify=True, turns=1, interval=1, once=True)
+    res = rc.command_serve(args)
+    assert res == 0
+
+    captured = capsys.readouterr()
+    assert f"owner: release {sha[:12]} not reported: mission {mid} unreadable" in captured.err
+
+    state_file = root / "serve" / "state.json"
+    assert not state_file.is_file() or "release_sha" not in json.loads(state_file.read_text(encoding="utf-8"))
+
+
+def test_command_serve_logs_when_serve_state_corrupt(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "continuity"
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
+    monkeypatch.setattr(rc, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
+    monkeypatch.setattr(rc, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    monkeypatch.setattr(rc, "serve_step", lambda *a, **kw: "empty")
+    monkeypatch.setattr(rc, "roadmap_step", lambda *a, **kw: None)
+
+    # Write corrupt serve store
+    serve_dir = root / "serve"
+    serve_dir.mkdir(parents=True, exist_ok=True)
+    (serve_dir / "state.json").write_text("{not json", encoding="utf-8")
+
+    args = argparse.Namespace(clear_stop=True, no_notify=True, turns=1, interval=1, once=True)
+    res = rc.command_serve(args)
+    assert res == 0
+
+    err = capsys.readouterr().err
+    assert "serve: state corrupt" in err
+    assert "; using defaults" in err
 
 
 def test_check_and_request_release_update_when_no_owner_sha(tmp_path):

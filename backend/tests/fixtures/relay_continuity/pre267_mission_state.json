@@ -1,0 +1,60 @@
+{
+ "acknowledged": null,
+ "agent": "claude",
+ "chain": [
+  "20261001-000000-aaaaaa"
+ ],
+ "cooldowns": {},
+ "counters": {
+  "consecutive_failures": 0,
+  "crash_retries": 0,
+  "transient_streak": 0
+ },
+ "head_session": "20261001-000000-aaaaaa",
+ "hold": null,
+ "last_attempt": {
+  "agent": "claude",
+  "attempt": 1,
+  "fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+  "nonce": "rc-20261001T000000Z-00000000",
+  "task": 0
+ },
+ "last_outcome": "success",
+ "last_switch_at": null,
+ "mission": {
+  "completed_at": "2026-10-01T00:01:00Z",
+  "done": [
+   {
+    "agent": "claude",
+    "at": "2026-10-01T00:01:00Z",
+    "session": "20261001-000000-aaaaaa",
+    "task": 0
+   }
+  ],
+  "id": "m-20261001T000000Z-aaaaaa",
+  "next": 1,
+  "total": 1
+ },
+ "notify": {
+  "dropped": 0,
+  "failures": 0,
+  "last_digest": null,
+  "retry": null,
+  "sent": {},
+  "window": []
+ },
+ "pending": null,
+ "permissions_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+ "permissions_pinned": true,
+ "phase": "idle",
+ "reconcile": null,
+ "schema": "relay-continuity.v1",
+ "spend_caps": {},
+ "switches": [],
+ "updated_at": "2026-10-01T00:01:00Z",
+ "waiting_since": null,
+ "watch": {
+  "master": null,
+  "seen": {}
+ }
+}
