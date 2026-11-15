@@ -5,7 +5,7 @@ Depends on: 264
 
 ## Goal
 
-`scripts/relay_continuity.py` (about 4 800 lines) becomes a small entry point plus sibling modules, one per
+`scripts/relay_continuity.py` (about 6 250 lines) becomes a small entry point plus sibling modules, one per
 responsibility that the file already marks with its own section comments. Behaviour, command line, journal and state
 formats are unchanged; the existing tests are the safety net.
 
@@ -15,19 +15,20 @@ Maintainer directives `L20261113011123-36ed` and `L20261113093830-1603`. Every l
 continuity, bounded turns, coordinator choice) edits this file, and a coordinator cannot read 250 KB before changing
 it. A split along the existing section boundaries lets a session read only the part it changes.
 
-## Code facts (verified at `2ef5d2b6`)
+## Code facts (rechecked at `9b1f4b39`)
 
-- Section comments in `scripts/relay_continuity.py`: turn classification (from line ~161), durable state, outbound
-  notification, Relay and host adapters, interrupted external operations (probes), supervisor, notify-only watch, CLI,
-  missions (spec 201), roadmap continuation (spec 203).
-- The host unit runs the owner as `python3 -I .../scripts/relay_continuity.py` (`host_ops.py`); `-I` does not put the
-  script's directory on `sys.path`, so siblings are loaded by file path. The file already does this for
-  `worker_routing.py` (`importlib.util.spec_from_file_location` registered in `sys.modules`), and `relay_observe.py`
-  loads `relay_continuity` the same way.
-- A release is a copy of the whole tree; `host_ops._preflight_release` requires a fixed list of script files.
-- `backend/tests/test_relay_continuity.py` loads the module by path as `rc` and patches about thirty module attributes
-  (`monkeypatch.setattr(rc, "make_host", ...)`, `rc.WEBHOOK_FILE`, `rc.roadmap_step`, ...). A patch on `rc` does not
-  reach a function that moved to another module and reads the name from its own globals.
+- `scripts/relay_continuity.py::classify_turn`, `scripts/relay_continuity.py::Store`,
+  `scripts/relay_continuity.py::Notifier`, `scripts/relay_continuity.py::Supervisor` and
+  `scripts/relay_continuity.py::serve_step` sit under section comments that mark the existing boundaries for turn
+  classification, state, notification, supervision and missions. The file also marks probes, adapters, watch, CLI and
+  roadmap continuation.
+- `scripts/host_ops.py` `UNIT_TEMPLATES` starts the owner through the sandbox without `-I` and the watcher with `-I`.
+  `scripts/relay_continuity.py` already loads
+  `worker_routing.py` by file path, and `scripts/relay_continuity.py::load_observe` loads `relay_observe.py` that way.
+  New siblings must work in both execution modes.
+- `scripts/host_ops.py::_preflight_release` requires a fixed list of script files.
+- `backend/tests/test_relay_continuity.py` loads the module by file path as `rc` and patches 71 module attributes.
+  A patch on `rc` does not reach a function moved to a sibling that reads the name from its own globals.
 
 ## Scope
 
