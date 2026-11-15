@@ -41,10 +41,11 @@ from relay_continuity_common import (  # noqa: E402
     NATIVE_AGENTS,
     PREFERRED,
     PREFERRED_AGENTS,
+    RESUME_CONTEXT_CAP_TOKENS,
     SAME_AGENT_CAUSES,
-    TURN_USAGE_CAP_TOKENS,
     WAIT_TIMEOUT_SECONDS,
     Limits,
+    UnmeasurableContextTokens,
     devctx,
     host_ops,
     iso,
@@ -1256,6 +1257,16 @@ class Supervisor:
             return {"unreadable": True}
         return default_pr_ci_status(self.host.relay.repo, pr_number, expected_head)
 
+    def _log_resume_decision(self, site: str, tokens: int | None, resume: bool) -> None:
+        if tokens is None:
+            tokens_desc = "unmeasured"
+        elif isinstance(tokens, UnmeasurableContextTokens):
+            tokens_desc = "unmeasurable"
+        else:
+            tokens_desc = f"{tokens} tokens"
+        decision = "resume" if resume else "fresh"
+        self.host.log(f"resume decision ({site}): last-call context {tokens_desc}; {decision}")
+
     def _wake_wait(self, reason: str, wait: dict[str, Any], report: TurnReport,
                    job_statuses: dict[str, str], ci_statuses: dict[str, str],
                    failed_job: str | None = None, failed_pr: str | None = None) -> tuple[str, str]:
@@ -1321,14 +1332,16 @@ class Supervisor:
 
         if (parent_candidate is not None
                 and resumes < MAX_SESSION_RESUMES
-                and (tokens is None or tokens <= TURN_USAGE_CAP_TOKENS)):
+                and (tokens is None or tokens <= RESUME_CONTEXT_CAP_TOKENS)):
             self.state["resumes"] = resumes + 1
             self.save()
+            self._log_resume_decision("wake", tokens, resume=True)
             return agent, short_resume_prompt
         else:
             self.state["resumes"] = 0
             self.state["force_fresh_context"] = True
             self.save()
+            self._log_resume_decision("wake", tokens, resume=False)
             task_text = self._mission_task() if (self.mission and rec) else None
             handoff = f"{outcome_header}\n{items_text}"
             if task_text:
@@ -1515,10 +1528,12 @@ class Supervisor:
         parent = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
                   or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
                   or force_fresh
-                  or (tokens is not None and tokens > TURN_USAGE_CAP_TOKENS)
+                  or (tokens is not None and tokens > RESUME_CONTEXT_CAP_TOKENS)
                   else self.state["head_session"])
         if parent is None:
             self.state["resumes"] = 0
+        if self.state.get("head_session"):
+            self._log_resume_decision("launch", tokens, resume=(parent is not None))
         fresh = resume is None and (parent is None or self.state.get("agent") != agent)
         pending = {"nonce": nonce, "agent": agent, "parent": parent, "started_at": iso(now),
                    "pid": None, "pid_start": None, "fingerprint": self.host.fingerprint(), "attempt": self.attempts}

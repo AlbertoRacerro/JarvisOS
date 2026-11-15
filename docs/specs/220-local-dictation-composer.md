@@ -1,6 +1,6 @@
 # 220 — Local dictation in the Jarvis composer
 
-State: **planned** (live state in [`STATUS.md`](STATUS.md)). Work item `JARVIS-LOCAL-DICTATION-1`. This is a definition under maintainer issue #930. **Implementation is not authorized yet.** The maintainer scheduled it after the remaining spec 216 work, unless the maintainer reorders. Acceptance and readiness must be made explicit in a later change before any implementation PR. The issue body is the source for the engine facts below; its host-side handoff lives at `/home/user/asr-local`, outside Git and not visible from `jarvis-sandbox`. Code references were re-checked on this branch (based on `origin/master`).
+State: **planned** (live state in [`STATUS.md`](STATUS.md)). Work item `JARVIS-LOCAL-DICTATION-1`. This is a definition under maintainer issue #930. **Implementation is not authorized yet.** The maintainer scheduled it after the approved supervisor and product queue. At readiness, recover the historical dictation prototype and adapt it to the current master and accepted contract. Acceptance and readiness must be made explicit in a later change before any implementation PR. The issue body is the source for the engine facts below; its host-side handoff lives outside Git and is not visible from the sandbox. Code references were re-checked on this branch (based on `origin/master`).
 
 ## Outcome
 

@@ -1,0 +1,11 @@
+{
+  "agent_key": "claude",
+  "status": "continue",
+  "turn_number": 1,
+  "kind": "relay_resumable_state",
+  "summary": "<coordinator narrative removed from fixture>",
+  "metadata": {
+    "context_used_tokens": 1080361,
+    "context_window_tokens": 200000
+  }
+}
