@@ -65,7 +65,8 @@ WAIT_TIMEOUT_SECONDS = 7200  # spec 267: elapsed wall-clock seconds before an ex
 CI_POLL_INTERVAL_SECONDS = 60  # spec 267: minimum seconds between PR CI check queries
 JOB_POLL_INTERVAL_SECONDS = 15  # spec 267: minimum seconds between job status queries
 MAX_SESSION_RESUMES = 4  # spec 267: consecutive resumes of the same session
-TURN_USAGE_CAP_TOKENS = 2_000_000  # spec 267: cumulative usage cap above which a turn starts a fresh context
+RESUME_CONTEXT_CAP_TOKENS = 150_000  # spec 277: context size cap above which a turn starts a fresh context
+TURN_USAGE_CAP_TOKENS = RESUME_CONTEXT_CAP_TOKENS  # spec 267 alias, superseded by spec 277
 MIN_CHECKPOINT_INTERVAL_SECONDS = 60  # spec 267: minimum seconds between bare checkpoints
 
 JOB_WAIT_LINE_RE = re.compile(r"^JOB-WAIT:\s*(j-\d{8}T\d{6}Z-[0-9a-f]{6})\s*$")

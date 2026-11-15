@@ -63,6 +63,7 @@ def write_turn(session_dir: Path, events: list[dict[str, Any]], *, agent: str = 
     state_data: dict[str, Any] = {"agent_key": agent, "status": status}
     if context_used_tokens is not None:
         state_data["context_used_tokens"] = context_used_tokens
+        state_data["metadata"] = {"context_used_tokens": context_used_tokens}
     (turn / "state.json").write_text(json.dumps(state_data))
     (turn / "prompt.md").write_text(prompt)
     if last_message is not None:
@@ -105,6 +106,22 @@ def tool_result(tid: str) -> dict[str, Any]:
 
 
 SUCCESS = [claude_result("ok")]
+def claude_turn_events(text: str = "ok", *, input_tokens: int = 50_000,
+                       cache_creation: int = 0, cache_read: int = 0) -> list[dict[str, Any]]:
+    return [
+        {"subtype": "init", "type": "system"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": text}],
+            "usage": {
+                "input_tokens": input_tokens,
+                "cache_creation_input_tokens": cache_creation,
+                "cache_read_input_tokens": cache_read,
+                "output_tokens": 100,
+            },
+        }},
+        claude_result("ok"),
+    ]
+
 CODEX_SUCCESS = [{"type": "thread.started"}, {"type": "turn.completed"}]
 QUOTA = [claude_result("You've hit your session limit · resets 11:50pm (Europe/Rome)", error=True, status=429)]
 CODEX_QUOTA = [{"type": "thread.started"}, {"type": "error", "message": "You've hit your usage limit. try again at 11:38 PM."},
@@ -5498,14 +5515,16 @@ def test_bare_checkpoint_enforces_minimum_interval(tmp_path: Path) -> None:
 def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> None:
     jid = "j-20261113T120000Z-111111"
     msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+    ev_under = claude_turn_events("continue", input_tokens=40_000, cache_creation=10_000, cache_read=10_000)
+    ev_over = claude_turn_events("continue", input_tokens=100_000, cache_creation=20_000, cache_read=40_000)
 
-    # Under cap (< 2M tokens) and under 4 resumes: continues session
+    # Under cap (<= 150_000 tokens) and under 4 resumes: continues session
     env1 = Env(tmp_path / "under")
     mission1 = mission_def("under cap")
     start_mission(env1, mission1)
     env1.jobs[jid] = {"status": "succeeded"}
     env1.relay.script = [
-        ("claude", SUCCESS, "continue", msg, 1_400_000),
+        ("claude", ev_under, "continue", msg, 60_000),
         ("claude", SUCCESS, "propose_done"),
     ]
     result1, sup1 = run_mission(env1, mission1)
@@ -5513,13 +5532,13 @@ def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> No
     assert env1.relay.launches[1]["parent"] is not None
     assert "External wait satisfied:" in env1.relay.launches[1]["task"]
 
-    # Over cap (> 2M tokens): forces fresh context (parent = None)
+    # Over cap (> 150_000 tokens): forces fresh context (parent = None)
     env2 = Env(tmp_path / "over")
     mission2 = mission_def("over cap")
     start_mission(env2, mission2)
     env2.jobs[jid] = {"status": "succeeded"}
     env2.relay.script = [
-        ("claude", SUCCESS, "continue", msg, 2_100_000),
+        ("claude", ev_over, "continue", msg, 160_000),
         ("claude", SUCCESS, "propose_done"),
     ]
     result2, sup2 = run_mission(env2, mission2)
@@ -5547,11 +5566,11 @@ def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> No
     env4.jobs[jid] = {"status": "succeeded"}
     # 5 "continue"+JOB-WAIT turns then propose_done
     env4.relay.script = [
-        ("claude", SUCCESS, "continue", msg, 100_000),
-        ("claude", SUCCESS, "continue", msg, 100_000),
-        ("claude", SUCCESS, "continue", msg, 100_000),
-        ("claude", SUCCESS, "continue", msg, 100_000),
-        ("claude", SUCCESS, "continue", msg, 100_000),
+        ("claude", ev_under, "continue", msg, 60_000),
+        ("claude", ev_under, "continue", msg, 60_000),
+        ("claude", ev_under, "continue", msg, 60_000),
+        ("claude", ev_under, "continue", msg, 60_000),
+        ("claude", ev_under, "continue", msg, 60_000),
         ("claude", SUCCESS, "propose_done"),
     ]
     result4, sup4 = run_mission(env4, mission4)
@@ -5561,6 +5580,124 @@ def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> No
         assert env4.relay.launches[i]["task"].startswith("[relay-continuity resume")
     assert env4.relay.launches[5]["parent"] is None
     assert "[Durable handoff summary]" in env4.relay.launches[5]["task"]
+
+
+def test_spec_277_turn_context_tokens_and_decisions_from_real_fixtures(tmp_path: Path) -> None:
+    over_turn = FIXTURES / "claude_context_over_cap"
+    under_turn = FIXTURES / "claude_context_under_cap"
+    codex_turn = FIXTURES / "codex_context_cumulative"
+
+    tokens_over = rc.turn_context_tokens(over_turn)
+    tokens_under = rc.turn_context_tokens(under_turn)
+    tokens_codex = rc.turn_context_tokens(codex_turn)
+
+    assert tokens_over == 160_000
+    assert tokens_over > rc.RESUME_CONTEXT_CAP_TOKENS
+    assert tokens_under == 60_000
+    assert tokens_under <= rc.RESUME_CONTEXT_CAP_TOKENS
+    # Criterion 2: Codex only has cumulative turn usage, so return None for its cap
+    assert tokens_codex is None
+
+    # Criterion 3: TurnReport.context_used_tokens is filled from metadata.context_used_tokens
+    rep_over = rc.classify_turn(over_turn)
+    assert rep_over.context_used_tokens == 2166425
+    rep_under = rc.classify_turn(under_turn)
+    assert rep_under.context_used_tokens == 800000
+    rep_codex = rc.classify_turn(codex_turn)
+    assert rep_codex.context_used_tokens == 2166425
+
+    # Top-level fallback when metadata is absent (older state files)
+    legacy_turn = tmp_path / "legacy_turn"
+    legacy_turn.mkdir(parents=True)
+    (legacy_turn / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "completed", "context_used_tokens": 123456}))
+    (legacy_turn / "output.jsonl").write_text("")
+    rep_legacy = rc.classify_turn(legacy_turn)
+    assert rep_legacy.context_used_tokens == 123456
+
+
+def test_spec_277_claude_over_cap_starts_fresh_under_cap_resumes(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    # Over cap copied fixture: next turn starts fresh context
+    env_over = Env(tmp_path / "over")
+    m_over = mission_def("over cap real fixture")
+    start_mission(env_over, m_over)
+    env_over.jobs[jid] = {"status": "succeeded"}
+    over_events = [json.loads(line) for line in (FIXTURES / "claude_context_over_cap" / "output.jsonl").read_text().splitlines()]
+    env_over.relay.script = [
+        ("claude", over_events, "continue", msg, 2_166_425),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_over, _ = run_mission(env_over, m_over)
+    assert res_over == "idle"
+    assert env_over.relay.launches[1]["parent"] is None
+    assert "[Durable handoff summary]" in env_over.relay.launches[1]["task"]
+
+    # Under cap copied fixture: next turn resumes
+    env_under = Env(tmp_path / "under")
+    m_under = mission_def("under cap real fixture")
+    start_mission(env_under, m_under)
+    env_under.jobs[jid] = {"status": "succeeded"}
+    under_events = [json.loads(line) for line in (FIXTURES / "claude_context_under_cap" / "output.jsonl").read_text().splitlines()]
+    env_under.relay.script = [
+        ("claude", under_events, "continue", msg, 800_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_under, _ = run_mission(env_under, m_under)
+    assert res_under == "idle"
+    assert env_under.relay.launches[1]["parent"] is not None
+    assert "External wait satisfied:" in env_under.relay.launches[1]["task"]
+
+
+def test_spec_277_codex_never_triggers_cap_from_cumulative_usage(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    env = Env(tmp_path / "codex_cumulative")
+    m = mission_def("codex cumulative")
+    start_mission(env, m)
+    env.jobs[jid] = {"status": "succeeded"}
+    codex_events = [json.loads(line) for line in (FIXTURES / "codex_context_cumulative" / "output.jsonl").read_text().splitlines()]
+    # Codex has cumulative usage of 2_166_425 tokens (way above 150_000 cap)
+    env.relay.script = [
+        ("codex", codex_events, "continue", msg, 2_166_425),
+        ("codex", CODEX_SUCCESS, "propose_done"),
+    ]
+    res, _ = run_mission(env, m)
+    assert res == "idle"
+    # Resumes because turn_context_tokens returns None for Codex, never cumulative usage
+    assert env.relay.launches[1]["parent"] is not None
+    assert "External wait satisfied:" in env.relay.launches[1]["task"]
+
+
+def test_spec_277_last_assistant_call_defines_context_size(tmp_path: Path) -> None:
+    turn = tmp_path / "multi_assistant_turn"
+    turn.mkdir(parents=True)
+    events = [
+        {"subtype": "init", "type": "system"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": "step 1"}],
+            "usage": {"input_tokens": 20_000, "cache_creation_input_tokens": 5_000, "cache_read_input_tokens": 10_000},
+        }},
+        {"message": {"content": [{"is_error": False, "type": "tool_result"}]}, "type": "user"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": "step 2"}],
+            "usage": {"input_tokens": 60_000, "cache_creation_input_tokens": 10_000, "cache_read_input_tokens": 20_000},
+        }},
+        {"message": {"content": [{"is_error": False, "type": "tool_result"}]}, "type": "user"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": "step 3 final call"}],
+            "usage": {"input_tokens": 90_000, "cache_creation_input_tokens": 15_000, "cache_read_input_tokens": 30_000},
+        }},
+        claude_result("done"),
+    ]
+    (turn / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    (turn / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "completed"}))
+
+    tokens = rc.turn_context_tokens(turn)
+    # Last call was step 3: 90_000 + 15_000 + 30_000 = 135_000
+    assert tokens == 135_000
 
 
 def test_provider_change_and_native_agents_force_fresh_context(tmp_path: Path) -> None:

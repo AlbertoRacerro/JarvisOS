@@ -42,7 +42,7 @@ from relay_continuity_common import (  # noqa: E402
     PREFERRED,
     PREFERRED_AGENTS,
     SAME_AGENT_CAUSES,
-    TURN_USAGE_CAP_TOKENS,
+    RESUME_CONTEXT_CAP_TOKENS,
     WAIT_TIMEOUT_SECONDS,
     Limits,
     devctx,
@@ -1321,7 +1321,7 @@ class Supervisor:
 
         if (parent_candidate is not None
                 and resumes < MAX_SESSION_RESUMES
-                and (tokens is None or tokens <= TURN_USAGE_CAP_TOKENS)):
+                and (tokens is None or tokens <= RESUME_CONTEXT_CAP_TOKENS)):
             self.state["resumes"] = resumes + 1
             self.save()
             return agent, short_resume_prompt
@@ -1515,7 +1515,7 @@ class Supervisor:
         parent = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
                   or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
                   or force_fresh
-                  or (tokens is not None and tokens > TURN_USAGE_CAP_TOKENS)
+                  or (tokens is not None and tokens > RESUME_CONTEXT_CAP_TOKENS)
                   else self.state["head_session"])
         if parent is None:
             self.state["resumes"] = 0

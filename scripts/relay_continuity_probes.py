@@ -106,17 +106,51 @@ def parse_wait_directives(text: str) -> tuple[list[str], list[tuple[int, str]]]:
 
 
 def turn_context_tokens(turn_dir: Path | None) -> int | None:
-    """Read context_used_tokens from turn's state.json if present and numeric."""
+    """Read the context size of the last model call from turn's output.jsonl.
+
+    For Claude turns, reads the usage of the last assistant event:
+    input_tokens + cache_creation_input_tokens + cache_read_input_tokens.
+    For agents without per-call usage (Codex today), returns None.
+    """
     if turn_dir is None:
         return None
     try:
         data = json.loads((turn_dir / "state.json").read_text(encoding="utf-8"))
-        val = data.get("context_used_tokens")
-        if isinstance(val, (int, float)) and not isinstance(val, bool):
-            return int(val)
+        if data.get("agent_key") == "codex":
+            return None
     except (OSError, json.JSONDecodeError):
         pass
-    return None
+    events, _ = read_events(turn_dir / "output.jsonl")
+    if any(e.get("type") == "thread.started" for e in events):
+        return None
+    last_context: int | None = None
+    for e in events:
+        if e.get("type") == "assistant" and not e.get("parent_tool_use_id"):
+            usage = e.get("usage")
+            if not isinstance(usage, dict):
+                msg = e.get("message")
+                if isinstance(msg, dict):
+                    usage = msg.get("usage")
+            if isinstance(usage, dict):
+                inp = usage.get("input_tokens") or 0
+                create = usage.get("cache_creation_input_tokens") or 0
+                read = usage.get("cache_read_input_tokens") or 0
+                last_context = int(inp + create + read)
+    if last_context is not None:
+        return last_context
+    for e in events:
+        if e.get("type") == "assistant":
+            usage = e.get("usage")
+            if not isinstance(usage, dict):
+                msg = e.get("message")
+                if isinstance(msg, dict):
+                    usage = msg.get("usage")
+            if isinstance(usage, dict):
+                inp = usage.get("input_tokens") or 0
+                create = usage.get("cache_creation_input_tokens") or 0
+                read = usage.get("cache_read_input_tokens") or 0
+                last_context = int(inp + create + read)
+    return last_context
 
 
 def default_pr_ci_status(repo: Path, pr_number: int, expected_head: str, run: Runner = devctx.run) -> dict[str, Any]:

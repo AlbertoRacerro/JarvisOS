@@ -1,0 +1,5 @@
+{"subtype": "init", "type": "system"}
+{"message": {"content": [{"id": "toolu_01B", "input": {"command": "git status"}, "name": "Bash", "type": "tool_use"}], "usage": {"cache_creation_input_tokens": 5000, "cache_read_input_tokens": 15000, "input_tokens": 20000, "output_tokens": 100}}, "type": "assistant"}
+{"message": {"content": [{"is_error": false, "tool_use_id": "toolu_01B", "type": "tool_result"}]}, "type": "user"}
+{"message": {"content": [{"text": "RELAY_STATUS continue\nJOB-WAIT: j-20261115T120000Z-111111", "type": "text"}], "usage": {"cache_creation_input_tokens": 5000, "cache_read_input_tokens": 15000, "input_tokens": 40000, "output_tokens": 200}}, "type": "assistant"}
+{"api_error_status": null, "is_error": false, "num_turns": 2, "result": "<coordinator narrative removed from fixture>", "stop_reason": "end_turn", "subtype": "success", "terminal_reason": "completed", "type": "result"}
