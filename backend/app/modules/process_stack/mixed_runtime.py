@@ -435,18 +435,53 @@ def _segment_document(document: dict[str, Any], ids: list[str], known: dict[str,
             "objects": objects, "reactions": document.get("reactions", {})}
 
 
+def _seed_without_feed(document: dict[str, Any], part: dict[str, Any], settings: tear_solver.Settings | None,
+                       compounds: list[str]) -> dict[str, dict[str, Any]]:
+    """A closed loop without a feed has no boundary to start from: each tear needs an explicit solver seed."""
+    units = document["objects"]
+    seeds = settings.seeds if settings is not None else {}
+    result: dict[str, dict[str, Any]] = {}
+    for uid in part["consumed"]:
+        tag = units[uid]["tag"]
+        explicit = seeds.get(tag, {})
+        if not all(isinstance(explicit.get(name), (int, float)) and not isinstance(explicit.get(name), bool)
+                   for name in ("mass_flow_kg_s", "temperature_K")):
+            raise SegmentFailure(
+                "initial_guess",
+                f"A closed loop without a feed needs a solver seed for {tag} (mass_flow_kg_s, temperature_K)")
+        stream = next(item for item in units.values() if item["kind"] == "stream"
+                      and (item.get("source") or {}).get("unit") == uid)
+        state: dict[str, Any] = {
+            "temperature_K": explicit["temperature_K"],
+            "pressure_Pa": explicit.get("pressure_Pa", 101325.0),
+            "mass_flow_kg_s": explicit["mass_flow_kg_s"],
+            "mass_fractions": {(compounds[0] if compounds else "Water"): 1.0},
+            "vapor_fraction": 0.0,
+            "culture": {field: None for field in mixed.CULTURE_FIELDS},
+        }
+        for name, value in explicit.items():
+            if name == "culture" and isinstance(value, dict):
+                state["culture"].update(value)
+            elif name in mixed.CULTURE_FIELDS:
+                state["culture"][name] = value
+            else:
+                state[name] = value
+        result[stream["tag"]] = state
+    return result
+
+
 def _seed(document: dict[str, Any], part: dict[str, Any],
           settings: tear_solver.Settings | None = None) -> dict[str, dict[str, Any]]:
     feeds = _feeds(document)
+    compounds = document.get("compounds", ["Water"])
+    units = document["objects"]
     if not feeds:
-        raise SegmentFailure("initial_guess", "A mixed draft needs a feed")
+        return _seed_without_feed(document, part, settings, compounds)
     preferred = next((item for item in feeds if item.get("spec", {}).get("culture") is not None), feeds[0])
-    compounds = document["compounds"]
     base = _state_from_spec(preferred, compounds)
     total = sum(_state_from_spec(item, compounds)["mass_flow_kg_s"] for item in feeds)
     if not total > 0:
         total = 1.0  # no feed flow is known in kg/s; the tear is still never exactly zero
-    units = document["objects"]
     result = {}
     for uid in part["consumed"]:
         stream = next(item for item in document["objects"].values() if item["kind"] == "stream"
@@ -472,7 +507,9 @@ def _seed(document: dict[str, Any], part: dict[str, Any],
         state["culture"]["ph"] = base["culture"].get("ph")
         explicit = (settings.seeds if settings is not None else {}).get(units[uid]["tag"], {})
         for name, value in explicit.items():
-            if name in mixed.CULTURE_FIELDS:
+            if name == "culture" and isinstance(value, dict):
+                state["culture"].update(value)
+            elif name in mixed.CULTURE_FIELDS:
                 if state["culture"].get(name) is not None:
                     state["culture"][name] = value
             else:
@@ -484,14 +521,24 @@ def _seed(document: dict[str, Any], part: dict[str, Any],
 def _validation_states(document: dict[str, Any], part: dict[str, Any], workspace_id: str | None = None) -> dict[str, dict[str, Any]]:
     """Supply deterministic boundary guesses so Validate can build without solving a segment."""
     feeds = _feeds(document)
+    compounds = document.get("compounds", ["Water"])
     if not feeds:
-        return {}
-    compounds = document["compounds"]
-    reference = _state_from_spec(next((feed for feed in feeds if feed.get("spec", {}).get("culture")), feeds[0]),
-                                 compounds)
-    if not reference["mass_flow_kg_s"] > 0:
-        reference["mass_flow_kg_s"] = 1.0
-    known = {feed["tag"]: _state_from_spec(feed, compounds) for feed in feeds}
+        first_compound = compounds[0] if compounds else "Water"
+        reference: dict[str, Any] = {
+            "temperature_K": 298.15,
+            "pressure_Pa": 101325.0,
+            "mass_flow_kg_s": 1.0,
+            "mass_fractions": {first_compound: 1.0},
+            "vapor_fraction": 0.0,
+            "culture": {field: None for field in mixed.CULTURE_FIELDS},
+        }
+        known = {}
+    else:
+        reference = _state_from_spec(next((feed for feed in feeds if feed.get("spec", {}).get("culture")), feeds[0]),
+                                     compounds)
+        if not reference["mass_flow_kg_s"] > 0:
+            reference["mass_flow_kg_s"] = 1.0
+        known = {feed["tag"]: _state_from_spec(feed, compounds) for feed in feeds}
     segment_of = {uid: index for index, ids in enumerate(part["segments"]) for uid in ids}
     for stream in document["objects"].values():
         if stream["kind"] != "stream" or stream["type"] == "EnergyStream":
@@ -867,12 +914,49 @@ def _pressure_diagnosis(history: list[dict[str, Any]]) -> str | None:
     common = set.intersection(*(set(row.get("residuals", {})) for row in tail))
     for tag in sorted(common):
         values = [row["residuals"][tag].get("pressure_Pa") for row in tail]
-        if all(isinstance(value, (int, float)) and value != 0 for value in values):
+        if all(isinstance(value, (int, float)) and not isinstance(value, bool) and value != 0 for value in values):
             signs = {value > 0 for value in values}
             if len(signs) == 1 and values[-1] < 0:
                 drop = abs(float(values[-1]))
                 return f"pressure falls by {drop:.6g} Pa per pass around the loop; add a pump"
     return None
+
+
+_TEMPERATURE_RANGE_CODES = frozenset({"PBR_HYDRAULICS_OUTSIDE_DOMAIN"})
+
+
+def _is_temperature_out_of_range(errors: Any) -> bool:
+    """Only a typed property-range failure counts; free text is never matched."""
+    return isinstance(errors, dict) and str(errors.get("code", "")).upper() in _TEMPERATURE_RANGE_CODES
+
+
+def _temperature_runaway_rise(history: list[dict[str, Any]]) -> float | None:
+    """The latest per-pass rise when a tear's temperature residual stayed positive and did not shrink."""
+    if len(history) < 3:
+        return None
+    tail = history[-3:]
+    common = set.intersection(*(set(row.get("residuals", {})) for row in tail))
+    for tag in sorted(common):
+        values = [row["residuals"][tag].get("temperature_K") for row in tail]
+        if (
+            all(isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 for value in values)
+            and values[-1] >= values[0]
+        ):
+            return float(values[-1])
+    return None
+
+
+def _temperature_diagnosis(history: list[dict[str, Any]], *, error: Any = None) -> str | None:
+    rise = _temperature_runaway_rise(history)
+    if rise is not None:
+        return f"temperature rises by {rise:.6g} K per pass around the loop; add a heat sink or temperature specification"
+    if error and _is_temperature_out_of_range(error):
+        return "loop temperature left the property range; add a heat sink or temperature specification"
+    return None
+
+
+def _loop_diagnosis(history: list[dict[str, Any]], *, error: Any = None) -> str | None:
+    return _temperature_diagnosis(history, error=error) or _pressure_diagnosis(history)
 
 
 def _evaluate(document: dict[str, Any], part: dict[str, Any], tear: dict[str, dict[str, Any]],
@@ -1135,7 +1219,7 @@ def _failure_record(document: dict[str, Any], part: dict[str, Any], *, reason: s
         "history": _history_record(history), "partition": _partition_record(document, part),
         "limits": {"iterations": settings.max_iterations, "wall_s": settings.wall_s},
         "solver": settings.record(), "tolerances": _tolerance_record(settings), "elapsed_s": phase_totals}
-    diagnosis = _pressure_diagnosis(history)
+    diagnosis = _loop_diagnosis(history, error=errors)
     if diagnosis:
         record["diagnosis"] = diagnosis
     return {"status": "segment_failed", "mixed_solve": finite_json(record)}
@@ -1164,7 +1248,13 @@ def _run(document: dict[str, Any], *, action: str, client: DwsimMcpClient,
     run_dir.mkdir(parents=True, exist_ok=True)
     settings = tear_solver.parse_settings(document.get("solver"))
     wall_s = settings.wall_s
-    initial = _seed(document, part, settings)
+    try:
+        initial = _seed(document, part, settings)
+    except SegmentFailure as exc:
+        return _failure_record(document, part, reason="initial_guess", iteration=None,
+                               segment=exc.segment, units=exc.units, errors=exc.detail,
+                               history=[], phase_totals={"build": 0.0, "solve": 0.0, "culture": 0.0},
+                               settings=settings)
     run_cache: dict[str, Any] = {}
     started = time.monotonic()
     deadline = started + timeout_s if timeout_s is not None else None
@@ -1172,7 +1262,7 @@ def _run(document: dict[str, Any], *, action: str, client: DwsimMcpClient,
         initial = copy.deepcopy(initial_tear)
     if action == "validate":
         try:
-            validation_known = _validation_states(document, part, workspace_id) | _seed(document, part)
+            validation_known = _validation_states(document, part, workspace_id) | _seed(document, part, settings)
             for index, ids in enumerate(part["segments"]):
                 segment = _segment_document(document, ids, validation_known)
                 _full(segment, client, label=f"mixed-validate-{index}", keep_case=None,
@@ -1320,8 +1410,8 @@ def _run(document: dict[str, Any], *, action: str, client: DwsimMcpClient,
                                        "final_sweep_builds": terminal_flashes},
                             "elapsed_s": phase_totals, "balances": balances["balances"],
                             **({"consistency_failure": mismatch} if mismatch else {}),
-                            **({"diagnosis": _pressure_diagnosis(history)}
-                               if status != "completed" and _pressure_diagnosis(history) else {}),
+                            **({"diagnosis": _loop_diagnosis(history)}
+                               if status != "completed" and _loop_diagnosis(history) else {}),
                             "results_label": "current" if status == "completed" else "Not converged — last iterate"}}
     if include_tear_state:
         record["_tear_state"] = tear

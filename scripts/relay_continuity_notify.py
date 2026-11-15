@@ -43,6 +43,8 @@ from relay_continuity_common import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # Outbound notification (Phase 2): fixed templates, allowlisted structured fields only
 
+SAFE_MISSION_FILE_RE = re.compile(r"m-[a-zA-Z0-9_\-]{1,64}")
+
 ISO_RE = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"
 FIELD_RULES: dict[str, Callable[[str], bool]] = {
     "session": lambda v: v == "none" or bool(re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{6}", v)),
@@ -92,6 +94,7 @@ EVENTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "mission_held": ("Il lavoro richiesto è in pausa e attende una decisione in Jarvis.",
                      ("owner", "mission", "task", "agent", "session", "reason")),
     "roadmap_paused": ("Il lavoro programmato è in pausa e attende una decisione in Jarvis.", ("owner", "reason")),
+    "release_withheld": ("L'aggiornamento di JarvisOS è in attesa di decisione in Jarvis.", ("owner", "mission", "sha")),
 }
 
 
@@ -109,7 +112,10 @@ def render(event: str, fields: dict[str, Any]) -> str | None:
         if value is None:
             return None
         value = str(value)
-        if not FIELD_RULES[key](value):
+        if event == "release_withheld" and key == "mission":
+            if not (MISSION_ID_RE.fullmatch(value) or SAFE_MISSION_FILE_RE.fullmatch(value)):
+                return None
+        elif not FIELD_RULES[key](value):
             return None
     text = title
     return None if devctx.find_secret(text) else text

@@ -184,10 +184,96 @@ def needs_mixed_solve(document: dict[str, Any]) -> bool:
     return False
 
 
+def _si_number(quantity: Any) -> float | None:
+    """The SI value of a stored param ({"si", "value", "unit"}); a bare number is taken as SI."""
+    if isinstance(quantity, dict):
+        value = quantity.get("si")
+        if value is None:
+            value = quantity.get("value")
+    else:
+        value = quantity
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _is_heat_or_work_adding(unit: dict[str, Any]) -> bool:
+    utype = unit.get("type")
+    mode = unit.get("mode")
+    params = unit.get("params", {})
+    if utype == "Pump":
+        return True
+    if utype == "Heater":
+        if mode in {"heat_added", "heat_added_removed"}:
+            duty = _si_number(params.get("heat_duty"))
+            return duty is None or duty >= 0  # a negative duty removes heat: a sink
+        if mode == "temperature_change":
+            change = _si_number(params.get("temperature_change"))
+            return change is not None and change > 0
+    return False
+
+
+def _is_heat_sink_or_temp_fixing(unit: dict[str, Any]) -> bool:
+    utype = unit.get("type")
+    mode = unit.get("mode")
+    if utype in {"Cooler", "HeatExchanger"}:
+        return True
+    if utype == "Heater" and (mode == "outlet_temperature" or mode is None):
+        return True
+    if utype in {"CSTR", "PFR"} and mode in {"isothermic", "outlet_temperature"}:
+        return True
+    return False
+
+
+def _is_closed_group(document: dict[str, Any], group: set[str]) -> bool:
+    """No material stream enters the group from outside (or from nowhere) and none leaves it."""
+    for stream in document["objects"].values():
+        if stream["kind"] != "stream" or stream["type"] == "EnergyStream":
+            continue
+        source = (stream.get("source") or {}).get("unit")
+        target = (stream.get("target") or {}).get("unit")
+        if target in group and source not in group:
+            return False
+        if source in group and target not in group:
+            return False
+    return True
+
+
+def loop_energy_findings(document: dict[str, Any]) -> list[dict[str, Any]]:
+    units = _units(document)
+    material_edges = _edges(document, energy=False)
+    sccs = components(set(units), material_edges)
+    findings: list[dict[str, Any]] = []
+
+    for group in sccs:
+        is_loop = len(group) > 1 or any(a == b and a in group for a, b, _ in material_edges)
+        if not is_loop:
+            continue
+        loop_units = [units[uid] for uid in group if uid in units]
+        if not any(_is_heat_or_work_adding(u) for u in loop_units):
+            continue
+        if any(_is_heat_sink_or_temp_fixing(u) for u in loop_units):
+            continue
+        if not _is_closed_group(document, group):
+            continue  # the through-flow carries the heat away
+
+        tags = sorted(u["tag"] for u in loop_units)
+        findings.append({
+            "severity": "blocker",
+            "code": "LOOP_ENERGY_UNCLOSED",
+            "object": tags[0],
+            "field": "connections",
+            "message": f"Process loop {tags} adds work or heat without a heat sink or temperature specification; "
+                       "add a Cooler, HeatExchanger, or temperature-fixing Heater.",
+            "source": "jarvis",
+        })
+    return findings
+
+
 def validation_findings(document: dict[str, Any]) -> list[dict[str, Any]]:
     objects = document["objects"]
     units = _units(document)
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = list(loop_energy_findings(document))
 
     def add(severity: str, code: str, tag: str, message: str) -> None:
         findings.append({"severity": severity, "code": code, "object": tag, "field": "connections",

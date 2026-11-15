@@ -2148,6 +2148,8 @@ def write_release_pending(
     owner_active: bool = False,
     now: datetime | None = None,
     kind: str | None = None,
+    guard_source: str | None = None,
+    guard_reason: str | None = None,
 ) -> dict[str, Any]:
     ts = now or now_utc()
     marker = {
@@ -2163,6 +2165,10 @@ def write_release_pending(
         marker["owner_active"] = True
     if kind is not None:
         marker["kind"] = kind
+    if guard_source is not None:
+        marker["guard_source"] = guard_source
+    if guard_reason is not None:
+        marker["guard_reason"] = guard_reason
     state_fd = open_dir(paths.state, create=True)
     try:
         write_at(state_fd, "release-pending.json", canonical(marker))
@@ -2196,6 +2202,12 @@ def load_release_pending(paths: Paths) -> dict[str, Any] | None:
     candidate = marker.get("candidate_sha")
     if not candidate or not isinstance(candidate, str) or not SHA_RE.fullmatch(candidate):
         raise MalformedPendingRelease(f"pending marker missing valid candidate_sha: {candidate!r}", raw_data=data)
+    guard_source = marker.get("guard_source")
+    if guard_source is not None and guard_source not in ("previous", "candidate"):
+        raise MalformedPendingRelease(f"pending marker has invalid guard_source: {guard_source!r}", raw_data=data)
+    guard_reason = marker.get("guard_reason")
+    if guard_reason is not None and not isinstance(guard_reason, str):
+        raise MalformedPendingRelease(f"pending marker has invalid guard_reason: {guard_reason!r}", raw_data=data)
     return marker
 
 
@@ -3625,6 +3637,19 @@ def _verify_existing_release(release: Path, stage: Path) -> None:
             raise Refused(f"existing release content mismatch for {rel_path}")
 
 
+def _release_has_guard(release_dir: Path) -> bool:
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-I", str(release_dir / "scripts" / "host_ops.py"), "guard", "--help"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
                     watcher_active: bool = False, owner_active: bool = False, now: datetime | None = None) -> None:
     if os.environ.get("JARVIS_SANDBOX") or socket.gethostname() == "jarvis-sandbox":
@@ -3705,9 +3730,20 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
             _verify_existing_release(release, stage)
             _preflight_release(release, paths)
 
-    # Pin previous release (or candidate if first install) to guard
-    source_dir = resolved if installed and resolved and resolved.is_dir() else release
-    source_sha = installed or sha
+    # Pin previous release (or candidate if first install or pre-guard) to guard
+    has_prev = bool(installed and resolved and resolved.is_dir())
+    if has_prev and _release_has_guard(resolved):
+        source_dir = resolved
+        source_sha = installed
+        guard_source = "previous"
+        guard_reason = None
+    else:
+        source_dir = release
+        source_sha = sha
+        guard_source = "candidate"
+        guard_reason = "previous release has no guard" if has_prev else None
+        if has_prev:
+            print("previous release has no guard; pinning guard from candidate", flush=True)
     _pin_guard(paths, source_dir, source_sha)
 
     # Ensure installed release is published
@@ -3743,7 +3779,8 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
         write_release_pending(paths, previous_sha=p_prev, candidate_sha=sha,
                               deadline=deadline, request_id=p_req,
                               attempts=p_attempts, watcher_active=p_watch,
-                              owner_active=p_owner, now=ts)
+                              owner_active=p_owner, now=ts,
+                              guard_source=guard_source, guard_reason=guard_reason)
         pending_written = True
 
         switch_install_release(paths, sha)
