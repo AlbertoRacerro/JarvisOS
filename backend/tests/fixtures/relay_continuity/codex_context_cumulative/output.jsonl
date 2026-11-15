@@ -1,4 +1,4 @@
 {"type": "thread.started"}
 {"type": "turn.started"}
 {"item": {"id": "item_0", "text": "RELAY_STATUS continue\nJOB-WAIT: j-20261115T120000Z-111111", "type": "agent_message"}, "type": "item.completed"}
-{"type": "turn.completed", "usage": {"input_tokens": 2166425, "output_tokens": 500}}
+{"type": "turn.completed", "usage": {"input_tokens": 2901816, "output_tokens": 500}}

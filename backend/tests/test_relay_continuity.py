@@ -5591,10 +5591,10 @@ def test_spec_277_turn_context_tokens_and_decisions_from_real_fixtures(tmp_path:
     tokens_under = rc.turn_context_tokens(under_turn)
     tokens_codex = rc.turn_context_tokens(codex_turn)
 
-    # 158420 + 2100 + 1480 = 162_000
-    assert tokens_over == 162_000
+    # 2 + 1020 + 198706 = 199_728
+    assert tokens_over == 199_728
     assert tokens_over > rc.RESUME_CONTEXT_CAP_TOKENS
-    # 58342 + 1210 + 848 = 60_400 (matches median in Spec 277)
+    # 2 + 209 + 60189 = 60_400
     assert tokens_under == 60_400
     assert tokens_under <= rc.RESUME_CONTEXT_CAP_TOKENS
     # Criterion 2: Codex only has cumulative turn usage, so return None for its cap
@@ -5602,11 +5602,11 @@ def test_spec_277_turn_context_tokens_and_decisions_from_real_fixtures(tmp_path:
 
     # Criterion 3: TurnReport.context_used_tokens is filled from metadata.context_used_tokens
     rep_over = rc.classify_turn(over_turn)
-    assert rep_over.context_used_tokens == 2166425
+    assert rep_over.context_used_tokens == 1583217
     rep_under = rc.classify_turn(under_turn)
-    assert rep_under.context_used_tokens == 2166425
+    assert rep_under.context_used_tokens == 1080361
     rep_codex = rc.classify_turn(codex_turn)
-    assert rep_codex.context_used_tokens == 2166425
+    assert rep_codex.context_used_tokens == 2901816
 
     # Top-level fallback when metadata is absent (older state files)
     legacy_turn = tmp_path / "legacy_turn"
@@ -5756,7 +5756,7 @@ def test_spec_277_claude_over_cap_starts_fresh_under_cap_resumes(tmp_path: Path)
     env_over.jobs[jid] = {"status": "succeeded"}
     over_events = [json.loads(line) for line in (FIXTURES / "claude_context_over_cap" / "output.jsonl").read_text().splitlines()]
     env_over.relay.script = [
-        ("claude", over_events, "continue", msg, 2_166_425),
+        ("claude", over_events, "continue", msg, 1_583_217),
         ("claude", SUCCESS, "propose_done"),
     ]
     res_over, _ = run_mission(env_over, m_over)
@@ -5771,7 +5771,7 @@ def test_spec_277_claude_over_cap_starts_fresh_under_cap_resumes(tmp_path: Path)
     env_under.jobs[jid] = {"status": "succeeded"}
     under_events = [json.loads(line) for line in (FIXTURES / "claude_context_under_cap" / "output.jsonl").read_text().splitlines()]
     env_under.relay.script = [
-        ("claude", under_events, "continue", msg, 800_000),
+        ("claude", under_events, "continue", msg, 1_080_361),
         ("claude", SUCCESS, "propose_done"),
     ]
     res_under, _ = run_mission(env_under, m_under)
@@ -5789,9 +5789,9 @@ def test_spec_277_codex_never_triggers_cap_from_cumulative_usage(tmp_path: Path)
     start_mission(env, m)
     env.jobs[jid] = {"status": "succeeded"}
     codex_events = [json.loads(line) for line in (FIXTURES / "codex_context_cumulative" / "output.jsonl").read_text().splitlines()]
-    # Codex has cumulative usage of 2_166_425 tokens (way above 150_000 cap)
+    # Codex has cumulative usage of 2_901_816 tokens (way above 150_000 cap)
     env.relay.script = [
-        ("codex", codex_events, "continue", msg, 2_166_425),
+        ("codex", codex_events, "continue", msg, 2_901_816),
         ("codex", CODEX_SUCCESS, "propose_done"),
     ]
     res, _ = run_mission(env, m)
