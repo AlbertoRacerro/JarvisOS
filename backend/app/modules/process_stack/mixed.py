@@ -184,24 +184,32 @@ def needs_mixed_solve(document: dict[str, Any]) -> bool:
     return False
 
 
+def _si_number(quantity: Any) -> float | None:
+    """The SI value of a stored param ({"si", "value", "unit"}); a bare number is taken as SI."""
+    if isinstance(quantity, dict):
+        value = quantity.get("si")
+        if value is None:
+            value = quantity.get("value")
+    else:
+        value = quantity
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
 def _is_heat_or_work_adding(unit: dict[str, Any]) -> bool:
     utype = unit.get("type")
     mode = unit.get("mode")
+    params = unit.get("params", {})
     if utype == "Pump":
         return True
     if utype == "Heater":
         if mode in {"heat_added", "heat_added_removed"}:
-            return True
+            duty = _si_number(params.get("heat_duty"))
+            return duty is None or duty >= 0  # a negative duty removes heat: a sink
         if mode == "temperature_change":
-            tc = unit.get("params", {}).get("temperature_change")
-            if isinstance(tc, dict):
-                val = tc.get("value")
-                if val is None:
-                    val = tc.get("si")
-                if val is not None and float(val) > 0:
-                    return True
-            elif isinstance(tc, (int, float)) and tc > 0:
-                return True
+            change = _si_number(params.get("temperature_change"))
+            return change is not None and change > 0
     return False
 
 
@@ -212,24 +220,23 @@ def _is_heat_sink_or_temp_fixing(unit: dict[str, Any]) -> bool:
         return True
     if utype == "Heater" and (mode == "outlet_temperature" or mode is None):
         return True
+    if utype in {"CSTR", "PFR"} and mode in {"isothermic", "outlet_temperature"}:
+        return True
     return False
 
 
-def _has_temperature_spec(unit: dict[str, Any]) -> bool:
-    if unit.get("temperature_specification") is not None:
-        return True
-    if unit.get("options", {}).get("temperature_specification") is not None:
-        return True
-    if unit.get("params", {}).get("temperature_specification") is not None:
-        return True
-    if unit.get("options", {}).get("temperature") is not None:
-        return True
-    utype = unit.get("type")
-    if utype not in {"PhotobioreactorT1", "Pump"}:
-        params = unit.get("params", {})
-        if params.get("temperature") is not None or params.get("outlet_temperature") is not None:
-            return True
-    return False
+def _is_closed_group(document: dict[str, Any], group: set[str]) -> bool:
+    """No material stream enters the group from outside (or from nowhere) and none leaves it."""
+    for stream in document["objects"].values():
+        if stream["kind"] != "stream" or stream["type"] == "EnergyStream":
+            continue
+        source = (stream.get("source") or {}).get("unit")
+        target = (stream.get("target") or {}).get("unit")
+        if target in group and source not in group:
+            return False
+        if source in group and target not in group:
+            return False
+    return True
 
 
 def loop_energy_findings(document: dict[str, Any]) -> list[dict[str, Any]]:
@@ -247,13 +254,8 @@ def loop_energy_findings(document: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         if any(_is_heat_sink_or_temp_fixing(u) for u in loop_units):
             continue
-        loop_stream_temp_spec = any(
-            stream.get("spec", {}).get("temperature") is not None
-            for a, b, stream in material_edges
-            if a in group and b in group
-        )
-        if loop_stream_temp_spec or any(_has_temperature_spec(u) for u in loop_units):
-            continue
+        if not _is_closed_group(document, group):
+            continue  # the through-flow carries the heat away
 
         tags = sorted(u["tag"] for u in loop_units)
         findings.append({

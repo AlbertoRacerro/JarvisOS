@@ -256,12 +256,14 @@ def test_loop_energy_unclosed_various_heat_adding_modes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ac1_closed_loop_converges_within_25_iterations_and_mass_balance_closes(
+def test_ac1_feedless_closed_loop_runner_with_fixed_fake_evaluation(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    """AC1: minimal closed-loop fixture (Pump, PhotobioreactorT1, Cooler, Recycle)
+    """AC1 (plumbing only): `_evaluate` is replaced by a fixed fake, so this does not prove the physics.
 
-    converges in fewer than 25 tear iterations, with mass balance closing within 1e-9 tolerance.
+    It proves that the runner accepts a feedless closed loop seeded from the solver settings, stops
+    in fewer than 25 tear iterations once the fake's fixed point repeats, and keeps the carrier-mass
+    balance bookkeeping at zero in and zero out.
     """
     workspace_id = new_workspace()
     doc, _ = _make_closed_loop_fixture(workspace_id, with_heat_sink=True, sink_type="Cooler")
@@ -443,7 +445,7 @@ def test_ac3_property_range_failure_maps_to_typed_temperature_diagnosis(
 ) -> None:
     """AC3 runtime: property-range failure during tear evaluation maps to a clear
 
-    typed loop diagnosis naming the loop temperature rise rather than a raw property-range error.
+    typed loop diagnosis next to the original message.
     """
     workspace_id = new_workspace()
     doc, _ = _make_closed_loop_fixture(workspace_id, with_heat_sink=False)
@@ -493,6 +495,110 @@ def test_ac3_property_range_failure_maps_to_typed_temperature_diagnosis(
     assert mixed_solve["status"] == "segment_failed"
     # Diagnosis must name the loop temperature rise
     assert "diagnosis" in mixed_solve
-    assert "temperature rises by 1.5 K per pass around the loop" in mixed_solve["diagnosis"]
-    # Message must also be mapped to the typed diagnosis rather than raw CoolProp error
-    assert "temperature rises by 1.5 K per pass around the loop" in mixed_solve["message"]
+    assert mixed_solve["diagnosis"] == (
+        "loop temperature left the property range; add a heat sink or temperature specification")
+    # The original failure text is kept; the diagnosis lives only in its own field
+    assert "outside domain bounds" in mixed_solve["message"]
+
+
+def test_ac3_free_text_does_not_count_as_property_range_failure() -> None:
+    assert not mixed_runtime._is_temperature_out_of_range("temperature is too high, out of range")
+    assert not mixed_runtime._is_temperature_out_of_range({"code": "X", "message": "temperature outside domain"})
+    assert mixed_runtime._is_temperature_out_of_range({"code": "PBR_HYDRAULICS_OUTSIDE_DOMAIN"})
+
+
+def test_temperature_diagnosis_none_when_loop_converges_from_below() -> None:
+    history = [{"residuals": {"Rec": {"temperature_K": value}}} for value in (0.8, 0.4, 0.2)]
+    assert mixed_runtime._temperature_diagnosis(history) is None
+
+
+def _fed_recycle_document(*, sink: dict[str, Any] | None = None, purge: bool = True) -> dict[str, Any]:
+    def unit(uid: str, utype: str, **extra: Any) -> dict[str, Any]:
+        return {"id": uid, "kind": "unit", "type": utype, "tag": uid.upper(), "mode": None,
+                "params": {}, "options": {}, "reactions": [], **extra}
+
+    def stream(sid: str, source: str | None, target: str | None) -> dict[str, Any]:
+        return {"id": sid, "kind": "stream", "tag": sid.upper(), "type": "MaterialStream", "spec": {},
+                "source": {"unit": source, "port": 0} if source else None,
+                "target": {"unit": target, "port": 0} if target else None}
+
+    objects = {u["id"]: u for u in (unit("mix", "Mixer"), unit("pump", "Pump"), unit("pbr", "PhotobioreactorT1"),
+                                    unit("split", "Splitter"))}
+    if sink is not None:
+        objects["sink"] = unit("sink", sink.pop("type"), **sink)
+    chain = ["mix", "pump", "pbr"] + (["sink"] if sink is not None else []) + ["split"]
+    streams = [stream("feed", None, "mix")]
+    streams += [stream(f"c{i}", a, b) for i, (a, b) in enumerate(zip(chain, chain[1:], strict=False))]
+    streams.append(stream("rec", "split", "mix"))
+    if purge:
+        streams.append(stream("product", "split", None))
+    objects.update({item["id"]: item for item in streams})
+    return {"schema_version": 1, "name": "fed recycle", "compounds": ["Water"], "property_package": "NRTL",
+            "objects": objects, "reactions": {}}
+
+
+def test_ac2_fed_recycle_loop_with_purge_is_not_blocked() -> None:
+    """A feed enters and a product leaves: the through-flow carries the heat, so no blocker."""
+    assert mixed.loop_energy_findings(_fed_recycle_document()) == []
+
+
+def test_ac2_closed_fixture_is_still_blocked() -> None:
+    workspace_id = new_workspace()
+    doc, _ = _make_closed_loop_fixture(workspace_id, with_heat_sink=False)
+    assert [f["code"] for f in mixed.loop_energy_findings(doc)] == ["LOOP_ENERGY_UNCLOSED"]
+
+
+def _closed_heater_loop(**heater: Any) -> dict[str, Any]:
+    doc = _fed_recycle_document(sink=dict({"type": "Heater"}, **heater), purge=False)
+    del doc["objects"]["feed"]
+    return doc
+
+
+def test_negative_heater_duty_is_a_sink_not_heat_adding() -> None:
+    unit = {"type": "Heater", "mode": "heat_added", "params": {"heat_duty": {"si": -500.0, "value": 0.5, "unit": "kW"}}}
+    assert mixed._is_heat_or_work_adding(unit) is False
+    unit["params"]["heat_duty"] = {"si": 500.0, "value": -1.0, "unit": "kW"}
+    assert mixed._is_heat_or_work_adding(unit) is True
+    # A closed loop with only a heat-removing Heater plus a pump still has a heater that is not heat-adding,
+    # but the pump adds work: the loop stays blocked unless the Heater fixes a temperature.
+    assert mixed._is_heat_or_work_adding({"type": "Pump"}) is True
+
+
+def test_temperature_fixing_reactors_close_the_loop_energy() -> None:
+    for utype, mode, blocked in (("CSTR", "isothermic", False), ("PFR", "outlet_temperature", False),
+                                 ("PFR", "adiabatic", True)):
+        doc = _closed_heater_loop()
+        doc["objects"]["sink"].update({"type": utype, "mode": mode, "params": {}})
+        assert bool(mixed.loop_energy_findings(doc)) is blocked, (utype, mode)
+    # Heater with no mode is temperature-fixing (its default); a heat_added Heater is not
+    assert mixed.loop_energy_findings(_closed_heater_loop(mode=None)) == []
+    assert mixed.loop_energy_findings(_closed_heater_loop(mode="heat_added", params={})) != []
+
+
+def test_closed_loop_without_feed_needs_a_solver_seed(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    workspace_id = new_workspace()
+    doc, _ = _make_closed_loop_fixture(workspace_id, with_heat_sink=True)
+    doc["solver"]["seeds"] = {"Rec": {"pressure_Pa": 101325.0}}
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("must not evaluate without a seed")
+
+    monkeypatch.setattr(mixed_runtime, "_evaluate", fail)
+    result = mixed_runtime.run(doc, action="run", client=object(), dwsim_version="10.2.9",
+                               mcp_sha256="a" * 64, run_dir=tmp_path, workspace_id=workspace_id)
+    mixed_solve = result["mixed_solve"]
+    assert mixed_solve["status"] == "segment_failed"
+    assert mixed_solve["reason"] == "initial_guess"
+    assert mixed_solve["message"] == (
+        "A closed loop without a feed needs a solver seed for Rec (mass_flow_kg_s, temperature_K)")
+
+
+def test_feedless_seed_uses_explicit_values_and_leaves_unseeded_culture_none() -> None:
+    workspace_id = new_workspace()
+    doc, _ = _make_closed_loop_fixture(workspace_id, with_heat_sink=True)
+    seeded = mixed_runtime._seed(doc, mixed.partition(doc), mixed_runtime.tear_solver.parse_settings(doc["solver"]))
+    state = seeded["RecToPump"]
+    assert state["mass_flow_kg_s"] == 0.05 and state["temperature_K"] == 298.15
+    assert state["culture"]["biomass"] == 0.2
+    assert any(value is None for value in state["culture"].values())
+    assert 0.0 not in [value for name, value in state["culture"].items() if name not in doc["solver"]["seeds"]["Rec"]]
