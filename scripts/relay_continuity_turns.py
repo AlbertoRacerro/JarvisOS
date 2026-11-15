@@ -77,6 +77,7 @@ class TurnReport:
     spend_cap: bool = False  # the provider message named a spend/credit cap (even if it also printed a reset)
     reaped: list[str] | None = None  # processes the turn left running, stopped at its end; None: not launched here
     context_used_tokens: int | None = None  # spec 267: cumulative reported tokens per turn
+    timed_out: bool = False
 
     @property
     def in_flight(self) -> list[ToolCall]:
@@ -974,7 +975,8 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
                         timed_out: bool = False) -> TurnReport:
     """Classify the retained native protocol, never model prose masquerading as execution evidence."""
     report = TurnReport(outcome="unknown", agent=agent, detail="native turn incomplete", bad_lines=bad,
-                        turn_id=f"{turn_dir.parent.parent.name}/{turn_dir.name}")
+                        turn_id=f"{turn_dir.parent.parent.name}/{turn_dir.name}",
+                        timed_out=timed_out)
     try:
         meta = json.loads((turn_dir / "native-result.json").read_text())
         if not isinstance(meta, dict) or meta.get("schema") != "argon-coordinator.v1" or meta.get("agent", "argon") != agent:
@@ -1110,17 +1112,21 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
         native = None
     cause = relay_argon.harness_cause(native) or (("unknown", "turn_time_limit") if reason == "timeout" else None)
 
-    def harness(report: TurnReport) -> TurnReport:
-        if cause is not None and report.outcome != "success":
-            report.outcome, report.harness_cause = cause
-            report.detail += f"; runner: {cause[1]}"
-        return report
-
     if timed_out:
         report.outcome = "unknown"
         report.harness_cause = "turn_time_limit"
         if "turn_time_limit" not in report.detail:
             report.detail += "; harness: turn_time_limit"
+        return report
+
+    valid_record = initialized and not report.bad_lines and bool(meta) and not report.no_evidence
+    if cause is not None and cause[1] == "turn_time_limit" and not valid_record:
+        cause = None
+
+    def harness(report: TurnReport) -> TurnReport:
+        if cause is not None and report.outcome != "success":
+            report.outcome, report.harness_cause = cause
+            report.detail += f"; runner: {cause[1]}"
         return report
 
     # A failed tool call that cannot act beyond this workstation (a missing file, an edit that did not apply, a
@@ -1197,7 +1203,7 @@ def settle_limit(report: TurnReport, text: str, ref: datetime, local_tz: Any) ->
 
 def gate(report: TurnReport) -> str | None:
     """Hold reason when the turn's own record cannot show what it did, so no operation of it can be judged."""
-    if report.harness_cause == "turn_time_limit":
+    if report.timed_out:
         return None
     if report.bad_lines:
         return "output_unparseable"

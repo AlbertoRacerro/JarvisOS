@@ -427,3 +427,90 @@ def test_sigterm_without_supervisor_timeout_flag_retains_output_gate(tmp_path: P
     assert rep_empty_flag.outcome == "unknown"
     assert rep_empty_flag.harness_cause == "turn_time_limit"
     assert rc.gate(rep_empty_flag) is None
+
+
+def test_runner_stderr_print_timeout_without_supervisor_flag_does_not_bypass_gate(tmp_path: Path) -> None:
+    """Causal regression test for review job P1:
+
+    A runner stderr AGY_ERROR reason print_timeout without supervisor timed_out=True:
+    1. With missing metadata or malformed lines, harness_cause is NOT turn_time_limit,
+       and gate holds as output_unparseable.
+    2. With empty output, harness_cause is NOT turn_time_limit,
+       and gate holds as output_missing.
+    3. With supervisor durable timed_out=True, both cases settle as unknown turn_time_limit
+       and bypass the gate.
+    4. With a valid record and timed_out=False, honest runner print_timeout is preserved
+       as unknown turn_time_limit without holding at gate, keeping in-flight effects.
+    """
+    agy_err = ra.AGY_ERROR_PREFIX + json.dumps({
+        "status": "DEADLINE_EXCEEDED",
+        "reason": "print_timeout",
+        "short_error": "print timeout after 30m0s with the turn still in progress",
+    }) + "\n"
+
+    # Case 1: Missing native-result.json and unparseable/torn lines
+    turn_malformed = tmp_path / "turn_malformed"
+    turn_malformed.mkdir()
+    (turn_malformed / "state.json").write_text(json.dumps({"agent_key": "argon"}))
+    (turn_malformed / "output.jsonl").write_text(
+        '{"event":"init","conversation_id":"c1","init":{"model":"gemini-4-argon-low"}}\n'
+        "{bad_torn_line\n"
+    )
+    (turn_malformed / "stderr.log").write_text(agy_err)
+
+    # timed_out=False: runner print_timeout cannot set turn_time_limit or bypass gate
+    rep_malformed = rc.classify_turn(turn_malformed, timed_out=False)
+    assert rep_malformed.harness_cause != "turn_time_limit"
+    assert rep_malformed.bad_lines > 0
+    assert rc.gate(rep_malformed) == "output_unparseable"
+
+    # timed_out=True: supervisor flag settles as unknown turn_time_limit and bypasses gate
+    rep_malformed_sup = rc.classify_turn(turn_malformed, timed_out=True)
+    assert rep_malformed_sup.outcome == "unknown"
+    assert rep_malformed_sup.harness_cause == "turn_time_limit"
+    assert rc.gate(rep_malformed_sup) is None
+
+    # Case 2: Missing evidence / empty output with missing native-result.json
+    turn_empty = tmp_path / "turn_empty"
+    turn_empty.mkdir()
+    (turn_empty / "state.json").write_text(json.dumps({"agent_key": "argon"}))
+    (turn_empty / "output.jsonl").write_text("")
+    (turn_empty / "stderr.log").write_text(agy_err)
+
+    # timed_out=False: gate holds as output_missing, no turn_time_limit
+    rep_empty = rc.classify_turn(turn_empty, timed_out=False)
+    assert rep_empty.harness_cause != "turn_time_limit"
+    assert rep_empty.no_evidence is True
+    assert rc.gate(rep_empty) == "output_missing"
+
+    # timed_out=True: supervisor flag settles as unknown turn_time_limit and bypasses gate
+    rep_empty_sup = rc.classify_turn(turn_empty, timed_out=True)
+    assert rep_empty_sup.outcome == "unknown"
+    assert rep_empty_sup.harness_cause == "turn_time_limit"
+    assert rc.gate(rep_empty_sup) is None
+
+    # Case 3: Valid record with runner print_timeout and timed_out=False preserves classification
+    turn_valid = tmp_path / "turn_valid"
+    turn_valid.mkdir()
+    (turn_valid / "state.json").write_text(json.dumps({"agent_key": "argon"}))
+    (turn_valid / "native-result.json").write_text(json.dumps({
+        "schema": "argon-coordinator.v1",
+        "agent": "argon",
+        "exit_code": 3,
+        "launched": True,
+        "model": "gemini-4-argon-low",
+    }))
+    (turn_valid / "output.jsonl").write_text(
+        '{"event":"init","conversation_id":"c1","init":{"model":"gemini-4-argon-low"}}\n'
+        '{"event":"step_update","step_update":{"conversation_id":"c1","step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"git push origin topic"}}}}\n'
+    )
+    (turn_valid / "stderr.log").write_text(agy_err)
+
+    rep_valid = rc.classify_turn(turn_valid, timed_out=False)
+    assert rep_valid.outcome == "unknown"
+    assert rep_valid.harness_cause == "turn_time_limit"
+    assert rep_valid.bad_lines == 0
+    assert rep_valid.no_evidence is False
+    assert rc.gate(rep_valid) is None
+    assert [c.label for c in rep_valid.in_flight] == ["git push"]
+
