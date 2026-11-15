@@ -64,7 +64,7 @@ FIELD_RULES: dict[str, Callable[[str], bool]] = {
     "sha": lambda v: bool(re.fullmatch(r"[0-9a-f]{7,40}", v)),
     "pr": lambda v: v == "none" or bool(re.fullmatch(r"\d{1,6}", v)),
     "phase": lambda v: v in PHASES,
-    "mission": lambda v: bool(MISSION_ID_RE.fullmatch(v)),
+    "mission": lambda v: bool(MISSION_ID_RE.fullmatch(v) or re.fullmatch(r"m-[a-zA-Z0-9_\-]{1,64}", v)),
     "task": lambda v: bool(re.fullmatch(r"\d{1,2}/\d{1,2}", v)),
     "owner": lambda v: v == "control-plane",
 }
@@ -92,6 +92,7 @@ EVENTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "mission_held": ("Il lavoro richiesto è in pausa e attende una decisione in Jarvis.",
                      ("owner", "mission", "task", "agent", "session", "reason")),
     "roadmap_paused": ("Il lavoro programmato è in pausa e attende una decisione in Jarvis.", ("owner", "reason")),
+    "release_withheld": ("L'aggiornamento di JarvisOS è in attesa di decisione in Jarvis.", ("owner", "mission", "sha")),
 }
 
 

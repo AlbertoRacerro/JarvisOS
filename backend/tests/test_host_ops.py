@@ -1172,9 +1172,12 @@ def mock_install(monkeypatch, data, status="ahead", rules=None, checks=None, sta
 
     monkeypatch.setattr(h, "_gh", gh)
     calls = []
+    real_run = subprocess.run
 
     def run(argv, **kw):
         calls.append(argv)
+        if argv and argv[0] == sys.executable:
+            return real_run(argv, **kw)
         return subprocess.CompletedProcess(argv, 0, data, b"")
 
     monkeypatch.setattr(h.subprocess, "run", run)
@@ -4096,6 +4099,101 @@ def test_install_release_pins_guard_copy(tmp_path, monkeypatch):
     mock_install(monkeypatch, release_archive(), status="ahead")
     h.install_release(paths, sha_b)
     assert (paths.guard / "RELEASE").read_text().strip() == sha_a
+
+
+def test_install_release_pins_from_candidate_when_previous_has_no_guard(tmp_path, monkeypatch, capsys):
+    paths = h.Paths(tmp_path)
+    prev_sha = "1" * 40
+    cand_sha = "2" * 40
+
+    # Setup previous release with pre-guard host_ops.py fixture
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "host_ops_pre_guard.py"
+    prev_scripts = paths.install / "releases" / prev_sha / "scripts"
+    prev_scripts.mkdir(parents=True)
+    (prev_scripts / "host_ops.py").write_bytes(fixture_path.read_bytes())
+    for name in _RELEASE_SCRIPTS:
+        if name != "host_ops.py":
+            (prev_scripts / name).write_text("# dummy\n")
+    (paths.install / "current").symlink_to(paths.install / "releases" / prev_sha)
+
+    # Candidate release has the real host_ops.py (with the guard subcommand)
+    real_host_ops = (Path(__file__).resolve().parents[2] / "scripts" / "host_ops.py").read_bytes()
+    cand_members = [(f"repo/scripts/{name}", tarfile.REGTYPE, real_host_ops if name == "host_ops.py" else b"# dummy\n")
+                    for name in _RELEASE_SCRIPTS] + [("repo/README.md", tarfile.REGTYPE, b"# readme\n")]
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w:gz") as tar:
+        for name, kind, data in cand_members:
+            info = tarfile.TarInfo(name)
+            info.type = kind
+            info.size = len(data)
+            info.mode = 0o755
+            tar.addfile(info, io.BytesIO(data))
+    cand_archive = out.getvalue()
+
+    mock_install(monkeypatch, cand_archive, status="ahead")
+    h.install_release(paths, cand_sha)
+
+    # Pinned guard comes from candidate, not pre-guard previous
+    assert paths.guard.is_dir()
+    assert (paths.guard / "RELEASE").read_text().strip() == cand_sha
+
+    # Running pinned guard --help exits 0
+    proc = subprocess.run(
+        [sys.executable, "-I", str(paths.guard / "scripts" / "host_ops.py"), "guard", "--help"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert "--return" in proc.stdout
+
+    # Pending marker records guard_source candidate and guard_reason
+    marker = h.load_release_pending(paths)
+    assert marker is not None
+    assert marker.get("guard_source") == "candidate"
+    assert marker.get("guard_reason") == "previous release has no guard"
+    assert marker.get("previous_sha") == prev_sha
+    assert marker.get("candidate_sha") == cand_sha
+
+    # Printed line to install log / stdout
+    captured = capsys.readouterr()
+    assert "previous release has no guard" in captured.out
+
+
+def test_load_release_pending_guard_fields(tmp_path):
+    paths = h.Paths(tmp_path)
+    t0 = datetime(2026, 11, 15, 12, 0, 0, tzinfo=UTC)
+    sha = "3" * 40
+
+    # Old marker without guard_source loads cleanly
+    marker = {
+        "previous_sha": None,
+        "candidate_sha": sha,
+        "deadline": h.iso(t0 + timedelta(minutes=10)),
+        "request_id": None,
+        "attempts": 0,
+        "watcher_active": False,
+        "created_at": h.iso(t0),
+    }
+    paths.state.mkdir(parents=True, exist_ok=True)
+    paths.release_pending.write_text(json.dumps(marker), encoding="utf-8")
+    loaded = h.load_release_pending(paths)
+    assert loaded is not None
+    assert loaded["candidate_sha"] == sha
+    assert "guard_source" not in loaded
+
+    # Marker with valid guard_source loads
+    marker["guard_source"] = "candidate"
+    marker["guard_reason"] = "previous release has no guard"
+    paths.release_pending.write_text(json.dumps(marker), encoding="utf-8")
+    loaded = h.load_release_pending(paths)
+    assert loaded["guard_source"] == "candidate"
+    assert loaded["guard_reason"] == "previous release has no guard"
+
+    # Marker with invalid guard_source raises MalformedPendingRelease
+    marker["guard_source"] = "unknown_source"
+    paths.release_pending.write_text(json.dumps(marker), encoding="utf-8")
+    with pytest.raises(h.MalformedPendingRelease):
+        h.load_release_pending(paths)
 
 
 def test_guard_cli_dispatch(tmp_path, capsys):

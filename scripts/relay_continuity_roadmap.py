@@ -512,6 +512,24 @@ def command_serve(args: argparse.Namespace) -> int:
             if bad_id not in unreadable_logged:
                 unreadable_logged.add(bad_id)
                 log(f"owner: release {curr_sha[:12]} not reported: mission {bad_id} unreadable")
+            alert_key = f"{curr_sha}:{bad_id}"
+            alerts = serve_state.setdefault("unreadable_alerts", [])
+            if alert_key not in alerts:
+                alerts.append(alert_key)
+                try:
+                    state = serve_store.load()
+                except StateCorrupt as exc:
+                    log(f"serve: state corrupt ({exc}); using defaults")
+                    state = default_state()
+                if alert_key not in state.setdefault("unreadable_alerts", []):
+                    state["unreadable_alerts"].append(alert_key)
+                Notifier(state, sender=sender, log=log).send(
+                    "release_withheld", now_utc(),
+                    dedupe_key=f"unreadable|{curr_sha}|{bad_id}",
+                    owner="control-plane", mission=bad_id, sha=curr_sha,
+                )
+                serve_store.save(state, now_utc())
+                serve_state.update(state)
             return
         serve_state["release_sha"] = curr_sha
         serve_state["release_updated_at"] = iso(now_utc())

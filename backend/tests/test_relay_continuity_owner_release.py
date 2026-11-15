@@ -103,6 +103,61 @@ def test_owner_does_not_report_release_sha_when_mission_store_corrupt(tmp_path, 
     assert not state_file.is_file() or "release_sha" not in json.loads(state_file.read_text(encoding="utf-8"))
 
 
+def test_owner_unreadable_mission_alerts_once_across_restarts(tmp_path, monkeypatch):
+    sha = "c" * 40
+    root = tmp_path / "continuity"
+    monkeypatch.setenv("JARVISOS_RELEASE_SHA", sha)
+    monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
+    monkeypatch.setattr(rc_roadmap, "in_sandbox", lambda: True)
+    monkeypatch.setattr(rc_roadmap, "become_subreaper", lambda: True)
+    monkeypatch.setattr(rc.shutil, "which", lambda cmd: "/bin/claude" if cmd == "claude" else None)
+    monkeypatch.setattr(rc_roadmap, "link_relay_claude_credentials", lambda *a: None)
+    monkeypatch.setattr(rc_roadmap, "sandbox_provider_env", lambda *a: {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+
+    # Set up one mission in the queue with a corrupt store
+    mid = "m-20261018T075500Z-abc123"
+    missions_dir = rc.missions_dir(root)
+    missions_dir.mkdir(parents=True, exist_ok=True)
+    mission_def_data = {
+        "id": mid,
+        "schema": rc.MISSION_SCHEMA,
+        "submitted_at": "2026-10-18T07:55:00Z",
+        "authority": "L20261020085928-0431",
+        "tasks": [{"text": "task 1"}],
+    }
+    (missions_dir / f"{mid}.json").write_text(json.dumps(mission_def_data), encoding="utf-8")
+
+    mstore = rc.mission_store(root, mid)
+    mstore.root.mkdir(parents=True, exist_ok=True)
+    bad_state = rc.default_state()
+    bad_state["chain"] = "x"  # bad type for chain -> raises StateCorrupt
+    mstore.state_path.write_text(json.dumps(bad_state), encoding="utf-8")
+
+    monkeypatch.setattr(rc_roadmap, "roadmap_step", lambda *a, **kw: None)
+
+    # Track sent alerts via webhook_sender
+    sent_alerts = []
+    monkeypatch.setattr(rc_roadmap, "webhook_sender", lambda: (lambda text: sent_alerts.append(text) or None))
+
+    args = argparse.Namespace(clear_stop=True, no_notify=False, turns=1, interval=1, once=True)
+
+    # First start: unreadable mission at start -> exactly one alert
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sent_alerts) == 1
+
+    # Serve state records the alerted (release sha, mission id)
+    state_file = root / "serve" / "state.json"
+    assert state_file.is_file()
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert f"{sha}:{mid}" in state.get("unreadable_alerts", [])
+
+    # Second start (restart with the same serve state): no second alert
+    res = rc.command_serve(args)
+    assert res == 0
+    assert len(sent_alerts) == 1
+
+
 def test_command_serve_logs_when_serve_state_corrupt(tmp_path, monkeypatch, capsys):
     root = tmp_path / "continuity"
     monkeypatch.setenv("RELAY_CONTINUITY_DIR", str(root))
