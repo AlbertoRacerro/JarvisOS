@@ -43,6 +43,8 @@ from relay_continuity_common import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # Outbound notification (Phase 2): fixed templates, allowlisted structured fields only
 
+SAFE_MISSION_FILE_RE = re.compile(r"m-[a-zA-Z0-9_\-]{1,64}")
+
 ISO_RE = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"
 FIELD_RULES: dict[str, Callable[[str], bool]] = {
     "session": lambda v: v == "none" or bool(re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{6}", v)),
@@ -64,7 +66,7 @@ FIELD_RULES: dict[str, Callable[[str], bool]] = {
     "sha": lambda v: bool(re.fullmatch(r"[0-9a-f]{7,40}", v)),
     "pr": lambda v: v == "none" or bool(re.fullmatch(r"\d{1,6}", v)),
     "phase": lambda v: v in PHASES,
-    "mission": lambda v: bool(MISSION_ID_RE.fullmatch(v) or re.fullmatch(r"m-[a-zA-Z0-9_\-]{1,64}", v)),
+    "mission": lambda v: bool(MISSION_ID_RE.fullmatch(v)),
     "task": lambda v: bool(re.fullmatch(r"\d{1,2}/\d{1,2}", v)),
     "owner": lambda v: v == "control-plane",
 }
@@ -110,7 +112,10 @@ def render(event: str, fields: dict[str, Any]) -> str | None:
         if value is None:
             return None
         value = str(value)
-        if not FIELD_RULES[key](value):
+        if event == "release_withheld" and key == "mission":
+            if not (MISSION_ID_RE.fullmatch(value) or SAFE_MISSION_FILE_RE.fullmatch(value)):
+                return None
+        elif not FIELD_RULES[key](value):
             return None
     text = title
     return None if devctx.find_secret(text) else text
