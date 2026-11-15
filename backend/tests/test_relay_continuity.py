@@ -63,6 +63,7 @@ def write_turn(session_dir: Path, events: list[dict[str, Any]], *, agent: str = 
     state_data: dict[str, Any] = {"agent_key": agent, "status": status}
     if context_used_tokens is not None:
         state_data["context_used_tokens"] = context_used_tokens
+        state_data["metadata"] = {"context_used_tokens": context_used_tokens}
     (turn / "state.json").write_text(json.dumps(state_data))
     (turn / "prompt.md").write_text(prompt)
     if last_message is not None:
@@ -105,6 +106,22 @@ def tool_result(tid: str) -> dict[str, Any]:
 
 
 SUCCESS = [claude_result("ok")]
+def claude_turn_events(text: str = "ok", *, input_tokens: int = 50_000,
+                       cache_creation: int = 0, cache_read: int = 0) -> list[dict[str, Any]]:
+    return [
+        {"subtype": "init", "type": "system"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": text}],
+            "usage": {
+                "input_tokens": input_tokens,
+                "cache_creation_input_tokens": cache_creation,
+                "cache_read_input_tokens": cache_read,
+                "output_tokens": 100,
+            },
+        }},
+        claude_result("ok"),
+    ]
+
 CODEX_SUCCESS = [{"type": "thread.started"}, {"type": "turn.completed"}]
 QUOTA = [claude_result("You've hit your session limit · resets 11:50pm (Europe/Rome)", error=True, status=429)]
 CODEX_QUOTA = [{"type": "thread.started"}, {"type": "error", "message": "You've hit your usage limit. try again at 11:38 PM."},
@@ -5498,14 +5515,16 @@ def test_bare_checkpoint_enforces_minimum_interval(tmp_path: Path) -> None:
 def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> None:
     jid = "j-20261113T120000Z-111111"
     msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+    ev_under = claude_turn_events("continue", input_tokens=40_000, cache_creation=10_000, cache_read=10_000)
+    ev_over = claude_turn_events("continue", input_tokens=100_000, cache_creation=20_000, cache_read=40_000)
 
-    # Under cap (< 2M tokens) and under 4 resumes: continues session
+    # Under cap (<= 150_000 tokens) and under 4 resumes: continues session
     env1 = Env(tmp_path / "under")
     mission1 = mission_def("under cap")
     start_mission(env1, mission1)
     env1.jobs[jid] = {"status": "succeeded"}
     env1.relay.script = [
-        ("claude", SUCCESS, "continue", msg, 1_400_000),
+        ("claude", ev_under, "continue", msg, 60_000),
         ("claude", SUCCESS, "propose_done"),
     ]
     result1, sup1 = run_mission(env1, mission1)
@@ -5513,13 +5532,13 @@ def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> No
     assert env1.relay.launches[1]["parent"] is not None
     assert "External wait satisfied:" in env1.relay.launches[1]["task"]
 
-    # Over cap (> 2M tokens): forces fresh context (parent = None)
+    # Over cap (> 150_000 tokens): forces fresh context (parent = None)
     env2 = Env(tmp_path / "over")
     mission2 = mission_def("over cap")
     start_mission(env2, mission2)
     env2.jobs[jid] = {"status": "succeeded"}
     env2.relay.script = [
-        ("claude", SUCCESS, "continue", msg, 2_100_000),
+        ("claude", ev_over, "continue", msg, 160_000),
         ("claude", SUCCESS, "propose_done"),
     ]
     result2, sup2 = run_mission(env2, mission2)
@@ -5527,7 +5546,7 @@ def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> No
     assert env2.relay.launches[1]["parent"] is None
     assert "[Durable handoff summary]" in env2.relay.launches[1]["task"]
 
-    # Missing context_used_tokens: does not force fresh context
+    # Missing context_used_tokens (and no assistant events): does not force fresh context
     env3 = Env(tmp_path / "missing")
     mission3 = mission_def("missing tokens")
     start_mission(env3, mission3)
@@ -5547,11 +5566,11 @@ def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> No
     env4.jobs[jid] = {"status": "succeeded"}
     # 5 "continue"+JOB-WAIT turns then propose_done
     env4.relay.script = [
-        ("claude", SUCCESS, "continue", msg, 100_000),
-        ("claude", SUCCESS, "continue", msg, 100_000),
-        ("claude", SUCCESS, "continue", msg, 100_000),
-        ("claude", SUCCESS, "continue", msg, 100_000),
-        ("claude", SUCCESS, "continue", msg, 100_000),
+        ("claude", ev_under, "continue", msg, 60_000),
+        ("claude", ev_under, "continue", msg, 60_000),
+        ("claude", ev_under, "continue", msg, 60_000),
+        ("claude", ev_under, "continue", msg, 60_000),
+        ("claude", ev_under, "continue", msg, 60_000),
         ("claude", SUCCESS, "propose_done"),
     ]
     result4, sup4 = run_mission(env4, mission4)
@@ -5561,6 +5580,400 @@ def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> No
         assert env4.relay.launches[i]["task"].startswith("[relay-continuity resume")
     assert env4.relay.launches[5]["parent"] is None
     assert "[Durable handoff summary]" in env4.relay.launches[5]["task"]
+
+
+def test_spec_277_turn_context_tokens_and_decisions_from_real_fixtures(tmp_path: Path) -> None:
+    over_turn = FIXTURES / "claude_context_over_cap"
+    under_turn = FIXTURES / "claude_context_under_cap"
+    codex_turn = FIXTURES / "codex_context_cumulative"
+
+    tokens_over = rc.turn_context_tokens(over_turn)
+    tokens_under = rc.turn_context_tokens(under_turn)
+    tokens_codex = rc.turn_context_tokens(codex_turn)
+
+    # 2 + 1020 + 198706 = 199_728
+    assert tokens_over == 199_728
+    assert tokens_over > rc.RESUME_CONTEXT_CAP_TOKENS
+    # 2 + 209 + 60189 = 60_400
+    assert tokens_under == 60_400
+    assert tokens_under <= rc.RESUME_CONTEXT_CAP_TOKENS
+    # Criterion 2: Codex only has cumulative turn usage, so return None for its cap
+    assert tokens_codex is None
+
+    # Criterion 3: TurnReport.context_used_tokens is filled from metadata.context_used_tokens
+    rep_over = rc.classify_turn(over_turn)
+    assert rep_over.context_used_tokens == 1583217
+    rep_under = rc.classify_turn(under_turn)
+    assert rep_under.context_used_tokens == 1080361
+    rep_codex = rc.classify_turn(codex_turn)
+    assert rep_codex.context_used_tokens == 2901816
+
+    # Codex fixture event usage has exact measured split totaling 2901816
+    codex_events = [json.loads(line) for line in (codex_turn / "output.jsonl").read_text().splitlines()]
+    completed_event = next(e for e in codex_events if e.get("type") == "turn.completed")
+    assert completed_event["usage"]["input_tokens"] == 2891987
+    assert completed_event["usage"]["output_tokens"] == 9829
+    assert completed_event["usage"]["input_tokens"] + completed_event["usage"]["output_tokens"] == 2901816
+
+    # Top-level fallback when metadata is absent (older state files)
+    legacy_turn = tmp_path / "legacy_turn"
+    legacy_turn.mkdir(parents=True)
+    (legacy_turn / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "completed", "context_used_tokens": 123456}))
+    (legacy_turn / "output.jsonl").write_text("")
+    rep_legacy = rc.classify_turn(legacy_turn)
+    assert rep_legacy.context_used_tokens == 123456
+
+
+def test_spec_277_missing_final_usage_starts_fresh_safely(tmp_path: Path) -> None:
+    """When the final Claude assistant call lacks usage, do not return an earlier call's
+
+    count (which could allow an over-cap turn to resume); return UNMEASURABLE_CONTEXT_TOKENS
+    so supervisor starts fresh safely."""
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    turn = tmp_path / "missing_final_usage"
+    turn.mkdir(parents=True)
+    events = [
+        {"subtype": "init", "type": "system"},
+        # Earlier call has small usage under cap
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": "earlier call"}],
+            "usage": {"input_tokens": 40_000, "cache_creation_input_tokens": 5_000, "cache_read_input_tokens": 5_000},
+        }},
+        {"message": {"content": [{"is_error": False, "type": "tool_result"}]}, "type": "user"},
+        # Final call lacks usage entirely
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": msg}],
+        }},
+        claude_result("ok"),
+    ]
+    (turn / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    (turn / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+
+    tokens = rc.turn_context_tokens(turn)
+    assert tokens == rc.UNMEASURABLE_CONTEXT_TOKENS
+    assert tokens > rc.RESUME_CONTEXT_CAP_TOKENS
+
+    # Verify supervisor starts fresh context when running this turn
+    env = Env(tmp_path / "mission_missing_usage")
+    m = mission_def("missing final usage")
+    start_mission(env, m)
+    env.jobs[jid] = {"status": "succeeded"}
+    env.relay.script = [
+        ("claude", events, "continue", msg, None),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res, _ = run_mission(env, m)
+    assert res == "idle"
+    # Fresh context forced because tokens is sentinel > cap, never resumed on stale earlier usage
+    assert env.relay.launches[1]["parent"] is None
+    assert "[Durable handoff summary]" in env.relay.launches[1]["task"]
+    assert "resume decision (wake): last-call context unmeasurable; fresh" in env.logs
+    assert "resume decision (launch): last-call context unmeasurable; fresh" in env.logs
+
+
+def test_spec_277_malformed_usage_starts_fresh_without_raising(tmp_path: Path) -> None:
+    """Non-numeric, boolean, negative or malformed usage must not raise TypeError
+
+    or crash the supervisor; returns UNMEASURABLE_CONTEXT_TOKENS to fail safe."""
+    malformed_cases = [
+        {"input_tokens": "invalid"},
+        {"input_tokens": True},
+        {"input_tokens": False},
+        {"input_tokens": -100},
+        {"input_tokens": 50_000, "cache_creation_input_tokens": "bad"},
+        {"input_tokens": 50_000, "cache_creation_input_tokens": True},
+        {"input_tokens": 50_000, "cache_read_input_tokens": -500},
+        {"input_tokens": 50_000, "cache_read_input_tokens": False},
+        "not_a_dict",
+        [],
+        {"other_key": 100},  # missing input_tokens
+    ]
+
+    for i, bad_usage in enumerate(malformed_cases):
+        case_dir = tmp_path / f"case_{i}"
+        case_dir.mkdir(parents=True)
+        event = {"type": "assistant", "message": {"content": [{"type": "text", "text": "bad"}]}}
+        if isinstance(bad_usage, dict):
+            event["message"]["usage"] = bad_usage
+        else:
+            event["usage"] = bad_usage
+        (case_dir / "output.jsonl").write_text(json.dumps(event) + "\n")
+        (case_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+
+        # Must not raise TypeError, must return sentinel
+        tokens = rc.turn_context_tokens(case_dir)
+        assert tokens == rc.UNMEASURABLE_CONTEXT_TOKENS, f"case {i}: {bad_usage}"
+        assert tokens > rc.RESUME_CONTEXT_CAP_TOKENS
+
+
+def test_spec_277_nested_and_top_level_usage_shapes(tmp_path: Path) -> None:
+    """Usage may be nested under message.usage (Claude Code default) or top-level event.usage."""
+    # 1. Nested in message
+    nested_dir = tmp_path / "nested"
+    nested_dir.mkdir(parents=True)
+    nested_ev = {"type": "assistant", "message": {
+        "content": [{"type": "text", "text": "nested"}],
+        "usage": {"input_tokens": 45_000, "cache_creation_input_tokens": 5_000, "cache_read_input_tokens": 10_000},
+    }}
+    (nested_dir / "output.jsonl").write_text(json.dumps(nested_ev) + "\n")
+    (nested_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    assert rc.turn_context_tokens(nested_dir) == 60_000
+
+    # 2. Top-level usage
+    top_dir = tmp_path / "top_level"
+    top_dir.mkdir(parents=True)
+    top_ev = {
+        "type": "assistant",
+        "usage": {"input_tokens": 45_000, "cache_creation_input_tokens": 5_000, "cache_read_input_tokens": 10_000},
+        "message": {"content": [{"type": "text", "text": "top"}]},
+    }
+    (top_dir / "output.jsonl").write_text(json.dumps(top_ev) + "\n")
+    (top_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    assert rc.turn_context_tokens(top_dir) == 60_000
+
+
+def test_spec_277_codex_remains_none_while_unmeasurable_claude_starts_fresh(tmp_path: Path) -> None:
+    """Explicitly distinguish unmeasurable Claude (which starts fresh) from Codex
+
+    (which returns None per spec and resumes within MAX_SESSION_RESUMES)."""
+    # Claude turn whose final assistant call lacks usage: unmeasurable -> starts fresh
+    claude_unmeas = tmp_path / "claude_unmeas"
+    claude_unmeas.mkdir(parents=True)
+    (claude_unmeas / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    ev = {"type": "assistant", "message": {"content": [{"type": "text", "text": "continue"}]}}
+    (claude_unmeas / "output.jsonl").write_text(json.dumps(ev) + "\n")
+    assert rc.turn_context_tokens(claude_unmeas) == rc.UNMEASURABLE_CONTEXT_TOKENS
+
+    # Codex turn: returns None per spec even when events are completed
+    codex_turn = tmp_path / "codex_turn"
+    codex_turn.mkdir(parents=True)
+    (codex_turn / "state.json").write_text(json.dumps({"agent_key": "codex", "status": "continue"}))
+    (codex_turn / "output.jsonl").write_text('{"type": "thread.started"}\n{"type": "turn.completed"}\n')
+    assert rc.turn_context_tokens(codex_turn) is None
+
+
+def test_spec_277_claude_over_cap_starts_fresh_under_cap_resumes(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    # Over cap copied fixture: next turn starts fresh context
+    env_over = Env(tmp_path / "over")
+    m_over = mission_def("over cap real fixture")
+    start_mission(env_over, m_over)
+    env_over.jobs[jid] = {"status": "succeeded"}
+    over_events = [json.loads(line) for line in (FIXTURES / "claude_context_over_cap" / "output.jsonl").read_text().splitlines()]
+    env_over.relay.script = [
+        ("claude", over_events, "continue", msg, 1_583_217),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_over, _ = run_mission(env_over, m_over)
+    assert res_over == "idle"
+    assert env_over.relay.launches[1]["parent"] is None
+    assert "[Durable handoff summary]" in env_over.relay.launches[1]["task"]
+    assert "resume decision (wake): last-call context 199728 tokens; fresh" in env_over.logs
+    assert "resume decision (launch): last-call context 199728 tokens; fresh" in env_over.logs
+
+    # Under cap copied fixture: next turn resumes
+    env_under = Env(tmp_path / "under")
+    m_under = mission_def("under cap real fixture")
+    start_mission(env_under, m_under)
+    env_under.jobs[jid] = {"status": "succeeded"}
+    under_events = [json.loads(line) for line in (FIXTURES / "claude_context_under_cap" / "output.jsonl").read_text().splitlines()]
+    env_under.relay.script = [
+        ("claude", under_events, "continue", msg, 1_080_361),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_under, _ = run_mission(env_under, m_under)
+    assert res_under == "idle"
+    assert env_under.relay.launches[1]["parent"] is not None
+    assert "External wait satisfied:" in env_under.relay.launches[1]["task"]
+    assert "resume decision (wake): last-call context 60400 tokens; resume" in env_under.logs
+    assert "resume decision (launch): last-call context 60400 tokens; resume" in env_under.logs
+
+
+def test_spec_277_codex_never_triggers_cap_from_cumulative_usage(tmp_path: Path) -> None:
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    env = Env(tmp_path / "codex_cumulative")
+    m = mission_def("codex cumulative")
+    start_mission(env, m)
+    env.jobs[jid] = {"status": "succeeded"}
+    codex_events = [json.loads(line) for line in (FIXTURES / "codex_context_cumulative" / "output.jsonl").read_text().splitlines()]
+    # Codex has cumulative usage of 2_901_816 tokens (way above 150_000 cap)
+    env.relay.script = [
+        ("codex", codex_events, "continue", msg, 2_901_816),
+        ("codex", CODEX_SUCCESS, "propose_done"),
+    ]
+    res, _ = run_mission(env, m)
+    assert res == "idle"
+    # Resumes because turn_context_tokens returns None for Codex, never cumulative usage
+    assert env.relay.launches[1]["parent"] is not None
+    assert "External wait satisfied:" in env.relay.launches[1]["task"]
+    assert "resume decision (wake): last-call context unmeasured; resume" in env.logs
+    assert "resume decision (launch): last-call context unmeasured; resume" in env.logs
+
+
+def test_spec_277_resume_decision_logging_causal(tmp_path: Path) -> None:
+    """Causal test verifying that context size measurements strictly control
+
+    the logged decision and context outcome at both decision sites (wake and launch),
+    without leaking private prompt content."""
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    def make_claude_events(last_tokens: int) -> list[dict[str, Any]]:
+        return [
+            {"subtype": "init", "type": "system"},
+            {"type": "assistant", "message": {
+                "content": [{"type": "text", "text": msg}],
+                "usage": {"input_tokens": last_tokens, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+            }},
+            claude_result("ok"),
+        ]
+
+    # 1. Exactly at cap (150_000) -> resumes at wake and launch
+    env_cap = Env(tmp_path / "at_cap")
+    m_cap = mission_def("mission at cap tokens")
+    start_mission(env_cap, m_cap)
+    env_cap.jobs[jid] = {"status": "succeeded"}
+    env_cap.relay.script = [
+        ("claude", make_claude_events(rc.RESUME_CONTEXT_CAP_TOKENS), "continue", msg, 500_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_cap, _ = run_mission(env_cap, m_cap)
+    assert res_cap == "idle"
+    assert env_cap.relay.launches[1]["parent"] is not None
+    assert f"resume decision (wake): last-call context {rc.RESUME_CONTEXT_CAP_TOKENS} tokens; resume" in env_cap.logs
+    assert f"resume decision (launch): last-call context {rc.RESUME_CONTEXT_CAP_TOKENS} tokens; resume" in env_cap.logs
+
+    # 2. 1 token over cap (150_001) -> fresh context at wake and launch
+    env_over = Env(tmp_path / "just_over_cap")
+    m_over = mission_def("mission over cap tokens")
+    start_mission(env_over, m_over)
+    env_over.jobs[jid] = {"status": "succeeded"}
+    env_over.relay.script = [
+        ("claude", make_claude_events(rc.RESUME_CONTEXT_CAP_TOKENS + 1), "continue", msg, 500_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_over, _ = run_mission(env_over, m_over)
+    assert res_over == "idle"
+    assert env_over.relay.launches[1]["parent"] is None
+    assert f"resume decision (wake): last-call context {rc.RESUME_CONTEXT_CAP_TOKENS + 1} tokens; fresh" in env_over.logs
+    assert f"resume decision (launch): last-call context {rc.RESUME_CONTEXT_CAP_TOKENS + 1} tokens; fresh" in env_over.logs
+
+    # 3. Unmeasurable context -> fresh context at wake and launch
+    env_unmeas = Env(tmp_path / "unmeasurable")
+    m_unmeas = mission_def("mission unmeasurable usage")
+    start_mission(env_unmeas, m_unmeas)
+    env_unmeas.jobs[jid] = {"status": "succeeded"}
+    unmeas_wake_events = [
+        {"subtype": "init", "type": "system"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": msg}],
+            "usage": {"input_tokens": "malformed"},
+        }},
+        claude_result("ok"),
+    ]
+    env_unmeas.relay.script = [
+        ("claude", unmeas_wake_events, "continue", msg, 500_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_unmeas, _ = run_mission(env_unmeas, m_unmeas)
+    assert res_unmeas == "idle"
+    assert env_unmeas.relay.launches[1]["parent"] is None
+    assert "resume decision (wake): last-call context unmeasurable; fresh" in env_unmeas.logs
+    assert "resume decision (launch): last-call context unmeasurable; fresh" in env_unmeas.logs
+
+    # 4. Direct launch site without wake (e.g. transient retry)
+    # Under cap retry resumes
+    env_retry_under = Env(tmp_path / "retry_under")
+    m_retry_under = mission_def("transient retry under cap")
+    start_mission(env_retry_under, m_retry_under)
+    env_retry_under.relay.script = [
+        ("claude", make_claude_events(60_400), "transient", "network timeout", 500_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_retry_under, _ = run_mission(env_retry_under, m_retry_under)
+    assert res_retry_under == "idle"
+    assert env_retry_under.relay.launches[1]["parent"] is not None
+    assert "resume decision (launch): last-call context 60400 tokens; resume" in env_retry_under.logs
+
+    # Over cap retry starts fresh
+    env_retry_over = Env(tmp_path / "retry_over")
+    m_retry_over = mission_def("transient retry over cap")
+    start_mission(env_retry_over, m_retry_over)
+    env_retry_over.relay.script = [
+        ("claude", make_claude_events(199_728), "transient", "network timeout", 500_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_retry_over, _ = run_mission(env_retry_over, m_retry_over)
+    assert res_retry_over == "idle"
+    assert env_retry_over.relay.launches[1]["parent"] is None
+    assert "resume decision (launch): last-call context 199728 tokens; fresh" in env_retry_over.logs
+
+    # Unmeasurable retry starts fresh
+    env_retry_unmeas = Env(tmp_path / "retry_unmeas")
+    m_retry_unmeas = mission_def("transient retry unmeasurable")
+    start_mission(env_retry_unmeas, m_retry_unmeas)
+    unmeas_retry_events = [
+        {"subtype": "init", "type": "system"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": "retry me"}],
+            "usage": {"input_tokens": "invalid"},
+        }},
+        claude_result("ok"),
+    ]
+    env_retry_unmeas.relay.script = [
+        ("claude", unmeas_retry_events, "transient", "network timeout", 500_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_retry_unmeas, _ = run_mission(env_retry_unmeas, m_retry_unmeas)
+    assert res_retry_unmeas == "idle"
+    assert env_retry_unmeas.relay.launches[1]["parent"] is None
+    assert "resume decision (launch): last-call context unmeasurable; fresh" in env_retry_unmeas.logs
+
+    # 5. Strict content isolation: verify no prompt text or file path appears in resume decision logs
+    all_logs = env_cap.logs + env_over.logs + env_unmeas.logs + env_retry_under.logs + env_retry_over.logs + env_retry_unmeas.logs
+    decision_logs = [log for log in all_logs if log.startswith("resume decision")]
+    assert len(decision_logs) >= 9
+    for log in decision_logs:
+        assert "mission" not in log
+        assert "task" not in log
+        assert "http" not in log
+        assert "/" not in log
+        assert "\\" not in log
+
+
+def test_spec_277_last_assistant_call_defines_context_size(tmp_path: Path) -> None:
+    turn = tmp_path / "multi_assistant_turn"
+    turn.mkdir(parents=True)
+    events = [
+        {"subtype": "init", "type": "system"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": "step 1"}],
+            "usage": {"input_tokens": 20_000, "cache_creation_input_tokens": 5_000, "cache_read_input_tokens": 10_000},
+        }},
+        {"message": {"content": [{"is_error": False, "type": "tool_result"}]}, "type": "user"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": "step 2"}],
+            "usage": {"input_tokens": 60_000, "cache_creation_input_tokens": 10_000, "cache_read_input_tokens": 20_000},
+        }},
+        {"message": {"content": [{"is_error": False, "type": "tool_result"}]}, "type": "user"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": "step 3 final call"}],
+            "usage": {"input_tokens": 90_000, "cache_creation_input_tokens": 15_000, "cache_read_input_tokens": 30_000},
+        }},
+        claude_result("done"),
+    ]
+    (turn / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    (turn / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "completed"}))
+
+    tokens = rc.turn_context_tokens(turn)
+    # Last call was step 3: 90_000 + 15_000 + 30_000 = 135_000
+    assert tokens == 135_000
 
 
 def test_provider_change_and_native_agents_force_fresh_context(tmp_path: Path) -> None:

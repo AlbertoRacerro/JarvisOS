@@ -873,7 +873,10 @@ def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any 
             ref = now_utc()
     calls: dict[str, ToolCall] = {}
     task_calls: dict[str, str] = {}
-    tokens = state.get("context_used_tokens")
+    meta = state.get("metadata")
+    tokens = meta.get("context_used_tokens") if isinstance(meta, dict) else None
+    if tokens is None:
+        tokens = state.get("context_used_tokens")
     used_tok = int(tokens) if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) else None
     report = TurnReport(outcome="crash", agent=agent, detail="no terminal event", bad_lines=bad,
                         relay_status=state.get("status"), turn_id=f"{turn_dir.parent.parent.name}/{turn_dir.name}",
