@@ -184,10 +184,94 @@ def needs_mixed_solve(document: dict[str, Any]) -> bool:
     return False
 
 
+def _is_heat_or_work_adding(unit: dict[str, Any]) -> bool:
+    utype = unit.get("type")
+    mode = unit.get("mode")
+    if utype == "Pump":
+        return True
+    if utype == "Heater":
+        if mode in {"heat_added", "heat_added_removed"}:
+            return True
+        if mode == "temperature_change":
+            tc = unit.get("params", {}).get("temperature_change")
+            if isinstance(tc, dict):
+                val = tc.get("value")
+                if val is None:
+                    val = tc.get("si")
+                if val is not None and float(val) > 0:
+                    return True
+            elif isinstance(tc, (int, float)) and tc > 0:
+                return True
+    return False
+
+
+def _is_heat_sink_or_temp_fixing(unit: dict[str, Any]) -> bool:
+    utype = unit.get("type")
+    mode = unit.get("mode")
+    if utype in {"Cooler", "HeatExchanger"}:
+        return True
+    if utype == "Heater" and (mode == "outlet_temperature" or mode is None):
+        return True
+    return False
+
+
+def _has_temperature_spec(unit: dict[str, Any]) -> bool:
+    if unit.get("temperature_specification") is not None:
+        return True
+    if unit.get("options", {}).get("temperature_specification") is not None:
+        return True
+    if unit.get("params", {}).get("temperature_specification") is not None:
+        return True
+    if unit.get("options", {}).get("temperature") is not None:
+        return True
+    utype = unit.get("type")
+    if utype not in {"PhotobioreactorT1", "Pump"}:
+        params = unit.get("params", {})
+        if params.get("temperature") is not None or params.get("outlet_temperature") is not None:
+            return True
+    return False
+
+
+def loop_energy_findings(document: dict[str, Any]) -> list[dict[str, Any]]:
+    units = _units(document)
+    material_edges = _edges(document, energy=False)
+    sccs = components(set(units), material_edges)
+    findings: list[dict[str, Any]] = []
+
+    for group in sccs:
+        is_loop = len(group) > 1 or any(a == b and a in group for a, b, _ in material_edges)
+        if not is_loop:
+            continue
+        loop_units = [units[uid] for uid in group if uid in units]
+        if not any(_is_heat_or_work_adding(u) for u in loop_units):
+            continue
+        if any(_is_heat_sink_or_temp_fixing(u) for u in loop_units):
+            continue
+        loop_stream_temp_spec = any(
+            stream.get("spec", {}).get("temperature") is not None
+            for a, b, stream in material_edges
+            if a in group and b in group
+        )
+        if loop_stream_temp_spec or any(_has_temperature_spec(u) for u in loop_units):
+            continue
+
+        tags = sorted(u["tag"] for u in loop_units)
+        findings.append({
+            "severity": "blocker",
+            "code": "LOOP_ENERGY_UNCLOSED",
+            "object": tags[0],
+            "field": "connections",
+            "message": f"Process loop {tags} adds work or heat without a heat sink or temperature specification; "
+                       "add a Cooler, HeatExchanger, or temperature-fixing Heater.",
+            "source": "jarvis",
+        })
+    return findings
+
+
 def validation_findings(document: dict[str, Any]) -> list[dict[str, Any]]:
     objects = document["objects"]
     units = _units(document)
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = list(loop_energy_findings(document))
 
     def add(severity: str, code: str, tag: str, message: str) -> None:
         findings.append({"severity": severity, "code": code, "object": tag, "field": "connections",
