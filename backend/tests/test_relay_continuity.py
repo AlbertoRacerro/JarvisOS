@@ -5546,7 +5546,7 @@ def test_context_cap_and_resume_limits_force_fresh_context(tmp_path: Path) -> No
     assert env2.relay.launches[1]["parent"] is None
     assert "[Durable handoff summary]" in env2.relay.launches[1]["task"]
 
-    # Missing context_used_tokens: does not force fresh context
+    # Missing context_used_tokens (and no assistant events): does not force fresh context
     env3 = Env(tmp_path / "missing")
     mission3 = mission_def("missing tokens")
     start_mission(env3, mission3)
@@ -5591,9 +5591,11 @@ def test_spec_277_turn_context_tokens_and_decisions_from_real_fixtures(tmp_path:
     tokens_under = rc.turn_context_tokens(under_turn)
     tokens_codex = rc.turn_context_tokens(codex_turn)
 
-    assert tokens_over == 160_000
+    # 158420 + 2100 + 1480 = 162_000
+    assert tokens_over == 162_000
     assert tokens_over > rc.RESUME_CONTEXT_CAP_TOKENS
-    assert tokens_under == 60_000
+    # 58342 + 1210 + 848 = 60_400 (matches median in Spec 277)
+    assert tokens_under == 60_400
     assert tokens_under <= rc.RESUME_CONTEXT_CAP_TOKENS
     # Criterion 2: Codex only has cumulative turn usage, so return None for its cap
     assert tokens_codex is None
@@ -5602,7 +5604,7 @@ def test_spec_277_turn_context_tokens_and_decisions_from_real_fixtures(tmp_path:
     rep_over = rc.classify_turn(over_turn)
     assert rep_over.context_used_tokens == 2166425
     rep_under = rc.classify_turn(under_turn)
-    assert rep_under.context_used_tokens == 800000
+    assert rep_under.context_used_tokens == 2166425
     rep_codex = rc.classify_turn(codex_turn)
     assert rep_codex.context_used_tokens == 2166425
 
@@ -5613,6 +5615,134 @@ def test_spec_277_turn_context_tokens_and_decisions_from_real_fixtures(tmp_path:
     (legacy_turn / "output.jsonl").write_text("")
     rep_legacy = rc.classify_turn(legacy_turn)
     assert rep_legacy.context_used_tokens == 123456
+
+
+def test_spec_277_missing_final_usage_starts_fresh_safely(tmp_path: Path) -> None:
+    """When the final Claude assistant call lacks usage, do not return an earlier call's
+
+    count (which could allow an over-cap turn to resume); return UNMEASURABLE_CONTEXT_TOKENS
+    so supervisor starts fresh safely."""
+    jid = "j-20261113T120000Z-111111"
+    msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+
+    turn = tmp_path / "missing_final_usage"
+    turn.mkdir(parents=True)
+    events = [
+        {"subtype": "init", "type": "system"},
+        # Earlier call has small usage under cap
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": "earlier call"}],
+            "usage": {"input_tokens": 40_000, "cache_creation_input_tokens": 5_000, "cache_read_input_tokens": 5_000},
+        }},
+        {"message": {"content": [{"is_error": False, "type": "tool_result"}]}, "type": "user"},
+        # Final call lacks usage entirely
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": msg}],
+        }},
+        claude_result("ok"),
+    ]
+    (turn / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    (turn / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+
+    tokens = rc.turn_context_tokens(turn)
+    assert tokens == rc.UNMEASURABLE_CONTEXT_TOKENS
+    assert tokens > rc.RESUME_CONTEXT_CAP_TOKENS
+
+    # Verify supervisor starts fresh context when running this turn
+    env = Env(tmp_path / "mission_missing_usage")
+    m = mission_def("missing final usage")
+    start_mission(env, m)
+    env.jobs[jid] = {"status": "succeeded"}
+    env.relay.script = [
+        ("claude", events, "continue", msg, None),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res, _ = run_mission(env, m)
+    assert res == "idle"
+    # Fresh context forced because tokens is sentinel > cap, never resumed on stale earlier usage
+    assert env.relay.launches[1]["parent"] is None
+    assert "[Durable handoff summary]" in env.relay.launches[1]["task"]
+
+
+def test_spec_277_malformed_usage_starts_fresh_without_raising(tmp_path: Path) -> None:
+    """Non-numeric, boolean, negative or malformed usage must not raise TypeError
+
+    or crash the supervisor; returns UNMEASURABLE_CONTEXT_TOKENS to fail safe."""
+    malformed_cases = [
+        {"input_tokens": "invalid"},
+        {"input_tokens": True},
+        {"input_tokens": False},
+        {"input_tokens": -100},
+        {"input_tokens": 50_000, "cache_creation_input_tokens": "bad"},
+        {"input_tokens": 50_000, "cache_creation_input_tokens": True},
+        {"input_tokens": 50_000, "cache_read_input_tokens": -500},
+        {"input_tokens": 50_000, "cache_read_input_tokens": False},
+        "not_a_dict",
+        [],
+        {"other_key": 100},  # missing input_tokens
+    ]
+
+    for i, bad_usage in enumerate(malformed_cases):
+        case_dir = tmp_path / f"case_{i}"
+        case_dir.mkdir(parents=True)
+        event = {"type": "assistant", "message": {"content": [{"type": "text", "text": "bad"}]}}
+        if isinstance(bad_usage, dict):
+            event["message"]["usage"] = bad_usage
+        else:
+            event["usage"] = bad_usage
+        (case_dir / "output.jsonl").write_text(json.dumps(event) + "\n")
+        (case_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+
+        # Must not raise TypeError, must return sentinel
+        tokens = rc.turn_context_tokens(case_dir)
+        assert tokens == rc.UNMEASURABLE_CONTEXT_TOKENS, f"case {i}: {bad_usage}"
+        assert tokens > rc.RESUME_CONTEXT_CAP_TOKENS
+
+
+def test_spec_277_nested_and_top_level_usage_shapes(tmp_path: Path) -> None:
+    """Usage may be nested under message.usage (Claude Code default) or top-level event.usage."""
+    # 1. Nested in message
+    nested_dir = tmp_path / "nested"
+    nested_dir.mkdir(parents=True)
+    nested_ev = {"type": "assistant", "message": {
+        "content": [{"type": "text", "text": "nested"}],
+        "usage": {"input_tokens": 45_000, "cache_creation_input_tokens": 5_000, "cache_read_input_tokens": 10_000},
+    }}
+    (nested_dir / "output.jsonl").write_text(json.dumps(nested_ev) + "\n")
+    (nested_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    assert rc.turn_context_tokens(nested_dir) == 60_000
+
+    # 2. Top-level usage
+    top_dir = tmp_path / "top_level"
+    top_dir.mkdir(parents=True)
+    top_ev = {
+        "type": "assistant",
+        "usage": {"input_tokens": 45_000, "cache_creation_input_tokens": 5_000, "cache_read_input_tokens": 10_000},
+        "message": {"content": [{"type": "text", "text": "top"}]},
+    }
+    (top_dir / "output.jsonl").write_text(json.dumps(top_ev) + "\n")
+    (top_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    assert rc.turn_context_tokens(top_dir) == 60_000
+
+
+def test_spec_277_codex_remains_none_while_unmeasurable_claude_starts_fresh(tmp_path: Path) -> None:
+    """Explicitly distinguish unmeasurable Claude (which starts fresh) from Codex
+
+    (which returns None per spec and resumes within MAX_SESSION_RESUMES)."""
+    # Claude turn whose final assistant call lacks usage: unmeasurable -> starts fresh
+    claude_unmeas = tmp_path / "claude_unmeas"
+    claude_unmeas.mkdir(parents=True)
+    (claude_unmeas / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "continue"}))
+    ev = {"type": "assistant", "message": {"content": [{"type": "text", "text": "continue"}]}}
+    (claude_unmeas / "output.jsonl").write_text(json.dumps(ev) + "\n")
+    assert rc.turn_context_tokens(claude_unmeas) == rc.UNMEASURABLE_CONTEXT_TOKENS
+
+    # Codex turn: returns None per spec even when events are completed
+    codex_turn = tmp_path / "codex_turn"
+    codex_turn.mkdir(parents=True)
+    (codex_turn / "state.json").write_text(json.dumps({"agent_key": "codex", "status": "continue"}))
+    (codex_turn / "output.jsonl").write_text('{"type": "thread.started"}\n{"type": "turn.completed"}\n')
+    assert rc.turn_context_tokens(codex_turn) is None
 
 
 def test_spec_277_claude_over_cap_starts_fresh_under_cap_resumes(tmp_path: Path) -> None:

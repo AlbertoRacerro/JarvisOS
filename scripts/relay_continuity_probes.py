@@ -24,6 +24,8 @@ from relay_continuity_common import (  # noqa: E402
     CI_WAIT_LINE_RE,
     FORBIDDEN_WAIT_CHARS,
     JOB_WAIT_LINE_RE,
+    NATIVE_AGENTS,
+    UNMEASURABLE_CONTEXT_TOKENS,
     devctx,
     host_ops,
     load_sibling,
@@ -105,52 +107,94 @@ def parse_wait_directives(text: str) -> tuple[list[str], list[tuple[int, str]]]:
     return list(dict.fromkeys(jobs)), list(dict.fromkeys(ci_waits))
 
 
+def _extract_usage_tokens(event: dict[str, Any]) -> int | None:
+    """Extract valid context size (input + cache) from assistant event usage dict.
+
+    Returns non-negative int if usage is valid; returns None if usage is missing
+    or malformed (non-numeric, boolean, negative, non-dict).
+    Supports both event["usage"] and event["message"]["usage"].
+    """
+    candidates: list[dict[str, Any]] = []
+    if isinstance(event.get("usage"), dict):
+        candidates.append(event["usage"])
+    msg = event.get("message")
+    if isinstance(msg, dict) and isinstance(msg.get("usage"), dict):
+        candidates.append(msg["usage"])
+    if not candidates:
+        return None
+
+    for usage in candidates:
+        inp = usage.get("input_tokens")
+        create = usage.get("cache_creation_input_tokens")
+        read = usage.get("cache_read_input_tokens")
+
+        # input_tokens is required and must be a non-boolean integer >= 0
+        if isinstance(inp, bool) or not isinstance(inp, int) or inp < 0:
+            continue
+
+        # Cache fields default to 0 if omitted/None; if provided they must be non-boolean integers >= 0
+        create_val = 0
+        if create is not None:
+            if isinstance(create, bool) or not isinstance(create, int) or create < 0:
+                continue
+            create_val = create
+
+        read_val = 0
+        if read is not None:
+            if isinstance(read, bool) or not isinstance(read, int) or read < 0:
+                continue
+            read_val = read
+
+        return inp + create_val + read_val
+
+    return None
+
+
 def turn_context_tokens(turn_dir: Path | None) -> int | None:
     """Read the context size of the last model call from turn's output.jsonl.
 
     For Claude turns, reads the usage of the last assistant event:
     input_tokens + cache_creation_input_tokens + cache_read_input_tokens.
-    For agents without per-call usage (Codex today), returns None.
+    If the final assistant call's usage is missing, non-numeric, negative or malformed,
+    returns UNMEASURABLE_CONTEXT_TOKENS (RESUME_CONTEXT_CAP_TOKENS + 1) so the supervisor
+    safely starts a fresh context rather than risking an overflow resume on an unmeasurable turn.
+    For agents without per-call usage (Codex today), returns None per spec.
     """
     if turn_dir is None:
         return None
+
+    agent = None
     try:
         data = json.loads((turn_dir / "state.json").read_text(encoding="utf-8"))
-        if data.get("agent_key") == "codex":
-            return None
+        if isinstance(data, dict):
+            agent = data.get("agent_key")
     except (OSError, json.JSONDecodeError):
         pass
+
     events, _ = read_events(turn_dir / "output.jsonl")
-    if any(e.get("type") == "thread.started" for e in events):
+
+    # Codex turns carry only cumulative turn.completed usage; return None per spec
+    if agent == "codex" or any(e.get("type") == "thread.started" for e in events):
         return None
-    last_context: int | None = None
-    for e in events:
-        if e.get("type") == "assistant" and not e.get("parent_tool_use_id"):
-            usage = e.get("usage")
-            if not isinstance(usage, dict):
-                msg = e.get("message")
-                if isinstance(msg, dict):
-                    usage = msg.get("usage")
-            if isinstance(usage, dict):
-                inp = usage.get("input_tokens") or 0
-                create = usage.get("cache_creation_input_tokens") or 0
-                read = usage.get("cache_read_input_tokens") or 0
-                last_context = int(inp + create + read)
-    if last_context is not None:
-        return last_context
-    for e in events:
-        if e.get("type") == "assistant":
-            usage = e.get("usage")
-            if not isinstance(usage, dict):
-                msg = e.get("message")
-                if isinstance(msg, dict):
-                    usage = msg.get("usage")
-            if isinstance(usage, dict):
-                inp = usage.get("input_tokens") or 0
-                create = usage.get("cache_creation_input_tokens") or 0
-                read = usage.get("cache_read_input_tokens") or 0
-                last_context = int(inp + create + read)
-    return last_context
+
+    # Native agents (argon/hydrogen) manage their own conversation store sizing
+    if agent in NATIVE_AGENTS:
+        return None
+
+    # Claude turns: inspect the final assistant event
+    top_assistants = [e for e in events if e.get("type") == "assistant" and not e.get("parent_tool_use_id")]
+    assistants = top_assistants if top_assistants else [e for e in events if e.get("type") == "assistant"]
+
+    if not assistants:
+        return None
+
+    final_assistant = assistants[-1]
+    tokens = _extract_usage_tokens(final_assistant)
+    if tokens is None:
+        # Final assistant call has missing or malformed usage; fail safe to fresh context
+        return UNMEASURABLE_CONTEXT_TOKENS
+
+    return tokens
 
 
 def default_pr_ci_status(repo: Path, pr_number: int, expected_head: str, run: Runner = devctx.run) -> dict[str, Any]:
