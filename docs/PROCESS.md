@@ -146,6 +146,9 @@ are away. Operations manual: `docs/implementation/relay-continuity-runbook.md`.
 - **Ending a supervised turn.** End with `RELAY_STATUS propose_done` when the work is merged or checkpointed,
   `RELAY_STATUS continue` after a durable checkpoint, or `RELAY_STATUS blocked` after recording a `question` or `blocker`
   note and only when no authorized useful work remains.
+- **Supervisor changes meet real inputs.** A change to the supervisor that reads a file written by another program or
+  by another release has one test whose fixture is copied from the real file, and it is done only after one real run in
+  the live owner.
 - **Holds.** The supervisor stops and asks for review when it cannot tell whether an external operation (a push, a merge,
   a comment) took effect. Check the effect, then `python3 scripts/relay_continuity.py release --note "..."`. A turn that
   was interrupted may have done part of its work: inspect before repeating, and never repeat an external operation that
