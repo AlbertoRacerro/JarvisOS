@@ -856,6 +856,8 @@ def test_spec_256_criterion_5_report_in_italian(
     assert "escalation" in text
     assert "Risparmio netto: 1 compiti Claude e GPT evitati (1 compiti Gemini non escalati), meno 150 token coordinatore registrati." in text
 
+    orig_report = wr.report
+    monkeypatch.setattr(wr, "report", lambda *args, **kwargs: orig_report(*args, **{**kwargs, "now": now}))
     assert wr.main(["report", "--days", "7", "--record-file", str(rf)]) == 0
     cli_out = capsys.readouterr().out
     assert "Risparmio netto:" in cli_out
