@@ -1,7 +1,16 @@
 # 260 — NAMED-ROLES-1: named local roles over the Hermes runtime
 
-Status: planned (draft for coordinator review)
+Status: ready
 Depends on: 259 (Hermes v0.23.0); absorbs what remains valid of 034
+
+## Code facts checked on `origin/master` at `8cee96c1`
+
+- `backend/app/modules/agents/hermes/worker_shim.py::ENABLED_TOOLSETS`, `backend/app/modules/agents/hermes/worker_shim.py::Worker._build_agent`, `backend/app/modules/agents/hermes/worker_shim.py::withhold_tools`: today `Worker._build_agent` builds `AIAgent` with the fixed `ENABLED_TOOLSETS` (`["mcp-jarvis", "memory", "session_search"]`) and `PRESENTATION_INSTRUCTIONS`.
+- `backend/app/modules/agents/hermes/supervisor.py::HermesSupervisor`, `backend/app/modules/agents/hermes/supervisor.py::bind_session`, `backend/app/modules/agents/hermes/supervisor.py::current_mapping`: `HermesSupervisor` binds a thread to `AgentSessionRef` (`profile_id` currently `"default"`) via `bind_session`.
+- `backend/app/modules/agents/hermes/session_pool.py::configured_supervisor` and `backend/app/modules/ai/thread_routes.py::_hermes_agent_availability`: currently resolve a single `JARVIS_HERMES_INFERENCE_ROUTE` (default `"local:llamacpp"`).
+- `backend/app/modules/ai/thread_service.py::_ensure_hermes_thread_session`, `backend/app/modules/ai/thread_models.py::AIThreadSubmit`, `backend/app/modules/ai/agent_contracts.py::AgentSessionRef`: session binding and submit payload.
+- `backend/app/modules/ai/settings.py::get_ai_settings`, `backend/app/modules/ai/settings.py::update_ai_settings` and `backend/app/core/packs.py::load_packs`: canonical AI settings store and pack loader.
+- `frontend/src/components/ai/useJarvisSidecar.tsx::useJarvisSidecar`: Hermes chat UI and route status display.
 
 ## Goal
 
@@ -60,8 +69,7 @@ Out of scope (binding non-goals):
    unavailable role model is shown as unavailable (frontend `.mjs` test and browser walk from `/`).
 5. No pack content appears in the repository; CI leak guard and gates pass.
 
-## Open points for coordinator review
+## Coordinator decisions
 
-- Whether the per-role model setting lives in the existing settings store or the pack only (prefer settings store
-  with pack defaults).
-- Whether Sheldon is chosen per turn or per session (draft: per turn, same session).
+- Per-role model setting lives in the existing AI settings store (`backend/app/modules/ai/settings.py`) with pack defaults when present, else `JARVIS_HERMES_INFERENCE_ROUTE`. Any additive SQLite column on `ai_settings` follows `docs/MIGRATIONS.md` (`CURRENT_SCHEMA_MIGRATION_ID` and `backend/tests/test_migration_discipline.py`).
+- Sheldon mode is selected per turn on the same Isaac session (no new session needed to toggle devil's-advocate mode).
