@@ -5669,8 +5669,8 @@ def test_spec_277_missing_final_usage_starts_fresh_safely(tmp_path: Path) -> Non
     # Fresh context forced because tokens is sentinel > cap, never resumed on stale earlier usage
     assert env.relay.launches[1]["parent"] is None
     assert "[Durable handoff summary]" in env.relay.launches[1]["task"]
-    assert f"resume decision (wake): last-call context {rc.UNMEASURABLE_CONTEXT_TOKENS} tokens; fresh" in env.logs
-    assert f"resume decision (launch): last-call context {rc.UNMEASURABLE_CONTEXT_TOKENS} tokens; fresh" in env.logs
+    assert "resume decision (wake): last-call context unmeasurable; fresh" in env.logs
+    assert "resume decision (launch): last-call context unmeasurable; fresh" in env.logs
 
 
 def test_spec_277_malformed_usage_starts_fresh_without_raising(tmp_path: Path) -> None:
@@ -5864,7 +5864,30 @@ def test_spec_277_resume_decision_logging_causal(tmp_path: Path) -> None:
     assert f"resume decision (wake): last-call context {rc.RESUME_CONTEXT_CAP_TOKENS + 1} tokens; fresh" in env_over.logs
     assert f"resume decision (launch): last-call context {rc.RESUME_CONTEXT_CAP_TOKENS + 1} tokens; fresh" in env_over.logs
 
-    # 3. Direct launch site without wake (e.g. transient retry)
+    # 3. Unmeasurable context -> fresh context at wake and launch
+    env_unmeas = Env(tmp_path / "unmeasurable")
+    m_unmeas = mission_def("mission unmeasurable usage")
+    start_mission(env_unmeas, m_unmeas)
+    env_unmeas.jobs[jid] = {"status": "succeeded"}
+    unmeas_wake_events = [
+        {"subtype": "init", "type": "system"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": msg}],
+            "usage": {"input_tokens": "malformed"},
+        }},
+        claude_result("ok"),
+    ]
+    env_unmeas.relay.script = [
+        ("claude", unmeas_wake_events, "continue", msg, 500_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_unmeas, _ = run_mission(env_unmeas, m_unmeas)
+    assert res_unmeas == "idle"
+    assert env_unmeas.relay.launches[1]["parent"] is None
+    assert "resume decision (wake): last-call context unmeasurable; fresh" in env_unmeas.logs
+    assert "resume decision (launch): last-call context unmeasurable; fresh" in env_unmeas.logs
+
+    # 4. Direct launch site without wake (e.g. transient retry)
     # Under cap retry resumes
     env_retry_under = Env(tmp_path / "retry_under")
     m_retry_under = mission_def("transient retry under cap")
@@ -5891,10 +5914,31 @@ def test_spec_277_resume_decision_logging_causal(tmp_path: Path) -> None:
     assert env_retry_over.relay.launches[1]["parent"] is None
     assert "resume decision (launch): last-call context 199728 tokens; fresh" in env_retry_over.logs
 
-    # 4. Strict content isolation: verify no prompt text or file path appears in resume decision logs
-    all_logs = env_cap.logs + env_over.logs + env_retry_under.logs + env_retry_over.logs
+    # Unmeasurable retry starts fresh
+    env_retry_unmeas = Env(tmp_path / "retry_unmeas")
+    m_retry_unmeas = mission_def("transient retry unmeasurable")
+    start_mission(env_retry_unmeas, m_retry_unmeas)
+    unmeas_retry_events = [
+        {"subtype": "init", "type": "system"},
+        {"type": "assistant", "message": {
+            "content": [{"type": "text", "text": "retry me"}],
+            "usage": {"input_tokens": "invalid"},
+        }},
+        claude_result("ok"),
+    ]
+    env_retry_unmeas.relay.script = [
+        ("claude", unmeas_retry_events, "transient", "network timeout", 500_000),
+        ("claude", SUCCESS, "propose_done"),
+    ]
+    res_retry_unmeas, _ = run_mission(env_retry_unmeas, m_retry_unmeas)
+    assert res_retry_unmeas == "idle"
+    assert env_retry_unmeas.relay.launches[1]["parent"] is None
+    assert "resume decision (launch): last-call context unmeasurable; fresh" in env_retry_unmeas.logs
+
+    # 5. Strict content isolation: verify no prompt text or file path appears in resume decision logs
+    all_logs = env_cap.logs + env_over.logs + env_unmeas.logs + env_retry_under.logs + env_retry_over.logs + env_retry_unmeas.logs
     decision_logs = [log for log in all_logs if log.startswith("resume decision")]
-    assert len(decision_logs) >= 6
+    assert len(decision_logs) >= 9
     for log in decision_logs:
         assert "mission" not in log
         assert "task" not in log

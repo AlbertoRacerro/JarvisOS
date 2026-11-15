@@ -43,6 +43,8 @@ from relay_continuity_common import (  # noqa: E402
     PREFERRED_AGENTS,
     RESUME_CONTEXT_CAP_TOKENS,
     SAME_AGENT_CAUSES,
+    UNMEASURABLE_CONTEXT_TOKENS,
+    UnmeasurableContextTokens,
     WAIT_TIMEOUT_SECONDS,
     Limits,
     devctx,
@@ -1257,7 +1259,12 @@ class Supervisor:
         return default_pr_ci_status(self.host.relay.repo, pr_number, expected_head)
 
     def _log_resume_decision(self, site: str, tokens: int | None, resume: bool) -> None:
-        tokens_desc = f"{tokens} tokens" if tokens is not None else "unmeasured"
+        if tokens is None:
+            tokens_desc = "unmeasured"
+        elif isinstance(tokens, UnmeasurableContextTokens):
+            tokens_desc = "unmeasurable"
+        else:
+            tokens_desc = f"{tokens} tokens"
         decision = "resume" if resume else "fresh"
         self.host.log(f"resume decision ({site}): last-call context {tokens_desc}; {decision}")
 

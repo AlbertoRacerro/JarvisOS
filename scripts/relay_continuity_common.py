@@ -64,10 +64,16 @@ MAX_TASK_CHECKPOINTS = 12  # spec 204: durable checkpoints of one task before it
 WAIT_TIMEOUT_SECONDS = 7200  # spec 267: elapsed wall-clock seconds before an external wait terminates (2 hours)
 CI_POLL_INTERVAL_SECONDS = 60  # spec 267: minimum seconds between PR CI check queries
 JOB_POLL_INTERVAL_SECONDS = 15  # spec 267: minimum seconds between job status queries
+class UnmeasurableContextTokens(int):
+    """Sentinel integer forcing fresh context when Claude context usage is unmeasurable."""
+
+
 MAX_SESSION_RESUMES = 4  # spec 267: consecutive resumes of the same session
 RESUME_CONTEXT_CAP_TOKENS = 150_000  # spec 277: context size cap above which a turn starts a fresh context
 TURN_USAGE_CAP_TOKENS = RESUME_CONTEXT_CAP_TOKENS  # spec 267 alias, superseded by spec 277
-UNMEASURABLE_CONTEXT_TOKENS = RESUME_CONTEXT_CAP_TOKENS + 1  # spec 277: sentinel forcing fresh context when Claude usage is missing/malformed
+UNMEASURABLE_CONTEXT_TOKENS = UnmeasurableContextTokens(
+    RESUME_CONTEXT_CAP_TOKENS + 1
+)  # spec 277: sentinel forcing fresh context when Claude usage is missing/malformed
 MIN_CHECKPOINT_INTERVAL_SECONDS = 60  # spec 267: minimum seconds between bare checkpoints
 
 JOB_WAIT_LINE_RE = re.compile(r"^JOB-WAIT:\s*(j-\d{8}T\d{6}Z-[0-9a-f]{6})\s*$")
