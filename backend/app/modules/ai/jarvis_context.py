@@ -89,7 +89,9 @@ class JarvisCapabilityRegistry:
         self._capabilities: dict[tuple[str, str], JarvisCapabilityDescriptor] = {}
 
     def register(self, capability: JarvisCapabilityDescriptor) -> None:
-        if capability.action_class in {"COMMIT", "EXECUTE"}:
+        if capability.action_class == "COMMIT" or (
+            capability.action_class == "EXECUTE" and capability.route_id != "ai-threads"
+        ):
             raise JarvisContextError("common Jarvis capability registry cannot own COMMIT or EXECUTE")
         key = (capability.route_id, capability.capability_id)
         if key in self._capabilities:

@@ -36,7 +36,11 @@ def test_turn_tools_are_scoped_to_owner_derived_surface() -> None:
     none = _turn_tools("none")
     assert "mcp__jarvis__jarvis_process_act" in process
     assert "mcp__jarvis__jarvis_bluecad_act" not in process
+    assert "mcp__jarvis__jarvis_bench_read" not in process
+    assert "mcp__jarvis__jarvis_bench_run" not in process
     assert "mcp__jarvis__jarvis_bluecad_act" in bluecad
+    assert "mcp__jarvis__jarvis_bench_read" in bluecad
+    assert "mcp__jarvis__jarvis_bench_run" in bluecad
     assert "mcp__jarvis__jarvis_process_act" not in bluecad
     assert not any("workspace" in name for name in none)
     assert all("jarvis_process" not in name and "jarvis_bluecad" not in name for name in none)
@@ -87,8 +91,10 @@ def test_surface_grants_and_instructions_are_scoped_to_brief() -> None:
     text = _install_surface_grants(worker, "workspace-166", "thread-166",
                                    SurfaceRef(route_id="design-bluecad", candidate_id="candidate-1"), brief)
     assert {grant.capability_id for grant in worker.live_grants.values()} == {
-        "jarvis.bluecad_read", "jarvis.bluecad_act"}
+        "jarvis.bluecad_read", "jarvis.bluecad_act", "jarvis.bench_read", "jarvis.bench_run"}
     assert "mcp__jarvis__jarvis_bluecad_act" in text
+    assert "mcp__jarvis__jarvis_bench_read" in text
+    assert "mcp__jarvis__jarvis_bench_run" in text
     assert "mcp__jarvis__jarvis_process_act" not in text
     assert "Monod" not in text
     assert all(grant.constraints["base_revision"] == "candidate-1" for grant in worker.live_grants.values())

@@ -214,8 +214,45 @@ _STUDIO_ACT_TOOL = {
         "rationale": {"type": "string", "maxLength": 600}},
         "required": ["grant_id", "base_revision", "actions"], "additionalProperties": False},
 }
+_BENCH_READ_TOOL = {
+    "name": "jarvis_bench_read",
+    "description": "Read engineering bench evaluators, show a stored run, or compare two stored runs.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "grant_id": {"type": "string", "maxLength": 128},
+            "op": {"type": "string", "enum": ["list", "show", "compare"]},
+            "run_id": {"type": "string", "maxLength": 128},
+            "run": {"type": "string", "maxLength": 128},
+            "run_a": {"type": "string", "maxLength": 128},
+            "run_b": {"type": "string", "maxLength": 128},
+            "run_id_a": {"type": "string", "maxLength": 128},
+            "run_id_b": {"type": "string", "maxLength": 128},
+        },
+        "required": ["grant_id", "op"],
+        "additionalProperties": False,
+    },
+}
+_BENCH_RUN_TOOL = {
+    "name": "jarvis_bench_run",
+    "description": "Run an engineering evaluator on the bench into an isolated workspace run folder.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "grant_id": {"type": "string", "maxLength": 128},
+            "evaluator_id": {"type": "string", "maxLength": 128},
+            "request": {"type": "object"},
+            "from_run": {"type": "string", "maxLength": 128},
+            "geometry_run": {"type": "string", "maxLength": 128},
+            "timeout_s": {"type": "number", "minimum": 0.1, "maximum": 100.0},
+        },
+        "required": ["grant_id", "evaluator_id", "request"],
+        "additionalProperties": False,
+    },
+}
 _TOOLS = [_TOOL, _RETRIEVAL_TOOL, _DECISION_TOOL, _PROCESS_READ_TOOL, _PROCESS_ACT_TOOL,
-          _BLUECAD_READ_TOOL, _BLUECAD_ACT_TOOL, _STUDIO_READ_TOOL, _STUDIO_ACT_TOOL]
+          _BLUECAD_READ_TOOL, _BLUECAD_ACT_TOOL, _STUDIO_READ_TOOL, _STUDIO_ACT_TOOL,
+          _BENCH_READ_TOOL, _BENCH_RUN_TOOL]
 _NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL}
 
 
