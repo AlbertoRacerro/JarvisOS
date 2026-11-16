@@ -63,6 +63,43 @@ def test_point_1_three_passes_with_failing_probe_leave_counters_and_cooldowns_un
     assert sup.state["counters"].get("transient_claude", 0) == 1
 
 
+def test_point_1_reachability_probe_failure_avoids_needless_sleep_and_keeps_outage(tmp_path: Path) -> None:
+    """Finding 2: Reachability failure avoids needless sleep and pre-launch strike, keeping the outage rule."""
+    env = Env(tmp_path, [("claude", SUCCESS)])
+    report = rc.TurnReport(
+        outcome="transient",
+        detail="network timeout",
+        harness_cause="provider_network",
+        agent="claude",
+        turn_id="s1/turn-001",
+    )
+    sup = env.supervisor()
+    sup.state["head_session"] = "s1"
+    sup.state["agent"] = "claude"
+    sup.state["permissions_digest"] = env.perm["v"]
+
+    slept_seconds: list[float] = []
+    sup._sleep = lambda sec: (slept_seconds.append(sec), False)[1]
+
+    # Reachability probe fails
+    env.host.reachable = lambda: False
+
+    decision = sup._decide(report, None)
+    assert isinstance(decision, tuple)
+    agent, prompt = decision
+    res = sup._launch(agent, prompt, report)
+
+    assert res == "waiting"
+    # No needless sleep occurred
+    assert len(slept_seconds) == 0
+    # No strike was recorded before launch
+    assert sup.state["counters"].get("transient_claude", 0) == 0
+    # Outage rule was kept
+    assert sup.state["network_outage"] is True
+    assert "claude" not in sup.state["cooldowns"]
+    assert len(env.relay.launches) == 0
+
+
 # Sanitized fixture copied from the live owner's continuity state.
 REAL_OWNER_STATE_SHAPE: dict[str, Any] = {
     "acknowledged": None,
@@ -346,6 +383,63 @@ def test_point_4_wake_while_chosen_agent_cooling_down_waits_or_holds_and_launche
     # Must NOT launch claude while cooling down; must return signal/stopped or held
     assert res in ("signal", "stopped", "held")
     assert len(env.relay.launches) == 0
+
+
+def test_point_4_persisted_woken_wait_routes_through_availability_does_not_launch_cooling_agent(tmp_path: Path) -> None:
+    """Finding 1: A persisted woken wait routes through availability / _wait_or_hold on restart and does not launch a cooling agent."""
+    jid = "j-20261018T080000Z-100200"
+    wait_msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+    events = [claude_result(wait_msg)]
+    env = Env(tmp_path, [("hydrogen", SUCCESS)])
+    sid = "s-woken-wait-restart"
+    write_turn(env.relay.sessions_dir() / sid, events, agent="claude", status="continue", last_message=wait_msg)
+
+    sup = env.supervisor()
+    future = T0 + timedelta(hours=2)
+    # Claude is cooling down
+    cooldowns = {
+        "claude": {"reason": "quota", "since": rc.iso(T0), "source": "limits", "until": rc.iso(future)}
+    }
+    sup.state.update({
+        "head_session": sid,
+        "agent": "claude",
+        "permissions_digest": env.perm["v"],
+        "cooldowns": dict(cooldowns),
+        "wait": {
+            "jobs": [jid],
+            "ci": [],
+            "started_at": rc.iso(T0),
+            "turn": f"{sid}/turn-001",
+            "woken": True,
+            "wake_reason": "satisfied",
+            "wake_agent": "claude",
+            "wake_prompt": "woken resume prompt",
+        },
+    })
+    sup.save()
+    env.host.reachable = lambda: True
+
+    # 1. When all agents are cooling down, supervisor stops/waits without launching claude
+    sup.state["cooldowns"] = {
+        a: {"reason": "quota", "since": rc.iso(T0), "source": "limits", "until": rc.iso(future)}
+        for a in rc.AGENTS
+    }
+    sup.signalled = True
+    res = sup._loop(None)
+    assert res in ("signal", "stopped", "held")
+    assert len(env.relay.launches) == 0
+
+    # 2. When another agent is available, supervisor routes through availability instead of cooling claude
+    sup.signalled = False
+    sup.state["cooldowns"] = {
+        "claude": {"reason": "quota", "since": rc.iso(T0), "source": "limits", "until": rc.iso(future)}
+    }
+    env.relay.script = [("argon", SUCCESS)]
+    res2 = sup._loop(None)
+    assert res2 != "waiting"
+    assert len(env.relay.launches) == 1
+    assert env.relay.launches[0]["agent"] != "claude"
+    assert env.relay.launches[0]["agent"] in rc.AGENTS
 
 
 

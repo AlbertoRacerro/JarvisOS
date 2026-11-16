@@ -891,12 +891,17 @@ _PROMPT_EMBEDDED_RE = re.compile(rf"{_PROMPT_END_SEP}\s*{_MARKER}")
 _SENTENCE_END_RE = re.compile(r"\b(?:PR|spec|issue|ticket|step|fase|task|v|ver|version|capitolo|cap)\s+\d+\.\s+[A-Z]")
 
 
+def _is_sentence_end_marker(text: str, m_start: int, m_end: int) -> bool:
+    for sm in _SENTENCE_END_RE.finditer(text):
+        if max(sm.start(), m_start) < min(sm.end(), m_end):
+            return True
+    return False
+
+
 def has_inline_alternatives_in_body(body: str) -> bool:
     """Return True if an option body contains embedded/inline alternatives."""
     for m in _INLINE_OPTION_RE.finditer(body):
-        start = max(0, m.start() - 20)
-        end = min(len(body), m.end() + 20)
-        if _SENTENCE_END_RE.search(body[start:end]):
+        if _is_sentence_end_marker(body, m.start(), m.end()):
             continue
         return True
     return False
@@ -908,9 +913,7 @@ def has_inline_alternatives_in_prompt(line: str) -> bool:
         return True
     matches = []
     for m in _INLINE_OPTION_RE.finditer(line):
-        start = max(0, m.start() - 20)
-        end = min(len(line), m.end() + 20)
-        if _SENTENCE_END_RE.search(line[start:end]):
+        if _is_sentence_end_marker(line, m.start(), m.end()):
             continue
         matches.append(m)
     return len(matches) >= 2

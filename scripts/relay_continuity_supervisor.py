@@ -891,6 +891,18 @@ class Supervisor:
             if wait.get("woken"):
                 agent = wait.get("wake_agent") or self.state.get("agent") or PREFERRED
                 prompt = wait["wake_prompt"]
+                if not self.available(agent):
+                    chosen = self._choose(agent)
+                    if chosen is None:
+                        wait_res = self._wait_or_hold(lambda _agent: prompt)
+                        if isinstance(wait_res, str):
+                            return wait_res
+                        agent, prompt = wait_res
+                    else:
+                        agent = chosen
+                    wait["wake_agent"] = agent
+                    wait["wake_prompt"] = prompt
+                    self.save()
                 new_report = self._launch(agent, prompt, report)
                 if isinstance(new_report, str):
                     return new_report
@@ -1059,13 +1071,6 @@ class Supervisor:
                                           agent=chosen, effects=effects, processes=processes)
 
         if retry_same:
-            if (probe_res := self._pre_launch_probe()) is not None:
-                return probe_res
-            backoff = min(self.limits.transient_base * 2 ** strikes, self.limits.transient_cap)
-            self.host.log(f"{failed_agent} {report.harness_cause}; retrying the same agent in {int(backoff)}s")
-            self.save()
-            if self._sleep(backoff):
-                return "signal" if self.signalled else "stopped"
             return failed_agent, make_prompt(failed_agent)
         agent = self._choose(failed_agent)
         if agent is None:
@@ -1522,6 +1527,15 @@ class Supervisor:
         digest = self.host.permissions_digest()
         if digest != self.state.get("permissions_digest"):
             return self.hold("permissions_changed")
+        if (previous is not None and previous.agent == agent
+                and previous.outcome == "transient"
+                and previous.harness_cause in SAME_AGENT_CAUSES):
+            strikes = self.state["counters"].get(f"transient_{agent}", 0)
+            backoff = min(self.limits.transient_base * 2 ** strikes, self.limits.transient_cap)
+            self.host.log(f"{agent} {previous.harness_cause}; retrying the same agent in {int(backoff)}s")
+            self.save()
+            if self._sleep(backoff):
+                return "signal" if self.signalled else "stopped"
         now = self.host.now()
         self.attempts += 1
         nonce = f"rc-{now.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}"
