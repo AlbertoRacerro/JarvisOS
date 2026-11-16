@@ -1487,6 +1487,98 @@
           "title": "Quantity",
           "type": "object"
         },
+        "ResultCheck": {
+          "additionalProperties": false,
+          "properties": {
+            "actual": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Actual"
+            },
+            "family": {
+              "enum": [
+                "input",
+                "numerical",
+                "conservation",
+                "discretisation",
+                "plausibility",
+                "reference"
+              ],
+              "title": "Family",
+              "type": "string"
+            },
+            "hint": {
+              "maxLength": 240,
+              "minLength": 1,
+              "title": "Hint",
+              "type": "string"
+            },
+            "id": {
+              "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+              "title": "Id",
+              "type": "string"
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Limit"
+            },
+            "source": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^(physical_limit|(policy|constant):[A-Za-z0-9_.:-]+|value_store:[A-Za-z0-9][A-Za-z0-9_.:-]*)$",
+              "title": "Source",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pass",
+                "warn",
+                "fail",
+                "not_evaluated"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "unit": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Unit"
+            }
+          },
+          "required": [
+            "id",
+            "family",
+            "status",
+            "hint",
+            "source"
+          ],
+          "title": "ResultCheck",
+          "type": "object"
+        },
         "SourceLocation": {
           "additionalProperties": false,
           "description": "Position inside an already-identified object; applied after authoritative reread.",
@@ -1790,6 +1882,15 @@
           "minLength": 1,
           "title": "Backend Version",
           "type": "string"
+        },
+        "checks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ResultCheck"
+          },
+          "maxItems": 64,
+          "title": "Checks",
+          "type": "array"
         },
         "completed_at": {
           "format": "date-time",
@@ -2134,6 +2235,16 @@
       "additionalProperties": false,
       "description": "Static identity of one evaluator adapter; the backend version is exact.",
       "properties": {
+        "advisory_checks": {
+          "default": [],
+          "items": {
+            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Advisory Checks",
+          "type": "array"
+        },
         "backend_kind": {
           "enum": [
             "process_kernel",
@@ -2199,6 +2310,16 @@
             }
           ],
           "default": null
+        },
+        "required_checks": {
+          "default": [],
+          "items": {
+            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Required Checks",
+          "type": "array"
         },
         "schema_version": {
           "const": "engineering_evaluator.v1",

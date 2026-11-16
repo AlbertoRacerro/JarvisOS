@@ -30,8 +30,9 @@ the rule only. Adapters for more engines and a headless command over the evaluat
 1. Add `ResultCheck` (frozen) to `evaluator_contracts.py` with: `id` (upper case, `^[A-Z][A-Z0-9_]{0,63}$`),
    `family` (`input`, `numerical`, `conservation`, `discretisation`, `plausibility`, `reference`), `status`
    (`pass`, `warn`, `fail`, `not_evaluated`), `actual`, `limit` (finite floats or null), `unit` (string or null),
-   `hint` (one line, at most 240 characters), `source` (`physical_limit`, `policy:<name>`, `constant:<name>` or a
-   value-store reference; at most 128 characters). `actual` and `limit` are null when the status is
+   `hint` (one line, at most 240 characters), `source` (`physical_limit`, `policy:<name>`, `constant:<name>` or
+   `value_store:<id>` where `<name>` is nonempty and `<id>` is a nonempty token matching ContractId syntax; at most
+   128 characters). Numeric checks require `actual` and `limit` together; both are null when the status is
    `not_evaluated` or the check is not numeric (for example a topology check); a `unit` requires `actual`.
 2. Add `checks: tuple[ResultCheck, ...] = ()` to `EvaluationResult`, bounded by `MAX_ITEMS`, ids unique. Results
    that are not `succeeded` may carry checks (for example the input check that caused a refusal).
@@ -57,8 +58,9 @@ the rule only. Adapters for more engines and a headless command over the evaluat
    including: a required check missing gives `unchecked`; a required check `not_evaluated` gives `unchecked`; a
    `fail` on a `succeeded` result gives `not_usable` and the outputs are unchanged; an advisory check missing gives
    `usable_with_warnings`; a descriptor with no required checks gives `unchecked`; a mismatched evaluator raises.
-2. Validation tests reject: duplicate check ids, a non-finite `actual` or `limit`, a `unit` without `actual`, a
-   `not_evaluated` check with an `actual`, and overlapping required and advisory lists.
+2. Validation tests reject: duplicate check ids, a non-finite `actual` or `limit`, a check with only `actual` or
+   only `limit`, a `unit` without `actual`, an unaccepted `source` form, a `not_evaluated` check with an `actual` or
+   `limit`, and overlapping required and advisory lists.
 3. A result serialised with `model_dump(mode="json")` and loaded again keeps its checks; a result without the
    `checks` key (as written before this change) still loads.
 4. The existing engineering, process-stack and CFD-adapter tests pass unchanged.
