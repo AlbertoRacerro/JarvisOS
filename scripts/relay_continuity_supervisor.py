@@ -1639,6 +1639,8 @@ class Supervisor:
                 text += "\n\n" + self.host.worker_routing()
             except Exception as exc:  # noqa: BLE001 - routing advice is optional; the turn still launches
                 self.host.log(f"worker routing block skipped: {type(exc).__name__}")
+        prior_wait = self.state.get("wait")
+        self.state["wait"] = None
         self.state["pending"] = pending  # intent is durable before anything is launched
         self.state["acknowledged"] = None  # the reviewed turn is now behind the chain
         self.state["agent"] = agent
@@ -1653,9 +1655,10 @@ class Supervisor:
         except OSError:
             # Relay could not be executed at all: nothing started, so the attempt settles as not started.
             self.state["pending"] = None
+            if prior_wait is not None:
+                self.state["wait"] = prior_wait
             self.store.journal({"event": "settle", "nonce": nonce, "session": None, "outcome": "not_started"})
             return self.hold("relay_invocation_failed", self.attempts)
-        self.state["wait"] = None
         pending["pid"] = getattr(proc, "pid", None)
         pending["pid_start"] = devctx.pid_start(pending["pid"]) if pending["pid"] else None
         if (previous is not None and previous.agent == agent
@@ -1710,6 +1713,8 @@ class Supervisor:
         if "task" in pending:
             self.state["last_attempt"]["task"] = pending["task"]
         self.state["pending"] = None
+        if (wait := self.state.get("wait")) and wait.get("woken"):
+            self.state["wait"] = None
         if session_id is None:
             # Remote effects (a merge, a PR comment) leave no local trace, so an unchanged fingerprint proves
             # nothing: the attempt's outcome is unknown and only the maintainer can resolve it. The hold is

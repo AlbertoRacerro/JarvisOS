@@ -641,4 +641,213 @@ def test_point_4_persisted_woken_wait_switching_to_fresh_agent_preserves_wait_st
     assert sup.state.get("wait") is None
 
 
+def test_stopped_owner_after_first_pending_save_proves_no_duplicate_launch_after_recovery(
+    tmp_path: Path,
+) -> None:
+    """Finding P1: When an owner stops after the first pending save of a wake launch,
+    the pending intent and consumed wait are atomic so recovery does not duplicate the launch.
+    """
+    jid = "j-20261116T040000Z-100200"
+    wait_msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+    events = [claude_result(wait_msg)]
+    env = Env(tmp_path, [("argon", SUCCESS), ("argon", SUCCESS)])
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 30.0, "disabled": False}]} if a == "argon" else None
+
+    sid = "s-stopped-owner-atomic-wake"
+    write_turn(env.relay.sessions_dir() / sid, events, agent="argon", status="continue", last_message=wait_msg)
+
+    wake_prompt = (
+        f"[relay-continuity resume {{nonce}}]\n"
+        f"External wait satisfied:\n"
+        f"- JOB {jid}: succeeded\n"
+        f"Resume work."
+    )
+
+    sup = env.supervisor()
+    sup.state.update({
+        "head_session": sid,
+        "agent": "argon",
+        "permissions_digest": env.perm["v"],
+        "wait": {
+            "jobs": [jid],
+            "ci": [],
+            "started_at": rc.iso(T0),
+            "turn": f"{sid}/turn-001",
+            "woken": True,
+            "wake_reason": "satisfied",
+            "wake_agent": "argon",
+            "wake_prompt": wake_prompt,
+        },
+    })
+    sup.save()
+
+    # Hook relay.start to simulate owner stopping right after the first pending save.
+    # At relay.start invocation time, _launch has already executed self.save() for pending.
+    orig_start = env.relay.start
+
+    def stopping_start(agent: str, parent: str | None, task: str, turns: int, **kwargs: Any) -> Any:
+        # Load persisted state on disk immediately after the first pending save
+        persisted = env.store.load()
+        # Verify atomic transition: pending intent is saved and wait is consumed
+        assert persisted.get("pending") is not None
+        assert persisted.get("wait") is None
+        # Start relay session and finish turn so session exists on disk for recovery
+        proc = orig_start(agent, parent, task, turns, **kwargs)
+        env.relay.finish(proc)
+        # Abrupt stop: owner terminates before supervisor executes second save
+        raise KeyboardInterrupt("simulated stopped owner after first pending save")
+
+    env.relay.start = stopping_start  # type: ignore[assignment]
+
+    try:
+        sup._loop(None)
+    except KeyboardInterrupt:
+        pass
+
+    assert len(env.relay.launches) == 1
+
+    # Verify persisted state representing stopped owner after the first pending save:
+    # Pending intent is durable, and wait was consumed atomically
+    persisted = env.store.load()
+    assert persisted.get("pending") is not None
+    assert persisted.get("wait") is None
+
+    # Restart supervisor from the persisted state representing the stopped owner
+    env.relay.start = orig_start
+    sup2 = env.supervisor()
+    sup2.state = env.store.load()
+
+    # Run recovery loop: _resolve_pending settles the turn from the first launch,
+    # and _loop must NOT see a woken wait or launch again.
+    res = sup2._loop(None)
+    assert res != "waiting"
+
+    # Exactly 1 launch occurred in total: no duplicate launch after recovery
+    assert len(env.relay.launches) == 1
+    assert sup2.state.get("pending") is None
+    assert sup2.state.get("wait") is None
+
+
+def test_point_1_oserror_on_relay_start_with_woken_wait_preserves_retryable_wait(
+    tmp_path: Path,
+) -> None:
+    """Finding P1: An OSError when executing relay with a woken wait settles no launch,
+    consumes no strike, and preserves the retryable wait under relay_invocation_failed hold.
+    """
+    env = Env(tmp_path)
+    report = rc.TurnReport(
+        outcome="success",
+        detail="prev turn",
+        agent="argon",
+        turn_id="s1/turn-001",
+    )
+    sup = env.supervisor()
+    sup.state["head_session"] = "s1"
+    sup.state["agent"] = "argon"
+    sup.state["permissions_digest"] = env.perm["v"]
+    sup.state["counters"]["transient_argon"] = 0
+
+    jid = "j-20261116T040000Z-300400"
+    wait_dict = {
+        "jobs": [jid],
+        "ci": [],
+        "started_at": rc.iso(T0),
+        "turn": "s1/turn-001",
+        "woken": True,
+        "wake_reason": "satisfied",
+        "wake_agent": "argon",
+        "wake_prompt": "wake prompt",
+    }
+    sup.state["wait"] = dict(wait_dict)
+
+    def fail_start(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("exec format error / not found")
+
+    env.relay.start = fail_start  # type: ignore[assignment]
+
+    res = sup._launch("argon", "wake prompt", report)
+    assert res == "held"
+    assert sup.state["hold"] is not None
+    assert sup.state["hold"]["reason"] == "relay_invocation_failed"
+    assert sup.state["counters"].get("transient_argon", 0) == 0
+    assert sup.state["pending"] is None
+
+    # Wait is preserved and still retryable
+    assert sup.state["wait"] is not None
+    assert sup.state["wait"]["woken"] is True
+    assert sup.state["wait"]["jobs"] == [jid]
+    assert sup.state["wait"]["wake_agent"] == "argon"
+
+    # Settle journal entry recorded not_started with session None
+    entries = [json.loads(line) for line in env.store.journal_path.read_text().splitlines() if line.strip()]
+    settle_entries = [e for e in entries if e.get("event") == "settle"]
+    assert len(settle_entries) == 1
+    assert settle_entries[0]["outcome"] == "not_started"
+    assert settle_entries[0]["session"] is None
+
+
+def test_stopped_owner_unatomic_disk_state_settles_and_does_not_duplicate_launch(
+    tmp_path: Path,
+) -> None:
+    """Finding P1: If persisted state on disk has pending set alongside a woken wait
+    (e.g. from an earlier un-atomic save), recovery settles the pending turn, consumes
+    the woken wait, and does not duplicate the launch.
+    """
+    jid = "j-20261116T040000Z-500600"
+    wait_msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+    events = [claude_result(wait_msg)]
+    env = Env(tmp_path, [("claude", SUCCESS)])
+
+    sid0 = "s-prior-session"
+    write_turn(env.relay.sessions_dir() / sid0, events, agent="claude", status="continue", last_message=wait_msg)
+
+    nonce = "rc-20261116T040000Z-a1b2c3d4"
+    sid1 = "20261116-000001-bbbbbb"
+    write_turn(
+        env.relay.sessions_dir() / sid1,
+        [claude_result("RELAY_STATUS propose_done\nWork finished")],
+        agent="claude",
+        prompt=f"\n## Task\n[relay-continuity attempt {nonce}]\ndo task",
+        status="propose_done",
+        last_message="Work finished",
+    )
+
+    sup = env.supervisor()
+    sup.state.update({
+        "head_session": sid0,
+        "agent": "claude",
+        "permissions_digest": env.perm["v"],
+        "pending": {
+            "nonce": nonce,
+            "agent": "claude",
+            "parent": None,
+            "started_at": rc.iso(T0),
+            "pid": None,
+            "pid_start": None,
+            "fingerprint": env.fp["v"],
+            "attempt": 1,
+        },
+        "wait": {
+            "jobs": [jid],
+            "ci": [],
+            "started_at": rc.iso(T0),
+            "turn": f"{sid0}/turn-001",
+            "woken": True,
+            "wake_reason": "satisfied",
+            "wake_agent": "claude",
+            "wake_prompt": "wake prompt",
+        },
+    })
+    sup.save()
+
+    # Recovery: _resolve_pending settles the turn for nonce, and clears the woken wait
+    res = sup._loop(None)
+    assert res == "idle"
+
+    # Zero new launches were triggered
+    assert len(env.relay.launches) == 0
+    assert sup.state.get("pending") is None
+    assert sup.state.get("wait") is None
+
+
 MAX_REPEATS = rc.MAX_UNSATISFIED_WAKES + 1
