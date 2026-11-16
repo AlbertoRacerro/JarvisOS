@@ -851,3 +851,71 @@ def test_bench_run_stays_outside_common_registry_and_view_hides_paths() -> None:
         PRODUCTION_CAPABILITY_REGISTRY.register(JarvisCapabilityDescriptor(
             capability_id="jarvis.other_execute", route_id="ai-threads", action_class="EXECUTE", label="x"))
     assert _agent_view({"result_path": "/data/ws/engineering/bench/run_x/result.json"})["result_path"] == "result.json"
+
+
+def _run_call(agent_session: AgentSessionRef, arguments: dict[str, Any]) -> Any:
+    now = datetime.now(UTC)
+    grant = CapabilityGrantRef(
+        grant_id="grant-review", capability_id="jarvis.bench_run", issuer="jarvis_policy",
+        scope=CapabilityScope(workspace_id=agent_session.workspace_id, jarvis_thread_id=agent_session.jarvis_thread_id),
+        issued_at=now, expires_at=now + timedelta(minutes=10),
+    )
+    call = StructuredToolCall(
+        call_id="call-review", capability_id="jarvis.bench_run", grant_id=grant.grant_id,
+        correlation_id="corr-review", session_ref=agent_session, arguments=arguments,
+        requested_at=now, deadline_at=now + timedelta(minutes=2),
+    )
+    return dispatch_tool(call, live_grants={grant.grant_id: grant})
+
+
+def test_agent_cannot_run_evaluators_that_write_outside_the_run(agent_session: AgentSessionRef) -> None:
+    for evaluator_id in ("openfoam_channel_v1", "dwsim.flowsheet", "photobioreactor.day_night"):
+        res = _run_call(agent_session, {"evaluator_id": evaluator_id, "request": {"request_ref": {}}})
+        assert res.status == "refused"
+        assert res.error_code == "evaluator_not_agent_runnable"
+
+
+def test_registry_request_is_pinned_to_grant_workspace_and_tool_deadline(agent_session: AgentSessionRef) -> None:
+    from tests.test_engineering_bench import _valid_pipe_pressure_drop_request
+
+    foreign = _valid_pipe_pressure_drop_request("other-workspace")
+    res = _run_call(agent_session, {"evaluator_id": "fluids.pipe_pressure_drop", "request": foreign})
+    assert res.status == "refused"
+    assert not (build_paths().workspaces_dir / "other-workspace").exists()
+
+    request = _valid_pipe_pressure_drop_request(agent_session.workspace_id)
+    request["requested_at"] = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    request["deadline_at"] = (datetime.now(UTC) + timedelta(days=30)).isoformat()
+    res = _run_call(agent_session, {"evaluator_id": "fluids.pipe_pressure_drop", "request": request,
+                                    "timeout_s": 5.0})
+    assert res.status == "succeeded", res.error_code
+    bench_root = (build_paths().workspaces_dir / agent_session.workspace_id / "engineering" / "bench").resolve()
+    saved = json.loads((bench_root / res.result["run_id"] / "result.json").read_text(encoding="utf-8"))
+    assert saved["request_ref"]["workspace_id"] == agent_session.workspace_id
+    completed = datetime.fromisoformat(saved["completed_at"])
+    assert completed - datetime.now(UTC) < timedelta(seconds=5)
+
+
+def test_non_mapping_geometry_is_refused_not_raised(agent_session: AgentSessionRef,
+                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_adapters(monkeypatch)
+    solid_req = json.loads((FIXTURES_DIR / "minimal_single_tube.json").read_text(encoding="utf-8"))
+    solid = _run_call(agent_session, {"evaluator_id": "bluecad.solid", "request": solid_req})
+    assert solid.status == "succeeded"
+    res = _run_call(agent_session, {"evaluator_id": "bluecad.mesh", "geometry_run": solid.result["run_id"],
+                                    "request": {"geometry": 123, "mesh": {"target_size": 10.0}}})
+    assert res.status == "refused"
+    assert res.error_code == "invalid_arguments"
+
+
+def test_agent_view_strips_absolute_paths_but_keeps_units() -> None:
+    from app.modules.engineering.bench import _agent_view
+
+    view = _agent_view({
+        "failure": {"message": "[Errno 2] No such file: '/data/ws/a/engineering/bench/run_1/mesh.inp'"},
+        "hint": "binary /usr/bin/gmsh missing", "unit": "W/(m**2*K)", "other": "kg/m3",
+    })
+    text = json.dumps(view)
+    assert "/data/" not in text and "/usr/bin" not in text
+    assert view["failure"]["message"].endswith("'mesh.inp'")
+    assert view["unit"] == "W/(m**2*K)" and view["other"] == "kg/m3"

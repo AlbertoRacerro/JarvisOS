@@ -9,10 +9,11 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import re
 import sys
 import threading
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -788,12 +789,33 @@ def show_run(
     return json.loads(view_text)
 
 
+# Evaluators the agent may run: they write only inside the run folder (or nothing) and finish within the
+# tool timeout. DWSIM, OpenFOAM and the day/night simulator write elsewhere or run on their own deadlines.
+AGENT_RUNNABLE_EVALUATORS = frozenset(BLUECAD_EVALUATORS | {
+    "fluids.pipe_pressure_drop", "ht.internal_convection", "coolprop.pure_fluid_properties"})
+_ABSOLUTE_PATH = re.compile(r"(?<![\w.)\]])/(?:[^\s\"'/]+/)+([^\s\"'/]*)")
+
+
 def _agent_view(view: dict[str, Any]) -> dict[str, Any]:
-    """The agent never sees a data-root path: name the result file relative to its run folder."""
-    return {**view, "result_path": "result.json"} if "result_path" in view else view
+    """The agent never sees a filesystem path: every absolute path is reduced to its last component."""
+    if "result_path" in view:
+        view = {**view, "result_path": "result.json"}
+    return json.loads(_ABSOLUTE_PATH.sub(r"\1", json.dumps(view)))
 
 
 def dispatch_bench_tool(
+    call: StructuredToolCall,
+    workspace_id: str,
+    error: str,
+) -> tuple[dict[str, Any] | None, str]:
+    """Bench tool entry for the agent; an unexpected error is a refusal, never an exception."""
+    try:
+        return _dispatch_bench_tool(call, workspace_id, error)
+    except Exception as exc:
+        return None, f"bench_error_{type(exc).__name__.lower()}"[:96]
+
+
+def _dispatch_bench_tool(
     call: StructuredToolCall,
     workspace_id: str,
     error: str,
@@ -807,7 +829,7 @@ def dispatch_bench_tool(
 
     bench_root = (studies_dir.parent / "bench").resolve()
     bench_root.mkdir(parents=True, exist_ok=True)
-    root = studies_dir.parent.resolve()
+    root = bench_root
 
     if call.capability_id == "jarvis.bench_read":
         for key in call.arguments:
@@ -886,6 +908,17 @@ def dispatch_bench_tool(
         registry = evaluator_registry()
         if evaluator_id not in registry and evaluator_id not in BLUECAD_EVALUATORS:
             return None, "unknown_evaluator"
+        if evaluator_id not in AGENT_RUNNABLE_EVALUATORS:
+            return None, "evaluator_not_agent_runnable"
+        if evaluator_id in registry:
+            # The grant names the workspace and the tool bounds the time; the request cannot widen either.
+            request_ref = request_data.get("request_ref")
+            if not isinstance(request_ref, dict):
+                return None, "invalid_arguments"
+            now = datetime.now(UTC)
+            request_data["request_ref"] = {**request_ref, "workspace_id": workspace_id}
+            request_data["requested_at"] = now.isoformat()
+            request_data["deadline_at"] = (now + timedelta(seconds=float(timeout_s))).isoformat()
 
         geometry_run = call.arguments.get("geometry_run")
         if evaluator_id == "bluecad.mesh" and not geometry_run:
@@ -910,7 +943,10 @@ def dispatch_bench_tool(
             manifest_file = solid_dir / "manifest.json"
             if not step_file.is_file() or not manifest_file.is_file():
                 return None, "missing_geometry_files"
-            geometry = dict(request_data.get("geometry") or {})
+            raw_geometry = request_data.get("geometry") or {}
+            if not isinstance(raw_geometry, dict):
+                return None, "invalid_arguments"
+            geometry = dict(raw_geometry)
             geometry["step_path"] = str(step_file)
             geometry["manifest_path"] = str(manifest_file)
             request_data["geometry"] = geometry

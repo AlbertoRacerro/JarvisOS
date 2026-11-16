@@ -81,6 +81,13 @@ Out of scope (binding non-goals):
 - **Bounded.** The run timeout is at most 100 s (the tool call deadline is 120 s); `--tool-registry` is not
   exposed; at most one bench run per worker at a time (a second call while one runs is refused `busy`); the
   returned view is the 282 view, at most 8000 characters.
+- **Agent-runnable evaluators only.** The agent may run the three BLUECAD engines and the three screening
+  evaluators (pipe pressure drop, internal convection, pure-fluid properties), which write only inside the run
+  folder or nothing and finish within the tool timeout. DWSIM, OpenFOAM and the day/night simulator write outside
+  the run folder or run on their own deadlines and are refused. For registry evaluators the server sets
+  `request_ref.workspace_id` to the grant's workspace and the request window to the tool timeout; a request whose
+  other refs name another workspace is refused. Absolute paths in any returned view are reduced to their last
+  component.
 - **Same verdict.** The tool result's `status`, `verdict` and checks are the ones `result.json` holds; the tool
   never computes a second verdict. A non-succeeded evaluation is a successful tool call carrying that status.
 - **Grant discipline.** Both capabilities go through `dispatch_tool`; a call with a missing, expired,
