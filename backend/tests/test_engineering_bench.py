@@ -541,10 +541,50 @@ def test_truncation_bound(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     assert doc["evaluator_id"] == "test.evaluator"
     assert doc["status"] == "succeeded"
     assert doc["verdict"] == "not_usable"
+    assert doc["outputs"] == "withheld (verdict not_usable)"
     # Preserved failed and warning checks
     assert any(c["id"] == "FAIL_CHECK" for c in doc["failed_checks"])
     assert any(c["id"] == "WARN_CHECK" for c in doc["warning_checks"])
     assert str(out_dir / "result.json") == doc["result_path"]
+
+
+def test_rejected_run_and_legacy_comparison(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real_run = bench_module._run_registry_evaluator
+    original_outputs = []
+
+    def rejected(evaluator_id, evaluator, request_data, out_dir):  # noqa: ANN001, ANN202
+        result, _ = real_run(evaluator_id, evaluator, request_data, out_dir)
+        original_outputs.extend(result.model_dump(mode="json")["outputs"])
+        check = ResultCheck(id="FAILED", family="input", status="fail", hint="Rejected", source="physical_limit")
+        result = result.model_copy(update={"checks": (check,)})
+        return result, bench_module.result_verdict(evaluator.descriptor(), result)
+
+    monkeypatch.setattr(bench_module, "_run_registry_evaluator", rejected)
+    rejected_dir = tmp_path / "rejected"
+    saved, view = bench_module.run_evaluation("fluids.pipe_pressure_drop", _valid_pipe_pressure_drop_request(), rejected_dir)
+    assert saved == json.loads((rejected_dir / "result.json").read_text())
+    assert saved["outputs"] == []
+    assert saved["rejected_outputs"] == original_outputs and original_outputs
+    assert view["outputs"] == "withheld (verdict not_usable)"
+    assert view["failed_checks"][0]["id"] == "FAILED"
+    assert bench_module.show_run(rejected_dir)["outputs"] == view["outputs"]
+
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    legacy = {**saved, "outputs": original_outputs}
+    legacy.pop("rejected_outputs")
+    (legacy_dir / "result.json").write_text(json.dumps(legacy))
+    assert bench_module.show_run(legacy_dir)["outputs"] == view["outputs"]
+    usable_dir = tmp_path / "usable"
+    usable_dir.mkdir()
+    (usable_dir / "result.json").write_text(json.dumps({**legacy, "verdict": "usable"}))
+    assert bench_module.show_run(usable_dir)["outputs"] == original_outputs
+    comparison = bench_module.compare_runs(legacy_dir, usable_dir)
+    assert comparison["verdict_a"] == "not_usable"
+    for output in comparison["outputs"].values():
+        assert output["a"] is None
+        assert output["b"] is not None
+        assert output["absolute_difference"] is None and output["relative_difference"] is None
 
 
 def test_compare_matching_mismatched_and_missing_outputs(

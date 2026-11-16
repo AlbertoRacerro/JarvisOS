@@ -616,6 +616,7 @@ def test_criterion_6_allowlists_and_surface_briefs(test_workspace: str) -> None:
     )
     assert "mcp__jarvis__jarvis_bench_read" in text_bluecad
     assert "mcp__jarvis__jarvis_bench_run" in text_bluecad
+    assert "numeric answer based on rejected bench evidence, use null and explain" in text_bluecad
     grant_caps_bluecad = {g.capability_id for g in worker_bluecad.live_grants.values()}
     assert "jarvis.bench_read" in grant_caps_bluecad
     assert "jarvis.bench_run" in grant_caps_bluecad
@@ -866,6 +867,60 @@ def _run_call(agent_session: AgentSessionRef, arguments: dict[str, Any]) -> Any:
         requested_at=now, deadline_at=now + timedelta(minutes=2),
     )
     return dispatch_tool(call, live_grants={grant.grant_id: grant})
+
+
+@pytest.mark.parametrize(("predecessor", "evaluator", "argument"), [
+    ("bluecad.solid", "bluecad.mesh", "geometry_run"),
+    ("bluecad.mesh", "bluecad.fem", "from_run"),
+])
+def test_rejected_predecessor_refused_before_native_work(
+    agent_session: AgentSessionRef, monkeypatch: pytest.MonkeyPatch, predecessor: str, evaluator: str, argument: str
+) -> None:
+    root = build_paths().workspaces_dir / agent_session.workspace_id / "engineering" / "bench" / "run_rejected"
+    root.mkdir(parents=True)
+    (root / "result.json").write_text(json.dumps({"evaluator_id": predecessor, "verdict": "not_usable"}))
+    (root / "model.step").write_text("step")
+    (root / "manifest.json").write_text("{}")
+    (root / "mesh_result.json").write_text("{}")
+
+    def unexpected(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("native work must not start")
+
+    monkeypatch.setattr(bench_module, "mesh_analysis_spec", unexpected)
+    monkeypatch.setattr(bench_module, "solve_static_analysis", unexpected)
+    result = _run_call(agent_session, {"evaluator_id": evaluator, "request": {}, argument: "run_rejected"})
+    assert result.status == "refused"
+    assert result.error_code == "rejected_predecessor"
+
+
+def test_agent_reads_legacy_rejected_outputs(agent_session: AgentSessionRef) -> None:
+    root = build_paths().workspaces_dir / agent_session.workspace_id / "engineering" / "bench"
+    for run_id, verdict, value in [("old", "not_usable", 987654.0), ("good", "usable", 123456.0)]:
+        folder = root / run_id
+        folder.mkdir(parents=True)
+        (folder / "result.json").write_text(json.dumps({
+            "evaluator_id": "test.eval", "status": "succeeded", "verdict": verdict,
+            "outputs": [{"name": "measure", "value": {"value": value, "unit": "m"}}],
+            "checks": [{"id": "FAILED", "status": "fail"}] if verdict == "not_usable" else [],
+        }))
+    now = datetime.now(UTC)
+    def read(arguments: dict[str, Any]) -> dict[str, Any]:
+        call = StructuredToolCall(
+            call_id="read", capability_id="jarvis.bench_read", grant_id="grant",
+            correlation_id="read", session_ref=agent_session, arguments=arguments,
+            requested_at=now, deadline_at=now + timedelta(minutes=1),
+        )
+        result, error = bench_module.dispatch_bench_tool(call, agent_session.workspace_id, "")
+        assert not error and result is not None
+        return result["view"]
+
+    shown = read({"op": "show", "run_id": "old"})
+    assert shown["outputs"] == "withheld (verdict not_usable)"
+    assert shown["failed_checks"][0]["id"] == "FAILED"
+    comparison = read({"op": "compare", "run_id_a": "old", "run_id_b": "good"})
+    assert "987654" not in json.dumps(comparison)
+    assert comparison["outputs"]["measure"]["b"]["value"] == 123456.0
+    assert comparison["outputs"]["measure"]["absolute_difference"] is None
 
 
 def test_agent_cannot_run_evaluators_that_write_outside_the_run(agent_session: AgentSessionRef) -> None:
