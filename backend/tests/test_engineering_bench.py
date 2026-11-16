@@ -186,9 +186,10 @@ def test_list_absent_tool_registry(tmp_path: Path, capsys: pytest.CaptureFixture
     captured = capsys.readouterr()
     data = json.loads(captured.out)
     assert isinstance(data, list)
-    assert len(data) == 10
+    assert len(data) == 11
 
     by_id = {row["evaluator_id"]: row for row in data}
+    assert by_id["retrieval.eval"]["availability_state"] == "available"
     # Verify the six registry evaluators are present
     assert "fluids.pipe_pressure_drop" in by_id
     assert "ht.internal_convection" in by_id

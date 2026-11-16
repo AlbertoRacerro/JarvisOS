@@ -147,14 +147,20 @@ def get_database_path() -> Path:
 
 
 @contextmanager
-def open_sqlite_connection(database_path: Path | None = None) -> Iterator[sqlite3.Connection]:
+def open_sqlite_connection(
+    database_path: Path | None = None, *, read_only: bool = False
+) -> Iterator[sqlite3.Connection]:
     database_path = database_path or get_database_path()
-    database_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(database_path)
+    if read_only:
+        connection = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True)
+    else:
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(database_path)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 5000")
-    connection.execute("PRAGMA journal_mode = WAL")
+    if not read_only:
+        connection.execute("PRAGMA journal_mode = WAL")
     try:
         yield connection
     finally:
