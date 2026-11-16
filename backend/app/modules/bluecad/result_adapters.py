@@ -7,7 +7,6 @@ usability through result_verdict without losing native reports or altering outpu
 
 from __future__ import annotations
 
-import hashlib
 import math
 import re
 from datetime import UTC, datetime
@@ -510,34 +509,25 @@ def _resolve_mesh_quality(
     return None, None, None
 
 
-def _normalize_digest(raw_digest: Any, file_path: Path | None = None) -> str:
-    if file_path is not None and file_path.is_file():
-        return f"sha256:{sha256_file(file_path)}"
-    val = str(raw_digest or "")
-    hex_part = val[7:] if val.startswith("sha256:") else val
-    if len(hex_part) == 64 and all(c in "0123456789abcdefABCDEF" for c in hex_part):
-        return f"sha256:{hex_part.lower()}"
-    return f"sha256:{hashlib.sha256(val.encode('utf-8')).hexdigest()}"
-
-
-def _mesh_artifacts(mesh_result: dict[str, Any], workspace_id: str) -> list[SourceRef]:
+def _native_artifacts(native_result: dict[str, Any], workspace_id: str) -> list[SourceRef]:
+    """Reference the native artifact map; entries without a valid sha256 are skipped, never re-hashed."""
     artifacts: list[SourceRef] = []
-    raw_artifacts = mesh_result.get("artifacts", {})
-    for role, item in sorted(raw_artifacts.items()):
-        if isinstance(item, dict):
-            path_str = item.get("path", role)
-            path = Path(path_str) if path_str else None
-            digest = _normalize_digest(item.get("sha256"), path)
-            filename = (path.name if path else None) or role
-            artifacts.append(
-                SourceRef(
-                    authority_owner="bluecad",
-                    object_type="artifact",
-                    object_id=filename,
-                    workspace_id=workspace_id,
-                    content_digest=digest,
-                )
+    for role, item in sorted(native_result.get("artifacts", {}).items()):
+        if not isinstance(item, dict):
+            continue
+        digest = str(item.get("sha256") or "").removeprefix("sha256:").lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            continue
+        path = item.get("path")
+        artifacts.append(
+            SourceRef(
+                authority_owner="bluecad",
+                object_type="artifact",
+                object_id=Path(path).name if path else role,
+                workspace_id=workspace_id,
+                content_digest=f"sha256:{digest}",
             )
+        )
     return artifacts
 
 
@@ -684,7 +674,7 @@ def mesh_result_to_evaluation_result(
             )
         )
 
-    artifacts = tuple(_mesh_artifacts(mesh_result, ws_id))
+    artifacts = tuple(_native_artifacts(mesh_result, ws_id))
 
     return EvaluationResult(
         result_ref=res_ref,
@@ -822,27 +812,6 @@ def _evaluate_force_equilibrium(
     )
 
 
-def _fem_artifacts(fem_result: dict[str, Any], workspace_id: str) -> list[SourceRef]:
-    artifacts: list[SourceRef] = []
-    raw_artifacts = fem_result.get("artifacts", {})
-    for role, item in sorted(raw_artifacts.items()):
-        if isinstance(item, dict):
-            path_str = item.get("path", role)
-            path = Path(path_str) if path_str else None
-            digest = _normalize_digest(item.get("sha256"), path)
-            filename = (path.name if path else None) or role
-            artifacts.append(
-                SourceRef(
-                    authority_owner="bluecad",
-                    object_type="artifact",
-                    object_id=filename,
-                    workspace_id=workspace_id,
-                    content_digest=digest,
-                )
-            )
-    return artifacts
-
-
 def fem_result_to_evaluation_result(
     fem_result: dict[str, Any],
     analysis_spec: dict[str, Any] | None = None,
@@ -942,7 +911,7 @@ def fem_result_to_evaluation_result(
         _evaluate_force_equilibrium(fem_result, analysis_spec),
     ]
 
-    artifacts = tuple(_fem_artifacts(fem_result, ws_id))
+    artifacts = tuple(_native_artifacts(fem_result, ws_id))
 
     return EvaluationResult(
         result_ref=res_ref,
