@@ -52,14 +52,12 @@ class RunResult:
 
 class RelayAdapter:
     def __init__(self, repo: Path, binary: str = "agent-relay", env: dict[str, str] | None = None,
-                 turn_wall: float = Limits.turn_wall, native_turn_wall: float = Limits.native_turn_wall,
-                 clock: Callable[[], float] = time.monotonic,
+                 turn_wall: float = Limits.turn_wall, clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep, killpg: Callable[[int, int], None] = os.killpg):
         self.repo = repo
         self.binary = binary
         self.env = env  # extra environment for launched runs (the sandboxed mission profile); None: inherited
         self.turn_wall = turn_wall
-        self.native_turn_wall = native_turn_wall
         self.clock = clock
         self.sleep = sleep
         self.killpg = killpg

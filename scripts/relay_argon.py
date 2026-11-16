@@ -276,7 +276,6 @@ def run(repo: Path, session: str, agent: str = "argon") -> int:
     metadata: dict[str, Any] = {"schema": "argon-coordinator.v1", "agent": agent, "exit_code": None, "reason": None, "quota": [], "launched": False}
     lease = None
     code = 1
-    proc: subprocess.Popen[Any] | None = None
     prev_sigterm = None
 
     def _sigterm_handler(signum: int, frame: Any) -> None:
@@ -313,31 +312,13 @@ def run(repo: Path, session: str, agent: str = "argon") -> int:
             metadata["model"] = model
             metadata["launched"] = True
             with (turn / "output.jsonl").open("w") as out, (turn / "stderr.log").open("w") as err:
+                # subprocess.run kills the child on any exception, including the SIGTERM path below.
                 try:
-                    if subprocess.run.__module__ != "subprocess" or getattr(subprocess.run, "__name__", "") != "run":
-                        proc_res = subprocess.run(argv, cwd=repo, stdout=out, stderr=err, stdin=subprocess.DEVNULL,
-                                                  timeout=TURN_TIMEOUT + 30, check=False)
-                        code = proc_res.returncode
-                        metadata["exit_code"] = code
-                    else:
-                        proc = subprocess.Popen(argv, cwd=repo, stdout=out, stderr=err, stdin=subprocess.DEVNULL)
-                        try:
-                            code = proc.wait(timeout=TURN_TIMEOUT + 30)
-                            metadata["exit_code"] = code
-                        except subprocess.TimeoutExpired:
-                            metadata["reason"] = "timeout"
-                            code = 1
-                            try:
-                                proc.terminate()
-                                try:
-                                    proc.wait(timeout=5.0)
-                                except subprocess.TimeoutExpired:
-                                    proc.kill()
-                                    proc.wait(timeout=2.0)
-                            except OSError:
-                                pass
-                except _Terminated:
-                    raise
+                    code = subprocess.run(argv, cwd=repo, stdout=out, stderr=err, stdin=subprocess.DEVNULL,
+                                          timeout=TURN_TIMEOUT + 30, check=False).returncode
+                    metadata["exit_code"] = code
+                except subprocess.TimeoutExpired:
+                    metadata["reason"] = "timeout"
             # Only genuine native result text is eligible for the mission's existing completion verifier.
             if metadata["exit_code"] == 0:
                 events, bad = read_events(turn / "output.jsonl")
@@ -351,16 +332,6 @@ def run(repo: Path, session: str, agent: str = "argon") -> int:
             code = 128 + signal.SIGTERM
             metadata["exit_code"] = -signal.SIGTERM
             metadata["reason"] = "sigterm"
-            if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5.0)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        proc.wait(timeout=2.0)
-                except OSError:
-                    pass
         except (Refused, OSError) as exc:
             metadata["reason"] = str(exc) if isinstance(exc, Refused) else type(exc).__name__
     finally:
