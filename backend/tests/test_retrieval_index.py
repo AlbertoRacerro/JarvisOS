@@ -73,6 +73,37 @@ def test_exact_phrase_lexical_vector_and_workspace_isolation(store: tuple[SQLite
     assert all(item.source_ref.object_type.endswith("summary") for item in bundle.items)
 
 
+def test_lexical_any_word_phrase_ranking_and_limits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JARVISOS_DATA_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    docs = [
+        _doc("strong", "w1", "quartz turbine"),
+        _doc("weak-one", "w1", "quartz mineral"),
+        _doc("weak-two", "w1", "quartz mineral"),
+        _doc("reverse", "w1", "turbine quartz"),
+        _doc("other", "w2", "quartz turbine"),
+    ]
+    index = SQLiteIndexStore(documents=lambda: docs, resolver=lambda ref: next(
+        (doc for doc in docs if doc.source_ref.object_id == ref.object_id), None))
+    index.upsert(docs)
+
+    def ids(query: str, limit: int = 10) -> list[str]:
+        return [hit.source_ref.object_id for hit in index.search_lexical(query, limit=limit, workspace_id="w1")]
+
+    assert set(ids("quartz absent")) == {"strong", "weak-one", "weak-two", "reverse"}
+    assert ids("absent missing") == []
+    assert ids("!!!") == []
+    assert ids('"quartz turbine"') == ["strong"]
+    hits = index.search_lexical("quartz turbine", limit=10, workspace_id="w1")
+    assert {hit.source_ref.object_id for hit in hits[:2]} == {"strong", "reverse"}
+    assert hits[1].lexical_score < hits[2].lexical_score
+    assert hits[2].lexical_score == hits[3].lexical_score
+    assert [retrieval_index._key(hit.source_ref) for hit in hits[2:]] == sorted(
+        retrieval_index._key(hit.source_ref) for hit in hits[2:])
+    assert ids("quartz turbine", limit=1) == [hits[0].source_ref.object_id]
+    get_settings.cache_clear()
+
+
 def test_stale_deleted_and_budget_manifest(store: tuple[SQLiteIndexStore, dict[str, IndexDocument]]) -> None:
     index, docs = store
     index.rebuild()
@@ -89,7 +120,7 @@ def test_stale_deleted_and_budget_manifest(store: tuple[SQLiteIndexStore, dict[s
     del docs["a"]
     assert index.resolve_authoritative(old).state == "unavailable"
     index.delete([old])
-    assert not index.search_lexical("alpha reactor", limit=5, workspace_id="w1")
+    assert not index.search_lexical("reactor", limit=5, workspace_id="w1")
     small = index.build_bundle("beta pressure", workspace_id="w1", token_budget=1)
     assert small.token_estimate == 0
     assert [entry.outcome for entry in small.evidence_manifest] == ["dropped_budget"]

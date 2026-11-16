@@ -149,7 +149,7 @@ def test_owner_catch_up_is_idempotent_and_rolls_back_on_failure(
     current.clear()
     deleted = retrieval_owners.owner_catch_up(store)
     assert deleted["development"]["deleted"] == 1
-    assert not store.search_lexical("changed exploratory", limit=5, workspace_id="w")
+    assert not store.search_lexical("changed", limit=5, workspace_id="w")
 
 
 def test_offline_owner_mutation_catch_up_matches_full_rebuild(
