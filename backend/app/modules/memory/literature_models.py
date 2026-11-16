@@ -68,6 +68,7 @@ class LiteratureBackingRead(StrictLiteratureModel):
     availability: str = Field(pattern="^(available|missing|ineligible|unsupported|unsafe)$")
     content_available: bool
     content_url: str | None
+    page_text: Literal["available", "no_text", "unreadable"] | None = None
 
 
 class LiteratureUsedByRead(StrictLiteratureModel):

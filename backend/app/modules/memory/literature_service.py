@@ -23,6 +23,7 @@ from app.modules.memory.literature_models import (
     LiteratureSourceRead,
     LiteratureUsedByRead,
 )
+from app.modules.memory.pdf_text import PdfTextError, cached_pdf_pages
 
 MAX_LITERATURE_PAGE_SIZE = 100
 MAX_ENTRIES_PER_SOURCE = 100
@@ -125,7 +126,7 @@ def _content_state(row) -> tuple[str, Path | None]:
     return "available", path
 
 
-def _backing_read(workspace_id: str, source_id: str, artifact_id: str, artifact_row) -> LiteratureBackingRead:
+def _backing_read(workspace_id: str, source_id: str, artifact_id: str, artifact_row, backing) -> LiteratureBackingRead:
     if artifact_row is None:
         return LiteratureBackingRead(
             artifact_id=artifact_id,
@@ -143,6 +144,7 @@ def _backing_read(workspace_id: str, source_id: str, artifact_id: str, artifact_
         mime_type=str(artifact_row["mime_type"]) if artifact_row["mime_type"] is not None else None,
         sha256=str(artifact_row["sha256"]) if artifact_row["sha256"] is not None else None,
         availability=availability,
+        page_text=backing.page_state() if str(artifact_row["mime_type"] or "") == "application/pdf" else None,
         content_available=path is not None,
         content_url=(
             f"/workspaces/{workspace_id}/literature/sources/{source_id}/content"
@@ -200,6 +202,16 @@ class _BackingText:
             self._lines, self._reason = self._load()
         return self._lines, self._reason
 
+    def is_pdf(self) -> bool:
+        if self._artifact_id is None:
+            return False
+        artifact = _artifact_row_or_none(self._connection, self._workspace_id, str(self._artifact_id))
+        return artifact is not None and artifact["mime_type"] == "application/pdf"
+
+    def page_state(self) -> str:
+        pages, reason = self.get()
+        return "available" if pages is not None else ("no_text" if "no_text" in reason else "unreadable")
+
     def _load(self) -> tuple[list[str] | None, str]:
         if self._artifact_id is None:
             return None, "The source has no backing artifact."
@@ -209,6 +221,12 @@ class _BackingText:
         availability, path = _content_state(artifact)
         if availability != "available" or path is None:
             return None, f"The backing content is {availability}."
+        if str(artifact["mime_type"] or "") == "application/pdf":
+            try:
+                pages = cached_pdf_pages(path)
+                return (pages, "") if pages else (None, "PDF page text is no_text.")
+            except PdfTextError:
+                return None, "PDF page text is unreadable (extractor unavailable or PDF invalid)."
         if str(artifact["mime_type"] or "") not in {"text/plain", "text/markdown"}:
             return None, "The backing is not a text or markdown file."
         try:
@@ -228,12 +246,16 @@ def _entry_read(connection, row, backing: _BackingText | None = None) -> Literat
     checks: list[ResultCheck] = []
     verdict: Verdict | None = None
     if row["entry_kind"] == "datum":
-        has_line_locator = row["locator_kind"] == "line" and row["locator_start"] is not None
+        has_line_locator = row["locator_kind"] in {"line", "page"} and row["locator_start"] is not None
         if has_line_locator:
             if backing is None:
                 source_row = _source_row(connection, str(row["workspace_id"]), str(row["source_id"]))
                 backing = _BackingText(connection, str(row["workspace_id"]), source_row)
             lines, unavailable = backing.get()
+            if row["locator_kind"] == "line" and backing.is_pdf():
+                lines, unavailable = None, "The backing is a PDF."
+            if row["locator_kind"] == "page" and not backing.is_pdf():
+                lines, unavailable = None, "The backing is not a PDF."
         else:
             lines, unavailable = None, ""
         checks, verdict = check_datum(
@@ -276,8 +298,10 @@ def _source_read(connection, row) -> LiteratureSourceRead:
     if row["artifact_id"] is not None:
         artifact_id = str(row["artifact_id"])
         artifact_row = _artifact_row_or_none(connection, workspace_id, artifact_id)
-        artifact = _backing_read(workspace_id, source_id, artifact_id, artifact_row)
-    backing = _BackingText(connection, workspace_id, row)
+        backing = _BackingText(connection, workspace_id, row)
+        artifact = _backing_read(workspace_id, source_id, artifact_id, artifact_row, backing)
+    else:
+        backing = _BackingText(connection, workspace_id, row)
     entry_rows = connection.execute(
         """
         SELECT * FROM literature_entries
@@ -453,6 +477,18 @@ def _validate_locator(connection, workspace_id: str, source_row, payload: Litera
             status_code=422,
         )
     mime_type = str(artifact["mime_type"] or "")
+    if payload.locator_kind == "page" and mime_type == "application/pdf":
+        try:
+            pages = cached_pdf_pages(path)
+        except PdfTextError:
+            pages = []
+        if not pages:
+            raise LiteratureError("literature_locator_unsupported", "PDF page text is unavailable.", status_code=422)
+        start = int(payload.locator_start or 0)
+        end = int(payload.locator_end if payload.locator_end is not None else start)
+        if start < 1 or end > len(pages):
+            raise LiteratureError("literature_locator_out_of_range", "Literature locator is outside the backing document range.", status_code=422)
+        return
     if payload.locator_kind != "line" or mime_type not in {"text/plain", "text/markdown"}:
         raise LiteratureError(
             "literature_locator_unsupported",

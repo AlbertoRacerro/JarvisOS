@@ -12,3 +12,5 @@ ht==1.2.0
 scikit-sundae==1.1.3
 pvlib==0.16.1
 pandas==3.0.6
+
+pypdfium2==5.14.0

@@ -55,6 +55,7 @@ export type LiteratureSource = {
     availability: LiteratureBackingAvailability;
     content_available: boolean;
     content_url: string | null;
+    page_text: "available" | "no_text" | "unreadable" | null;
   };
   entries: LiteratureEntry[];
   created_at: string;
@@ -83,7 +84,7 @@ export function literatureContentUrl(source: LiteratureSource): string | null {
 export type LiteratureSourceInput = Pick<LiteratureSource, "title" | "source_kind" | "citation" | "publisher" | "published_year"> & { artifact_id?: string };
 export type LiteratureEntryInput = {
   entry_kind: LiteratureEntryKind; statement?: string; value_text?: string; value_number?: number; unit?: string; context_text?: string;
-  locator_kind?: "line"; locator_start?: number; locator_end?: number;
+  locator_kind?: "line" | "page"; locator_start?: number; locator_end?: number;
 };
 
 async function createLiteratureRecord<T>(path: string, payload: object, requestKey: string): Promise<T> {
