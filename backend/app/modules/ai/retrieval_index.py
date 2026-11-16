@@ -1200,7 +1200,7 @@ class SQLiteIndexStore:
         if query.strip().startswith('"') and query.strip().endswith('"'):
             expression = '"' + " ".join(tokens) + '"'
         else:
-            expression = " AND ".join('"' + token + '"' for token in tokens)
+            expression = " OR ".join('"' + token + '"' for token in tokens)
         with open_retrieval_index_connection() as db:
             rows = db.execute(
                 "SELECT d.*, bm25(docs_fts) AS score FROM docs_fts JOIN docs d ON d.key=docs_fts.key "
