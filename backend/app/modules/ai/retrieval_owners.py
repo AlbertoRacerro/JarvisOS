@@ -325,9 +325,12 @@ def _owner_fingerprints() -> dict[str, str]:
         result[owner] = canonical_digest(files)
     from app.modules.ai.document_intake import folder_fingerprint
 
+    with open_sqlite_connection() as connection:
+        workspaces_ready = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspaces'").fetchone() is not None
     result["workspace_documents"] = canonical_digest([
         (workspace.id, folder_fingerprint(workspace.id))
-        for workspace in list_workspaces(include_archived=True)
+        for workspace in (list_workspaces(include_archived=True) if workspaces_ready else [])
     ])
     return result
 
