@@ -39,7 +39,7 @@ that a suitable battery exists or that any candidate has passed one.
 | Tool use | Hermes governed broker and MCP bridge; the `tools` module is an empty scaffold | Tool selection, arguments, recovery and boundary cases |
 | Research/office | Not qualified | Source-grounded research and document tasks |
 | Search/memory | SQLite FTS5 lexical search plus a rebuildable embedding index (`retrieval_index`) | Retrieval relevance, provenance and recall on representative queries |
-| Calculation engines | Pint unit registry (`process_kernel`) and runner-hosted model code (`runner`) | Checked calculations, units, numerical accuracy and failure cases |
+| Calculation engines | Pint units (`process_kernel`); `bluecad` solid CAD (build123d), Gmsh meshing, OpenFOAM pipe CFD and CalculiX static FEM (`fem_*`, in development); `process_stack` steady-state and dynamic engines (CoolProp, fluids/ht, SUNDIALS, DWSIM); runner-hosted model code (`runner`) | Checked calculations, units, numerical accuracy and failure cases |
 | Inference/structured output | llama.cpp and Ollama local runtimes; structured-output method not qualified | Task quality, valid output, latency and resource use |
 | Machines | Local bounded runner (`runner`); remote execution not qualified | End-to-end workload, transfer and operational cost |
 | Coordinator/workers | Hermes isolated local responder and `relay_gateway` sandboxed coding agents | Task completion, coordination overhead and boundary adherence |
