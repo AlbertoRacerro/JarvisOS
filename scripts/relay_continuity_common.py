@@ -40,7 +40,7 @@ PHASES = ("idle", "running", "waiting", "held", "stopped")
 HOLD_REASONS = (
     "effects_uncertain", "output_unparseable", "output_missing", "attempt_unresolved", "circuit_failures",
     "no_provider_available", "wait_exceeded", "permissions_changed", "state_corrupt", "relay_invocation_failed",
-    "task_check_failed", "task_blocked", "task_checkpoint_limit",
+    "task_check_failed", "task_blocked", "task_checkpoint_limit", "task_wait_limit",
 )
 # Holds the earlier controller raised for reasons this one no longer treats as blocking (a provider failure, live
 # or uncertain local work, an unavailable diagnosis, an unverified report). Such a hold on the chain's latest turn is
@@ -61,6 +61,7 @@ DIRECTIVE_ID_RE = re.compile(r"L\d{14}-[0-9a-f]{4}")
 MAX_TASKS = 20
 MAX_TASK_CHARS = 8000
 MAX_TASK_CHECKPOINTS = 12  # spec 204: durable checkpoints of one task before it holds, across owner restarts
+MAX_UNSATISFIED_WAKES = 3  # spec 279: non-satisfied wakes of one task before it holds, across owner restarts
 WAIT_TIMEOUT_SECONDS = 7200  # spec 267: elapsed wall-clock seconds before an external wait terminates (2 hours)
 CI_POLL_INTERVAL_SECONDS = 60  # spec 267: minimum seconds between PR CI check queries
 JOB_POLL_INTERVAL_SECONDS = 15  # spec 267: minimum seconds between job status queries
