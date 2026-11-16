@@ -3159,14 +3159,16 @@ class Executor:
                 prune_releases(self.paths, now=self.now())
                 return True
 
-        if not marker.get("owner_active"):
-            deadline_str = marker.get("deadline")
-            if deadline_str:
-                deadline_dt = parse_ts(deadline_str)
-                if deadline_dt and self.now() > deadline_dt:
+        deadline_str = marker.get("deadline")
+        if deadline_str:
+            deadline_dt = parse_ts(deadline_str)
+            if deadline_dt and self.now() > deadline_dt:
+                if marker.get("owner_active"):
+                    self._handle_owner_timeout(marker, candidate)
+                else:
                     self.log(f"hostops: candidate {candidate} confirmation deadline expired")
                     self._record_unhealthy(marker, reason="deadline expired")
-                    return False
+                return False
 
         try:
             load_policy(self.paths)

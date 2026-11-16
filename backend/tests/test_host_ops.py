@@ -2132,6 +2132,44 @@ def test_confirm_release_deadline_expired_fails_confirmation(host):
     assert "deadline expired" in history[0]["reason"]
 
 
+def test_confirm_release_owner_active_unsettled_watcher_fails_after_deadline(host):
+    paths, ex, _ = host
+    t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)
+    current_time = [t0]
+    ex.now = lambda: current_time[0]
+    ex._version = SHA
+    h.write_release_pending(
+        paths,
+        previous_sha=None,
+        candidate_sha=SHA,
+        deadline=h.iso(t0 + timedelta(minutes=10)),
+        request_id="req1",
+        attempts=0,
+        watcher_active=True,
+        owner_active=True,
+        now=t0,
+    )
+
+    # Watcher unit is activating (never reaches active)
+    ex.run = lambda argv, **kw: subprocess.CompletedProcess(
+        argv, 0, "ActiveState=activating\nNRestarts=0\n", ""
+    )
+
+    # Step at t0: within deadline, watcher not active -> not confirmed, not unhealthy yet
+    ex.step()
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert marker.get("unhealthy_reason") is None
+
+    # Step at t0 + 11 minutes: past deadline, watcher still activating -> ends as unhealthy
+    current_time[0] = t0 + timedelta(minutes=11)
+    ex.step()
+    assert paths.release_pending.is_file()
+    marker = h.load_release_pending(paths)
+    assert "deadline" in marker.get("unhealthy_reason", "")
+    assert ex.restart_requested is True
+
+
 def test_confirm_release_systemd_active_enter_timestamp(host):
     paths, ex, _ = host
     t0 = datetime(2026, 11, 13, 10, 0, 0, tzinfo=UTC)

@@ -15,14 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from app.modules.coding import relay_monitor
-
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "devctx.py"
 SPEC = importlib.util.spec_from_file_location("devctx", SCRIPT)
 assert SPEC and SPEC.loader
 devctx = importlib.util.module_from_spec(SPEC)
 sys.modules["devctx"] = devctx
 SPEC.loader.exec_module(devctx)
+from app.modules.coding import relay_monitor  # noqa: E402
 
 ro = relay_monitor.observe()
 rc = ro.rc
@@ -119,6 +118,23 @@ def test_dates_times_and_versions_in_prompt_are_not_inline_options(prompt):
     [question] = ro.parse_open_questions([{"id": "L1", "kind": "question", "ts": "2026-11-13T00:00:00Z", "text": text}])
     assert question["prompt"] == prompt
     assert [o["label"] for o in question["options"]] == ["Procedi", "Rimanda"]
+
+
+@pytest.mark.parametrize("text", [
+    "Quale file?\n1. Aggiorna docs/specs/264.md — conseguenza: x\n2. Rimanda — conseguenza: y",
+    "Quale PR?\n1. Mergia PR 104. Poi attendi — conseguenza: x\n2. Rimanda — conseguenza: y",
+    "Quale PR?\n1. Review PR 2. Then proceed\n2. Yes",
+    "Aggiorno docs/specs/264.md o no?\n1. Si\n2. No",
+    "Scegli tra le modifiche per (spec 276) e (spec 278):\n1. Opzione A\n2. Opzione B",
+])
+def test_spec_279_paths_sentence_ends_and_spec_parentheticals_accepted(text):
+    devctx.validate_question(text)
+
+
+def test_spec_279_second_inline_option_after_sentence_end_rejected():
+    text = "Choose:\n1. Review PR 2. Then proceed 2. No\n2. Yes"
+    with pytest.raises(ValueError, match="inline alternatives are not allowed"):
+        devctx.validate_question(text)
 
 
 def test_legacy_question_with_one_inline_alternative_has_no_choices():
