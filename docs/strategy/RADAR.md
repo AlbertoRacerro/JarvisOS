@@ -47,7 +47,8 @@ that a suitable battery exists or that any candidate has passed one.
 ## Initial watchlist
 
 These are leads for concrete intake cards, not evaluated products. Licences are unverified until a specific version and
-its terms are checked. Gaps and total costs are not measured; battery availability must be verified.
+its terms are checked. Gaps and total costs are not measured; battery availability must be verified. Concrete candidate
+cards supply a checked primary link and licence.
 
 Monthly review, on the first working day of each month, for every WATCH line:
 - If its reopening event has occurred, write an intake card and change its outcome by the intake rules above.
@@ -56,15 +57,15 @@ Monthly review, on the first working day of each month, for every WATCH line:
 
 | Family (starting point) | Slot; potential change | Outcome | Added | Reopening event |
 | --- | --- | --- | --- | --- |
-| [Open models](https://huggingface.co/models) | Scientific reasoning; replace a model | WATCH | 2026-11-16 | A candidate and suitable battery are identified |
-| [Tool models](https://huggingface.co/tasks/text-generation) | Tool use; replace a model | WATCH | 2026-11-16 | A candidate and suitable tool battery are identified |
-| [Multilingual retrieval](https://huggingface.co/tasks/sentence-similarity) | Search/memory; replace retrieval | WATCH | 2026-11-16 | A multilingual gap and battery become measurable |
-| [Semantic layers](https://www.getdbt.com/product/semantic-layer) | Research/office; add a semantic hop | WATCH | 2026-11-16 | A concrete question requires it and a battery exists |
-| [Long-context memory](https://arxiv.org/abs/2307.03172) | Search/memory; add a context hop | WATCH | 2026-11-16 | A representative long-context battery exists |
-| [Constrained decoding](https://github.com/guidance-ai/llguidance) | Inference/structured output; replace decoding | WATCH | 2026-11-16 | A structured-output gap and battery become measurable |
-| [Equation discovery](https://github.com/MilesCranmer/PySR) | Calculation engines; add a discovery hop | WATCH | 2026-11-16 | A checked equation-discovery battery exists |
-| [Neural solvers](https://arxiv.org/abs/2010.08895) | Calculation engines; replace a solver | WATCH | 2026-11-16 | A checked solver battery and candidate exist |
-| [Materials foundation models](https://arxiv.org/abs/2209.02046) | Calculation engines; add a prediction hop | WATCH | 2026-11-16 | A checked materials battery and candidate exist |
-| [Second-machine uses](https://docs.python.org/3/library/concurrent.futures.html) | Machines; add a remote execution hop | WATCH | 2026-11-16 | An authorized machine and representative workload are available |
-| [Host scheduler](https://docs.kernel.org/scheduler/index.html) | Machines; replace or add scheduling | WATCH | 2026-11-16 | A measurable scheduling gap and battery exist |
-| [Spiking/video models](https://arxiv.org/abs/1904.08405) | Scientific reasoning; add a perception hop | WATCH | 2026-11-16 | A representative perception battery and candidate exist |
+| Open models | Scientific reasoning; replace a model | WATCH | 2026-11-16 | A candidate and suitable battery are identified |
+| Tool models | Tool use; replace a model | WATCH | 2026-11-16 | A candidate and suitable tool battery are identified |
+| Multilingual retrieval | Search/memory; replace retrieval | WATCH | 2026-11-16 | A multilingual gap and battery become measurable |
+| Semantic layers | Research/office; add a semantic hop | WATCH | 2026-11-16 | A concrete question requires it and a battery exists |
+| Long-context memory | Search/memory; add a context hop | WATCH | 2026-11-16 | A representative long-context battery exists |
+| Constrained decoding | Inference/structured output; replace decoding | WATCH | 2026-11-16 | A structured-output gap and battery become measurable |
+| Equation discovery | Calculation engines; add a discovery hop | WATCH | 2026-11-16 | A checked equation-discovery battery exists |
+| Neural solvers | Calculation engines; replace a solver | WATCH | 2026-11-16 | A checked solver battery and candidate exist |
+| Materials foundation models | Calculation engines; add a prediction hop | WATCH | 2026-11-16 | A checked materials battery and candidate exist |
+| Second-machine uses | Machines; add a remote execution hop | WATCH | 2026-11-16 | An authorized machine and representative workload are available |
+| Host scheduler | Machines; replace or add scheduling | WATCH | 2026-11-16 | A measurable scheduling gap and battery exist |
+| Spiking/video models | Scientific reasoning; add a perception hop | WATCH | 2026-11-16 | A representative perception battery and candidate exist |
