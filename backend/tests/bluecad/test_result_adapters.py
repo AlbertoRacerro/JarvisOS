@@ -1295,7 +1295,7 @@ def test_solid_code_adapter_ok_valid_topology_derives_usable() -> None:
     outputs_by_name = {o.name: o.value for o in res.outputs}
     assert outputs_by_name["total_volume"].value == 1000.0
     assert outputs_by_name["total_volume"].unit == "mm**3"
-    assert outputs_by_name["volume"].value == 1000.0
+    assert outputs_by_name["total_volume"].value == 1000.0
     assert outputs_by_name["bbox_dx"].value == 10.0
     assert outputs_by_name["bbox_dx"].unit == "mm"
 
@@ -1438,3 +1438,21 @@ def test_solid_code_adapter_missing_required_check_derives_unchecked() -> None:
     desc = solid_code_evaluator_descriptor()
     assert result_verdict(desc, res_no_checks) == "unchecked"
 
+
+
+def test_solid_code_adapter_ok_without_facts_is_parse_error_not_zeros() -> None:
+    for facts in ({"valid": True, "solids": 1}, {"valid": True, "solids": 1, "volume": 1.0, "bbox_min": [0.0],
+                                                  "bbox_max": [1.0]}, None):
+        record = RunRecord(
+            source_sha256="abc",
+            limits=_dummy_limits(),
+            mechanism="bubblewrap-userns-v1",
+            duration_seconds=0.1,
+            classification="ok",
+            profile="geometry",
+            result=facts,
+        )
+        res = solid_code_run_record_to_evaluation_result(record)
+        assert res.status == "failed"
+        assert res.failure is not None and res.failure.category == "result_parse_error"
+        assert res.outputs == ()

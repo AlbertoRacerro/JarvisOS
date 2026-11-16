@@ -10,8 +10,6 @@ import argparse
 import copy
 import json
 import math
-import re
-import shutil
 import sys
 import threading
 from collections.abc import Sequence
@@ -26,6 +24,7 @@ from app.modules.bluecad.fem_adapter import solve_static_analysis
 from app.modules.bluecad.mesh_adapter import mesh_analysis_spec
 from app.modules.bluecad.registry import ToolRegistryError, resolve_tool
 from app.modules.bluecad.result_adapters import (
+    PATH_PATTERN,
     fem_evaluator_descriptor,
     fem_result_to_evaluation_result,
     mesh_evaluator_descriptor,
@@ -511,9 +510,7 @@ def _run_bluecad_solid_code(
     )
 
     run_req = RunRequest(source=source_code, inputs=inputs)
-    artifact_dir = out_dir / "artifacts"
-    if artifact_dir.exists():
-        shutil.rmtree(artifact_dir, ignore_errors=True)
+    artifact_dir = out_dir / "artifacts"  # out_dir is fresh, so the runtime creates this itself
     started = datetime.now(UTC)
     record = studio_runtime_run(run_req, profile="geometry", artifact_dir=artifact_dir)
 
@@ -937,7 +934,7 @@ AGENT_RUNNABLE_EVALUATORS = frozenset({
 })
 # An absolute or parent-relative path: "/a/b/c", "../run_x/c", "C:\\a\\c". Units ("W/(m**2*K)", "kg/m3") have a
 # word character or ")" before their slash and are left alone.
-_PATH = re.compile(r"(?<![\w.)\]])(?:\.\.[/\\]|/|[A-Za-z]:\\)(?:[^\s\"'/\\]+[/\\])*([^\s\"'/\\]+)")
+_PATH = PATH_PATTERN
 
 
 def _strip_paths(value: Any) -> Any:

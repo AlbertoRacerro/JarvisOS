@@ -75,11 +75,11 @@ FEM_EQUILIBRIUM_SOURCE: Final = "policy:force_equilibrium"
 FEM_FORCE_EQUILIBRIUM_TOL_N: Final = 1e-3
 FEM_FORCE_EQUILIBRIUM_REL_TOL: Final = 0.01
 
-_PATH = re.compile(r"(?<![\w.)\]])(?:\.\.[/\\]|/|[A-Za-z]:\\)(?:[^\s\"'/\\]+[/\\])*([^\s\"'/\\]+)")
+PATH_PATTERN = re.compile(r"(?<![\w.)\]])(?:\.\.[/\\]|/|[A-Za-z]:\\)(?:[^\s\"'/\\]+[/\\])*([^\s\"'/\\]+)")
 
 
 def _strip_paths(text: str) -> str:
-    return _PATH.sub(r"\1", text)
+    return PATH_PATTERN.sub(r"\1", text)
 
 
 WORST_AVG_RE = re.compile(
@@ -761,17 +761,45 @@ def solid_code_run_record_to_evaluation_result(
             completed_at=completed,
         )
 
-    # Classification is "ok"
+    # Classification is "ok": facts come from the sandbox worker; a malformed set is a parse error, never zeros.
     facts = record.result if isinstance(record.result, dict) else {}
-    vol = float(facts.get("volume", 0.0))
-    bbox_min = facts.get("bbox_min", [0.0, 0.0, 0.0])
-    bbox_max = facts.get("bbox_max", [0.0, 0.0, 0.0])
-    min_f = [float(x) for x in bbox_min] if len(bbox_min) == 3 else [0.0, 0.0, 0.0]
-    max_f = [float(x) for x in bbox_max] if len(bbox_max) == 3 else [0.0, 0.0, 0.0]
+    try:
+        vol = float(facts["volume"])
+        min_f = [float(x) for x in facts["bbox_min"]]
+        max_f = [float(x) for x in facts["bbox_max"]]
+        if len(min_f) != 3 or len(max_f) != 3:
+            raise ValueError("bounding box needs three coordinates")
+    except (KeyError, TypeError, ValueError):
+        return EvaluationResult(
+            result_ref=res_ref,
+            request_ref=req_ref,
+            evaluator_id=SOLID_CODE_EVALUATOR_ID,
+            backend_version=backend_version,
+            status="failed",
+            failure=EvaluationFailure(
+                category="result_parse_error",
+                backend_code="INVALID_FACTS",
+                message="The sandbox returned no volume or bounding box for the shape.",
+            ),
+            fidelity="screening",
+            outputs=(),
+            output_artifacts=(),
+            checks=(
+                ResultCheck(
+                    id=CHECK_TOPOLOGY,
+                    family="input",
+                    status="not_evaluated",
+                    hint="topology check not evaluated: geometry facts missing",
+                    source=SOLID_TOPOLOGY_SOURCE,
+                ),
+            ),
+            numerical=NumericalDiagnostics(wall_time_s=record.duration_seconds),
+            started_at=started_at,
+            completed_at=completed,
+        )
 
     outputs = (
         NamedQuantity(name="total_volume", value=Quantity(value=vol, unit="mm**3")),
-        NamedQuantity(name="volume", value=Quantity(value=vol, unit="mm**3")),
         NamedQuantity(name="bbox_min_x", value=Quantity(value=min_f[0], unit="mm")),
         NamedQuantity(name="bbox_min_y", value=Quantity(value=min_f[1], unit="mm")),
         NamedQuantity(name="bbox_min_z", value=Quantity(value=min_f[2], unit="mm")),
