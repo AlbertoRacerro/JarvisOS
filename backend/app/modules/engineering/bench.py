@@ -793,14 +793,26 @@ def show_run(
 # tool timeout. DWSIM, OpenFOAM and the day/night simulator write elsewhere or run on their own deadlines.
 AGENT_RUNNABLE_EVALUATORS = frozenset(BLUECAD_EVALUATORS | {
     "fluids.pipe_pressure_drop", "ht.internal_convection", "coolprop.pure_fluid_properties"})
-_ABSOLUTE_PATH = re.compile(r"(?<![\w.)\]])/(?:[^\s\"'/]+/)+([^\s\"'/]*)")
+# An absolute or parent-relative path: "/a/b/c", "../run_x/c", "C:\\a\\c". Units ("W/(m**2*K)", "kg/m3") have a
+# word character or ")" before their slash and are left alone.
+_PATH = re.compile(r"(?<![\w.)\]])(?:\.\.[/\\]|/|[A-Za-z]:\\)(?:[^\s\"'/\\]+[/\\])*([^\s\"'/\\]+)")
+
+
+def _strip_paths(value: Any) -> Any:
+    if isinstance(value, str):
+        return _PATH.sub(r"\1", value)
+    if isinstance(value, dict):
+        return {key: _strip_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_strip_paths(item) for item in value]
+    return value
 
 
 def _agent_view(view: dict[str, Any]) -> dict[str, Any]:
     """The agent never sees a filesystem path: every absolute path is reduced to its last component."""
     if "result_path" in view:
         view = {**view, "result_path": "result.json"}
-    return json.loads(_ABSOLUTE_PATH.sub(r"\1", json.dumps(view)))
+    return _strip_paths(view)
 
 
 def dispatch_bench_tool(
@@ -943,7 +955,7 @@ def _dispatch_bench_tool(
             manifest_file = solid_dir / "manifest.json"
             if not step_file.is_file() or not manifest_file.is_file():
                 return None, "missing_geometry_files"
-            raw_geometry = request_data.get("geometry") or {}
+            raw_geometry = request_data.get("geometry", {})
             if not isinstance(raw_geometry, dict):
                 return None, "invalid_arguments"
             geometry = dict(raw_geometry)

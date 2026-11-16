@@ -875,7 +875,8 @@ def test_agent_cannot_run_evaluators_that_write_outside_the_run(agent_session: A
         assert res.error_code == "evaluator_not_agent_runnable"
 
 
-def test_registry_request_is_pinned_to_grant_workspace_and_tool_deadline(agent_session: AgentSessionRef) -> None:
+def test_registry_request_is_pinned_to_grant_workspace_and_tool_deadline(agent_session: AgentSessionRef,
+                                                                       monkeypatch: pytest.MonkeyPatch) -> None:
     from tests.test_engineering_bench import _valid_pipe_pressure_drop_request
 
     foreign = _valid_pipe_pressure_drop_request("other-workspace")
@@ -886,14 +887,26 @@ def test_registry_request_is_pinned_to_grant_workspace_and_tool_deadline(agent_s
     request = _valid_pipe_pressure_drop_request(agent_session.workspace_id)
     request["requested_at"] = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     request["deadline_at"] = (datetime.now(UTC) + timedelta(days=30)).isoformat()
+    import app.modules.engineering.bench as bench_module
+
+    seen: list[dict] = []
+    real_run = bench_module.run_evaluation
+
+    def _capture(evaluator_id, request_data, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+        seen.append(request_data)
+        return real_run(evaluator_id, request_data, *args, **kwargs)
+
+    monkeypatch.setattr(bench_module, "run_evaluation", _capture)
     res = _run_call(agent_session, {"evaluator_id": "fluids.pipe_pressure_drop", "request": request,
                                     "timeout_s": 5.0})
     assert res.status == "succeeded", res.error_code
     bench_root = (build_paths().workspaces_dir / agent_session.workspace_id / "engineering" / "bench").resolve()
     saved = json.loads((bench_root / res.result["run_id"] / "result.json").read_text(encoding="utf-8"))
     assert saved["request_ref"]["workspace_id"] == agent_session.workspace_id
-    completed = datetime.fromisoformat(saved["completed_at"])
-    assert completed - datetime.now(UTC) < timedelta(seconds=5)
+    sent = seen[-1]
+    window = datetime.fromisoformat(sent["deadline_at"]) - datetime.fromisoformat(sent["requested_at"])
+    assert window == timedelta(seconds=5)
+    assert datetime.now(UTC) - datetime.fromisoformat(sent["requested_at"]) < timedelta(minutes=1)
 
 
 def test_non_mapping_geometry_is_refused_not_raised(agent_session: AgentSessionRef,
@@ -906,6 +919,34 @@ def test_non_mapping_geometry_is_refused_not_raised(agent_session: AgentSessionR
                                     "request": {"geometry": 123, "mesh": {"target_size": 10.0}}})
     assert res.status == "refused"
     assert res.error_code == "invalid_arguments"
+
+    for falsy in ([], "", 0, False):
+        res = _run_call(agent_session, {"evaluator_id": "bluecad.mesh", "geometry_run": solid.result["run_id"],
+                                        "request": {"geometry": falsy, "mesh": {"target_size": 10.0}}})
+        assert res.status == "refused"
+        assert res.error_code == "invalid_arguments"
+
+
+def test_nan_timeout_never_reaches_the_bench(agent_session: AgentSessionRef) -> None:
+    from pydantic import ValidationError
+
+    from tests.test_engineering_bench import _valid_pipe_pressure_drop_request
+
+    request = _valid_pipe_pressure_drop_request(agent_session.workspace_id)
+    with pytest.raises(ValidationError):
+        _run_call(agent_session, {"evaluator_id": "fluids.pipe_pressure_drop", "request": request,
+                                  "timeout_s": float("nan")})
+
+
+def test_agent_view_strips_paths_inside_multiline_relative_and_windows_text() -> None:
+    from app.modules.engineering.bench import _agent_view
+
+    view = _agent_view({"failure": {"message": "File missing:\n/data/ws/a/run_1/mesh.inp\tsee ../run_2/x.inp"},
+                        "checks": [{"hint": "C:\\Users\\someone\\model.step not found"}]})
+    text = json.dumps(view)
+    assert "/data/" not in text and "run_2" not in text and "Users" not in text
+    assert view["failure"]["message"] == "File missing:\nmesh.inp\tsee x.inp"
+    assert view["checks"][0]["hint"] == "model.step not found"
 
 
 def test_agent_view_strips_absolute_paths_but_keeps_units() -> None:
