@@ -788,6 +788,11 @@ def show_run(
     return json.loads(view_text)
 
 
+def _agent_view(view: dict[str, Any]) -> dict[str, Any]:
+    """The agent never sees a data-root path: name the result file relative to its run folder."""
+    return {**view, "result_path": "result.json"} if "result_path" in view else view
+
+
 def dispatch_bench_tool(
     call: StructuredToolCall,
     workspace_id: str,
@@ -815,10 +820,10 @@ def dispatch_bench_tool(
 
         if op == "list":
             rows = list_evaluators()
-            return {"op": "list", "rows": rows, "evaluators": rows, "items": rows}, error
+            return {"op": "list", "rows": rows}, error
 
         if op == "show":
-            run_id = call.arguments.get("run_id") or call.arguments.get("run")
+            run_id = call.arguments.get("run_id")
             if not isinstance(run_id, str) or not SAFE_ID.fullmatch(run_id) or run_id in {".", ".."}:
                 return None, "invalid_arguments"
             run_dir = (bench_root / run_id).resolve()
@@ -826,15 +831,15 @@ def dispatch_bench_tool(
                 return None, "run_not_found"
             try:
                 view = show_run(run_dir, root=bench_root)
-                return {**view, "run_id": run_id, "view": view, "bounded_view": view}, error
+                return {"op": "show", "run_id": run_id, "view": _agent_view(view)}, error
             except BenchInputError:
                 return None, "run_not_found"
             except Exception:
                 return None, "show_failed"
 
         if op == "compare":
-            run_a = call.arguments.get("run_a") or call.arguments.get("run_id_a")
-            run_b = call.arguments.get("run_b") or call.arguments.get("run_id_b")
+            run_a = call.arguments.get("run_id_a")
+            run_b = call.arguments.get("run_id_b")
             if not isinstance(run_a, str) or not SAFE_ID.fullmatch(run_a) or run_a in {".", ".."}:
                 return None, "invalid_arguments"
             if not isinstance(run_b, str) or not SAFE_ID.fullmatch(run_b) or run_b in {".", ".."}:
@@ -847,7 +852,7 @@ def dispatch_bench_tool(
                 return None, "run_not_found"
             try:
                 compare_doc = compare_runs(dir_a, dir_b, root=bench_root)
-                return {**compare_doc, "compare": compare_doc, "view": compare_doc}, error
+                return {"op": "compare", "run_id_a": run_a, "run_id_b": run_b, "view": compare_doc}, error
             except BenchInputError:
                 return None, "run_not_found"
             except Exception:
@@ -868,7 +873,7 @@ def dispatch_bench_tool(
 
         request_data = copy.deepcopy(raw_request)
 
-        timeout_s = call.arguments.get("timeout_s", call.arguments.get("timeout", 60.0))
+        timeout_s = call.arguments.get("timeout_s", 60.0)
         if not isinstance(timeout_s, (int, float)) or isinstance(timeout_s, bool):
             return None, "invalid_arguments"
         if timeout_s > 100.0 or timeout_s <= 0.0:
@@ -953,9 +958,7 @@ def dispatch_bench_tool(
                 "run_id": run_id,
                 "status": res_dict.get("status"),
                 "verdict": res_dict.get("verdict"),
-                "view": bounded_view,
-                "bounded_view": bounded_view,
-                **bounded_view,
+                "view": _agent_view(bounded_view),
             }
             return result_payload, error
         except BenchInputError as exc:

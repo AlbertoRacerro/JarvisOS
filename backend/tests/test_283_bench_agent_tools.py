@@ -544,11 +544,11 @@ def test_criterion_5_show_and_compare_return_282_views(
     res_show = dispatch_tool(call_show, live_grants={read_grant.grant_id: read_grant})
     assert res_show.status == "succeeded"
     assert res_show.result is not None
-    assert res_show.result["evaluator_id"] == "bluecad.solid"
-    assert res_show.result["verdict"] == "usable"
-    assert res_show.result["status"] == "succeeded"
-    assert "failed_checks" in res_show.result
-    assert "outputs" in res_show.result
+    assert res_show.result["view"]["evaluator_id"] == "bluecad.solid"
+    assert res_show.result["view"]["verdict"] == "usable"
+    assert res_show.result["view"]["status"] == "succeeded"
+    assert "failed_checks" in res_show.result["view"]
+    assert "outputs" in res_show.result["view"]
 
     # 2. Test compare
     call_compare = StructuredToolCall(
@@ -557,19 +557,19 @@ def test_criterion_5_show_and_compare_return_282_views(
         grant_id=read_grant.grant_id,
         correlation_id="corr-compare",
         session_ref=agent_session,
-        arguments={"op": "compare", "run_a": run_1_id, "run_b": run_2_id},
+        arguments={"op": "compare", "run_id_a": run_1_id, "run_id_b": run_2_id},
         requested_at=now,
         deadline_at=now + timedelta(minutes=1),
     )
     res_compare = dispatch_tool(call_compare, live_grants={read_grant.grant_id: read_grant})
     assert res_compare.status == "succeeded"
     assert res_compare.result is not None
-    assert res_compare.result["evaluator_a"] == "bluecad.solid"
-    assert res_compare.result["evaluator_b"] == "bluecad.solid"
-    assert res_compare.result["verdict_a"] == "usable"
-    assert res_compare.result["verdict_b"] == "usable"
-    assert "outputs" in res_compare.result
-    assert "checks" in res_compare.result
+    assert res_compare.result["view"]["evaluator_a"] == "bluecad.solid"
+    assert res_compare.result["view"]["evaluator_b"] == "bluecad.solid"
+    assert res_compare.result["view"]["verdict_a"] == "usable"
+    assert res_compare.result["view"]["verdict_b"] == "usable"
+    assert "outputs" in res_compare.result["view"]
+    assert "checks" in res_compare.result["view"]
 
 
 def test_criterion_6_allowlists_and_surface_briefs(test_workspace: str) -> None:
@@ -834,3 +834,20 @@ def test_criterion_7_native_engine_proof(
     assert res_fem.result is not None
     assert res_fem.result["status"] == "succeeded"
     assert res_fem.result["verdict"] == "usable"
+
+
+def test_bench_run_stays_outside_common_registry_and_view_hides_paths() -> None:
+    """EXECUTE keeps its own grant (111): the common registry still refuses it; the agent view names no data-root path."""
+    from app.modules.agents.hermes import supervisor
+    from app.modules.ai.jarvis_context import PRODUCTION_CAPABILITY_REGISTRY, JarvisContextError
+    from app.modules.ai.jarvis_context_models import JarvisCapabilityDescriptor
+    from app.modules.engineering.bench import _agent_view
+
+    ids = {item.capability_id for item in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads")}
+    assert "jarvis.bench_read" in ids
+    assert "jarvis.bench_run" not in ids
+    assert supervisor._HERMES_BENCH_RUN_CAPABILITY.action_class == "EXECUTE"
+    with pytest.raises(JarvisContextError):
+        PRODUCTION_CAPABILITY_REGISTRY.register(JarvisCapabilityDescriptor(
+            capability_id="jarvis.other_execute", route_id="ai-threads", action_class="EXECUTE", label="x"))
+    assert _agent_view({"result_path": "/data/ws/engineering/bench/run_x/result.json"})["result_path"] == "result.json"

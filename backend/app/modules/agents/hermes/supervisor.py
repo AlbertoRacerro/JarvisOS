@@ -91,6 +91,7 @@ _HERMES_BENCH_READ_CAPABILITY = JarvisCapabilityDescriptor(
     capability_id="jarvis.bench_read", route_id="ai-threads", action_class="READ",
     label="Read engineering bench evaluators or runs",
 )
+# EXECUTE keeps its own grant outside the common registry (111); dispatch_tool admits it by identity only.
 _HERMES_BENCH_RUN_CAPABILITY = JarvisCapabilityDescriptor(
     capability_id="jarvis.bench_run", route_id="ai-threads", action_class="EXECUTE",
     label="Run an engineering bench evaluator",
@@ -110,8 +111,7 @@ _TOOL_CAPABILITIES = {
 for _descriptor in (_HERMES_PROCESS_READ_CAPABILITY, _HERMES_PROCESS_ACT_CAPABILITY,
                     _HERMES_BLUECAD_READ_CAPABILITY,
                     _HERMES_BLUECAD_ACT_CAPABILITY, _HERMES_STUDIO_READ_CAPABILITY,
-                    _HERMES_STUDIO_ACT_CAPABILITY,
-                    _HERMES_BENCH_READ_CAPABILITY, _HERMES_BENCH_RUN_CAPABILITY):
+                    _HERMES_STUDIO_ACT_CAPABILITY, _HERMES_BENCH_READ_CAPABILITY):
     if _descriptor not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
         PRODUCTION_CAPABILITY_REGISTRY.register(_descriptor)
 if _HERMES_CONTEXT_CAPABILITY not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
@@ -333,7 +333,10 @@ def dispatch_tool(
                 and scope.jarvis_thread_id in (None, call.session_ref.jarvis_thread_id)):
             descriptors = PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads")
             descriptor = next((item for item in descriptors if item.capability_id == call.capability_id), None)
-            if descriptor is not None and descriptor.action_class in {"READ", "CONTEXT", "PROPOSE", "EXECUTE"}:
+            if call.capability_id == _HERMES_BENCH_RUN_CAPABILITY.capability_id:
+                descriptor = _HERMES_BENCH_RUN_CAPABILITY
+            if descriptor is not None and (descriptor.action_class in {"READ", "CONTEXT", "PROPOSE"}
+                                           or descriptor is _HERMES_BENCH_RUN_CAPABILITY):
                 if call.capability_id == "jarvis.context_preview":
                     try:
                         request = JarvisContextRequest.model_validate(call.arguments)
