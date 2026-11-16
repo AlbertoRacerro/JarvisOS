@@ -63,7 +63,7 @@ def test_point_1_three_passes_with_failing_probe_leave_counters_and_cooldowns_un
     assert sup.state["counters"].get("transient_claude", 0) == 1
 
 
-# Copied from /home/thera/jarvis-control/work/continuity/state.json
+# Sanitized fixture copied from the live owner's continuity state.
 REAL_OWNER_STATE_SHAPE: dict[str, Any] = {
     "acknowledged": None,
     "agent": "claude",
@@ -170,7 +170,7 @@ def test_point_2_wake_waiting_reuses_woken_wait_on_next_pass(tmp_path: Path) -> 
     assert sup.state.get("wait") is None
 
 
-# Copied from /home/thera/jarvis-control/work/continuity/missions/m-20261113T152626Z-cddd54/state.json
+# Sanitized fixture copied from a live mission's continuity state.
 REAL_OWNER_MISSION_STATE_SHAPE: dict[str, Any] = {
     "acknowledged": None,
     "agent": "claude",
