@@ -12,6 +12,11 @@ from typing import Any, Literal
 from app.core.paths import build_paths
 from app.modules.ai.context_builder import canonical_digest
 from app.modules.bluecad.cfd_adapter import OpenFoamEvaluator
+from app.modules.bluecad.result_adapters import (
+    CalculixFemEvaluator,
+    GmshMeshEvaluator,
+    SolidBuildEvaluator,
+)
 from app.modules.engineering.evaluator_contracts import (
     BackendKind,
     EngineeringEvaluator,
@@ -39,6 +44,9 @@ def evaluator_registry() -> dict[str, EngineeringEvaluator]:
         ("dwsim.flowsheet", DwsimEvaluator, "dynamic_simulator", "DWSIM", "dynamic_detailed"),
         ("openfoam_channel_v1", OpenFoamEvaluator, "cfd_solver", "OpenFOAM", "field_resolved"),
         ("photobioreactor.day_night", PbrDayNightEvaluator, "dynamic_simulator", "scikit-sundae", "reduced_order"),
+        ("bluecad.solid", SolidBuildEvaluator, "cad_kernel", "build123d", "screening"),
+        ("bluecad.mesh", GmshMeshEvaluator, "mesher", "Gmsh", "screening"),
+        ("bluecad.fem", CalculixFemEvaluator, "fem_solver", "CalculiX", "field_resolved"),
     )
     registry: dict[str, EngineeringEvaluator] = {}
     for evaluator_id, factory, kind, name, fidelity in factories:

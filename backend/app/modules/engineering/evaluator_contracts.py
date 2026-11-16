@@ -118,6 +118,10 @@ _KNOWN_BACKEND_CODES: Final[dict[str, FailureCategory]] = {
     "MESH_GROUP_EMPTY": "invalid_input",
     "MESH_ELEMENT_ORDER_MISMATCH": "invalid_input",
     "MESH_HIGH_ORDER_INVALID": "invalid_input",
+    "KERNEL_ERROR": "solver_crash",
+    "EXPORT_ERROR": "solver_crash",
+    "SPEC_INVALID": "invalid_input",
+    "PORT_MISMATCH": "invalid_input",
     # process kernel
     "correlation_not_qualified": "outside_validity_domain",
     "unit_dimension_unsupported": "unsupported_request",
