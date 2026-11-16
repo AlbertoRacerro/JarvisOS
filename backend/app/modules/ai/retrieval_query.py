@@ -17,7 +17,7 @@ SCHEMA_VERSION = "retrieval-query.v1"
 # Repository documents have no workspace identity and are intentionally excluded.
 WORKSPACE_SCOPED_OWNERS = frozenset({
     "ai_threads", "bluecad", "development", "engineering",
-    "literature", "modeling", "process_stack", "project_knowledge",
+    "literature", "modeling", "process_stack", "project_knowledge", "workspace_documents",
 })
 
 
