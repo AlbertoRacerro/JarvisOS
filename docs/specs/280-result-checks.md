@@ -12,15 +12,16 @@ the rule only. Adapters for more engines and a headless command over the evaluat
 
 ## Code facts checked on `origin/master` at `74b6adbd`
 
-- `backend/app/modules/engineering/evaluator_contracts.py` defines the shared envelope `EvaluationResult`
+- `backend/app/modules/engineering/evaluator_contracts.py::EvaluationResult` is the shared envelope
   (`status`, `failure`, `outputs`, `output_artifacts`, `numerical: NumericalDiagnostics`, `validity`,
-  `evidence_refs`), the static `EvaluatorDescriptor`, and the `EngineeringEvaluator` protocol. Its module docstring
+  `evidence_refs`); `backend/app/modules/engineering/evaluator_contracts.py::EvaluatorDescriptor` is the static
+  identity; there is also the `EngineeringEvaluator` protocol. Its module docstring
   says numerical convergence is a diagnostic, never validation. Contracts are frozen pydantic models
   (`FrozenContract`) with `MAX_ITEMS = 64` bounds.
 - Evaluators that build `EvaluatorDescriptor` today: `bluecad/cfd_adapter.py`, `engineering/operator_service.py`,
   `photobioreactor/pbr_evaluator.py`, `process_stack/correlations.py` (two), `process_stack/dwsim.py`,
   `process_stack/pbr_adapter.py`, `process_stack/properties.py`.
-- `backend/app/modules/bluecad/validate.py` already emits checks as dicts `{"id", "tier", "status", "detail",
+- `backend/app/modules/bluecad/validate.py::_tier1_declared` already emits checks as dicts `{"id", "tier", "status", "detail",
   "hint"}`, for example a declared-volume check with its relative error and tolerance.
 - `EvaluationResult` is not part of the generated frontend contracts (`frontend/src/api/generated`).
 
