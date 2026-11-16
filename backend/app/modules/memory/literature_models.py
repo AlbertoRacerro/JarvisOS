@@ -28,6 +28,10 @@ class LiteratureSourceCreate(StrictLiteratureModel):
     request_key: str | None = Field(default=None, min_length=1, max_length=128)
 
 
+class LiteratureBackingAttach(StrictLiteratureModel):
+    artifact_id: str = Field(min_length=1)
+
+
 class LiteratureEntryCreate(StrictLiteratureModel):
     entry_kind: LiteratureEntryKind
     statement: str | None = Field(default=None, max_length=8000)

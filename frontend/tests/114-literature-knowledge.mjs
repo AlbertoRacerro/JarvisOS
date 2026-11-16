@@ -24,6 +24,17 @@ assert.match(page, /createLiteratureSource/);
 assert.match(page, /createLiteratureEntry/);
 assert.match(page, /onKnowledgeSelectionChange/);
 assert.match(api, /request_key/);
+assert.match(api, /\/literature\/files\?filename=/);
+assert.match(api, /\/backing`/);
+assert.match(api, /value_number\?: number/);
+assert.match(page, /Source file \(optional\)/);
+assert.match(page, /Attach source file/);
+assert.match(page, /Number \(optional\)/);
+assert.match(page, /Lines from \(optional\)/);
+assert.match(page, /Lines to \(optional\)/);
+assert.match(page, /locator_kind: "line" as const/);
+for (const words of ["Checked against the source", "Checked, with warnings", "Not checked", "Does not match the source"]) assert.ok(page.includes(words), words);
+assert.match(page, /check\.status !== "pass"/);
 
 assert.match(page, /Browsing does not add Jarvis context\./);
 assert.doesNotMatch(page, /\b(?:postJson|putJson|deleteJson)\b/);

@@ -4,6 +4,10 @@ export type LiteratureState = "raw" | "review" | "accepted";
 export type LiteratureEntryKind = "claim" | "datum";
 export type LiteratureBackingAvailability = "available" | "missing" | "ineligible" | "unsupported" | "unsafe";
 
+export type LiteratureCheck = { id: string; status: "pass" | "warn" | "fail" | "not_evaluated"; hint: string };
+export type LiteratureVerdict = "usable" | "usable_with_warnings" | "unchecked" | "not_usable";
+export type LiteratureUploadedFile = { artifact_id: string; filename: string; mime_type: string; sha256: string; size: number };
+
 export type LiteratureUsedBy = {
   kind: "parameter" | "assumption" | "artifact";
   record_id: string;
@@ -25,6 +29,8 @@ export type LiteratureEntry = {
   locator_start: number | null;
   locator_end: number | null;
   context_text: string | null;
+  checks: LiteratureCheck[];
+  verdict: LiteratureVerdict | null;
   provenance_ref: string;
   used_by: LiteratureUsedBy[];
   created_at: string;
@@ -74,8 +80,11 @@ export function literatureContentUrl(source: LiteratureSource): string | null {
   return `${API_BASE_URL}${source.backing.content_url}`;
 }
 
-export type LiteratureSourceInput = Pick<LiteratureSource, "title" | "source_kind" | "citation" | "publisher" | "published_year">;
-export type LiteratureEntryInput = { entry_kind: LiteratureEntryKind; statement?: string; value_text?: string; unit?: string; context_text?: string };
+export type LiteratureSourceInput = Pick<LiteratureSource, "title" | "source_kind" | "citation" | "publisher" | "published_year"> & { artifact_id?: string };
+export type LiteratureEntryInput = {
+  entry_kind: LiteratureEntryKind; statement?: string; value_text?: string; value_number?: number; unit?: string; context_text?: string;
+  locator_kind?: "line"; locator_start?: number; locator_end?: number;
+};
 
 async function createLiteratureRecord<T>(path: string, payload: object, requestKey: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -95,4 +104,25 @@ export function createLiteratureSource(workspaceId: string, payload: LiteratureS
 
 export function createLiteratureEntry(workspaceId: string, sourceId: string, payload: LiteratureEntryInput, requestKey: string): Promise<LiteratureEntry> {
   return createLiteratureRecord(`/workspaces/${encodeURIComponent(workspaceId)}/literature/sources/${encodeURIComponent(sourceId)}/entries`, payload, requestKey);
+}
+
+async function literatureErrorMessage(response: Response, fallback: string): Promise<string> {
+  const body = await response.json().catch(() => null);
+  return typeof body?.detail?.message === "string" ? body.detail.message : fallback;
+}
+
+export async function uploadLiteratureFile(workspaceId: string, file: File): Promise<LiteratureUploadedFile> {
+  const response = await fetch(`${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/literature/files?filename=${encodeURIComponent(file.name)}`, {
+    method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file
+  });
+  if (!response.ok) throw new Error(await literatureErrorMessage(response, `Could not upload the file (${response.status}).`));
+  return response.json() as Promise<LiteratureUploadedFile>;
+}
+
+export async function attachLiteratureBacking(workspaceId: string, sourceId: string, artifactId: string): Promise<LiteratureSource> {
+  const response = await fetch(`${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/literature/sources/${encodeURIComponent(sourceId)}/backing`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_id: artifactId })
+  });
+  if (!response.ok) throw new Error(await literatureErrorMessage(response, `Could not attach the file (${response.status}).`));
+  return response.json() as Promise<LiteratureSource>;
 }
