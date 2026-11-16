@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import math
 import sys
@@ -20,11 +21,13 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.modules.ai.jarvis_context_models import SourceRef
 from app.modules.bluecad.fem_adapter import solve_static_analysis
 from app.modules.bluecad.mesh_adapter import mesh_analysis_spec
 from app.modules.bluecad.registry import ToolRegistryError, resolve_tool
 from app.modules.bluecad.result_adapters import (
     PATH_PATTERN,
+    build_solid_code_manifest,
     fem_evaluator_descriptor,
     fem_result_to_evaluation_result,
     mesh_evaluator_descriptor,
@@ -519,6 +522,24 @@ def _run_bluecad_solid_code(
         case=case,
         started_at=started,
     )
+    if eval_res.status == "succeeded" and record.classification == "ok":
+        manifest_data = build_solid_code_manifest(record, artifact_dir=artifact_dir)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = artifact_dir / "manifest.json"
+        manifest_text = json.dumps(manifest_data, indent=2, sort_keys=True) + "\n"
+        manifest_path.write_text(manifest_text, encoding="utf-8")
+        manifest_sha = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
+        if not any(art.object_id == "manifest.json" for art in eval_res.output_artifacts):
+            manifest_ref = SourceRef(
+                authority_owner="bluecad",
+                object_type="artifact",
+                object_id="manifest.json",
+                workspace_id=eval_res.result_ref.workspace_id,
+                content_digest=f"sha256:{manifest_sha}",
+            )
+            eval_res = eval_res.model_copy(
+                update={"output_artifacts": (*eval_res.output_artifacts, manifest_ref)}
+            )
     desc = solid_code_evaluator_descriptor(tool_registry)
     verdict = result_verdict(desc, eval_res)
     return eval_res, verdict
