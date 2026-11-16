@@ -450,9 +450,12 @@ def solid_build_result_to_evaluation_result(
         )
 
     # Preserve every native validation check with status 'fail' or 'error' (Spec 284).
-    # Topology and declared volume are already mapped to CHECK_BREP_VALID,
-    # CHECK_WATERTIGHT, and CHECK_VOLUME_CONSERVATION.
-    mapped_native_checks: set[str] = {"T1_BREP_VALID", "T1_WATERTIGHT", "T1_VOLUME_DECL"}
+    # Skip a native failure only when its existing shared check also records failure.
+    mapped_native_checks = {
+        "T1_BREP_VALID": CHECK_BREP_VALID,
+        "T1_WATERTIGHT": CHECK_WATERTIGHT,
+        "T1_VOLUME_DECL": CHECK_VOLUME_CONSERVATION,
+    }
     seen_check_ids: set[str] = {c.id for c in checks_list}
 
     for native_check in build_result.report.get("checks", []):
@@ -460,7 +463,10 @@ def solid_build_result_to_evaluation_result(
         if raw_status not in {"fail", "error"}:
             continue
         raw_id = str(native_check.get("id") or "UNKNOWN_CHECK")
-        if raw_id in mapped_native_checks:
+        if any(
+            check.id == mapped_native_checks.get(raw_id) and check.status == "fail"
+            for check in checks_list
+        ):
             continue
 
         check_id = _sanitize_check_id(raw_id)

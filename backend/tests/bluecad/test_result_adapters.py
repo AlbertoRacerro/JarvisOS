@@ -567,6 +567,22 @@ def test_solid_adapter_declared_bbox_failure_without_finite_numbers_fails_safe(
     assert result_verdict(desc, res) == "not_usable"
 
 
+def test_solid_adapter_declared_volume_failure_without_numbers_names_native_check(
+    tmp_path: Path,
+) -> None:
+    build_result = _mock_build_result(
+        tmp_path,
+        total_volume=800.0,
+        extra_checks=[{"id": "T1_VOLUME_DECL", "status": "fail", "detail": {}}],
+        verdict="fail",
+    )
+
+    res = solid_build_result_to_evaluation_result(build_result)
+
+    assert {check.id: check.status for check in res.checks}["T1_VOLUME_DECL"] == "fail"
+    assert result_verdict(solid_evaluator_descriptor(), res) == "not_usable"
+
+
 def test_solid_adapter_disambiguates_duplicate_native_check_ids(
     tmp_path: Path,
 ) -> None:
