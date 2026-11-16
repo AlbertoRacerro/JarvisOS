@@ -6,7 +6,9 @@ from uuid import uuid4
 
 from app.core.database import open_sqlite_connection
 from app.core.paths import build_paths
+from app.modules.engineering.evaluator_contracts import ResultCheck, Verdict
 from app.modules.events.service import utc_now
+from app.modules.memory.literature_checks import check_datum
 from app.modules.memory.literature_models import (
     LiteratureBackingRead,
     LiteratureEntryCreate,
@@ -169,8 +171,69 @@ def _used_by(connection, workspace_id: str, entry_id: str) -> list[LiteratureUse
     ]
 
 
-def _entry_read(connection, row) -> LiteratureEntryRead:
+class _BackingText:
+    """The located-text backing of one source, read at most once and only when a datum needs it."""
+
+    def __init__(self, connection, workspace_id: str, source_row) -> None:
+        self._connection = connection
+        self._workspace_id = workspace_id
+        self._artifact_id = source_row["artifact_id"]
+        self._loaded = False
+        self._lines: list[str] | None = None
+        self._reason = ""
+
+    def get(self) -> tuple[list[str] | None, str]:
+        if not self._loaded:
+            self._loaded = True
+            self._lines, self._reason = self._load()
+        return self._lines, self._reason
+
+    def _load(self) -> tuple[list[str] | None, str]:
+        if self._artifact_id is None:
+            return None, "The source has no backing artifact."
+        artifact = _artifact_row_or_none(self._connection, self._workspace_id, str(self._artifact_id))
+        if artifact is None:
+            return None, "The backing artifact is missing."
+        availability, path = _content_state(artifact)
+        if availability != "available" or path is None:
+            return None, f"The backing content is {availability}."
+        if str(artifact["mime_type"] or "") not in {"text/plain", "text/markdown"}:
+            return None, "The backing is not a text or markdown file."
+        try:
+            if path.stat().st_size > MAX_LOCATOR_TEXT_BYTES:
+                return None, "The backing text is too large to check."
+            return _read_backing_lines(path), ""
+        except (OSError, UnicodeError):
+            return None, "The backing text could not be read."
+
+
+def _read_backing_lines(path: Path) -> list[str]:
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def _entry_read(connection, row, backing: _BackingText | None = None) -> LiteratureEntryRead:
     entry_id = str(row["id"])
+    checks: list[ResultCheck] = []
+    verdict: Verdict | None = None
+    if row["entry_kind"] == "datum":
+        has_line_locator = row["locator_kind"] == "line" and row["locator_start"] is not None
+        if has_line_locator:
+            if backing is None:
+                source_row = _source_row(connection, str(row["workspace_id"]), str(row["source_id"]))
+                backing = _BackingText(connection, str(row["workspace_id"]), source_row)
+            lines, unavailable = backing.get()
+        else:
+            lines, unavailable = None, ""
+        checks, verdict = check_datum(
+            value_number=row["value_number"],
+            value_text=row["value_text"],
+            unit=row["unit"],
+            locator_kind=row["locator_kind"],
+            locator_start=row["locator_start"],
+            locator_end=row["locator_end"],
+            lines=lines,
+            unavailable=unavailable,
+        )
     return LiteratureEntryRead(
         id=entry_id,
         workspace_id=str(row["workspace_id"]),
@@ -187,6 +250,8 @@ def _entry_read(connection, row) -> LiteratureEntryRead:
         context_text=row["context_text"],
         provenance_ref=f"literature_entry:{entry_id}",
         used_by=_used_by(connection, str(row["workspace_id"]), entry_id),
+        checks=checks,
+        verdict=verdict,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -200,6 +265,7 @@ def _source_read(connection, row) -> LiteratureSourceRead:
         artifact_id = str(row["artifact_id"])
         artifact_row = _artifact_row_or_none(connection, workspace_id, artifact_id)
         artifact = _backing_read(workspace_id, source_id, artifact_id, artifact_row)
+    backing = _BackingText(connection, workspace_id, row)
     entry_rows = connection.execute(
         """
         SELECT * FROM literature_entries
@@ -220,7 +286,7 @@ def _source_read(connection, row) -> LiteratureSourceRead:
         published_year=row["published_year"],
         source_ref=f"literature_source:{source_id}",
         backing=artifact,
-        entries=[_entry_read(connection, entry_row) for entry_row in entry_rows],
+        entries=[_entry_read(connection, entry_row, backing) for entry_row in entry_rows],
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -388,7 +454,7 @@ def _validate_locator(connection, workspace_id: str, source_row, payload: Litera
                 "Backing text is too large for bounded locator verification.",
                 status_code=422,
             )
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = _read_backing_lines(path)
     except LiteratureError:
         raise
     except (OSError, UnicodeError) as exc:
