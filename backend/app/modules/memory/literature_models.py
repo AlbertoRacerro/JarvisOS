@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.modules.engineering.evaluator_contracts import ResultCheck, Verdict
+
 LiteratureSourceKind = Literal["paper", "book", "report", "standard", "dataset", "web", "other"]
 LiteratureState = Literal["raw", "review", "accepted"]
 LiteratureEntryKind = Literal["claim", "datum"]
@@ -87,6 +89,8 @@ class LiteratureEntryRead(StrictLiteratureModel):
     context_text: str | None
     provenance_ref: str
     used_by: list[LiteratureUsedByRead]
+    checks: list[ResultCheck] = Field(default_factory=list)
+    verdict: Verdict | None = None
     created_at: str
     updated_at: str
 
