@@ -139,7 +139,7 @@ def test_real_tools_proof_build_mesh_solve_adapters(tmp_path: Path) -> None:
     assert build_result.verdict == "pass", f"build failed: {build_result.errors}"
     assert build_result.manifest is not None
 
-    solid_eval_res = solid_build_result_to_evaluation_result(build_result, spec)
+    solid_eval_res = solid_build_result_to_evaluation_result(build_result)
     solid_desc = solid_evaluator_descriptor()
 
     assert solid_eval_res.evaluator_id == SOLID_EVALUATOR_ID

@@ -17,15 +17,14 @@ from typing import Any, Final
 from app.modules.ai.jarvis_context_models import SourceRef
 from app.modules.bluecad.export import sha256_file
 from app.modules.bluecad.models import BuildResult
-from app.modules.bluecad.registry import ToolRegistryError, resolve_tool
+from app.modules.bluecad.registry import resolve_tool
 from app.modules.engineering.evaluator_contracts import (
     REFUSAL_CATEGORIES,
-    AvailabilityState,
+    CheckStatus,
     EvaluationFailure,
     EvaluationRequest,
     EvaluationResult,
     EvaluationStatus,
-    EvaluatorAvailability,
     EvaluatorDescriptor,
     NamedQuantity,
     NumericalDiagnostics,
@@ -52,10 +51,10 @@ CHECK_ELEMENT_QUALITY: Final = "ELEMENT_QUALITY"
 CHECK_SOLVER_COMPLETION: Final = "SOLVER_COMPLETION"
 CHECK_FORCE_EQUILIBRIUM: Final = "FORCE_EQUILIBRIUM"
 
-# Policy limit for tetrahedral element quality (SICN / mean ratio).
+# Policy limit for tetrahedral element quality (gamma measure from Gmsh tetrahedral optimizer).
 # Elements with quality below 0.10 are considered poor/degraded for static FEA.
 MESH_QUALITY_POLICY_LIMIT: Final = 0.10
-MESH_QUALITY_POLICY_SOURCE: Final = "policy:mesh_quality_min"
+MESH_QUALITY_POLICY_SOURCE: Final = "policy:gmsh_gamma_min"
 
 SOLID_TOPOLOGY_SOURCE: Final = "physical_limit"
 SOLID_VOLUME_SOURCE: Final = "policy:declared_volume"
@@ -222,7 +221,6 @@ def _solid_artifacts(build_result: BuildResult, workspace_id: str) -> list[Sourc
 
 def solid_build_result_to_evaluation_result(
     build_result: BuildResult,
-    spec: dict[str, Any] | None = None,
     *,
     request: EvaluationRequest | None = None,
     workspace_id: str | None = None,
@@ -292,103 +290,145 @@ def solid_build_result_to_evaluation_result(
     # Built geometry exists
     manifest = build_result.manifest or {}
     assembly = manifest.get("assembly", {})
-    total_volume = float(assembly.get("total_volume_mm3", 0.0))
-    bbox = assembly.get("bbox_mm", {})
-    min_coords = bbox.get("min", [0.0, 0.0, 0.0])
-    max_coords = bbox.get("max", [0.0, 0.0, 0.0])
+    outputs_list: list[NamedQuantity] = []
+    if "total_volume_mm3" in assembly and assembly["total_volume_mm3"] is not None:
+        try:
+            total_volume = float(assembly["total_volume_mm3"])
+            if math.isfinite(total_volume):
+                outputs_list.append(
+                    NamedQuantity(name="total_volume", value=Quantity(value=total_volume, unit="mm**3"))
+                )
+        except (ValueError, TypeError):
+            pass
 
-    outputs = (
-        NamedQuantity(name="total_volume", value=Quantity(value=total_volume, unit="mm**3")),
-        NamedQuantity(name="bbox_min_x", value=Quantity(value=float(min_coords[0]), unit="mm")),
-        NamedQuantity(name="bbox_min_y", value=Quantity(value=float(min_coords[1]), unit="mm")),
-        NamedQuantity(name="bbox_min_z", value=Quantity(value=float(min_coords[2]), unit="mm")),
-        NamedQuantity(name="bbox_max_x", value=Quantity(value=float(max_coords[0]), unit="mm")),
-        NamedQuantity(name="bbox_max_y", value=Quantity(value=float(max_coords[1]), unit="mm")),
-        NamedQuantity(name="bbox_max_z", value=Quantity(value=float(max_coords[2]), unit="mm")),
-        NamedQuantity(name="bbox_dx", value=Quantity(value=float(max_coords[0] - min_coords[0]), unit="mm")),
-        NamedQuantity(name="bbox_dy", value=Quantity(value=float(max_coords[1] - min_coords[1]), unit="mm")),
-        NamedQuantity(name="bbox_dz", value=Quantity(value=float(max_coords[2] - min_coords[2]), unit="mm")),
-    )
+    if "bbox_mm" in assembly and isinstance(assembly["bbox_mm"], dict):
+        bbox = assembly["bbox_mm"]
+        min_coords = bbox.get("min")
+        max_coords = bbox.get("max")
+        if (
+            min_coords is not None
+            and max_coords is not None
+            and len(min_coords) == 3
+            and len(max_coords) == 3
+        ):
+            try:
+                min_f = [float(x) for x in min_coords]
+                max_f = [float(x) for x in max_coords]
+                if all(math.isfinite(x) for x in min_f) and all(math.isfinite(x) for x in max_f):
+                    outputs_list.extend(
+                        [
+                            NamedQuantity(name="bbox_min_x", value=Quantity(value=min_f[0], unit="mm")),
+                            NamedQuantity(name="bbox_min_y", value=Quantity(value=min_f[1], unit="mm")),
+                            NamedQuantity(name="bbox_min_z", value=Quantity(value=min_f[2], unit="mm")),
+                            NamedQuantity(name="bbox_max_x", value=Quantity(value=max_f[0], unit="mm")),
+                            NamedQuantity(name="bbox_max_y", value=Quantity(value=max_f[1], unit="mm")),
+                            NamedQuantity(name="bbox_max_z", value=Quantity(value=max_f[2], unit="mm")),
+                            NamedQuantity(name="bbox_dx", value=Quantity(value=max_f[0] - min_f[0], unit="mm")),
+                            NamedQuantity(name="bbox_dy", value=Quantity(value=max_f[1] - min_f[1], unit="mm")),
+                            NamedQuantity(name="bbox_dz", value=Quantity(value=max_f[2] - min_f[2], unit="mm")),
+                        ]
+                    )
+            except (ValueError, TypeError):
+                pass
+
+    outputs = tuple(outputs_list)
 
     # Topology checks
     report_checks = {c["id"]: c for c in build_result.report.get("checks", [])}
     kernel_checks = assembly.get("kernel_checks", {})
 
-    brep_ok = True
+    brep_status: CheckStatus
     if "T1_BREP_VALID" in report_checks:
         brep_ok = report_checks["T1_BREP_VALID"]["status"] == "pass"
+        brep_status = "pass" if brep_ok else "fail"
+        brep_hint = "solid B-rep topology is valid" if brep_ok else "solid B-rep topology contains invalid parts"
     elif kernel_checks:
         brep_ok = all(check.get("brep_valid") for check in kernel_checks.values())
+        brep_status = "pass" if brep_ok else "fail"
+        brep_hint = "solid B-rep topology is valid" if brep_ok else "solid B-rep topology contains invalid parts"
+    else:
+        brep_status = "not_evaluated"
+        brep_hint = "B-rep validity check not evaluated: no validation report or kernel checks"
 
-    watertight_ok = True
+    watertight_status: CheckStatus
     if "T1_WATERTIGHT" in report_checks:
         watertight_ok = report_checks["T1_WATERTIGHT"]["status"] == "pass"
+        watertight_status = "pass" if watertight_ok else "fail"
+        watertight_hint = "solid is manifold and watertight" if watertight_ok else "solid is open or non-manifold"
     elif kernel_checks:
         watertight_ok = all(check.get("manifold") for check in kernel_checks.values())
+        watertight_status = "pass" if watertight_ok else "fail"
+        watertight_hint = "solid is manifold and watertight" if watertight_ok else "solid is open or non-manifold"
+    else:
+        watertight_status = "not_evaluated"
+        watertight_hint = "watertight check not evaluated: no validation report or kernel checks"
 
     checks_list: list[ResultCheck] = [
         ResultCheck(
             id=CHECK_BREP_VALID,
             family="input",
-            status="pass" if brep_ok else "fail",
-            hint="solid B-rep topology is valid" if brep_ok else "solid B-rep topology contains invalid parts",
+            status=brep_status,
+            hint=brep_hint,
             source=SOLID_TOPOLOGY_SOURCE,
         ),
         ResultCheck(
             id=CHECK_WATERTIGHT,
             family="input",
-            status="pass" if watertight_ok else "fail",
-            hint="solid is manifold and watertight" if watertight_ok else "solid is open or non-manifold",
+            status=watertight_status,
+            hint=watertight_hint,
             source=SOLID_TOPOLOGY_SOURCE,
         ),
     ]
 
-    # Declared volume check
-    declared = (spec or {}).get("declared", {})
+    # Declared volume check: map only native T1_VOLUME_DECL check
     if "T1_VOLUME_DECL" in report_checks:
         t1_vol = report_checks["T1_VOLUME_DECL"]
-        detail = t1_vol.get("detail", {})
-        rel_error = float(detail.get("rel_error", 0.0))
-        rel_tol = float(detail.get("rel_tol", 0.001))
-        is_pass = t1_vol.get("status") == "pass"
-        checks_list.append(
-            ResultCheck(
-                id=CHECK_VOLUME_CONSERVATION,
-                family="conservation",
-                status="pass" if is_pass else "fail",
-                actual=rel_error,
-                limit=rel_tol,
-                unit="1",
-                hint=(
-                    f"declared volume relative error {rel_error:.6g} within tolerance {rel_tol:.6g}"
-                    if is_pass
-                    else f"declared volume relative error {rel_error:.6g} exceeds tolerance {rel_tol:.6g}"
-                ),
-                source=SOLID_VOLUME_SOURCE,
+        detail = t1_vol.get("detail")
+        rel_error = None
+        rel_tol = None
+        if isinstance(detail, dict):
+            raw_err = detail.get("rel_error")
+            raw_tol = detail.get("rel_tol")
+            try:
+                if raw_err is not None:
+                    err_val = float(raw_err)
+                    if math.isfinite(err_val):
+                        rel_error = err_val
+                if raw_tol is not None:
+                    tol_val = float(raw_tol)
+                    if math.isfinite(tol_val):
+                        rel_tol = tol_val
+            except (ValueError, TypeError):
+                pass
+
+        if rel_error is not None and rel_tol is not None:
+            is_pass = t1_vol.get("status") == "pass"
+            checks_list.append(
+                ResultCheck(
+                    id=CHECK_VOLUME_CONSERVATION,
+                    family="conservation",
+                    status="pass" if is_pass else "fail",
+                    actual=rel_error,
+                    limit=rel_tol,
+                    unit="1",
+                    hint=(
+                        f"declared volume relative error {rel_error:.6g} within tolerance {rel_tol:.6g}"
+                        if is_pass
+                        else f"declared volume relative error {rel_error:.6g} exceeds tolerance {rel_tol:.6g}"
+                    ),
+                    source=SOLID_VOLUME_SOURCE,
+                )
             )
-        )
-    elif "total_volume_mm3" in declared:
-        decl_vol = declared["total_volume_mm3"]
-        expected = float(decl_vol.get("value", 0.0))
-        rel_tol = float(decl_vol.get("rel_tol", 0.001))
-        rel_error = abs(total_volume - expected) / max(abs(expected), 1.0)
-        is_pass = rel_error <= rel_tol
-        checks_list.append(
-            ResultCheck(
-                id=CHECK_VOLUME_CONSERVATION,
-                family="conservation",
-                status="pass" if is_pass else "fail",
-                actual=rel_error,
-                limit=rel_tol,
-                unit="1",
-                hint=(
-                    f"declared volume relative error {rel_error:.6g} within tolerance {rel_tol:.6g}"
-                    if is_pass
-                    else f"declared volume relative error {rel_error:.6g} exceeds tolerance {rel_tol:.6g}"
-                ),
-                source=SOLID_VOLUME_SOURCE,
+        else:
+            checks_list.append(
+                ResultCheck(
+                    id=CHECK_VOLUME_CONSERVATION,
+                    family="conservation",
+                    status="not_evaluated",
+                    hint="declared volume check lacks finite relative error or tolerance",
+                    source=SOLID_VOLUME_SOURCE,
+                )
             )
-        )
     else:
         checks_list.append(
             ResultCheck(
@@ -420,15 +460,15 @@ def solid_build_result_to_evaluation_result(
 
 def _parse_gmsh_quality(
     log_text: str,
-) -> tuple[float | None, float | None, int]:
+) -> tuple[float | None, float | None, int | None]:
     matches = list(WORST_AVG_RE.finditer(log_text))
     if not matches:
-        return None, None, 0
+        return None, None, None
     last_match = matches[-1]
     worst = float(last_match.group("worst"))
     average = float(last_match.group("average"))
     if not (math.isfinite(worst) and math.isfinite(average)):
-        return None, None, 0
+        return None, None, None
 
     tail_text = log_text[last_match.end() :]
     below_limit = 0
@@ -440,64 +480,13 @@ def _parse_gmsh_quality(
         if high <= MESH_QUALITY_POLICY_LIMIT + 1e-9:
             below_limit += count
 
-    if not histogram_found and worst < MESH_QUALITY_POLICY_LIMIT:
-        below_limit = 1
-
-    return worst, average, below_limit
-
-
-def _parse_msh_quality(msh_path: Path) -> tuple[float | None, float | None, int]:
-    try:
-        text = msh_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None, None, 0
-    if "$ElementData" not in text:
-        return None, None, 0
-    lines = text.splitlines()
-    values: list[float] = []
-    idx = 0
-    while idx < len(lines):
-        line = lines[idx].strip()
-        if line == "$ElementData":
-            idx += 1
-            if idx >= len(lines):
-                break
-            num_strings = int(lines[idx].strip())
-            idx += 1 + num_strings
-            if idx >= len(lines):
-                break
-            num_reals = int(lines[idx].strip())
-            idx += 1 + num_reals
-            if idx >= len(lines):
-                break
-            num_ints = int(lines[idx].strip())
-            idx += 1 + num_ints
-            if idx < len(lines):
-                count = int(lines[idx].strip())
-                idx += 1
-                for _ in range(count):
-                    if idx >= len(lines):
-                        break
-                    parts = lines[idx].strip().split()
-                    if len(parts) >= 2:
-                        val = float(parts[1])
-                        if math.isfinite(val):
-                            values.append(val)
-                    idx += 1
-            break
-        idx += 1
-    if not values:
-        return None, None, 0
-    min_q = min(values)
-    avg_q = sum(values) / len(values)
-    below = sum(1 for v in values if v < MESH_QUALITY_POLICY_LIMIT)
-    return min_q, avg_q, below
+    below_limit_count = below_limit if histogram_found else None
+    return worst, average, below_limit_count
 
 
 def _resolve_mesh_quality(
     mesh_result: dict[str, Any],
-) -> tuple[float | None, float | None, int]:
-    # Check attempt artifacts or top-level artifacts
+) -> tuple[float | None, float | None, int | None]:
     attempts = mesh_result.get("attempts", [])
     candidate_artifacts = [
         mesh_result.get("artifacts", {}),
@@ -510,30 +499,15 @@ def _resolve_mesh_quality(
             log_path = Path(log_meta["path"])
             if log_path.is_file():
                 try:
-                    q_min, q_avg, q_below = _parse_gmsh_quality(log_path.read_text(encoding="utf-8", errors="replace"))
+                    q_min, q_avg, q_below = _parse_gmsh_quality(
+                        log_path.read_text(encoding="utf-8", errors="replace")
+                    )
                     if q_min is not None:
                         return q_min, q_avg, q_below
                 except OSError:
                     pass
 
-    for arts in candidate_artifacts:
-        msh_meta = arts.get("mesh_msh")
-        if isinstance(msh_meta, dict) and "path" in msh_meta:
-            msh_path = Path(msh_meta["path"])
-            if msh_path.is_file():
-                q_min, q_avg, q_below = _parse_msh_quality(msh_path)
-                if q_min is not None:
-                    return q_min, q_avg, q_below
-
-    # Check warnings for inline quality mentions
-    for att in reversed(attempts):
-        warnings_text = "\n".join(att.get("warnings", []))
-        if warnings_text:
-            q_min, q_avg, q_below = _parse_gmsh_quality(warnings_text)
-            if q_min is not None:
-                return q_min, q_avg, q_below
-
-    return None, None, 0
+    return None, None, None
 
 
 def _normalize_digest(raw_digest: Any, file_path: Path | None = None) -> str:
@@ -604,11 +578,8 @@ def mesh_result_to_evaluation_result(
             ResultCheck(
                 id=CHECK_VOLUME_ELEMENTS,
                 family="discretisation",
-                status="fail",
-                actual=0.0,
-                limit=1.0,
-                unit="1",
-                hint=f"mesh generation failed: {failure.backend_code}",
+                status="not_evaluated",
+                hint=f"volume elements not evaluated: mesh generation failed ({failure.backend_code})",
                 source="policy:mesh_volume_elements",
             ),
             ResultCheck(
@@ -652,9 +623,12 @@ def mesh_result_to_evaluation_result(
             [
                 NamedQuantity(name="mesh_quality_min", value=Quantity(value=q_min, unit="1")),
                 NamedQuantity(name="mesh_quality_mean", value=Quantity(value=q_avg, unit="1")),
-                NamedQuantity(name="mesh_quality_below_limit", value=Quantity(value=float(q_below), unit="1")),
             ]
         )
+        if q_below is not None:
+            outputs_list.append(
+                NamedQuantity(name="mesh_quality_below_limit", value=Quantity(value=float(q_below), unit="1")),
+            )
 
     # Checks
     checks_list: list[ResultCheck] = []
@@ -673,7 +647,19 @@ def mesh_result_to_evaluation_result(
     )
 
     if q_min is not None and q_avg is not None:
-        q_pass = q_min >= MESH_QUALITY_POLICY_LIMIT and q_below == 0
+        q_pass = q_min >= MESH_QUALITY_POLICY_LIMIT and (q_below is None or q_below == 0)
+        if q_below is not None:
+            hint = (
+                f"minimum Gmsh gamma quality {q_min:.4f} >= limit {MESH_QUALITY_POLICY_LIMIT:.2f} (mean {q_avg:.4f}, {q_below} below limit)"
+                if q_pass
+                else f"minimum Gmsh gamma quality {q_min:.4f} < limit {MESH_QUALITY_POLICY_LIMIT:.2f} (mean {q_avg:.4f}, {q_below} below limit)"
+            )
+        else:
+            hint = (
+                f"minimum Gmsh gamma quality {q_min:.4f} >= limit {MESH_QUALITY_POLICY_LIMIT:.2f} (mean {q_avg:.4f})"
+                if q_pass
+                else f"minimum Gmsh gamma quality {q_min:.4f} < limit {MESH_QUALITY_POLICY_LIMIT:.2f} (mean {q_avg:.4f})"
+            )
         checks_list.append(
             ResultCheck(
                 id=CHECK_ELEMENT_QUALITY,
@@ -682,11 +668,7 @@ def mesh_result_to_evaluation_result(
                 actual=q_min,
                 limit=MESH_QUALITY_POLICY_LIMIT,
                 unit="1",
-                hint=(
-                    f"minimum element quality {q_min:.4f} >= limit {MESH_QUALITY_POLICY_LIMIT:.2f} (mean {q_avg:.4f}, {q_below} below limit)"
-                    if q_pass
-                    else f"minimum element quality {q_min:.4f} < limit {MESH_QUALITY_POLICY_LIMIT:.2f} (mean {q_avg:.4f}, {q_below} below limit)"
-                ),
+                hint=hint,
                 source=MESH_QUALITY_POLICY_SOURCE,
             )
         )
@@ -736,9 +718,7 @@ def _evaluate_force_equilibrium(
         )
 
     bcs = analysis_spec.get("bcs", [])
-    fixed_sets = [item for item in bcs if item.get("kind") == "fixed"]
-    # The existing parser's first-fixed-set reaction output must not be treated as the full support reaction when multiple fixed sets exist.
-    if len(fixed_sets) != 1:
+    if len(bcs) != 1 or bcs[0].get("kind", "fixed") != "fixed":
         return ResultCheck(
             id=CHECK_FORCE_EQUILIBRIUM,
             family="conservation",
@@ -757,24 +737,11 @@ def _evaluate_force_equilibrium(
             source=FEM_EQUILIBRIUM_SOURCE,
         )
 
-    # Pressure loads require an integrated resultant. A missing integration yields not_evaluated.
     total_applied = [0.0, 0.0, 0.0]
     for load in loads:
-        load_type = load.get("type")
-        if load_type == "pressure":
-            resultant = load.get("resultant_force") or load.get("integrated_force")
-            if not resultant or len(resultant) != 3 or not all(math.isfinite(v) for v in resultant):
-                return ResultCheck(
-                    id=CHECK_FORCE_EQUILIBRIUM,
-                    family="conservation",
-                    status="not_evaluated",
-                    hint="force equilibrium not evaluated: pressure load lacks integrated resultant",
-                    source=FEM_EQUILIBRIUM_SOURCE,
-                )
-            for i in range(3):
-                total_applied[i] += float(resultant[i])
-        elif load_type in ("force_total", "force") or "force" in load or "vector_n" in load:
-            f_vec = load.get("force") or load.get("vector_n")
+        load_type = load.get("type", "force_total")
+        if load_type == "force_total":
+            f_vec = load.get("force", load.get("vector_n"))
             if not f_vec or len(f_vec) != 3 or not all(math.isfinite(v) for v in f_vec):
                 return ResultCheck(
                     id=CHECK_FORCE_EQUILIBRIUM,
@@ -785,6 +752,14 @@ def _evaluate_force_equilibrium(
                 )
             for i in range(3):
                 total_applied[i] += float(f_vec[i])
+        elif load_type == "pressure":
+            return ResultCheck(
+                id=CHECK_FORCE_EQUILIBRIUM,
+                family="conservation",
+                status="not_evaluated",
+                hint="force equilibrium not evaluated: pressure load lacks integrated resultant",
+                source=FEM_EQUILIBRIUM_SOURCE,
+            )
         else:
             return ResultCheck(
                 id=CHECK_FORCE_EQUILIBRIUM,
@@ -822,11 +797,7 @@ def _evaluate_force_equilibrium(
     f_mag = math.sqrt(sum(v * v for v in total_applied))
     norm_res = res_mag / max(f_mag, 1.0)
 
-    tol_spec = analysis_spec.get("equilibrium_tolerance_n")
-    if tol_spec is not None and math.isfinite(float(tol_spec)) and float(tol_spec) > 0:
-        tolerance_n = float(tol_spec)
-    else:
-        tolerance_n = max(FEM_FORCE_EQUILIBRIUM_REL_TOL * f_mag, FEM_FORCE_EQUILIBRIUM_TOL_N)
+    tolerance_n = max(FEM_FORCE_EQUILIBRIUM_REL_TOL * f_mag, FEM_FORCE_EQUILIBRIUM_TOL_N)
 
     if res_mag <= tolerance_n:
         return ResultCheck(
@@ -987,302 +958,3 @@ def fem_result_to_evaluation_result(
         started_at=started_at,
         completed_at=completed,
     )
-
-
-class SolidBuildEvaluator:
-    """EngineeringEvaluator implementation for BLUECAD build123d geometry builds."""
-
-    def __init__(self, registry_path: Path | None = None) -> None:
-        self.registry_path = registry_path
-
-    def descriptor(self) -> EvaluatorDescriptor:
-        return solid_evaluator_descriptor(self.registry_path)
-
-    def availability(self) -> EvaluatorAvailability:
-        now = datetime.now(UTC)
-        try:
-            import build123d
-
-            version = getattr(build123d, "__version__", "0.11.1")
-            return EvaluatorAvailability(
-                evaluator_id=SOLID_EVALUATOR_ID,
-                state="available",
-                checked_at=now,
-                backend_version=version,
-            )
-        except ImportError:
-            return EvaluatorAvailability(
-                evaluator_id=SOLID_EVALUATOR_ID,
-                state="not_installed",
-                checked_at=now,
-                reason_code="TOOL_BINARY_MISSING",
-            )
-
-    def evaluate(self, request: EvaluationRequest) -> EvaluationResult:
-        if request.evaluator_id != SOLID_EVALUATOR_ID:
-            now = datetime.now(UTC)
-            req_ref, res_ref = _synthesize_refs(
-                request.request_ref.object_id,
-                "bluecad",
-                request.request_ref.workspace_id,
-            )
-            return EvaluationResult(
-                result_ref=res_ref,
-                request_ref=request.request_ref,
-                evaluator_id=SOLID_EVALUATOR_ID,
-                backend_version=self.descriptor().backend_version,
-                status="refused",
-                failure=EvaluationFailure(category="invalid_input", backend_code="SPEC_INVALID"),
-                fidelity="screening",
-                outputs=(),
-                checks=(),
-                completed_at=now,
-            )
-        now = datetime.now(UTC)
-        if request.is_expired(now):
-            req_ref, res_ref = _synthesize_refs(
-                request.request_ref.object_id,
-                "bluecad",
-                request.request_ref.workspace_id,
-            )
-            return EvaluationResult(
-                result_ref=res_ref,
-                request_ref=request.request_ref,
-                evaluator_id=SOLID_EVALUATOR_ID,
-                backend_version=self.descriptor().backend_version,
-                status="deadline_exceeded",
-                failure=EvaluationFailure(category="timeout", backend_code="TIMEOUT"),
-                fidelity="screening",
-                outputs=(),
-                checks=(),
-                completed_at=now,
-            )
-        avail = self.availability()
-        if avail.state != "available":
-            req_ref, res_ref = _synthesize_refs(
-                request.request_ref.object_id,
-                "bluecad",
-                request.request_ref.workspace_id,
-            )
-            return EvaluationResult(
-                result_ref=res_ref,
-                request_ref=request.request_ref,
-                evaluator_id=SOLID_EVALUATOR_ID,
-                backend_version=self.descriptor().backend_version,
-                status="refused",
-                failure=EvaluationFailure(category="not_available", backend_code=avail.reason_code or "TOOL_UNKNOWN"),
-                fidelity="screening",
-                outputs=(),
-                checks=(),
-                completed_at=now,
-            )
-        # Standalone evaluation without geometry spec is refused
-        req_ref, res_ref = _synthesize_refs(
-            request.request_ref.object_id,
-            "bluecad",
-            request.request_ref.workspace_id,
-        )
-        return EvaluationResult(
-            result_ref=res_ref,
-            request_ref=request.request_ref,
-            evaluator_id=SOLID_EVALUATOR_ID,
-            backend_version=self.descriptor().backend_version,
-            status="refused",
-            failure=EvaluationFailure(category="unsupported_request", backend_code="SPEC_INVALID"),
-            fidelity="screening",
-            outputs=(),
-            checks=(),
-            completed_at=now,
-        )
-
-
-class GmshMeshEvaluator:
-    """EngineeringEvaluator implementation for BLUECAD Gmsh meshing."""
-
-    def __init__(self, registry_path: Path | None = None) -> None:
-        self.registry_path = registry_path
-
-    def descriptor(self) -> EvaluatorDescriptor:
-        return mesh_evaluator_descriptor(self.registry_path)
-
-    def availability(self) -> EvaluatorAvailability:
-        now = datetime.now(UTC)
-        try:
-            tool = resolve_tool("gmsh", self.registry_path)
-            version = str(tool.get("version_pin") or "4.15.2")
-            return EvaluatorAvailability(
-                evaluator_id=MESH_EVALUATOR_ID,
-                state="available",
-                checked_at=now,
-                backend_version=version,
-            )
-        except ToolRegistryError as exc:
-            state: AvailabilityState = (
-                "disabled"
-                if exc.code == "TOOL_DISABLED"
-                else "not_installed"
-                if exc.code in {"TOOL_BINARY_MISSING", "TOOL_UNKNOWN"}
-                else "unhealthy"
-            )
-            return EvaluatorAvailability(
-                evaluator_id=MESH_EVALUATOR_ID,
-                state=state,
-                checked_at=now,
-                reason_code=exc.code,
-            )
-
-    def evaluate(self, request: EvaluationRequest) -> EvaluationResult:
-        now = datetime.now(UTC)
-        req_ref, res_ref = _synthesize_refs(
-            request.request_ref.object_id,
-            "bluecad",
-            request.request_ref.workspace_id,
-        )
-        if request.evaluator_id != MESH_EVALUATOR_ID:
-            return EvaluationResult(
-                result_ref=res_ref,
-                request_ref=request.request_ref,
-                evaluator_id=MESH_EVALUATOR_ID,
-                backend_version=self.descriptor().backend_version,
-                status="refused",
-                failure=EvaluationFailure(category="invalid_input", backend_code="MESH_FAIL"),
-                fidelity="screening",
-                outputs=(),
-                checks=(),
-                completed_at=now,
-            )
-        if request.is_expired(now):
-            return EvaluationResult(
-                result_ref=res_ref,
-                request_ref=request.request_ref,
-                evaluator_id=MESH_EVALUATOR_ID,
-                backend_version=self.descriptor().backend_version,
-                status="deadline_exceeded",
-                failure=EvaluationFailure(category="timeout", backend_code="TIMEOUT"),
-                fidelity="screening",
-                outputs=(),
-                checks=(),
-                completed_at=now,
-            )
-        avail = self.availability()
-        if avail.state != "available":
-            return EvaluationResult(
-                result_ref=res_ref,
-                request_ref=request.request_ref,
-                evaluator_id=MESH_EVALUATOR_ID,
-                backend_version=self.descriptor().backend_version,
-                status="refused",
-                failure=EvaluationFailure(category="not_available", backend_code=avail.reason_code or "TOOL_UNKNOWN"),
-                fidelity="screening",
-                outputs=(),
-                checks=(),
-                completed_at=now,
-            )
-        return EvaluationResult(
-            result_ref=res_ref,
-            request_ref=request.request_ref,
-            evaluator_id=MESH_EVALUATOR_ID,
-            backend_version=self.descriptor().backend_version,
-            status="refused",
-            failure=EvaluationFailure(category="unsupported_request", backend_code="MESH_FAIL"),
-            fidelity="screening",
-            outputs=(),
-            checks=(),
-            completed_at=now,
-        )
-
-
-class CalculixFemEvaluator:
-    """EngineeringEvaluator implementation for BLUECAD CalculiX static FEM."""
-
-    def __init__(self, registry_path: Path | None = None) -> None:
-        self.registry_path = registry_path
-
-    def descriptor(self) -> EvaluatorDescriptor:
-        return fem_evaluator_descriptor(self.registry_path)
-
-    def availability(self) -> EvaluatorAvailability:
-        now = datetime.now(UTC)
-        try:
-            tool = resolve_tool("calculix", self.registry_path)
-            version = str(tool.get("version_pin") or "2.22")
-            return EvaluatorAvailability(
-                evaluator_id=FEM_EVALUATOR_ID,
-                state="available",
-                checked_at=now,
-                backend_version=version,
-            )
-        except ToolRegistryError as exc:
-            state: AvailabilityState = (
-                "disabled"
-                if exc.code == "TOOL_DISABLED"
-                else "not_installed"
-                if exc.code in {"TOOL_BINARY_MISSING", "TOOL_UNKNOWN"}
-                else "unhealthy"
-            )
-            return EvaluatorAvailability(
-                evaluator_id=FEM_EVALUATOR_ID,
-                state=state,
-                checked_at=now,
-                reason_code=exc.code,
-            )
-
-    def evaluate(self, request: EvaluationRequest) -> EvaluationResult:
-        now = datetime.now(UTC)
-        req_ref, res_ref = _synthesize_refs(
-            request.request_ref.object_id,
-            "bluecad",
-            request.request_ref.workspace_id,
-        )
-        if request.evaluator_id != FEM_EVALUATOR_ID:
-            return EvaluationResult(
-                result_ref=res_ref,
-                request_ref=request.request_ref,
-                evaluator_id=FEM_EVALUATOR_ID,
-                backend_version=self.descriptor().backend_version,
-                status="refused",
-                failure=EvaluationFailure(category="invalid_input", backend_code="SOLVE_ERROR"),
-                fidelity="field_resolved",
-                outputs=(),
-                checks=(),
-                completed_at=now,
-            )
-        if request.is_expired(now):
-            return EvaluationResult(
-                result_ref=res_ref,
-                request_ref=request.request_ref,
-                evaluator_id=FEM_EVALUATOR_ID,
-                backend_version=self.descriptor().backend_version,
-                status="deadline_exceeded",
-                failure=EvaluationFailure(category="timeout", backend_code="TIMEOUT"),
-                fidelity="field_resolved",
-                outputs=(),
-                checks=(),
-                completed_at=now,
-            )
-        avail = self.availability()
-        if avail.state != "available":
-            return EvaluationResult(
-                result_ref=res_ref,
-                request_ref=request.request_ref,
-                evaluator_id=FEM_EVALUATOR_ID,
-                backend_version=self.descriptor().backend_version,
-                status="refused",
-                failure=EvaluationFailure(category="not_available", backend_code=avail.reason_code or "TOOL_UNKNOWN"),
-                fidelity="field_resolved",
-                outputs=(),
-                checks=(),
-                completed_at=now,
-            )
-        return EvaluationResult(
-            result_ref=res_ref,
-            request_ref=request.request_ref,
-            evaluator_id=FEM_EVALUATOR_ID,
-            backend_version=self.descriptor().backend_version,
-            status="refused",
-            failure=EvaluationFailure(category="unsupported_request", backend_code="SOLVE_ERROR"),
-            fidelity="field_resolved",
-            outputs=(),
-            checks=(),
-            completed_at=now,
-        )

@@ -19,10 +19,8 @@ from app.modules.bluecad.result_adapters import (
     FEM_EVALUATOR_ID,
     MESH_EVALUATOR_ID,
     MESH_QUALITY_POLICY_LIMIT,
+    MESH_QUALITY_POLICY_SOURCE,
     SOLID_EVALUATOR_ID,
-    CalculixFemEvaluator,
-    GmshMeshEvaluator,
-    SolidBuildEvaluator,
     fem_evaluator_descriptor,
     fem_result_to_evaluation_result,
     mesh_evaluator_descriptor,
@@ -34,7 +32,7 @@ from app.modules.engineering.evaluator_contracts import (
     EvaluationResult,
     result_verdict,
 )
-from app.modules.engineering.operator_service import evaluator_reads, evaluator_registry
+from app.modules.engineering.operator_service import evaluator_registry
 
 
 def _mock_build_result(
@@ -116,9 +114,8 @@ def test_solid_adapter_valid_solid_absent_declared_volume_yields_usable_with_war
     tmp_path: Path,
 ) -> None:
     build_result = _mock_build_result(tmp_path, total_volume=125000.0)
-    spec = {"name": "test_spec", "parts": []}  # No declared section
 
-    res = solid_build_result_to_evaluation_result(build_result, spec)
+    res = solid_build_result_to_evaluation_result(build_result)
     desc = solid_evaluator_descriptor()
 
     assert res.evaluator_id == SOLID_EVALUATOR_ID
@@ -164,13 +161,8 @@ def test_solid_adapter_valid_declared_volume_yields_usable(tmp_path: Path) -> No
         declared_volume_rel_error=0.0002,
         declared_volume_rel_tol=0.001,
     )
-    spec = {
-        "declared": {
-            "total_volume_mm3": {"value": 1000.0, "rel_tol": 0.001},
-        }
-    }
 
-    res = solid_build_result_to_evaluation_result(build_result, spec)
+    res = solid_build_result_to_evaluation_result(build_result)
     desc = solid_evaluator_descriptor()
 
     checks_by_id = {c.id: c for c in res.checks}
@@ -192,13 +184,8 @@ def test_solid_adapter_false_declared_volume_fails_without_changing_measured_vol
         declared_volume_rel_error=0.15,
         declared_volume_rel_tol=0.001,
     )
-    spec = {
-        "declared": {
-            "total_volume_mm3": {"value": 850.0, "rel_tol": 0.001},
-        }
-    }
 
-    res = solid_build_result_to_evaluation_result(build_result, spec)
+    res = solid_build_result_to_evaluation_result(build_result)
     desc = solid_evaluator_descriptor()
 
     # Measured volume is unchanged
@@ -211,6 +198,87 @@ def test_solid_adapter_false_declared_volume_fails_without_changing_measured_vol
 
     # Result verdict is not_usable
     assert result_verdict(desc, res) == "not_usable"
+
+
+def test_solid_adapter_missing_evidence_yields_unchecked_and_omits_missing_outputs(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "missing_evidence"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {"assembly": {}, "parts": {}}
+    manifest_path = out_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    report = {
+        "report_version": "bluecad_validation_report_v0_1",
+        "spec_id": "sha256:missing",
+        "verdict": "pass",
+        "checks": [],
+        "errors": [],
+    }
+    build_result = BuildResult(
+        spec_id="missing",
+        out_dir=out_dir,
+        manifest_path=manifest_path,
+        report_path=None,
+        manifest=manifest,
+        report=report,
+        verdict="pass",
+        errors=[],
+    )
+
+    res = solid_build_result_to_evaluation_result(build_result)
+    desc = solid_evaluator_descriptor()
+
+    # When manifest lacks total_volume_mm3 or bbox_mm, those outputs are omitted (not 0.0)
+    assert res.outputs == ()
+
+    # When report lacks T1_BREP_VALID/T1_WATERTIGHT and no kernel_checks, emit not_evaluated
+    checks_by_id = {c.id: c for c in res.checks}
+    assert checks_by_id[CHECK_BREP_VALID].status == "not_evaluated"
+    assert checks_by_id[CHECK_WATERTIGHT].status == "not_evaluated"
+    assert checks_by_id[CHECK_VOLUME_CONSERVATION].status == "not_evaluated"
+
+    # Required checks not_evaluated yields unchecked
+    assert result_verdict(desc, res) == "unchecked"
+
+
+def test_solid_adapter_non_finite_or_missing_rel_error_yields_not_evaluated(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "bad_rel_error"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "assembly": {
+            "total_volume_mm3": 1000.0,
+            "kernel_checks": {"p1": {"brep_valid": True, "manifold": True}},
+        },
+        "parts": {},
+    }
+    report = {
+        "report_version": "bluecad_validation_report_v0_1",
+        "spec_id": "sha256:bad_rel_err",
+        "verdict": "pass",
+        "checks": [
+            {"id": "T1_BREP_VALID", "status": "pass"},
+            {"id": "T1_WATERTIGHT", "status": "pass"},
+            {"id": "T1_VOLUME_DECL", "status": "pass", "detail": {"rel_error": None, "rel_tol": 0.001}},
+        ],
+        "errors": [],
+    }
+    build_result = BuildResult(
+        spec_id="bad_rel_err",
+        out_dir=out_dir,
+        manifest_path=None,
+        report_path=None,
+        manifest=manifest,
+        report=report,
+        verdict="pass",
+        errors=[],
+    )
+
+    res = solid_build_result_to_evaluation_result(build_result)
+    checks_by_id = {c.id: c for c in res.checks}
+    assert checks_by_id[CHECK_VOLUME_CONSERVATION].status == "not_evaluated"
 
 
 def test_solid_adapter_bad_brep_or_open_solid_yields_not_usable(tmp_path: Path) -> None:
@@ -375,8 +443,36 @@ Info    : Done writing 'mesh.msh'
     assert checks_by_id[CHECK_ELEMENT_QUALITY].status == "pass"
     assert checks_by_id[CHECK_ELEMENT_QUALITY].actual == 0.803848
     assert checks_by_id[CHECK_ELEMENT_QUALITY].limit == MESH_QUALITY_POLICY_LIMIT
+    assert checks_by_id[CHECK_ELEMENT_QUALITY].source == MESH_QUALITY_POLICY_SOURCE
+    assert "gamma" in checks_by_id[CHECK_ELEMENT_QUALITY].hint
 
     assert result_verdict(desc, res) == "usable"
+
+
+def test_mesh_adapter_no_histogram_omits_below_limit_output(tmp_path: Path) -> None:
+    log_no_hist = """
+Info    : Meshing 3D...
+Info    : Optimizing mesh...
+Info    : Optimization starts (volume = 1) with worst = 0.050000 / average = 0.400000:
+Info    : Done writing 'mesh.msh'
+"""
+    mesh_res = _mock_mesh_result(tmp_path, log_quality=log_no_hist)
+    res = mesh_result_to_evaluation_result(mesh_res)
+    desc = mesh_evaluator_descriptor()
+
+    assert res.status == "succeeded"
+    outputs_by_name = {o.name: o.value for o in res.outputs}
+    assert "mesh_quality_min" in outputs_by_name
+    assert "mesh_quality_mean" in outputs_by_name
+    # When no histogram is found, below-limit count is not invented and output is omitted
+    assert "mesh_quality_below_limit" not in outputs_by_name
+
+    checks_by_id = {c.id: c for c in res.checks}
+    assert checks_by_id[CHECK_ELEMENT_QUALITY].status == "fail"
+    assert checks_by_id[CHECK_ELEMENT_QUALITY].actual == 0.05
+    assert checks_by_id[CHECK_ELEMENT_QUALITY].source == MESH_QUALITY_POLICY_SOURCE
+    assert "gamma" in checks_by_id[CHECK_ELEMENT_QUALITY].hint
+    assert result_verdict(desc, res) == "not_usable"
 
 
 def test_mesh_adapter_degraded_quality_mesh_fails_documented_policy_check(
@@ -444,6 +540,10 @@ def test_mesh_adapter_failures_and_errors_preserved(tmp_path: Path) -> None:
     assert res_fail.failure is not None
     assert res_fail.failure.backend_code == "MESH_FAIL"
     assert res_fail.failure.category == "solver_crash"
+    checks_fail = {c.id: c for c in res_fail.checks}
+    assert checks_fail[CHECK_VOLUME_ELEMENTS].status == "not_evaluated"
+    assert checks_fail[CHECK_VOLUME_ELEMENTS].actual is None
+    assert checks_fail[CHECK_ELEMENT_QUALITY].status == "not_evaluated"
     assert result_verdict(desc, res_fail) == "not_usable"
 
     # MESH_GROUP_EMPTY
@@ -614,12 +714,19 @@ def test_fem_adapter_multiple_supports_or_pressure_without_resultant_is_unchecke
     # Multiple supports case without complete resultant is unchecked, not passed
     assert result_verdict(desc, res_multi) == "unchecked"
 
-    # Pressure load case without complete resultant
+    # Pressure load case (even with caller-supplied claimed resultant force, must be not_evaluated)
     pressure_spec = {
         "analysis_id": "pressure-case",
         "analysis_type": "static",
         "bcs": [{"port_label": "support_1", "kind": "fixed"}],
-        "loads": [{"port_label": "bore", "type": "pressure", "pressure": 10.0}],
+        "loads": [
+            {
+                "port_label": "bore",
+                "type": "pressure",
+                "pressure": 10.0,
+                "resultant_force": [100.0, 0.0, 0.0],
+            }
+        ],
     }
     fem_res2 = _mock_fem_result(tmp_path / "pressure", reaction_force=[-100.0, 0.0, 0.0])
     res_press = fem_result_to_evaluation_result(fem_res2, pressure_spec)
@@ -628,6 +735,49 @@ def test_fem_adapter_multiple_supports_or_pressure_without_resultant_is_unchecke
     assert checks2[CHECK_SOLVER_COMPLETION].status == "pass"
     assert checks2[CHECK_FORCE_EQUILIBRIUM].status == "not_evaluated"
     assert result_verdict(desc, res_press) == "unchecked"
+
+
+def test_fem_adapter_bc_without_kind_treated_as_fixed_passes_equilibrium(
+    tmp_path: Path,
+) -> None:
+    # Ordinary spec where BC lacks kind key and load lacks type key (defaults to force_total and vector_n)
+    analysis_spec = {
+        "analysis_id": "test-no-kind-bc",
+        "analysis_type": "static",
+        "bcs": [{"port_label": "fixed_port"}],
+        "loads": [{"port_label": "load_port", "vector_n": [100.0, 0.0, 0.0]}],
+    }
+    fem_res = _mock_fem_result(tmp_path, reaction_force=[-100.0, 0.0, 0.0])
+
+    res = fem_result_to_evaluation_result(fem_res, analysis_spec)
+    desc = fem_evaluator_descriptor()
+
+    assert res.status == "succeeded"
+    checks = {c.id: c for c in res.checks}
+    assert checks[CHECK_SOLVER_COMPLETION].status == "pass"
+    assert checks[CHECK_FORCE_EQUILIBRIUM].status == "pass"
+    assert checks[CHECK_FORCE_EQUILIBRIUM].actual == 0.0
+    assert result_verdict(desc, res) == "usable"
+
+
+def test_fem_adapter_equilibrium_ignores_caller_overridden_tolerance(
+    tmp_path: Path,
+) -> None:
+    # Caller supplies very large equilibrium_tolerance_n, but it must be ignored;
+    # limit comes only from module policy constants.
+    analysis_spec = {
+        "analysis_id": "test-ignore-tolerance",
+        "analysis_type": "static",
+        "bcs": [{"port_label": "fixed_port", "kind": "fixed"}],
+        "loads": [{"port_label": "load_port", "type": "force_total", "force": [100.0, 0.0, 0.0]}],
+        "equilibrium_tolerance_n": 5000.0,
+    }
+    fem_res = _mock_fem_result(tmp_path, reaction_force=[-100.0, 0.0, 0.0])
+
+    res = fem_result_to_evaluation_result(fem_res, analysis_spec)
+    eq_check = {c.id: c for c in res.checks}[CHECK_FORCE_EQUILIBRIUM]
+    # Limit must NOT be 5000.0; it should be max(0.01 * 100.0, 1e-3) = 1.0 N
+    assert eq_check.limit == 1.0
 
 
 def test_fem_adapter_failures_and_errors_preserved(tmp_path: Path) -> None:
@@ -679,33 +829,29 @@ def test_fem_adapter_failures_and_errors_preserved(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_evaluator_registry_and_reads_include_solid_mesh_fem() -> None:
+def test_evaluator_registry_does_not_include_solid_mesh_fem() -> None:
     registry = evaluator_registry()
-    assert SOLID_EVALUATOR_ID in registry
-    assert MESH_EVALUATOR_ID in registry
-    assert FEM_EVALUATOR_ID in registry
+    assert SOLID_EVALUATOR_ID not in registry
+    assert MESH_EVALUATOR_ID not in registry
+    assert FEM_EVALUATOR_ID not in registry
 
-    solid_ev = registry[SOLID_EVALUATOR_ID]
-    assert isinstance(solid_ev, SolidBuildEvaluator)
-    assert solid_ev.descriptor().evaluator_id == SOLID_EVALUATOR_ID
-    assert solid_ev.availability().evaluator_id == SOLID_EVALUATOR_ID
 
-    mesh_ev = registry[MESH_EVALUATOR_ID]
-    assert isinstance(mesh_ev, GmshMeshEvaluator)
-    assert mesh_ev.descriptor().evaluator_id == MESH_EVALUATOR_ID
-    assert mesh_ev.availability().evaluator_id == MESH_EVALUATOR_ID
+def test_evaluator_descriptors() -> None:
+    solid_desc = solid_evaluator_descriptor()
+    assert solid_desc.evaluator_id == SOLID_EVALUATOR_ID
+    assert solid_desc.backend_kind == "cad_kernel"
+    assert solid_desc.backend_name == "build123d"
+    assert solid_desc.required_checks == (CHECK_BREP_VALID, CHECK_WATERTIGHT)
+    assert solid_desc.advisory_checks == (CHECK_VOLUME_CONSERVATION,)
 
-    fem_ev = registry[FEM_EVALUATOR_ID]
-    assert isinstance(fem_ev, CalculixFemEvaluator)
-    assert fem_ev.descriptor().evaluator_id == FEM_EVALUATOR_ID
-    assert fem_ev.availability().evaluator_id == FEM_EVALUATOR_ID
+    mesh_desc = mesh_evaluator_descriptor()
+    assert mesh_desc.evaluator_id == MESH_EVALUATOR_ID
+    assert mesh_desc.backend_kind == "mesher"
+    assert mesh_desc.backend_name == "Gmsh"
+    assert mesh_desc.required_checks == (CHECK_VOLUME_ELEMENTS, CHECK_ELEMENT_QUALITY)
 
-    reads = evaluator_reads(registry)
-    read_map = {r.evaluator_id: r for r in reads}
-    assert SOLID_EVALUATOR_ID in read_map
-    assert MESH_EVALUATOR_ID in read_map
-    assert FEM_EVALUATOR_ID in read_map
-
-    assert read_map[SOLID_EVALUATOR_ID].backend_kind == "cad_kernel"
-    assert read_map[MESH_EVALUATOR_ID].backend_kind == "mesher"
-    assert read_map[FEM_EVALUATOR_ID].backend_kind == "fem_solver"
+    fem_desc = fem_evaluator_descriptor()
+    assert fem_desc.evaluator_id == FEM_EVALUATOR_ID
+    assert fem_desc.backend_kind == "fem_solver"
+    assert fem_desc.backend_name == "CalculiX"
+    assert fem_desc.required_checks == (CHECK_SOLVER_COMPLETION, CHECK_FORCE_EQUILIBRIUM)
