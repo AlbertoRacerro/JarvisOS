@@ -46,6 +46,7 @@ HERMES_TOOL_ALLOWLIST = frozenset({"mcp__jarvis__jarvis_context_preview",
                                   "mcp__jarvis__jarvis_process_read", "mcp__jarvis__jarvis_process_act",
                                   "mcp__jarvis__jarvis_bluecad_read", "mcp__jarvis__jarvis_bluecad_act",
                                   "mcp__jarvis__jarvis_studio_read", "mcp__jarvis__jarvis_studio_act",
+                                  "mcp__jarvis__jarvis_bench_read", "mcp__jarvis__jarvis_bench_run",
                                   "memory", "session_search"})
 _BWRAP_PREFIX = ("bwrap", "--dev-bind", "/", "/", "--unshare-net", "--die-with-parent", "--")
 
@@ -86,6 +87,15 @@ _HERMES_STUDIO_ACT_CAPABILITY = JarvisCapabilityDescriptor(
     capability_id="jarvis.studio_act", route_id="ai-threads", action_class="PROPOSE",
     label="Propose a Studio draft",
 )
+_HERMES_BENCH_READ_CAPABILITY = JarvisCapabilityDescriptor(
+    capability_id="jarvis.bench_read", route_id="ai-threads", action_class="READ",
+    label="Read engineering bench evaluators or runs",
+)
+# EXECUTE keeps its own grant outside the common registry (111); dispatch_tool admits it by identity only.
+_HERMES_BENCH_RUN_CAPABILITY = JarvisCapabilityDescriptor(
+    capability_id="jarvis.bench_run", route_id="ai-threads", action_class="EXECUTE",
+    label="Run an engineering bench evaluator",
+)
 _TOOL_CAPABILITIES = {
     "jarvis_retrieval_query": "jarvis.retrieval_query",
     "jarvis_decide": "jarvis.decide",
@@ -95,11 +105,13 @@ _TOOL_CAPABILITIES = {
     "jarvis_bluecad_act": "jarvis.bluecad_act",
     "jarvis_studio_read": "jarvis.studio_read",
     "jarvis_studio_act": "jarvis.studio_act",
+    "jarvis_bench_read": "jarvis.bench_read",
+    "jarvis_bench_run": "jarvis.bench_run",
 }
 for _descriptor in (_HERMES_PROCESS_READ_CAPABILITY, _HERMES_PROCESS_ACT_CAPABILITY,
                     _HERMES_BLUECAD_READ_CAPABILITY,
                     _HERMES_BLUECAD_ACT_CAPABILITY, _HERMES_STUDIO_READ_CAPABILITY,
-                    _HERMES_STUDIO_ACT_CAPABILITY):
+                    _HERMES_STUDIO_ACT_CAPABILITY, _HERMES_BENCH_READ_CAPABILITY):
     if _descriptor not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
         PRODUCTION_CAPABILITY_REGISTRY.register(_descriptor)
 if _HERMES_CONTEXT_CAPABILITY not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
@@ -321,7 +333,10 @@ def dispatch_tool(
                 and scope.jarvis_thread_id in (None, call.session_ref.jarvis_thread_id)):
             descriptors = PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads")
             descriptor = next((item for item in descriptors if item.capability_id == call.capability_id), None)
-            if descriptor is not None and descriptor.action_class in {"READ", "CONTEXT", "PROPOSE"}:
+            if call.capability_id == _HERMES_BENCH_RUN_CAPABILITY.capability_id:
+                descriptor = _HERMES_BENCH_RUN_CAPABILITY
+            if descriptor is not None and (descriptor.action_class in {"READ", "CONTEXT", "PROPOSE"}
+                                           or descriptor is _HERMES_BENCH_RUN_CAPABILITY):
                 if call.capability_id == "jarvis.context_preview":
                     try:
                         request = JarvisContextRequest.model_validate(call.arguments)
@@ -387,6 +402,10 @@ def dispatch_tool(
                                             "jarvis.studio_read", "jarvis.studio_act"}:
                     result, error = _workspace_action_tool(call, scope.workspace_id, error, interaction_id,
                                                            grant.constraints)
+                elif call.capability_id in {"jarvis.bench_read", "jarvis.bench_run"}:
+                    from app.modules.engineering.bench import dispatch_bench_tool
+
+                    result, error = dispatch_bench_tool(call, scope.workspace_id, error)
     return StructuredToolResult(
         call_id=call.call_id, capability_id=call.capability_id,
         status="succeeded" if result is not None else "refused",

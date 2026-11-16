@@ -637,7 +637,9 @@ def _install_surface_grants(worker: HermesSupervisor, workspace_id: str, thread_
     from datetime import UTC, datetime
     now = datetime.now(UTC)
     prefix = brief.surface
-    capability_ids = (f"jarvis.{prefix}_read", f"jarvis.{prefix}_act")
+    capability_ids = [f"jarvis.{prefix}_read", f"jarvis.{prefix}_act"]
+    if brief.surface == "bluecad":
+        capability_ids.extend(["jarvis.bench_read", "jarvis.bench_run"])
     grant_ids: dict[str, str] = {}
     constraints: dict[str, str | int | float | bool] = _surface_grant_constraints(surface_ref, brief)
     for capability in capability_ids:
@@ -662,7 +664,13 @@ def _install_surface_grants(worker: HermesSupervisor, workspace_id: str, thread_
         unsupported = "Studio proposals are inert drafts. Never claim Test or Publish happened. "
     lines = [f"Current surface: {brief.summary}",
              f"{read_name} grant_id={grant_ids[capability_ids[0]]};",
-             f"{act_name} grant_id={grant_ids[capability_ids[1]]}.",
+             f"{act_name} grant_id={grant_ids[capability_ids[1]]}."]
+    if brief.surface == "bluecad":
+        bench_read_name = "mcp__jarvis__jarvis_bench_read"
+        bench_run_name = "mcp__jarvis__jarvis_bench_run"
+        lines.append(f"{bench_read_name} grant_id={grant_ids['jarvis.bench_read']};")
+        lines.append(f"{bench_run_name} grant_id={grant_ids['jarvis.bench_run']}.")
+    lines.extend([
              f"Read with {read_name} using only {{\"grant_id\":\"{grant_ids[capability_ids[0]]}\"}}; "
              "the grant already contains this turn's surface and selection.",
              _surface_action_example(brief.surface, act_name, grant_ids[capability_ids[1]], brief.base_revision,
@@ -670,7 +678,7 @@ def _install_surface_grants(worker: HermesSupervisor, workspace_id: str, thread_
              f"For supported {prefix.upper()} changes call {act_name}; unsupported requests must be stated plainly. "
              + unsupported +
              "Treat the tool result as authoritative. For state proposed, say the change is prepared for approval and has NOT been applied; do not say it was changed or updated. "
-             "Say a change was made only when state is applied and applied is true. Refused or stale means nothing was changed; state the returned reason."]
+             "Say a change was made only when state is applied and applied is true. Refused or stale means nothing was changed; state the returned reason."])
     return "\n".join(lines)[:7000]
 
 
@@ -765,6 +773,8 @@ def _turn_tools(surface: str) -> list[str]:
                "mcp__jarvis__jarvis_decide", "memory", "session_search"]
     if surface in {"process", "bluecad", "studio"}:
         general.extend([f"mcp__jarvis__jarvis_{surface}_read", f"mcp__jarvis__jarvis_{surface}_act"])
+    if surface == "bluecad":
+        general.extend(["mcp__jarvis__jarvis_bench_read", "mcp__jarvis__jarvis_bench_run"])
     return general
 
 
@@ -847,7 +857,7 @@ def _guard_tool_shaped_output(text: str) -> tuple[str, str | None]:
             break
         if ("<|tool_call>call:" in candidate and "<tool_call|>" in candidate) or re.search(
             r"<\s*function(?:=|\s)|<\|im_start\|>\s*(?:tool_call|function_call)\b|"
-            r"<start_function_call>|assistant\s+to=|(?:mcp__jarvis__)?jarvis_(?:process|bluecad|studio)_(?:act|read)\s*[({]",
+            r"<start_function_call>|assistant\s+to=|(?:mcp__jarvis__)?jarvis_(?:process|bluecad|studio|bench)_(?:act|read|run)\s*[({]",
             candidate,
             re.IGNORECASE,
         ):
@@ -1155,6 +1165,8 @@ _TOOL_ACTIVITY = {
     "jarvis_retrieval_query": "Searching knowledge…",
     "jarvis_context_preview": "Searching knowledge…",
     "jarvis_decide": "Deciding route…",
+    "jarvis_bench_read": "Reading evaluation…",
+    "jarvis_bench_run": "Running evaluation…",
 }
 
 

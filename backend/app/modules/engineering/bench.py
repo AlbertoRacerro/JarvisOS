@@ -7,12 +7,16 @@ into an isolated output folder with bounded stdout view, and compare two runs.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import re
 import sys
+import threading
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -38,11 +42,43 @@ from app.modules.engineering.evaluator_contracts import (
     result_verdict,
     validate_evaluation_result,
 )
-from app.modules.engineering.operator_service import evaluator_registry
+from app.modules.engineering.operator_service import SAFE_ID, evaluator_registry
 from app.modules.engineering.refs import EvaluationResultRef
+
+if TYPE_CHECKING:
+    from app.modules.ai.agent_contracts import StructuredToolCall
 
 BLUECAD_EVALUATORS = {"bluecad.solid", "bluecad.mesh", "bluecad.fem"}
 MAX_VIEW_CHARS = 8000
+
+_ACTIVE_BENCH_WORKERS: set[str] = set()
+_ACTIVE_BENCH_LOCK = threading.Lock()
+
+
+def acquire_bench_worker(worker_id: str) -> bool:
+    with _ACTIVE_BENCH_LOCK:
+        if worker_id in _ACTIVE_BENCH_WORKERS:
+            return False
+        _ACTIVE_BENCH_WORKERS.add(worker_id)
+        return True
+
+
+def release_bench_worker(worker_id: str) -> None:
+    with _ACTIVE_BENCH_LOCK:
+        _ACTIVE_BENCH_WORKERS.discard(worker_id)
+
+
+def _has_path_keys(obj: Any) -> bool:
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            key_str = str(key)
+            if key_str.endswith("_path") or key_str == "path" or _has_path_keys(val):
+                return True
+    elif isinstance(obj, list):
+        for item in obj:
+            if _has_path_keys(item):
+                return True
+    return False
 
 
 class BenchInputError(Exception):
@@ -197,24 +233,7 @@ def format_bounded_view(
     return json.dumps(view, separators=(",", ":"))
 
 
-def handle_list(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="bench list")
-    parser.add_argument("--tool-registry", type=Path, default=None)
-    parser.add_argument("--root", type=Path, default=None)
-    args = parser.parse_args(argv)
-
-    root = Path.cwd() if args.root is None else args.root.resolve()
-    reg_path: Path | None = None
-    if args.tool_registry is not None:
-        try:
-            reg_path = _check_within_root(args.tool_registry, root, "--tool-registry")
-            if not reg_path.is_file():
-                emit_error("INPUT_NOT_FOUND", f"Tool registry file '{reg_path}' does not exist.")
-                return 2
-        except BenchInputError as exc:
-            emit_error(exc.code, exc.hint)
-            return 2
-
+def list_evaluators(*, tool_registry: Path | None = None) -> list[dict[str, Any]]:
     registry = evaluator_registry()
     rows: list[dict[str, Any]] = []
 
@@ -252,13 +271,13 @@ def handle_list(argv: Sequence[str]) -> int:
 
     # 2. Three BLUECAD evaluators
     descriptors = {
-        "bluecad.solid": (solid_evaluator_descriptor(reg_path), "geometry_spec"),
-        "bluecad.mesh": (mesh_evaluator_descriptor(reg_path), "analysis_spec"),
-        "bluecad.fem": (fem_evaluator_descriptor(reg_path), "analysis_spec"),
+        "bluecad.solid": (solid_evaluator_descriptor(tool_registry), "geometry_spec"),
+        "bluecad.mesh": (mesh_evaluator_descriptor(tool_registry), "analysis_spec"),
+        "bluecad.fem": (fem_evaluator_descriptor(tool_registry), "analysis_spec"),
     }
 
     for evaluator_id, (desc, req_kind) in descriptors.items():
-        state, reason, version = _check_bluecad_availability(evaluator_id, reg_path)
+        state, reason, version = _check_bluecad_availability(evaluator_id, tool_registry)
         rows.append(
             {
                 "id": evaluator_id,
@@ -278,6 +297,28 @@ def handle_list(argv: Sequence[str]) -> int:
             }
         )
 
+    return rows
+
+
+def handle_list(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(prog="bench list")
+    parser.add_argument("--tool-registry", type=Path, default=None)
+    parser.add_argument("--root", type=Path, default=None)
+    args = parser.parse_args(argv)
+
+    root = Path.cwd() if args.root is None else args.root.resolve()
+    reg_path: Path | None = None
+    if args.tool_registry is not None:
+        try:
+            reg_path = _check_within_root(args.tool_registry, root, "--tool-registry")
+            if not reg_path.is_file():
+                emit_error("INPUT_NOT_FOUND", f"Tool registry file '{reg_path}' does not exist.")
+                return 2
+        except BenchInputError as exc:
+            emit_error(exc.code, exc.hint)
+            return 2
+
+    rows = list_evaluators(tool_registry=reg_path)
     print(json.dumps(rows, indent=2))
     return 0
 
@@ -453,6 +494,67 @@ def _run_bluecad_fem(
     return eval_res, verdict
 
 
+def run_evaluation(
+    evaluator_id: str,
+    request_data: dict[str, Any],
+    out_dir: Path,
+    *,
+    from_dir: Path | None = None,
+    root: Path | None = None,
+    tool_registry: Path | None = None,
+    timeout_s: float = 60.0,
+    request_path: Path | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if root is None:
+        root = Path.cwd().resolve()
+
+    registry = evaluator_registry()
+
+    if evaluator_id not in registry and evaluator_id not in BLUECAD_EVALUATORS:
+        raise BenchInputError(
+            "UNKNOWN_EVALUATOR",
+            f"Unknown evaluator '{evaluator_id}'. Run 'bench list' to see available evaluators.",
+        )
+
+    if evaluator_id in registry:
+        result, verdict = _run_registry_evaluator(evaluator_id, registry[evaluator_id], request_data, out_dir)
+    else:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if request_path is None:
+            request_path = out_dir / "request.json"
+            request_path.write_text(json.dumps(request_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        if evaluator_id == "bluecad.solid":
+            result, verdict = _run_bluecad_solid(request_path, out_dir, tool_registry, timeout_s)
+        elif evaluator_id == "bluecad.mesh":
+            result, verdict = _run_bluecad_mesh(request_data, request_path, out_dir, root, tool_registry, timeout_s)
+        elif evaluator_id == "bluecad.fem":
+            result, verdict = _run_bluecad_fem(
+                request_data, request_path, from_dir, out_dir, root, tool_registry, timeout_s
+            )
+        else:
+            raise BenchInputError("UNKNOWN_EVALUATOR", f"Unhandled evaluator '{evaluator_id}'")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    res_dict = result.model_dump(mode="json")
+    res_dict["verdict"] = verdict
+    result_file = out_dir / "result.json"
+    result_file.write_text(json.dumps(res_dict, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    view_text = format_bounded_view(
+        evaluator_id=result.evaluator_id,
+        status=result.status,
+        verdict=verdict,
+        failure=result.failure.model_dump(mode="json") if result.failure else None,
+        checks=[c.model_dump(mode="json") for c in result.checks],
+        outputs=[o.model_dump(mode="json") for o in result.outputs],
+        artifacts=[a.model_dump(mode="json") for a in result.output_artifacts],
+        result_path=result_file,
+    )
+    bounded_view = json.loads(view_text)
+    return res_dict, bounded_view
+
+
 def handle_run(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(prog="bench run")
     parser.add_argument("evaluator_id", type=str)
@@ -486,27 +588,16 @@ def handle_run(argv: Sequence[str]) -> int:
         except json.JSONDecodeError as exc:
             raise BenchInputError("INVALID_JSON", f"Request file is not valid JSON: {exc}") from exc
 
-        registry = evaluator_registry()
-        evaluator_id = args.evaluator_id
-
-        if evaluator_id not in registry and evaluator_id not in BLUECAD_EVALUATORS:
-            raise BenchInputError(
-                "UNKNOWN_EVALUATOR",
-                f"Unknown evaluator '{evaluator_id}'. Run 'bench list' to see available evaluators.",
-            )
-
-        if evaluator_id in registry:
-            result, verdict = _run_registry_evaluator(evaluator_id, registry[evaluator_id], req_data, out_path)
-        elif evaluator_id == "bluecad.solid":
-            result, verdict = _run_bluecad_solid(req_path, out_path, reg_path, args.timeout_s)
-        elif evaluator_id == "bluecad.mesh":
-            result, verdict = _run_bluecad_mesh(req_data, req_path, out_path, root, reg_path, args.timeout_s)
-        elif evaluator_id == "bluecad.fem":
-            result, verdict = _run_bluecad_fem(
-                req_data, req_path, args.from_dir, out_path, root, reg_path, args.timeout_s
-            )
-        else:
-            raise BenchInputError("UNKNOWN_EVALUATOR", f"Unhandled evaluator '{evaluator_id}'")
+        res_dict, bounded_view = run_evaluation(
+            args.evaluator_id,
+            req_data,
+            out_path,
+            from_dir=args.from_dir,
+            root=root,
+            tool_registry=reg_path,
+            timeout_s=args.timeout_s,
+            request_path=req_path,
+        )
 
     except BenchInputError as exc:
         emit_error(exc.code, exc.hint)
@@ -515,23 +606,10 @@ def handle_run(argv: Sequence[str]) -> int:
         emit_error(f"ENGINE_ERROR_{type(exc).__name__.upper()}", f"{args.evaluator_id} raised: {exc}"[:240])
         return 2
 
-    # Write out_path / result.json
-    out_path.mkdir(parents=True, exist_ok=True)
-    res_dict = result.model_dump(mode="json")
-    res_dict["verdict"] = verdict
-    result_file = out_path / "result.json"
-    result_file.write_text(json.dumps(res_dict, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-    # Output bounded view
-    view_text = format_bounded_view(
-        evaluator_id=result.evaluator_id,
-        status=result.status,
-        verdict=verdict,
-        failure=result.failure.model_dump(mode="json") if result.failure else None,
-        checks=[c.model_dump(mode="json") for c in result.checks],
-        outputs=[o.model_dump(mode="json") for o in result.outputs],
-        artifacts=[a.model_dump(mode="json") for a in result.output_artifacts],
-        result_path=result_file,
+    view_text = (
+        json.dumps(bounded_view, indent=2)
+        if len(json.dumps(bounded_view, indent=2)) <= MAX_VIEW_CHARS
+        else json.dumps(bounded_view, separators=(",", ":"))
     )
     print(view_text)
 
@@ -539,47 +617,40 @@ def handle_run(argv: Sequence[str]) -> int:
     # 0 for usable and usable_with_warnings
     # 1 for unchecked and not_usable
     # 2 for a result that is not succeeded and for any usage or input error
-    if result.status != "succeeded":
+    if res_dict.get("status") != "succeeded":
         return 2
-    if verdict in {"usable", "usable_with_warnings"}:
+    if res_dict.get("verdict") in {"usable", "usable_with_warnings"}:
         return 0
     return 1
 
 
-def handle_compare(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="bench compare")
-    parser.add_argument("dir_a", type=Path)
-    parser.add_argument("dir_b", type=Path)
-    parser.add_argument("--root", type=Path, default=None)
-    args = parser.parse_args(argv)
+def compare_runs(
+    dir_a: Path,
+    dir_b: Path,
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    if root is not None:
+        dir_a = _check_within_root(dir_a, root, "dirA")
+        dir_b = _check_within_root(dir_b, root, "dirB")
 
-    root = Path.cwd() if args.root is None else args.root.resolve()
+    res_a_path = dir_a / "result.json"
+    res_b_path = dir_b / "result.json"
+
+    if not res_a_path.is_file():
+        raise BenchInputError("INPUT_NOT_FOUND", f"Result file missing in dirA: '{res_a_path}'")
+    if not res_b_path.is_file():
+        raise BenchInputError("INPUT_NOT_FOUND", f"Result file missing in dirB: '{res_b_path}'")
 
     try:
-        dir_a = _check_within_root(args.dir_a, root, "dirA")
-        dir_b = _check_within_root(args.dir_b, root, "dirB")
+        res_a = json.loads(res_a_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BenchInputError("INVALID_JSON", f"Result file in dirA is not valid JSON: {exc}") from exc
 
-        res_a_path = dir_a / "result.json"
-        res_b_path = dir_b / "result.json"
-
-        if not res_a_path.is_file():
-            raise BenchInputError("INPUT_NOT_FOUND", f"Result file missing in dirA: '{res_a_path}'")
-        if not res_b_path.is_file():
-            raise BenchInputError("INPUT_NOT_FOUND", f"Result file missing in dirB: '{res_b_path}'")
-
-        try:
-            res_a = json.loads(res_a_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise BenchInputError("INVALID_JSON", f"Result file in dirA is not valid JSON: {exc}") from exc
-
-        try:
-            res_b = json.loads(res_b_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise BenchInputError("INVALID_JSON", f"Result file in dirB is not valid JSON: {exc}") from exc
-
-    except BenchInputError as exc:
-        emit_error(exc.code, exc.hint)
-        return 2
+    try:
+        res_b = json.loads(res_b_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BenchInputError("INVALID_JSON", f"Result file in dirB is not valid JSON: {exc}") from exc
 
     outputs_a = {item["name"]: item["value"] for item in res_a.get("outputs", []) if "name" in item and "value" in item}
     outputs_b = {item["name"]: item["value"] for item in res_b.get("outputs", []) if "name" in item and "value" in item}
@@ -665,8 +736,287 @@ def handle_compare(argv: Sequence[str]) -> int:
                 break
             ranked = ranked[: len(ranked) // 2]
 
-    print(formatted)
+    return compare_doc
+
+
+def handle_compare(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(prog="bench compare")
+    parser.add_argument("dir_a", type=Path)
+    parser.add_argument("dir_b", type=Path)
+    parser.add_argument("--root", type=Path, default=None)
+    args = parser.parse_args(argv)
+
+    root = Path.cwd() if args.root is None else args.root.resolve()
+
+    try:
+        compare_doc = compare_runs(args.dir_a, args.dir_b, root=root)
+    except BenchInputError as exc:
+        emit_error(exc.code, exc.hint)
+        return 2
+
+    if compare_doc.get("truncated"):
+        print(json.dumps(compare_doc, separators=(",", ":")))
+    else:
+        print(json.dumps(compare_doc, indent=2))
     return 0
+
+
+def show_run(
+    run_dir: Path,
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    if root is not None:
+        run_dir = _check_within_root(run_dir, root, "run directory")
+    res_path = run_dir / "result.json"
+    if not res_path.is_file():
+        raise BenchInputError("INPUT_NOT_FOUND", f"Result file missing in run directory: '{res_path}'")
+    try:
+        res_data = json.loads(res_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BenchInputError("INVALID_JSON", f"Result file is not valid JSON: {exc}") from exc
+
+    view_text = format_bounded_view(
+        evaluator_id=res_data.get("evaluator_id", "unknown"),
+        status=res_data.get("status", "unknown"),
+        verdict=res_data.get("verdict", "unknown"),
+        failure=res_data.get("failure"),
+        checks=res_data.get("checks", []),
+        outputs=res_data.get("outputs", []),
+        artifacts=res_data.get("output_artifacts", res_data.get("artifacts", [])),
+        result_path=res_path,
+    )
+    return json.loads(view_text)
+
+
+# Evaluators the agent may run: they write only inside the run folder (or nothing) and finish within the
+# tool timeout. DWSIM, OpenFOAM and the day/night simulator write elsewhere or run on their own deadlines.
+AGENT_RUNNABLE_EVALUATORS = frozenset(BLUECAD_EVALUATORS | {
+    "fluids.pipe_pressure_drop", "ht.internal_convection", "coolprop.pure_fluid_properties"})
+# An absolute or parent-relative path: "/a/b/c", "../run_x/c", "C:\\a\\c". Units ("W/(m**2*K)", "kg/m3") have a
+# word character or ")" before their slash and are left alone.
+_PATH = re.compile(r"(?<![\w.)\]])(?:\.\.[/\\]|/|[A-Za-z]:\\)(?:[^\s\"'/\\]+[/\\])*([^\s\"'/\\]+)")
+
+
+def _strip_paths(value: Any) -> Any:
+    if isinstance(value, str):
+        return _PATH.sub(r"\1", value)
+    if isinstance(value, dict):
+        return {key: _strip_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_strip_paths(item) for item in value]
+    return value
+
+
+def _agent_view(view: dict[str, Any]) -> dict[str, Any]:
+    """The agent never sees a filesystem path: every absolute path is reduced to its last component."""
+    if "result_path" in view:
+        view = {**view, "result_path": "result.json"}
+    return _strip_paths(view)
+
+
+def dispatch_bench_tool(
+    call: StructuredToolCall,
+    workspace_id: str,
+    error: str,
+) -> tuple[dict[str, Any] | None, str]:
+    """Bench tool entry for the agent; an unexpected error is a refusal, never an exception."""
+    try:
+        return _dispatch_bench_tool(call, workspace_id, error)
+    except Exception as exc:
+        return None, f"bench_error_{type(exc).__name__.lower()}"[:96]
+
+
+def _dispatch_bench_tool(
+    call: StructuredToolCall,
+    workspace_id: str,
+    error: str,
+) -> tuple[dict[str, Any] | None, str]:
+    from app.modules.engineering.operator_service import workspace_dir
+
+    try:
+        studies_dir = workspace_dir(workspace_id)
+    except Exception:
+        return None, "workspace_not_found"
+
+    bench_root = (studies_dir.parent / "bench").resolve()
+    bench_root.mkdir(parents=True, exist_ok=True)
+    root = bench_root
+
+    if call.capability_id == "jarvis.bench_read":
+        for key in call.arguments:
+            if str(key).endswith("_path") or key == "path":
+                return None, "path_argument_refused"
+
+        op = call.arguments.get("op")
+        if not isinstance(op, str):
+            return None, "invalid_arguments"
+
+        if op == "list":
+            rows = list_evaluators()
+            return {"op": "list", "rows": rows}, error
+
+        if op == "show":
+            run_id = call.arguments.get("run_id")
+            if not isinstance(run_id, str) or not SAFE_ID.fullmatch(run_id) or run_id in {".", ".."}:
+                return None, "invalid_arguments"
+            run_dir = (bench_root / run_id).resolve()
+            if not run_dir.is_relative_to(bench_root) or not run_dir.is_dir():
+                return None, "run_not_found"
+            try:
+                view = show_run(run_dir, root=bench_root)
+                return {"op": "show", "run_id": run_id, "view": _agent_view(view)}, error
+            except BenchInputError:
+                return None, "run_not_found"
+            except Exception:
+                return None, "show_failed"
+
+        if op == "compare":
+            run_a = call.arguments.get("run_id_a")
+            run_b = call.arguments.get("run_id_b")
+            if not isinstance(run_a, str) or not SAFE_ID.fullmatch(run_a) or run_a in {".", ".."}:
+                return None, "invalid_arguments"
+            if not isinstance(run_b, str) or not SAFE_ID.fullmatch(run_b) or run_b in {".", ".."}:
+                return None, "invalid_arguments"
+            dir_a = (bench_root / run_a).resolve()
+            dir_b = (bench_root / run_b).resolve()
+            if not dir_a.is_relative_to(bench_root) or not dir_a.is_dir():
+                return None, "run_not_found"
+            if not dir_b.is_relative_to(bench_root) or not dir_b.is_dir():
+                return None, "run_not_found"
+            try:
+                compare_doc = compare_runs(dir_a, dir_b, root=bench_root)
+                return {"op": "compare", "run_id_a": run_a, "run_id_b": run_b, "view": compare_doc}, error
+            except BenchInputError:
+                return None, "run_not_found"
+            except Exception:
+                return None, "compare_failed"
+
+        return None, "unknown_operation"
+
+    if call.capability_id == "jarvis.bench_run":
+        for key in call.arguments:
+            if str(key).endswith("_path") or key == "path":
+                return None, "path_argument_refused"
+
+        raw_request = call.arguments.get("request")
+        if not isinstance(raw_request, dict):
+            return None, "invalid_arguments"
+        if _has_path_keys(raw_request):
+            return None, "path_in_request_forbidden"
+
+        request_data = copy.deepcopy(raw_request)
+
+        timeout_s = call.arguments.get("timeout_s", 60.0)
+        if not isinstance(timeout_s, (int, float)) or isinstance(timeout_s, bool):
+            return None, "invalid_arguments"
+        if timeout_s > 100.0 or timeout_s <= 0.0:
+            return None, "timeout_exceeded"
+
+        evaluator_id = call.arguments.get("evaluator_id")
+        if not isinstance(evaluator_id, str):
+            return None, "invalid_arguments"
+
+        registry = evaluator_registry()
+        if evaluator_id not in registry and evaluator_id not in BLUECAD_EVALUATORS:
+            return None, "unknown_evaluator"
+        if evaluator_id not in AGENT_RUNNABLE_EVALUATORS:
+            return None, "evaluator_not_agent_runnable"
+        if evaluator_id in registry:
+            # The grant names the workspace and the tool bounds the time; the request cannot widen either.
+            request_ref = request_data.get("request_ref")
+            if not isinstance(request_ref, dict):
+                return None, "invalid_arguments"
+            now = datetime.now(UTC)
+            request_data["request_ref"] = {**request_ref, "workspace_id": workspace_id}
+            request_data["requested_at"] = now.isoformat()
+            request_data["deadline_at"] = (now + timedelta(seconds=float(timeout_s))).isoformat()
+
+        geometry_run = call.arguments.get("geometry_run")
+        if evaluator_id == "bluecad.mesh" and not geometry_run:
+            return None, "missing_geometry_run"
+
+        if geometry_run is not None:
+            if not isinstance(geometry_run, str) or not SAFE_ID.fullmatch(geometry_run) or geometry_run in {".", ".."}:
+                return None, "invalid_run_id"
+            solid_dir = (bench_root / geometry_run).resolve()
+            if not solid_dir.is_relative_to(bench_root) or not solid_dir.is_dir():
+                return None, "run_not_found"
+            res_file = solid_dir / "result.json"
+            if not res_file.is_file():
+                return None, "run_not_found"
+            try:
+                res_data = json.loads(res_file.read_text(encoding="utf-8"))
+            except Exception:
+                return None, "invalid_run_result"
+            if res_data.get("evaluator_id") != "bluecad.solid":
+                return None, "wrong_evaluator"
+            step_file = solid_dir / "model.step"
+            manifest_file = solid_dir / "manifest.json"
+            if not step_file.is_file() or not manifest_file.is_file():
+                return None, "missing_geometry_files"
+            raw_geometry = request_data.get("geometry", {})
+            if not isinstance(raw_geometry, dict):
+                return None, "invalid_arguments"
+            geometry = dict(raw_geometry)
+            geometry["step_path"] = str(step_file)
+            geometry["manifest_path"] = str(manifest_file)
+            request_data["geometry"] = geometry
+
+        from_run = call.arguments.get("from_run")
+        if evaluator_id == "bluecad.fem" and not from_run:
+            return None, "missing_from_run"
+
+        from_dir: Path | None = None
+        if from_run is not None:
+            if not isinstance(from_run, str) or not SAFE_ID.fullmatch(from_run) or from_run in {".", ".."}:
+                return None, "invalid_run_id"
+            from_dir = (bench_root / from_run).resolve()
+            if not from_dir.is_relative_to(bench_root) or not from_dir.is_dir():
+                return None, "run_not_found"
+            res_file = from_dir / "result.json"
+            if not res_file.is_file():
+                return None, "run_not_found"
+            try:
+                res_data = json.loads(res_file.read_text(encoding="utf-8"))
+            except Exception:
+                return None, "invalid_run_result"
+            if res_data.get("evaluator_id") != "bluecad.mesh":
+                return None, "wrong_evaluator"
+            if not (from_dir / "mesh_result.json").is_file():
+                return None, "missing_mesh_result"
+
+        worker_id = call.session_ref.hermes_session_id if call.session_ref else "default"
+        if not acquire_bench_worker(worker_id):
+            return None, "busy"
+
+        run_id = f"run_{uuid4().hex[:12]}"
+        out_dir = bench_root / run_id
+
+        try:
+            res_dict, bounded_view = run_evaluation(
+                evaluator_id,
+                request_data,
+                out_dir,
+                from_dir=from_dir,
+                root=root,
+                timeout_s=float(timeout_s),
+            )
+            result_payload = {
+                "run_id": run_id,
+                "status": res_dict.get("status"),
+                "verdict": res_dict.get("verdict"),
+                "view": _agent_view(bounded_view),
+            }
+            return result_payload, error
+        except BenchInputError as exc:
+            return None, f"bench_input_error_{exc.code.lower()}"
+        except Exception as exc:
+            return None, f"engine_error_{type(exc).__name__.lower()}"
+        finally:
+            release_bench_worker(worker_id)
+
+    return None, error
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -698,3 +1048,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
