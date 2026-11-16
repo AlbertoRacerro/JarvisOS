@@ -1284,14 +1284,16 @@ class Supervisor:
         rec = self.state.get("mission")
         if rec and self.mission:
             task_idx = str(rec["next"])
-            if reason != "satisfied":
+            if reason == "satisfied":
+                rec.setdefault("unsatisfied_wakes", {}).pop(task_idx, None)
+            elif not wait.get("counted"):
+                # Counted once per wait: a pass that waits for an agent or is stopped before launching re-uses it.
                 counts = rec.setdefault("unsatisfied_wakes", {})
                 current_wakes = counts.get(task_idx, 0)
                 if current_wakes >= MAX_UNSATISFIED_WAKES:
                     return self.hold("task_wait_limit", None, report.turn_id)
                 counts[task_idx] = current_wakes + 1
-            else:
-                rec.setdefault("unsatisfied_wakes", {}).pop(task_idx, None)
+                wait["counted"] = True
 
         lines = []
         for j in wait.get("jobs", []):

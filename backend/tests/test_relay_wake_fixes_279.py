@@ -349,3 +349,35 @@ def test_point_4_wake_while_chosen_agent_cooling_down_waits_or_holds_and_launche
 
 
 
+
+
+def test_point_3_wake_stopped_while_agents_cool_counts_once(tmp_path: Path) -> None:
+    """A wake that launches nothing (every agent cooling, owner stopped) and is repeated on the same wait counts once."""
+    jid = "j-20261018T080000Z-999999"
+    wait_msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+    events = [claude_result(wait_msg)]
+    env = Env(tmp_path)
+    m = mission_def("benchmark task", mid="m-20261113T152626Z-cddd54")
+    rc.write_json_atomic(rc.missions_dir(env.store.root) / f"{m['id']}.json", m)
+    sid = "20261113-152631-50e0ed"
+    write_turn(env.relay.sessions_dir() / sid, events, agent="claude", status="continue", last_message=wait_msg)
+    report = rc.classify_turn(env.relay.sessions_dir() / sid / "turns" / "turn-001")
+
+    sup = env.supervisor()
+    sup.mission = m
+    sup.state = json.loads(json.dumps(REAL_OWNER_MISSION_STATE_SHAPE))
+    sup.state["permissions_digest"] = env.perm["v"]
+    future = T0 + timedelta(hours=2)
+    sup.state["cooldowns"] = {a: {"reason": "quota", "since": rc.iso(T0), "source": "limits", "until": rc.iso(future)}
+                              for a in rc.AGENTS}
+    sup.state["wait"] = {"jobs": [jid], "ci": [], "started_at": rc.iso(T0), "last_job_poll": None,
+                         "last_ci_poll": None, "turn": f"{sid}/turn-001"}
+    sup.signalled = True
+    for _ in range(MAX_REPEATS):
+        res = sup._wake_wait("unregistered_job", sup.state["wait"], report, {}, {}, failed_job=jid)
+        assert res in ("signal", "stopped")
+    assert sup.state["mission"]["unsatisfied_wakes"]["0"] == 1
+    assert len(env.relay.launches) == 0
+
+
+MAX_REPEATS = rc.MAX_UNSATISFIED_WAKES + 1
