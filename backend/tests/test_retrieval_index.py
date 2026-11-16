@@ -727,3 +727,50 @@ def test_typed_temporal_edges_and_workspace_isolation(
     hits = index.expand_graph([docs[0].source_ref], depth=2, limit=50)
     assert all(hit.source_ref.workspace_id == "w1" for hit in hits)
     get_settings.cache_clear()
+
+
+def test_search_hybrid_downweights_noisy_or_hashing_vector_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JARVISOS_DATA_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    initialize_database()
+    index = SQLiteIndexStore(documents=lambda: [])
+    lex_ref = SourceRef(authority_owner="modeling", object_type="decision", object_id="lex-only",
+                        content_digest=canonical_digest("lex"))
+    vec_ref = SourceRef(authority_owner="modeling", object_type="decision", object_id="vec-noise",
+                        content_digest=canonical_digest("vec"))
+    lex_hit = retrieval_index.RetrievalHit(source_ref=lex_ref, lexical_score=5.0, fused_score=0.0, index_revision="test")
+    vec_hit = retrieval_index.RetrievalHit(source_ref=vec_ref, vector_score=0.12, fused_score=0.0, index_revision="test")
+    index.search_lexical = lambda *_args, **_kwargs: [lex_hit]  # type: ignore[method-assign]
+    index.search_vector = lambda *_args, **_kwargs: [vec_hit]  # type: ignore[method-assign]
+
+    ranked = index.search_hybrid("pump sizing", limit=2)
+    assert [hit.source_ref.object_id for hit in ranked] == ["lex-only", "vec-noise"]
+    assert ranked[0].fused_score > ranked[1].fused_score
+
+    # Non-hashing embedder with low top vector score is also down-weighted relative to lexical.
+    index.embedder = object()  # type: ignore[assignment]
+    ranked_low_vec = index.search_hybrid("pump sizing", limit=2)
+    assert [hit.source_ref.object_id for hit in ranked_low_vec] == ["lex-only", "vec-noise"]
+    get_settings.cache_clear()
+
+
+def test_owner_records_carry_readable_summary_line_and_preserve_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JARVISOS_DATA_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    initialize_database()
+    seed_default_workspace()
+    decision = create_decision("main", DecisionCreate(title="Pump sizing", decision_text="Use lower pressure"))
+    doc = retrieval_index._model_document("decision", decision, "main")
+    first_line, json_body = doc.text.split("\n", 1)
+    assert first_line.startswith("decision: Pump sizing")
+    assert json.loads(json_body)["id"] == decision.id
+    assert doc.source_ref.content_digest == canonical_digest(decision.model_dump(mode="json"))
+
+    index = SQLiteIndexStore()
+    index.rebuild()
+    res = index.resolve_authoritative(doc.source_ref)
+    assert res.state == "current"
+    assert res.current_content_digest == doc.source_ref.content_digest
+    get_settings.cache_clear()

@@ -20,8 +20,10 @@ _MAX_DOCUMENT_CHARS = 32_000
 
 def _doc(owner: str, kind: str, object_id: str, workspace_id: str,
          record: object, *, revision: str | None = None, title: str | None = None) -> IndexDocument:
+    from app.modules.ai.retrieval_index import format_record_document
+
     data = record.model_dump(mode="json") if hasattr(record, "model_dump") else record
-    text = data if isinstance(data, str) else json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
+    text = format_record_document(kind, data)
     digest = canonical_digest(data)
     if len(text) > _MAX_DOCUMENT_CHARS:
         text = text[:_MAX_DOCUMENT_CHARS] + f"\n[TRUNCATED: full owner record digest sha256:{digest}]"

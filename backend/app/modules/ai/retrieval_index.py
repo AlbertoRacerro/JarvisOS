@@ -140,10 +140,32 @@ def _key(ref: SourceRef) -> str:
     return canonical_digest((ref.authority_owner, ref.object_type, ref.object_id, ref.workspace_id, location))
 
 
+_SUMMARY_SUBJECT_KEYS = ("title", "name", "subject", "label", "tag", "symbol", "question", "goal", "summary", "statement", "description", "id")
+_SUMMARY_OUTCOME_KEYS = ("status", "verdict", "state", "outcome", "result_state", "conclusion", "decision_text")
+
+
+def format_record_document(kind: str, data: object) -> str:
+    """Prepend a concise one-line summary (what, about what, outcome) ahead of canonical JSON."""
+    body = data if isinstance(data, str) else json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
+    if not isinstance(data, dict):
+        return body
+    def _first(keys: tuple[str, ...]) -> str:
+        for key in keys:
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return " ".join(val.split())[:100]
+        return ""
+    subject = _first(_SUMMARY_SUBJECT_KEYS)
+    outcome = _first(_SUMMARY_OUTCOME_KEYS)
+    detail = f"{subject} — {outcome}" if subject and outcome and outcome != subject else (subject or outcome)
+    header = f"{kind}: {detail}" if detail else kind
+    return f"{header[:200]}\n{body}"
+
+
 def _model_document(kind: str, record: object, workspace_id: str) -> IndexDocument:
     assert isinstance(record, BaseModel)
     data = record.model_dump(mode="json")
-    text = json.dumps(data, sort_keys=True, ensure_ascii=False)
+    text = format_record_document(kind, data)
     ref = SourceRef(
         authority_owner="modeling", object_type=kind, object_id=str(data["id"]),
         workspace_id=workspace_id, revision=str(data["updated_at"]), content_digest=canonical_digest(data),
@@ -162,7 +184,7 @@ def _record_document(
         workspace_id=workspace_id, revision=str(revision) if revision else None,
         content_digest=canonical_digest(data),
     )
-    return IndexDocument(source_ref=ref, text=json.dumps(data, sort_keys=True, ensure_ascii=False), title=title)
+    return IndexDocument(source_ref=ref, text=format_record_document(kind, data), title=title)
 
 
 def _snapshot_document(snapshot: BaseModel, workspace_id: str) -> IndexDocument:
@@ -734,7 +756,10 @@ class SQLiteIndexStore:
             for doc in full_docs:
                 ref = doc.source_ref
                 if ref.authority_owner in {"modeling", "bluecad", "ai_threads"}:
-                    data = json.loads(doc.text)
+                    payload = doc.text
+                    if not payload.lstrip().startswith("{") and "\n" in payload:
+                        payload = payload.split("\n", 1)[1]
+                    data = json.loads(payload)
                 else:
                     data = {}
                 since = data.get("created_at") or data.get("updated_at") or ref.revision
@@ -1284,13 +1309,21 @@ class SQLiteIndexStore:
         return self._fresh_hits(found, fresh)
 
     def search_hybrid(self, query: str, *, limit: int, workspace_id: str | None = None) -> list[RetrievalHit]:
-        """Merge lexical and vector ranks with reciprocal-rank fusion (k=60)."""
+        """Merge lexical and vector ranks with credibility-weighted reciprocal-rank fusion (k=60)."""
         if limit <= 0:
             return []
+        lexical_hits = self.search_lexical(query, limit=limit, workspace_id=workspace_id)
+        vector_hits = self.search_vector(query, limit=limit, workspace_id=workspace_id)
+        vector_weight = 1.0
+        if lexical_hits and vector_hits:
+            top_vec = max((h.vector_score for h in vector_hits if h.vector_score is not None), default=None)
+            if isinstance(self.embedder, HashingEmbedder):
+                vector_weight = 0.05
+            elif top_vec is not None and top_vec < 0.25:
+                vector_weight = 0.1
         ranked: dict[str, RetrievalHit] = {}
         scores: dict[str, float] = {}
-        for hits in (self.search_lexical(query, limit=limit, workspace_id=workspace_id),
-                     self.search_vector(query, limit=limit, workspace_id=workspace_id)):
+        for weight, hits in ((1.0, lexical_hits), (vector_weight, vector_hits)):
             for rank, hit in enumerate(hits, 1):
                 key = _key(hit.source_ref)
                 previous = ranked.get(key)
@@ -1300,7 +1333,7 @@ class SQLiteIndexStore:
                     "vector_score": hit.vector_score if hit.vector_score is not None else
                     (previous.vector_score if previous else None),
                 })
-                scores[key] = scores.get(key, 0.0) + 1.0 / (60 + rank)
+                scores[key] = scores.get(key, 0.0) + weight / (60 + rank)
         def ranked_score(key: str) -> float:
             # Hermes memory is useful operational context, but always ranks below canonical
             # JarvisOS and exact-revision repository sources when their retrieval evidence ties.
