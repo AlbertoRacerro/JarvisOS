@@ -121,6 +121,16 @@ def test_dates_times_and_versions_in_prompt_are_not_inline_options(prompt):
     assert [o["label"] for o in question["options"]] == ["Procedi", "Rimanda"]
 
 
+@pytest.mark.parametrize("text", [
+    "Quale file?\n1. Aggiorna docs/specs/264.md — conseguenza: x\n2. Rimanda — conseguenza: y",
+    "Quale PR?\n1. Mergia PR 104. Poi attendi — conseguenza: x\n2. Rimanda — conseguenza: y",
+    "Aggiorno docs/specs/264.md o no?\n1. Si\n2. No",
+    "Scegli tra le modifiche per (spec 276) e (spec 278):\n1. Opzione A\n2. Opzione B",
+])
+def test_spec_279_paths_sentence_ends_and_spec_parentheticals_accepted(text):
+    devctx.validate_question(text)
+
+
 def test_legacy_question_with_one_inline_alternative_has_no_choices():
     entry = {"id": "L1", "kind": "question", "ts": "2026-11-13T00:00:00Z",
              "text": "Scegli:\n1. Approva ora 2. Rimanda a domani"}

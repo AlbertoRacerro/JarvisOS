@@ -875,25 +875,45 @@ _SEP_CHARS = r"(?:\s|(?<!\d)[,(;:—/|\\–\)\-?!])"
 _CONJ = r"\b(?:e|o|and|or|oppure)\b"
 _SEP = rf"(?:^|{_SEP_CHARS}|{_CONJ})"
 
-# An option marker: "2)", "(2)" or "2." followed by text. A dot needs a space or a letter after it, so decimals,
-# versions and times ("3.12", "10.30") are not markers; "[1]" is a citation, not a marker.
-_MARKER = r"(?:(?:\d+\)|\(\d+\))\s*\S|\d+\.(?:\s+\S|[a-zA-Z]))"
-_INLINE_OPTION_RE = re.compile(rf"{_SEP}\s*{_MARKER}")
+# An option marker: "(2)", "2)" or "2." followed by text. Valid option numbers in JarvisOS questions
+# are 1 to 4. A dot marker requires whitespace after the dot (not ".md" or ".py"); a closing paren
+# marker cannot be preceded by letters (e.g. not "(spec 276)"); decimals, versions and citations are not markers.
+_OPT_NUM = r"[1-4]"
+_PAREN_MARKER = rf"(?:\({_OPT_NUM}\)|(?<![a-zA-Z\d]){_OPT_NUM}\))\s*\S"
+_DOT_MARKER = rf"(?<![a-zA-Z\d]){_OPT_NUM}\.\s+\S"
+_MARKER = rf"(?:{_PAREN_MARKER}|{_DOT_MARKER})"
 
-_PROMPT_END_SEP = r"(?:^|(?<!\d)[?!:;—/|\\–\-])"
+_INLINE_OPTION_RE = re.compile(rf"{_SEP}\s*{_MARKER}")
+_PROMPT_END_SEP = r"(?:^|(?<!\d)[?!:;—–\-])"
 _PROMPT_EMBEDDED_RE = re.compile(rf"{_PROMPT_END_SEP}\s*{_MARKER}")
+
+# A number ending a sentence followed by a capitalized word (e.g. "PR 104. Poi" or "PR 2. Poi") is not an option marker.
+_SENTENCE_END_RE = re.compile(r"\b(?:PR|spec|issue|ticket|step|fase|task|v|ver|version|capitolo|cap)\s+\d+\.\s+[A-Z]")
 
 
 def has_inline_alternatives_in_body(body: str) -> bool:
     """Return True if an option body contains embedded/inline alternatives."""
-    return bool(_INLINE_OPTION_RE.search(body))
+    for m in _INLINE_OPTION_RE.finditer(body):
+        start = max(0, m.start() - 20)
+        end = min(len(body), m.end() + 20)
+        if _SENTENCE_END_RE.search(body[start:end]):
+            continue
+        return True
+    return False
 
 
 def has_inline_alternatives_in_prompt(line: str) -> bool:
     """Return True if a prompt line contains embedded/inline alternatives."""
     if _PROMPT_EMBEDDED_RE.search(line):
         return True
-    return len(_INLINE_OPTION_RE.findall(line)) >= 2
+    matches = []
+    for m in _INLINE_OPTION_RE.finditer(line):
+        start = max(0, m.start() - 20)
+        end = min(len(line), m.end() + 20)
+        if _SENTENCE_END_RE.search(line[start:end]):
+            continue
+        matches.append(m)
+    return len(matches) >= 2
 
 
 def validate_question(text: str) -> None:
