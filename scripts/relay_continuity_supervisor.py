@@ -890,16 +890,17 @@ class Supervisor:
             report.agent = report.agent or self.state.get("agent")
             if wait.get("woken"):
                 agent = wait.get("wake_agent") or self.state.get("agent") or PREFERRED
-                prompt = wait["wake_prompt"]
+                prompt = wait.get("wake_prompt", "")
                 if not self.available(agent):
                     chosen = self._choose(agent)
                     if chosen is None:
-                        wait_res = self._wait_or_hold(lambda _agent: prompt)
+                        wait_res = self._wait_or_hold(lambda a: self._make_wake_prompt(a, wait))
                         if isinstance(wait_res, str):
                             return wait_res
                         agent, prompt = wait_res
                     else:
                         agent = chosen
+                        prompt = self._make_wake_prompt(agent, wait)
                     wait["wake_agent"] = agent
                     wait["wake_prompt"] = prompt
                     self.save()
@@ -1280,6 +1281,64 @@ class Supervisor:
         decision = "resume" if resume else "fresh"
         self.host.log(f"resume decision ({site}): last-call context {tokens_desc}; {decision}")
 
+    def _make_wake_prompt(self, chosen: str, wait: dict[str, Any]) -> str:
+        reason = wait.get("wake_reason") or "satisfied"
+        items_text = wait.get("wake_items")
+        outcome_header = ("External wait satisfied:" if reason == "satisfied"
+                          else f"External wait terminated ({reason}):")
+        if items_text is None:
+            wake_prompt = wait.get("wake_prompt", "")
+            if outcome_header in wake_prompt:
+                part = wake_prompt.split(outcome_header, 1)[1]
+                part = part.split("Resume work", 1)[0].split("[Durable handoff", 1)[0].strip()
+                items_text = part
+            elif "[Durable handoff summary]" in wake_prompt:
+                part = wake_prompt.split("[Durable handoff summary]", 1)[1].strip()
+                items_text = part
+            else:
+                lines = [f"- JOB {j}: {reason}" for j in wait.get("jobs", [])]
+                lines += [f"- CI PR #{item['pr']}@{item['sha']}: {reason}" for item in wait.get("ci", [])]
+                items_text = "\n".join(lines)
+
+        rec = self.state.get("mission")
+        if rec and self.mission:
+            mission_line = f"Resume work on mission {self.mission['id']} task {rec['next'] + 1}/{rec['total']}."
+        else:
+            mission_line = "Resume work."
+
+        short_resume_prompt = (
+            f"[relay-continuity resume {{nonce}}]\n"
+            f"{outcome_header}\n"
+            f"{items_text}\n"
+            f"{mission_line}"
+        )
+
+        parent_candidate = (None if chosen in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
+                            or (chosen == "codex" and self.state.get("agent") not in (None, "codex"))
+                            else self.state.get("head_session"))
+
+        resumes = self.state.get("resumes", 0)
+        turn_dir = last_turn_dir(self.host.relay.sessions_dir() / self.state["head_session"]) if self.state.get("head_session") else None
+        tokens = turn_context_tokens(turn_dir)
+
+        if (parent_candidate is not None
+                and resumes < MAX_SESSION_RESUMES
+                and (tokens is None or tokens <= RESUME_CONTEXT_CAP_TOKENS)):
+            self.state["resumes"] = resumes + 1
+            self._log_resume_decision("wake", tokens, resume=True)
+            return short_resume_prompt
+        else:
+            self.state["resumes"] = 0
+            self.state["force_fresh_context"] = True
+            self._log_resume_decision("wake", tokens, resume=False)
+            task_text = self._mission_task() if (self.mission and rec) else None
+            handoff = f"{outcome_header}\n{items_text}"
+            if task_text:
+                full_prompt = f"{task_text}\n\n[Durable handoff summary]\n{handoff}"
+            else:
+                full_prompt = f"[relay-continuity attempt {{nonce}}]\n[Durable handoff summary]\n{handoff}"
+            return full_prompt
+
     def _wake_wait(self, reason: str, wait: dict[str, Any], report: TurnReport,
                    job_statuses: dict[str, str], ci_statuses: dict[str, str],
                    failed_job: str | None = None, failed_pr: str | None = None) -> tuple[str, str] | str:
@@ -1328,61 +1387,20 @@ class Supervisor:
                 lines.append(f"- CI PR #{item['pr']}@{item['sha']}: uncertain")
 
         items_text = "\n".join(lines)
-        outcome_header = ("External wait satisfied:" if reason == "satisfied"
-                          else f"External wait terminated ({reason}):")
-
-        rec = self.state.get("mission")
-        if rec and self.mission:
-            mission_line = f"Resume work on mission {self.mission['id']} task {rec['next'] + 1}/{rec['total']}."
-        else:
-            mission_line = "Resume work."
-
-        short_resume_prompt = (
-            f"[relay-continuity resume {{nonce}}]\n"
-            f"{outcome_header}\n"
-            f"{items_text}\n"
-            f"{mission_line}"
-        )
-
-        def make_wake_prompt(chosen: str) -> str:
-            parent_candidate = (None if chosen in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
-                                or (chosen == "codex" and self.state.get("agent") not in (None, "codex"))
-                                else self.state.get("head_session"))
-
-            resumes = self.state.get("resumes", 0)
-            turn_dir = last_turn_dir(self.host.relay.sessions_dir() / self.state["head_session"]) if self.state.get("head_session") else None
-            tokens = turn_context_tokens(turn_dir)
-
-            if (parent_candidate is not None
-                    and resumes < MAX_SESSION_RESUMES
-                    and (tokens is None or tokens <= RESUME_CONTEXT_CAP_TOKENS)):
-                self.state["resumes"] = resumes + 1
-                self._log_resume_decision("wake", tokens, resume=True)
-                return short_resume_prompt
-            else:
-                self.state["resumes"] = 0
-                self.state["force_fresh_context"] = True
-                self._log_resume_decision("wake", tokens, resume=False)
-                task_text = self._mission_task() if (self.mission and rec) else None
-                handoff = f"{outcome_header}\n{items_text}"
-                if task_text:
-                    full_prompt = f"{task_text}\n\n[Durable handoff summary]\n{handoff}"
-                else:
-                    full_prompt = f"[relay-continuity attempt {{nonce}}]\n[Durable handoff summary]\n{handoff}"
-                return full_prompt
+        wait["woken"] = True
+        wait["wake_reason"] = reason
+        wait["wake_items"] = items_text
 
         failed_agent = report.agent or self.state.get("agent") or PREFERRED
         agent = self._choose(failed_agent)
         if agent is None:
-            chosen = self._wait_or_hold(make_wake_prompt)
+            chosen = self._wait_or_hold(lambda a: self._make_wake_prompt(a, wait))
             if isinstance(chosen, str):
                 return chosen
             agent, prompt = chosen
         else:
-            prompt = make_wake_prompt(agent)
+            prompt = self._make_wake_prompt(agent, wait)
 
-        wait["woken"] = True
-        wait["wake_reason"] = reason
         wait["wake_agent"] = agent
         wait["wake_prompt"] = prompt
         self.save()
@@ -1596,7 +1614,9 @@ class Supervisor:
         if (rec := self.state.get("mission")) is not None and self.mission is not None:
             # Every launch until the task completes (recoveries and failovers included) serves that task.
             pending["task"] = rec["next"]
-            if MISSION_HEADER not in text and not text.startswith("[relay-continuity resume "):
+            if fresh and text.startswith(f"[relay-continuity resume {nonce}]"):
+                text = text.replace(f"[relay-continuity resume {nonce}]", f"[relay-continuity attempt {nonce}]", 1)
+            if MISSION_HEADER not in text and (not text.startswith("[relay-continuity resume ") or fresh):
                 task = self.mission["tasks"][rec["next"]]["text"]
                 text += (f"\n\nThe interrupted work is mission {self.mission['id']} task {rec['next'] + 1}/{rec['total']}, "
                          f"which has not been recorded complete:\n{MISSION_HEADER}\n{task}")
@@ -1622,12 +1642,6 @@ class Supervisor:
         self.state["pending"] = pending  # intent is durable before anything is launched
         self.state["acknowledged"] = None  # the reviewed turn is now behind the chain
         self.state["agent"] = agent
-        self.state["wait"] = None
-        if (previous is not None and previous.agent == agent
-                and previous.outcome == "transient"
-                and previous.harness_cause in SAME_AGENT_CAUSES):
-            strikes = self.state["counters"].get(f"transient_{agent}", 0)
-            self.state["counters"][f"transient_{agent}"] = strikes + 1
         self.save()
         launch_journal = {"event": "launch", **{k: v for k, v in pending.items() if k != "fingerprint"},
                           **({"resume": resume} if resume else {})}
@@ -1641,8 +1655,14 @@ class Supervisor:
             self.state["pending"] = None
             self.store.journal({"event": "settle", "nonce": nonce, "session": None, "outcome": "not_started"})
             return self.hold("relay_invocation_failed", self.attempts)
+        self.state["wait"] = None
         pending["pid"] = getattr(proc, "pid", None)
         pending["pid_start"] = devctx.pid_start(pending["pid"]) if pending["pid"] else None
+        if (previous is not None and previous.agent == agent
+                and previous.outcome == "transient"
+                and previous.harness_cause in SAME_AGENT_CAUSES):
+            strikes = self.state["counters"].get(f"transient_{agent}", 0)
+            self.state["counters"][f"transient_{agent}"] = strikes + 1
         self.save()
         try:
             try:

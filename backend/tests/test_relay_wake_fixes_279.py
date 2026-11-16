@@ -474,4 +474,171 @@ def test_point_3_wake_stopped_while_agents_cool_counts_once(tmp_path: Path) -> N
     assert len(env.relay.launches) == 0
 
 
+def test_point_1_oserror_on_relay_start_records_not_started_without_consuming_strike(tmp_path: Path) -> None:
+    """Finding 2: An OSError when executing relay records not_started without consuming a strike."""
+    env = Env(tmp_path)
+    report = rc.TurnReport(
+        outcome="transient",
+        detail="network timeout",
+        harness_cause="provider_network",
+        agent="argon",
+        turn_id="s1/turn-001",
+    )
+    sup = env.supervisor()
+    sup.state["head_session"] = "s1"
+    sup.state["agent"] = "argon"
+    sup.state["permissions_digest"] = env.perm["v"]
+    sup.state["counters"]["transient_argon"] = 0
+
+    def fail_start(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("exec format error / not found")
+
+    env.relay.start = fail_start  # type: ignore[assignment]
+
+    res = sup._launch("argon", "some prompt", report)
+    assert res == "held"
+    assert sup.state["hold"] is not None
+    assert sup.state["hold"]["reason"] == "relay_invocation_failed"
+    assert sup.state["counters"].get("transient_argon", 0) == 0
+    assert sup.state["pending"] is None
+
+    # Check journal has settle event with not_started
+    entries = [json.loads(line) for line in env.store.journal_path.read_text().splitlines() if line.strip()]
+    settle_entries = [e for e in entries if e.get("event") == "settle"]
+    assert len(settle_entries) == 1
+    assert settle_entries[0]["outcome"] == "not_started"
+
+
+def test_point_1_adjacent_no_launch_paths_consume_no_strike(tmp_path: Path) -> None:
+    """Adjacent no-launch paths (conflict, permissions change, stop during sleep) consume no strike."""
+    env = Env(tmp_path)
+    report = rc.TurnReport(
+        outcome="transient",
+        detail="network timeout",
+        harness_cause="provider_network",
+        agent="argon",
+        turn_id="s1/turn-001",
+    )
+    sup = env.supervisor()
+    sup.state["head_session"] = "s1"
+    sup.state["agent"] = "argon"
+    sup.state["permissions_digest"] = env.perm["v"]
+    sup.state["counters"]["transient_argon"] = 0
+
+    # 1. Conflict before launch
+    env.conflicts = ["other-coord"]
+    res1 = sup._launch("argon", "prompt", report)
+    assert res1 == "waiting"
+    assert sup.state["counters"].get("transient_argon", 0) == 0
+
+    # 2. Permissions changed before launch
+    env.conflicts = []
+    sup.state["permissions_digest"] = "different_digest"
+    res2 = sup._launch("argon", "prompt", report)
+    assert res2 == "held"
+    assert sup.state["hold"]["reason"] == "permissions_changed"
+    assert sup.state["counters"].get("transient_argon", 0) == 0
+
+    # 3. Interrupted sleep during backoff
+    sup.state["permissions_digest"] = env.perm["v"]
+    sup.state["hold"] = None
+    sup.signalled = True
+    res3 = sup._launch("argon", "prompt", report)
+    assert res3 in ("signal", "stopped")
+    assert sup.state["counters"].get("transient_argon", 0) == 0
+
+
+def test_point_4_persisted_woken_wait_switching_to_fresh_agent_preserves_wait_status_and_task_context(
+    tmp_path: Path,
+) -> None:
+    """Finding 1: When a persisted woken wait switches to another agent due to cooldown,
+    wait status is preserved and the fresh agent path receives the full task context prompt,
+    not the short resume prompt lacking mission task context.
+    """
+    jid = "j-20261018T080000Z-100300"
+    wait_msg = f"RELAY_STATUS continue\nJOB-WAIT: {jid}"
+    events = [claude_result(wait_msg)]
+    env = Env(tmp_path, [("argon", SUCCESS)])
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 30.0, "disabled": False}]} if a == "argon" else None
+    m = mission_def("repair antenna and report telemetry", mid="m-20261116T040000Z-112233")
+    rc.write_json_atomic(rc.missions_dir(env.store.root) / f"{m['id']}.json", m)
+
+    sid = "s-woken-wait-fresh-agent"
+    write_turn(env.relay.sessions_dir() / sid, events, agent="claude", status="continue", last_message=wait_msg)
+
+    short_resume_prompt = (
+        f"[relay-continuity resume {{nonce}}]\n"
+        f"External wait satisfied:\n"
+        f"- JOB {jid}: succeeded\n"
+        f"Resume work on mission {m['id']} task 1/1."
+    )
+
+    sup = env.supervisor()
+    sup.mission = m
+    future = T0 + timedelta(hours=2)
+    sup.state.update({
+        "head_session": sid,
+        "agent": "claude",
+        "permissions_digest": env.perm["v"],
+        "cooldowns": {
+            "claude": {"reason": "quota", "since": rc.iso(T0), "source": "limits", "until": rc.iso(future)}
+        },
+        "mission": {
+            "id": m["id"],
+            "next": 0,
+            "total": 1,
+            "done": [],
+        },
+        "resumes": 1,
+        "wait": {
+            "jobs": [jid],
+            "ci": [],
+            "started_at": rc.iso(T0),
+            "turn": f"{sid}/turn-001",
+            "woken": True,
+            "wake_reason": "satisfied",
+            "wake_agent": "claude",
+            "wake_prompt": short_resume_prompt,
+        },
+    })
+    sup.save()
+
+    # Pass 1: Reachability probe fails while switching to argon.
+    # Wait status must be preserved, and the updated wake prompt for argon must contain the mission task.
+    env.host.reachable = lambda: False
+    res1 = sup._loop(None)
+    assert res1 == "waiting"
+
+    preserved_wait = sup.state.get("wait")
+    assert preserved_wait is not None
+    assert preserved_wait.get("woken") is True
+    assert preserved_wait.get("wake_agent") == "argon"
+    # Prompt was regenerated for argon (fresh context) rather than reusing the short resume prompt
+    assert rc.MISSION_HEADER in preserved_wait.get("wake_prompt", "")
+    assert "repair antenna and report telemetry" in preserved_wait.get("wake_prompt", "")
+    assert "External wait satisfied" in preserved_wait.get("wake_prompt", "")
+    # Resumes reset to 0 for fresh context
+    assert sup.state.get("resumes") == 0
+
+    # Pass 2: Network recovers; supervisor launches argon with full task context
+    env.host.reachable = lambda: True
+    res2 = sup._loop(None)
+    assert res2 != "waiting"
+    assert len(env.relay.launches) == 1
+
+    launch = env.relay.launches[0]
+    assert launch["agent"] == "argon"
+    assert launch["parent"] is None  # fresh native agent has no parent session
+
+    launched_prompt = launch["task"]
+    # Verify the launched prompt contains the mission task context
+    assert rc.MISSION_HEADER in launched_prompt
+    assert "repair antenna and report telemetry" in launched_prompt
+    assert "External wait satisfied" in launched_prompt
+    assert not launched_prompt.startswith("[relay-continuity resume ")
+
+    # Wait is cleared only after launch succeeded
+    assert sup.state.get("wait") is None
+
+
 MAX_REPEATS = rc.MAX_UNSATISFIED_WAKES + 1
