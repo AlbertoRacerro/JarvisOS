@@ -611,6 +611,9 @@ def test_compare_matching_mismatched_and_missing_outputs(
 
 def test_real_tools_engine_proof_criterion_7(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Acceptance criterion 7: Real solid -> mesh -> FEM chain with installed tools."""
+    pytest.importorskip("build123d", reason="build123d is not installed; solid engine path not proved")
+    if not shutil.which("gmsh") or not shutil.which("ccx"):
+        pytest.skip("gmsh or ccx is not installed; mesh and FEM engine paths not proved")
     tool_reg = _make_working_tools_registry(tmp_path)
     tube_fixture = FIXTURES_DIR / "minimal_single_tube.json"
     assert tube_fixture.is_file(), "minimal_single_tube.json fixture required"
@@ -659,3 +662,63 @@ def test_real_tools_engine_proof_criterion_7(tmp_path: Path, capsys: pytest.Capt
     res_fem = json.loads((fem_out / "result.json").read_text(encoding="utf-8"))
     assert res_fem["status"] == "succeeded"
     assert res_fem["verdict"] == "usable"
+
+
+def test_view_with_many_failed_checks_stays_valid_json() -> None:
+    from app.modules.engineering.bench import format_bounded_view
+
+    checks = [
+        ResultCheck(id=f"FAIL_{i}", family="input", status="fail", actual=float(i), limit=1.0, unit="m",
+                    hint="x" * 200, source="physical_limit").model_dump(mode="json")
+        for i in range(64)
+    ]
+    view = format_bounded_view(evaluator_id="e", status="succeeded", verdict="not_usable", failure=None,
+                               checks=checks, outputs=[], artifacts=[], result_path=Path("result.json"))
+    assert len(view) <= MAX_VIEW_CHARS
+    doc = json.loads(view)
+    assert doc["truncated"] is True
+    assert [c["id"] for c in doc["failed_checks"]] == [f"FAIL_{i}" for i in range(64)]
+    assert doc["failed_checks"][3]["actual"] == 3.0
+
+
+def test_fem_refuses_mesh_artifact_outside_root(tmp_path: Path, capsys: pytest.CaptureFixture[str],
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.modules.engineering.bench as bench_module
+
+    root = tmp_path / "root"
+    mesh_dir = root / "mesh"
+    mesh_dir.mkdir(parents=True)
+    outside = tmp_path / "elsewhere.inp"
+    outside.write_text("*NODE\n", encoding="utf-8")
+    (mesh_dir / "mesh_result.json").write_text(
+        json.dumps({"artifacts": {"mesh_inp": {"path": str(outside)}}}), encoding="utf-8")
+    spec = root / "spec.json"
+    spec.write_text(json.dumps({"analysis_type": "static"}), encoding="utf-8")
+    called: list[bool] = []
+    monkeypatch.setattr(bench_module, "solve_static_analysis", lambda *a, **k: called.append(True))
+
+    code = main(["run", "bluecad.fem", str(spec), "--out", str(root / "fem"), "--from", str(mesh_dir),
+                 "--root", str(root)])
+
+    assert code == 2
+    assert json.loads(capsys.readouterr().out)["code"] == "PATH_OUTSIDE_ROOT"
+    assert called == []
+
+
+def test_engine_exception_is_json_error(tmp_path: Path, capsys: pytest.CaptureFixture[str],
+                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.modules.engineering.bench as bench_module
+
+    spec = tmp_path / "geom.json"
+    spec.write_text("{}", encoding="utf-8")
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise KeyError("geometry")
+
+    monkeypatch.setattr(bench_module, "build_geometry_spec_file", boom)
+    code = main(["run", "bluecad.solid", str(spec), "--out", str(tmp_path / "out"), "--root", str(tmp_path)])
+
+    assert code == 2
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["code"] == "ENGINE_ERROR_KEYERROR"
+    assert "\n" not in doc["hint"]

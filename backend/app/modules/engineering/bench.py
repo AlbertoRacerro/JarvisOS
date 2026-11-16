@@ -187,7 +187,14 @@ def format_bounded_view(
     if len(compact) <= MAX_VIEW_CHARS:
         return compact
 
-    return formatted[:MAX_VIEW_CHARS]
+    # Still too large: keep every failed and warning check id, status and numbers, drop their prose,
+    # then cap the failure message. The view stays valid JSON; result.json holds the full text.
+    keep = ("id", "family", "status", "actual", "limit", "unit")
+    view["failed_checks"] = [{k: c.get(k) for k in keep} for c in failed_checks]
+    view["warning_checks"] = [{k: c.get(k) for k in keep} for c in warning_checks]
+    if failure and failure.get("message"):
+        view["failure"] = {**failure, "message": str(failure["message"])[:200]}
+    return json.dumps(view, separators=(",", ":"))
 
 
 def handle_list(argv: Sequence[str]) -> int:
@@ -346,6 +353,29 @@ def _run_bluecad_solid(
     return eval_res, verdict
 
 
+def _resolve_geometry_paths(
+    request_data: dict[str, Any], req_dir: Path, root: Path, *, required: bool
+) -> dict[str, Any]:
+    """Resolve geometry.step_path and geometry.manifest_path against the request folder, inside the root."""
+    geometry = request_data.get("geometry")
+    if not isinstance(geometry, dict):
+        if required:
+            raise BenchInputError("INVALID_REQUEST", "the analysis spec requires a 'geometry' mapping.")
+        return request_data
+    resolved = dict(geometry)
+    for key in ("step_path", "manifest_path"):
+        raw = geometry.get(key)
+        if not raw:
+            if required:
+                raise BenchInputError("INVALID_REQUEST", f"geometry.{key} is required; point it at the bluecad.solid output.")
+            continue
+        path = _check_within_root(Path(raw) if Path(raw).is_absolute() else req_dir / raw, root, f"geometry.{key}")
+        if not path.is_file():
+            raise BenchInputError("INPUT_NOT_FOUND", f"geometry.{key} not found: '{path}'")
+        resolved[key] = str(path)
+    return {**request_data, "geometry": resolved}
+
+
 def _run_bluecad_mesh(
     request_data: dict[str, Any],
     request_path: Path,
@@ -354,36 +384,7 @@ def _run_bluecad_mesh(
     tool_registry: Path | None,
     timeout_s: float,
 ) -> tuple[EvaluationResult, str]:
-    geometry = request_data.get("geometry")
-    if not isinstance(geometry, dict):
-        raise BenchInputError("INVALID_REQUEST", "bluecad.mesh request requires a 'geometry' mapping.")
-
-    step_raw = geometry.get("step_path")
-    manifest_raw = geometry.get("manifest_path")
-    if not step_raw or not manifest_raw:
-        raise BenchInputError(
-            "INVALID_REQUEST",
-            "bluecad.mesh geometry requires both 'step_path' and 'manifest_path'.",
-        )
-
-    req_dir = request_path.parent
-    step_path = (req_dir / step_raw).resolve() if not Path(step_raw).is_absolute() else Path(step_raw).resolve()
-    manifest_path = (
-        (req_dir / manifest_raw).resolve() if not Path(manifest_raw).is_absolute() else Path(manifest_raw).resolve()
-    )
-
-    _check_within_root(step_path, root, "geometry.step_path")
-    _check_within_root(manifest_path, root, "geometry.manifest_path")
-
-    if not step_path.is_file():
-        raise BenchInputError("INPUT_NOT_FOUND", f"Geometry step_path not found: '{step_path}'")
-    if not manifest_path.is_file():
-        raise BenchInputError("INPUT_NOT_FOUND", f"Geometry manifest_path not found: '{manifest_path}'")
-
-    analysis_spec = dict(request_data)
-    analysis_spec["geometry"] = dict(geometry)
-    analysis_spec["geometry"]["step_path"] = str(step_path)
-    analysis_spec["geometry"]["manifest_path"] = str(manifest_path)
+    analysis_spec = _resolve_geometry_paths(request_data, request_path.parent, root, required=True)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     mesh_result = mesh_analysis_spec(
@@ -405,6 +406,7 @@ def _run_bluecad_mesh(
 
 def _run_bluecad_fem(
     request_data: dict[str, Any],
+    request_path: Path,
     from_dir: Path | None,
     out_dir: Path,
     root: Path,
@@ -425,6 +427,12 @@ def _run_bluecad_fem(
         raise BenchInputError("INPUT_NOT_FOUND", f"mesh_result.json not found in --from folder '{from_path}'.")
 
     mesh_result = json.loads(mesh_result_path.read_text(encoding="utf-8"))
+    try:
+        mesh_inp = Path(mesh_result["artifacts"]["mesh_inp"]["path"])
+    except (KeyError, TypeError) as exc:
+        raise BenchInputError("INVALID_REQUEST", "mesh_result.json in --from has no artifacts.mesh_inp.path; rerun bluecad.mesh.") from exc
+    _check_within_root(mesh_inp if mesh_inp.is_absolute() else from_path / mesh_inp, root, "mesh_inp artifact")
+    request_data = _resolve_geometry_paths(request_data, request_path.parent, root, required=False)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     fem_result = solve_static_analysis(
@@ -495,13 +503,16 @@ def handle_run(argv: Sequence[str]) -> int:
             result, verdict = _run_bluecad_mesh(req_data, req_path, out_path, root, reg_path, args.timeout_s)
         elif evaluator_id == "bluecad.fem":
             result, verdict = _run_bluecad_fem(
-                req_data, args.from_dir, out_path, root, reg_path, args.timeout_s
+                req_data, req_path, args.from_dir, out_path, root, reg_path, args.timeout_s
             )
         else:
             raise BenchInputError("UNKNOWN_EVALUATOR", f"Unhandled evaluator '{evaluator_id}'")
 
     except BenchInputError as exc:
         emit_error(exc.code, exc.hint)
+        return 2
+    except Exception as exc:  # native engines and evaluators may raise on malformed input
+        emit_error(f"ENGINE_ERROR_{type(exc).__name__.upper()}", f"{args.evaluator_id} raised: {exc}"[:240])
         return 2
 
     # Write out_path / result.json
@@ -638,14 +649,21 @@ def handle_compare(argv: Sequence[str]) -> int:
 
     formatted = json.dumps(compare_doc, indent=2)
     if len(formatted) > MAX_VIEW_CHARS:
+        # Keep differing checks first, then outputs with the largest relative difference, as valid JSON.
         compare_doc["truncated"] = True
-        # Trim checks if needed
         compare_doc["checks"] = {
-            k: v for k, v in list(checks_comparison.items())[:10]
+            k: v for k, v in checks_comparison.items() if v["status_a"] != v["status_b"] or v["status_a"] in {"fail", "warn"}
         }
-        formatted = json.dumps(compare_doc, indent=2)
-        if len(formatted) > MAX_VIEW_CHARS:
-            formatted = formatted[:MAX_VIEW_CHARS]
+        ranked = sorted(
+            outputs_comparison.items(),
+            key=lambda item: -(item[1]["relative_difference"] if item[1]["relative_difference"] is not None else float("inf")),
+        )
+        while True:
+            compare_doc["outputs"] = dict(ranked)
+            formatted = json.dumps(compare_doc, separators=(",", ":"))
+            if len(formatted) <= MAX_VIEW_CHARS or not ranked:
+                break
+            ranked = ranked[: len(ranked) // 2]
 
     print(formatted)
     return 0
