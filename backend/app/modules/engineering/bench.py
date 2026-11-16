@@ -689,6 +689,7 @@ def run_evaluation(
             f"Unknown evaluator '{evaluator_id}'. Run 'bench list' to see available evaluators.",
         )
 
+    verdict: str
     if evaluator_id == "retrieval.eval":
         try:
             result, verdict, per_question = evaluate_retrieval_request(request_data, root=root, out_dir=out_dir)

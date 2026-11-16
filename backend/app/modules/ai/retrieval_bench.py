@@ -209,6 +209,7 @@ def evaluate_retrieval_request(
             if (mode != "lexical" or documents) and not source.has_compatible_embedder():
                 raise ValueError("index embedder identity is missing or incompatible")
         if index_path is None or documents:
+            assert temp_dir is not None
             db_path = Path(temp_dir) / "index.sqlite3"
             if index_path is not None:
                 with source._open_connection() as src, open_sqlite_connection(db_path) as dst:
