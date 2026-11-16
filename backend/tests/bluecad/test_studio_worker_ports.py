@@ -81,7 +81,7 @@ def test_geometry_rejects_unknown_keys_in_result_dict(tmp_path: Path) -> None:
 
 
 def test_geometry_rejects_missing_shape_in_dict(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="must contain 'shape'"):
+    with pytest.raises(ValueError, match="dict with 'shape'"):
         _geometry({"ports": {}}, artifact_dir=str(tmp_path))
 
 
@@ -89,7 +89,7 @@ def test_geometry_rejects_invalid_shape_types(tmp_path: Path) -> None:
     with pytest.raises(TypeError, match="must return one build123d shape"):
         _geometry("not_a_shape", artifact_dir=str(tmp_path))
 
-    with pytest.raises(TypeError, match="build123d Shape"):
+    with pytest.raises(TypeError, match="build123d shape"):
         _geometry({"shape": "not_a_shape"}, artifact_dir=str(tmp_path))
 
 

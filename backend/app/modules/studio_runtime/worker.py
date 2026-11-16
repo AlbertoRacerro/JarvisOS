@@ -126,15 +126,18 @@ def _geometry(result: Any, artifact_dir: str = "/work/artifacts") -> dict[str, A
     if isinstance(result, bd.Shape):
         shape = result
     elif isinstance(result, dict):
+        if "shape" not in result:
+            raise ValueError("build must return one build123d shape or a dict with 'shape'")
         allowed_keys = {"shape", "ports"}
         unknown = set(result.keys()) - allowed_keys
         if unknown:
-            raise ValueError(f"unknown key(s) in result dict: {', '.join(sorted(str(k) for k in unknown))}")
-        if "shape" not in result:
-            raise ValueError("result dict must contain 'shape'")
+            raise ValueError(
+                f"build must return one build123d shape or a dict with 'shape'; "
+                f"unknown key(s) in result dict: {', '.join(sorted(str(k) for k in unknown))}"
+            )
         shape = result["shape"]
         if not isinstance(shape, bd.Shape):
-            raise TypeError("result['shape'] must be a build123d Shape")
+            raise TypeError("build must return one build123d shape in result['shape']")
         if "ports" in result:
             ports_provided = True
             raw_ports = result["ports"]
