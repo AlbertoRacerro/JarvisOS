@@ -135,6 +135,8 @@ class E5Embedder:
 
 def _key(ref: SourceRef) -> str:
     location = ref.location.model_dump(mode="json") if ref.location else None
+    if ref.authority_owner == "workspace_documents":
+        location = None  # Line shifts update the citation without changing passage identity.
     return canonical_digest((ref.authority_owner, ref.object_type, ref.object_id, ref.workspace_id, location))
 
 
@@ -427,6 +429,7 @@ _OWNER_RESOLVERS: dict[tuple[str, str], Callable[[SourceRef], IndexDocument | No
         ("modeling", "simulation_run"), ("engineering", "study_run"),
         ("process_stack", "case_revision"),
         ("ai_threads", "thread"), ("ai_threads", "interaction"),
+        ("workspace_documents", "passage"),
     )},
 }
 

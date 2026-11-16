@@ -143,6 +143,10 @@ def canonical_owner_documents(owners: set[str] | None = None) -> Iterable[IndexD
                        revision=run.created_at)
         if selected("engineering") or selected("process_stack"):
             yield from _filesystem_documents(wid, owners=owners)
+        if selected("workspace_documents"):
+            from app.modules.ai.document_intake import scan_folder
+
+            yield from scan_folder(wid).documents
 
 
 def _filesystem_documents(workspace_id: str, *, owners: set[str] | None = None) -> Iterable[IndexDocument]:
@@ -185,6 +189,10 @@ def resolve_owner_document(ref: SourceRef) -> IndexDocument | None:
     wid = ref.workspace_id
     if wid is None:
         return None
+    if ref.authority_owner == "workspace_documents" and ref.object_type == "passage":
+        from app.modules.ai.document_intake import resolve_passage
+
+        return resolve_passage(ref)
     if ref.authority_owner == "project_knowledge" and ref.object_type == "snapshot":
         from app.modules.project_knowledge.service import get_snapshot
 
@@ -270,6 +278,8 @@ def resolve_owner_document(ref: SourceRef) -> IndexDocument | None:
 
 def _manifest_key(ref: SourceRef) -> str:
     location = ref.location.model_dump(mode="json") if ref.location else None
+    if ref.authority_owner == "workspace_documents":
+        location = None
     return canonical_digest((ref.authority_owner, ref.object_type, ref.object_id, ref.workspace_id, location))
 
 
@@ -313,6 +323,15 @@ def _owner_fingerprints() -> dict[str, str]:
                             stat = path.stat()
                             files.append((str(path.relative_to(root)), stat.st_size, stat.st_mtime_ns))
         result[owner] = canonical_digest(files)
+    from app.modules.ai.document_intake import folder_fingerprint
+
+    with open_sqlite_connection() as connection:
+        workspaces_ready = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspaces'").fetchone() is not None
+    result["workspace_documents"] = canonical_digest([
+        (workspace.id, folder_fingerprint(workspace.id))
+        for workspace in (list_workspaces(include_archived=True) if workspaces_ready else [])
+    ])
     return result
 
 
