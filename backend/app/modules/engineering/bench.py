@@ -22,6 +22,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from app.modules.ai.jarvis_context_models import SourceRef
+from app.modules.ai.retrieval_bench import evaluate_retrieval_request, retrieval_eval_descriptor
 from app.modules.bluecad.fem_adapter import solve_static_analysis
 from app.modules.bluecad.mesh_adapter import mesh_analysis_spec
 from app.modules.bluecad.registry import ToolRegistryError, resolve_tool
@@ -62,6 +63,7 @@ if TYPE_CHECKING:
     from app.modules.ai.agent_contracts import StructuredToolCall
 
 BLUECAD_EVALUATORS = {"bluecad.solid", "bluecad.solid_code", "bluecad.mesh", "bluecad.fem"}
+SPECIALIST_EVALUATORS = {"retrieval.eval"}
 MAX_VIEW_CHARS = 8000
 
 _ACTIVE_BENCH_WORKERS: set[str] = set()
@@ -332,6 +334,25 @@ def list_evaluators(*, tool_registry: Path | None = None) -> list[dict[str, Any]
             }
         )
 
+    desc = retrieval_eval_descriptor()
+    rows.append(
+        {
+            "id": "retrieval.eval",
+            "evaluator_id": "retrieval.eval",
+            "backend_kind": str(desc.backend_kind),
+            "backend_name": str(desc.backend_name),
+            "name": str(desc.backend_name),
+            "backend_version": str(desc.backend_version),
+            "version": str(desc.backend_version),
+            "fidelity": str(desc.fidelity),
+            "availability_state": "available",
+            "state": "available",
+            "reason_code": None,
+            "required_checks": list(desc.required_checks),
+            "advisory_checks": list(desc.advisory_checks),
+            "request_kind": "retrieval_eval",
+        }
+    )
     return rows
 
 
@@ -662,13 +683,23 @@ def run_evaluation(
 
     registry = evaluator_registry()
 
-    if evaluator_id not in registry and evaluator_id not in BLUECAD_EVALUATORS:
+    if evaluator_id not in registry and evaluator_id not in BLUECAD_EVALUATORS | SPECIALIST_EVALUATORS:
         raise BenchInputError(
             "UNKNOWN_EVALUATOR",
             f"Unknown evaluator '{evaluator_id}'. Run 'bench list' to see available evaluators.",
         )
 
-    if evaluator_id in registry:
+    verdict: str
+    if evaluator_id == "retrieval.eval":
+        try:
+            result, verdict, per_question = evaluate_retrieval_request(request_data, root=root, out_dir=out_dir)
+        except ValueError as exc:
+            raise BenchInputError("INVALID_REQUEST", str(exc)) from exc
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "per_question.json").write_text(
+            json.dumps(per_question, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    elif evaluator_id in registry:
         result, verdict = _run_registry_evaluator(evaluator_id, registry[evaluator_id], request_data, out_dir)
     else:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -740,7 +771,14 @@ def handle_run(argv: Sequence[str]) -> int:
             raise BenchInputError("INPUT_NOT_FOUND", f"Request file '{req_path}' does not exist.")
 
         try:
-            req_text = req_path.read_text(encoding="utf-8")
+            if args.evaluator_id == "retrieval.eval":
+                with req_path.open("rb") as request_file:
+                    raw_request = request_file.read(2_000_001)
+                if len(raw_request) > 2_000_000:
+                    raise BenchInputError("INVALID_REQUEST", "request size limit exceeded")
+                req_text = raw_request.decode("utf-8")
+            else:
+                req_text = req_path.read_text(encoding="utf-8")
             req_data = json.loads(req_text)
         except json.JSONDecodeError as exc:
             raise BenchInputError("INVALID_JSON", f"Request file is not valid JSON: {exc}") from exc

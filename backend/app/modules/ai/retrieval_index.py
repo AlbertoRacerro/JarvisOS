@@ -10,7 +10,8 @@ import shutil
 import sqlite3
 import struct
 import subprocess
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from itertools import chain
 from pathlib import Path
@@ -23,7 +24,7 @@ try:
 except ImportError:  # pragma: no cover - optional accelerator, absent in the backend venv
     sqlite_vec = None
 
-from app.core.database import open_retrieval_index_connection
+from app.core.database import RETRIEVAL_INDEX_MAX_PAGE_COUNT, open_retrieval_index_connection, open_sqlite_connection
 from app.modules.ai.context_builder import canonical_digest
 from app.modules.ai.jarvis_context_models import SourceLocation, SourceRef
 from app.modules.ai.retrieval_contracts import (
@@ -479,19 +480,34 @@ class SQLiteIndexStore:
                  documents: Callable[[], Iterable[IndexDocument]] = lambda: chain(
                      canonical_documents(), hermes_operational_memory_documents()),
                  resolver: Callable[[SourceRef], IndexDocument | None] | None = None,
-                 repository_root: Path | None = None, master_ref: str = "refs/remotes/origin/master") -> None:
+                 repository_root: Path | None = None, master_ref: str = "refs/remotes/origin/master",
+                 db_path: Path | None = None, read_only: bool = False) -> None:
         self.embedder = embedder or HashingEmbedder()
         self.documents = documents
         self.resolver = resolver
         self.repository_root = repository_root
         self.master_ref = master_ref
+        self.db_path = db_path
+        self.read_only = read_only
         self.use_sqlite_vec = False
         self._vector_dimensions = 0
         self._last_owner_changes: list[SourceRef] = []
-        self._initialize()
+        if not read_only:
+            self._initialize()
+
+    @contextmanager
+    def _open_connection(self) -> Iterator[sqlite3.Connection]:
+        if self.db_path is None and not self.read_only:
+            with open_retrieval_index_connection() as db:
+                yield db
+            return
+        with open_sqlite_connection(self.db_path, read_only=self.read_only) as db:
+            if not self.read_only:
+                db.execute(f"PRAGMA max_page_count = {RETRIEVAL_INDEX_MAX_PAGE_COUNT}")
+            yield db
 
     def _initialize(self) -> None:
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             use_vec = _load_vector_extension(db)
             db.execute("CREATE TABLE IF NOT EXISTS meta (name TEXT PRIMARY KEY, value TEXT NOT NULL)")
             version = db.execute("SELECT value FROM meta WHERE name='schema_version'").fetchone()
@@ -547,6 +563,21 @@ class SQLiteIndexStore:
             if use_vec:
                 self._sync_vector_table(db)
             db.commit()
+
+    def document_title(self, ref: SourceRef) -> str | None:
+        with self._open_connection() as db:
+            row = db.execute("SELECT title FROM docs WHERE key=?", (_key(ref),)).fetchone()
+            return str(row[0]) if row is not None and row[0] is not None else None
+
+    def has_compatible_embedder(self) -> bool:
+        with self._open_connection() as db:
+            row = db.execute("SELECT value FROM meta WHERE name='embedder_identity'").fetchone()
+            return row is not None and row[0] == self._embedder_identity()
+
+    def document_count(self) -> int:
+        with self._open_connection() as db:
+            row = db.execute("SELECT COUNT(*) FROM docs").fetchone()
+            return int(row[0]) if row is not None else 0
 
     def _sync_vector_table(self, db: sqlite3.Connection) -> None:
         """Keep the derived vec0 table consistent with ``docs.vector`` (the rebuildable source).
@@ -624,7 +655,7 @@ class SQLiteIndexStore:
 
     @property
     def revision(self) -> str:
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             row = db.execute("SELECT value FROM meta WHERE name='revision'").fetchone()
             return str(row[0]) if row else self._revision(db)
 
@@ -687,7 +718,7 @@ class SQLiteIndexStore:
         return embedded
 
     def rebuild(self) -> str:
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             generation_row = db.execute("SELECT value FROM meta WHERE name='generation'").fetchone()
             observed_generation = int(generation_row[0]) if generation_row else 0
         full_docs = sorted(self.documents(), key=lambda item: _key(item.source_ref))
@@ -727,7 +758,7 @@ class SQLiteIndexStore:
                 db.execute("INSERT OR IGNORE INTO edges VALUES (?,?,?,?)",
                            (_key(ref), target, edge_kind, valid_from))
 
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             db.execute("BEGIN IMMEDIATE")
             current_generation = db.execute("SELECT value FROM meta WHERE name='generation'").fetchone()
             actual_generation = int(current_generation[0]) if current_generation else 0
@@ -806,7 +837,7 @@ class SQLiteIndexStore:
 
     @property
     def indexed_master_sha(self) -> str | None:
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             row = db.execute("SELECT value FROM meta WHERE name='indexed_master_sha'").fetchone()
             return str(row[0]) if row else None
 
@@ -819,7 +850,7 @@ class SQLiteIndexStore:
                           capture_output=True, check=False, timeout=10).returncode:
             raise ValueError("target commit is unavailable")
         for attempt in range(3):
-            with open_retrieval_index_connection() as db:
+            with self._open_connection() as db:
                 indexed_row = db.execute("SELECT value FROM meta WHERE name='indexed_master_sha'").fetchone()
                 generation_row = db.execute("SELECT value FROM meta WHERE name='generation'").fetchone()
                 old_sha = str(indexed_row[0]) if indexed_row else None
@@ -848,14 +879,14 @@ class SQLiteIndexStore:
                 tree = subprocess.run(["git", "-C", str(repo), "ls-tree", "-r", "--name-only", "-z", new_sha],
                                       capture_output=True, check=True, timeout=30).stdout
                 paths.update(p for p in tree.decode("utf-8", "surrogateescape").split("\0") if p)
-                with open_retrieval_index_connection() as db:
+                with self._open_connection() as db:
                     for row in db.execute("SELECT ref FROM docs"):
                         ref = SourceRef.model_validate_json(row[0])
                         if ref.authority_owner == "repository":
                             paths.add(ref.object_id.split("::", 1)[0])
             source_docs = [*repository_file_documents(repo, new_sha, sorted(paths)),
                            *repository_symbol_documents(repo, new_sha, sorted(paths))]
-            with open_retrieval_index_connection() as db:
+            with self._open_connection() as db:
                 db.execute("BEGIN IMMEDIATE")
                 stored = db.execute("SELECT value FROM meta WHERE name='indexed_master_sha'").fetchone()
                 generation = db.execute("SELECT value FROM meta WHERE name='generation'").fetchone()
@@ -972,7 +1003,7 @@ class SQLiteIndexStore:
             return
         try:
             master_sha = master_sha or self.resolve_master_sha()
-            with open_retrieval_index_connection() as db:
+            with self._open_connection() as db:
                 schema = db.execute("SELECT value FROM meta WHERE name='schema_version'").fetchone()
                 embedder = db.execute("SELECT value FROM meta WHERE name='embedder_identity'").fetchone()
                 extractor = db.execute("SELECT value FROM meta WHERE name='extractor_identity'").fetchone()
@@ -998,7 +1029,7 @@ class SQLiteIndexStore:
             needed_catchup = bool(master and indexed != master)
             identity_ok = True
             if self.repository_root:
-                with open_retrieval_index_connection() as db:
+                with self._open_connection() as db:
                     values = {str(row[0]): str(row[1]) for row in db.execute(
                         "SELECT name,value FROM meta WHERE name IN "
                         "('schema_version','extractor_identity','embedder_identity')")}
@@ -1012,26 +1043,26 @@ class SQLiteIndexStore:
                 "unavailable" if master is None else "behind" if not identity_ok
                 else "caught_up" if owner_caught_up or (needed_catchup and indexed == master)
                 else "current" if indexed == master else "behind")
-            with open_retrieval_index_connection() as db:
+            with self._open_connection() as db:
                 row = db.execute("SELECT value FROM meta WHERE name='generation'").fetchone()
             return IndexFreshness(indexed_sha=indexed, master_sha=master, state=state,
                                   generation=int(row[0]) if row else 0,
                                   reason=None if state in {"current", "caught_up"} else
                                   f"repository index not at current master {(master or '')[:12]}")
         except (OSError, RuntimeError, sqlite3.Error, subprocess.SubprocessError, ValueError) as exc:
-            with open_retrieval_index_connection() as db:
+            with self._open_connection() as db:
                 row = db.execute("SELECT value FROM meta WHERE name='generation'").fetchone()
             return IndexFreshness(indexed_sha=indexed, master_sha=None, state="unavailable",
                                   generation=int(row[0]) if row else 0, reason=str(exc))
 
     def upsert(self, documents: Sequence[IndexDocument]) -> None:
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             self._upsert(db, documents)
             self._revision(db)
             db.commit()
 
     def delete(self, refs: Sequence[SourceRef]) -> None:
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             if self.use_sqlite_vec:
                 _load_vector_extension(db)
             for ref in refs:
@@ -1071,7 +1102,7 @@ class SQLiteIndexStore:
             raise ValueError("unsupported edge kind")
         if source.workspace_id != target.workspace_id:
             raise ValueError("graph edges cannot cross workspace boundaries")
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             db.execute("INSERT OR IGNORE INTO edges VALUES (?,?,?,?)",
                        (_key(source), _key(target), kind, valid_from))
             self._revision(db)
@@ -1096,7 +1127,7 @@ class SQLiteIndexStore:
     def verify(self) -> IndexIntegrityReport:
         issues: list[str] = []
         try:
-            with open_retrieval_index_connection() as db:
+            with self._open_connection() as db:
                 check = str(db.execute("PRAGMA quick_check").fetchone()[0])
                 if check != "ok":
                     issues.append(f"quick_check: {check}")
@@ -1171,7 +1202,7 @@ class SQLiteIndexStore:
                 self._initialize()
             self.rebuild()
             return self.verify()
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             db.execute("BEGIN IMMEDIATE")
             if self.use_sqlite_vec:
                 _load_vector_extension(db)
@@ -1204,7 +1235,7 @@ class SQLiteIndexStore:
         fresh = self.freshness()
         if limit <= 0:
             return []
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             revision = self.revision
             exact = db.execute(
                 "SELECT * FROM docs WHERE object_id=? AND (? IS NULL OR workspace_id=?) ORDER BY key LIMIT ?",
@@ -1214,7 +1245,7 @@ class SQLiteIndexStore:
             return self._fresh_hits([self._hit(row, revision, lexical=-1000.0) for row in exact], fresh)
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", query):
             suffix = "::" + query
-            with open_retrieval_index_connection() as db:
+            with self._open_connection() as db:
                 symbols = db.execute(
                     "SELECT * FROM docs WHERE substr(object_id, -length(?))=? "
                     "AND (? IS NULL OR workspace_id=?) ORDER BY key LIMIT ?",
@@ -1229,7 +1260,7 @@ class SQLiteIndexStore:
             expression = '"' + " ".join(tokens) + '"'
         else:
             expression = " OR ".join('"' + token + '"' for token in tokens)
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             rows = db.execute(
                 "SELECT d.*, bm25(docs_fts) AS score FROM docs_fts JOIN docs d ON d.key=docs_fts.key "
                 "WHERE docs_fts MATCH ? AND (? IS NULL OR d.workspace_id=?) ORDER BY score, d.key LIMIT ?",
@@ -1242,7 +1273,7 @@ class SQLiteIndexStore:
         if limit <= 0:
             return []
         q = self.embedder.embed_query(query)
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             if self.use_sqlite_vec:
                 _load_vector_extension(db)
                 q_bytes = _pack_vector(q)
@@ -1285,7 +1316,7 @@ class SQLiteIndexStore:
         if len(workspaces) > 1:
             raise ValueError("graph expansion requires one workspace")
         workspace_id = next(iter(workspaces), None)
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             for level in range(1, min(depth, 8) + 1):
                 following: set[str] = set()
                 for key in sorted(frontier):
@@ -1346,7 +1377,7 @@ class SQLiteIndexStore:
     def resolve_authoritative(self, ref: SourceRef) -> AuthoritativeResolution:
         doc: IndexDocument | None = None
         if ref.authority_owner == "retrieval" and ref.object_type == "document_summary":
-            with open_retrieval_index_connection() as db:
+            with self._open_connection() as db:
                 row = db.execute("SELECT ref FROM docs WHERE key=?", (ref.object_id,)).fetchone()
             if row is not None:
                 source_ref = SourceRef.model_validate_json(row[0])
@@ -1404,7 +1435,7 @@ class SQLiteIndexStore:
             tokens = _TOKEN.findall(query)
             if tokens:
                 expression = " AND ".join('"' + token + '"' for token in tokens)
-                with open_retrieval_index_connection() as db:
+                with self._open_connection() as db:
                     rows = db.execute("SELECT d.* FROM docs_fts JOIN docs d ON d.key=docs_fts.key "
                                       "WHERE docs_fts MATCH ? AND d.object_id IS NOT NULL AND "
                                       "json_extract(d.ref,'$.authority_owner')='repository' "
@@ -1434,7 +1465,7 @@ class SQLiteIndexStore:
                 candidates.append((hit, level))
 
         revision = self.revision
-        with open_retrieval_index_connection() as db:
+        with self._open_connection() as db:
             for hit in direct:
                 ref = hit.source_ref
                 if ref.authority_owner == "hermes_operational_memory":
