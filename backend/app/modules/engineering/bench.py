@@ -225,7 +225,7 @@ def format_bounded_view(
         "failed_checks": failed_checks,
         "warning_checks": warning_checks,
         "other_checks": other_checks,
-        "outputs": outputs,
+        "outputs": "withheld (verdict not_usable)" if verdict == "not_usable" else outputs,
         "artifacts": artifacts,
         "result_path": str(result_path),
         "truncated": False,
@@ -242,7 +242,8 @@ def format_bounded_view(
     if len(formatted) <= MAX_VIEW_CHARS:
         return formatted
 
-    view["outputs"] = []
+    if verdict != "not_usable":
+        view["outputs"] = []
     formatted = json.dumps(view, indent=2)
     if len(formatted) <= MAX_VIEW_CHARS:
         return formatted
@@ -691,6 +692,9 @@ def run_evaluation(
     out_dir.mkdir(parents=True, exist_ok=True)
     res_dict = result.model_dump(mode="json")
     res_dict["verdict"] = verdict
+    if verdict == "not_usable":
+        res_dict["rejected_outputs"] = res_dict["outputs"]
+        res_dict["outputs"] = []
     result_file = out_dir / "result.json"
     result_file.write_text(json.dumps(res_dict, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -805,8 +809,12 @@ def compare_runs(
     except json.JSONDecodeError as exc:
         raise BenchInputError("INVALID_JSON", f"Result file in dirB is not valid JSON: {exc}") from exc
 
-    outputs_a = {item["name"]: item["value"] for item in res_a.get("outputs", []) if "name" in item and "value" in item}
-    outputs_b = {item["name"]: item["value"] for item in res_b.get("outputs", []) if "name" in item and "value" in item}
+    outputs_a = {}
+    if res_a.get("verdict") != "not_usable":
+        outputs_a = {item["name"]: item["value"] for item in res_a.get("outputs", []) if "name" in item and "value" in item}
+    outputs_b = {}
+    if res_b.get("verdict") != "not_usable":
+        outputs_b = {item["name"]: item["value"] for item in res_b.get("outputs", []) if "name" in item and "value" in item}
 
     outputs_comparison: dict[str, Any] = {}
     for name in sorted(set(outputs_a.keys()) | set(outputs_b.keys())):
@@ -863,9 +871,11 @@ def compare_runs(
         "evaluator_a": res_a.get("evaluator_id"),
         "status_a": res_a.get("status"),
         "verdict_a": res_a.get("verdict"),
+        "result_path_a": str(res_a_path),
         "evaluator_b": res_b.get("evaluator_id"),
         "status_b": res_b.get("status"),
         "verdict_b": res_b.get("verdict"),
+        "result_path_b": str(res_b_path),
         "outputs": outputs_comparison,
         "checks": checks_comparison,
         "truncated": False,
@@ -1046,7 +1056,7 @@ def _dispatch_bench_tool(
                 return None, "run_not_found"
             try:
                 compare_doc = compare_runs(dir_a, dir_b, root=bench_root)
-                return {"op": "compare", "run_id_a": run_a, "run_id_b": run_b, "view": compare_doc}, error
+                return {"op": "compare", "run_id_a": run_a, "run_id_b": run_b, "view": _agent_view(compare_doc)}, error
             except BenchInputError:
                 return None, "run_not_found"
             except Exception:
@@ -1111,6 +1121,8 @@ def _dispatch_bench_tool(
                 return None, "invalid_run_result"
             if res_data.get("evaluator_id") != "bluecad.solid":
                 return None, "wrong_evaluator"
+            if res_data.get("verdict") == "not_usable":
+                return None, "rejected_predecessor"
             step_file = solid_dir / "model.step"
             manifest_file = solid_dir / "manifest.json"
             if not step_file.is_file() or not manifest_file.is_file():
@@ -1143,6 +1155,8 @@ def _dispatch_bench_tool(
                 return None, "invalid_run_result"
             if res_data.get("evaluator_id") != "bluecad.mesh":
                 return None, "wrong_evaluator"
+            if res_data.get("verdict") == "not_usable":
+                return None, "rejected_predecessor"
             if not (from_dir / "mesh_result.json").is_file():
                 return None, "missing_mesh_result"
 

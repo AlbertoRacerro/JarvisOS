@@ -670,6 +670,7 @@ def _install_surface_grants(worker: HermesSupervisor, workspace_id: str, thread_
         bench_run_name = "mcp__jarvis__jarvis_bench_run"
         lines.append(f"{bench_read_name} grant_id={grant_ids['jarvis.bench_read']};")
         lines.append(f"{bench_run_name} grant_id={grant_ids['jarvis.bench_run']}.")
+        lines.append("For any numeric answer based on rejected bench evidence, use null and explain why the value is unavailable.")
     lines.extend([
              f"Read with {read_name} using only {{\"grant_id\":\"{grant_ids[capability_ids[0]]}\"}}; "
              "the grant already contains this turn's surface and selection.",
