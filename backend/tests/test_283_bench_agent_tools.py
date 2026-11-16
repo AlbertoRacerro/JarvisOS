@@ -143,7 +143,7 @@ def _mock_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_criterion_2_bench_read_list_grants_and_refusals(
     agent_session: AgentSessionRef,
 ) -> None:
-    """Criterion 2: jarvis_bench_read list through dispatch_tool with live grant returns nine rows;
+    """Criterion 2: jarvis_bench_read list through dispatch_tool with live grant returns eleven rows;
 
     refused without grant, expired grant, or with jarvis.bluecad_read grant.
     """
@@ -167,16 +167,17 @@ def test_criterion_2_bench_read_list_grants_and_refusals(
         deadline_at=now + timedelta(minutes=1),
     )
 
-    # 1. Live grant succeeds and returns 9 rows
+    # 1. Live grant succeeds and returns 11 rows
     res = dispatch_tool(call, live_grants={read_grant.grant_id: read_grant})
     assert res.status == "succeeded"
     assert res.result is not None
-    assert len(res.result["rows"]) == 10
+    assert len(res.result["rows"]) == 11
     evaluator_ids = {r["evaluator_id"] for r in res.result["rows"]}
     assert "bluecad.solid" in evaluator_ids
     assert "bluecad.mesh" in evaluator_ids
     assert "bluecad.fem" in evaluator_ids
     assert "fluids.pipe_pressure_drop" in evaluator_ids
+    assert "retrieval.eval" in evaluator_ids
 
     # 2. Without grant: refused
     res_no_grant = dispatch_tool(call, live_grants={})
