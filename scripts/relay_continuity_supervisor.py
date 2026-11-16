@@ -37,6 +37,7 @@ from relay_continuity_common import (  # noqa: E402
     JOB_POLL_INTERVAL_SECONDS,
     MAX_SESSION_RESUMES,
     MAX_TASK_CHECKPOINTS,
+    MAX_UNSATISFIED_WAKES,
     MIN_CHECKPOINT_INTERVAL_SECONDS,
     NATIVE_AGENTS,
     PREFERRED,
@@ -887,14 +888,22 @@ class Supervisor:
             turn = last_turn_dir(self.host.relay.sessions_dir() / session_id) if session_id else None
             report = classify_turn(turn) if turn else TurnReport(outcome="success", agent=self.state.get("agent"), detail="restored wait")
             report.agent = report.agent or self.state.get("agent")
-            wait_res = self._poll_external_wait(wait, report)
-            if isinstance(wait_res, str):
-                return wait_res
-            agent, prompt = wait_res
-            new_report = self._launch(agent, prompt, report)
-            if isinstance(new_report, str):
-                return new_report
-            report = new_report
+            if wait.get("woken"):
+                agent = wait.get("wake_agent") or self.state.get("agent") or PREFERRED
+                prompt = wait["wake_prompt"]
+                new_report = self._launch(agent, prompt, report)
+                if isinstance(new_report, str):
+                    return new_report
+                report = new_report
+            else:
+                wait_res = self._poll_external_wait(wait, report)
+                if isinstance(wait_res, str):
+                    return wait_res
+                agent, prompt = wait_res
+                new_report = self._launch(agent, prompt, report)
+                if isinstance(new_report, str):
+                    return new_report
+                report = new_report
         while True:
             self.state["last_outcome"] = report.outcome
             self.state["agent"] = report.agent or self.state.get("agent") or PREFERRED
@@ -1020,7 +1029,6 @@ class Supervisor:
                       and counters.get(f"transient_{failed_agent}", 0) < self.limits.same_agent_retries)
         if retry_same:
             strikes = counters.get(f"transient_{failed_agent}", 0)
-            counters[f"transient_{failed_agent}"] = strikes + 1
         elif report.outcome in ("quota", "spend_limit", "transient", "auth") and failed_agent not in cleared:
             # A provider failure makes only that provider unavailable, until its reset or a backed-off retry.
             self.set_cooldown(failed_agent, report)
@@ -1051,6 +1059,8 @@ class Supervisor:
                                           agent=chosen, effects=effects, processes=processes)
 
         if retry_same:
+            if (probe_res := self._pre_launch_probe()) is not None:
+                return probe_res
             backoff = min(self.limits.transient_base * 2 ** strikes, self.limits.transient_cap)
             self.host.log(f"{failed_agent} {report.harness_cause}; retrying the same agent in {int(backoff)}s")
             self.save()
@@ -1269,10 +1279,19 @@ class Supervisor:
 
     def _wake_wait(self, reason: str, wait: dict[str, Any], report: TurnReport,
                    job_statuses: dict[str, str], ci_statuses: dict[str, str],
-                   failed_job: str | None = None, failed_pr: str | None = None) -> tuple[str, str]:
-        self.state["wait"] = None
+                   failed_job: str | None = None, failed_pr: str | None = None) -> tuple[str, str] | str:
         self.state["phase"] = "running"
-        self.save()
+        rec = self.state.get("mission")
+        if rec and self.mission:
+            task_idx = str(rec["next"])
+            if reason != "satisfied":
+                counts = rec.setdefault("unsatisfied_wakes", {})
+                current_wakes = counts.get(task_idx, 0)
+                if current_wakes >= MAX_UNSATISFIED_WAKES:
+                    return self.hold("task_wait_limit", None, report.turn_id)
+                counts[task_idx] = current_wakes + 1
+            else:
+                rec.setdefault("unsatisfied_wakes", {}).pop(task_idx, None)
 
         lines = []
         for j in wait.get("jobs", []):
@@ -1320,35 +1339,49 @@ class Supervisor:
             f"{mission_line}"
         )
 
-        failed_agent = report.agent or self.state.get("agent") or PREFERRED
-        agent = self._choose(failed_agent) or failed_agent
-        parent_candidate = (None if agent in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
-                            or (agent == "codex" and self.state.get("agent") not in (None, "codex"))
-                            else self.state.get("head_session"))
+        def make_wake_prompt(chosen: str) -> str:
+            parent_candidate = (None if chosen in NATIVE_AGENTS or self.state.get("agent") in NATIVE_AGENTS
+                                or (chosen == "codex" and self.state.get("agent") not in (None, "codex"))
+                                else self.state.get("head_session"))
 
-        resumes = self.state.get("resumes", 0)
-        turn_dir = last_turn_dir(self.host.relay.sessions_dir() / self.state["head_session"]) if self.state.get("head_session") else None
-        tokens = turn_context_tokens(turn_dir)
+            resumes = self.state.get("resumes", 0)
+            turn_dir = last_turn_dir(self.host.relay.sessions_dir() / self.state["head_session"]) if self.state.get("head_session") else None
+            tokens = turn_context_tokens(turn_dir)
 
-        if (parent_candidate is not None
-                and resumes < MAX_SESSION_RESUMES
-                and (tokens is None or tokens <= RESUME_CONTEXT_CAP_TOKENS)):
-            self.state["resumes"] = resumes + 1
-            self.save()
-            self._log_resume_decision("wake", tokens, resume=True)
-            return agent, short_resume_prompt
-        else:
-            self.state["resumes"] = 0
-            self.state["force_fresh_context"] = True
-            self.save()
-            self._log_resume_decision("wake", tokens, resume=False)
-            task_text = self._mission_task() if (self.mission and rec) else None
-            handoff = f"{outcome_header}\n{items_text}"
-            if task_text:
-                full_prompt = f"{task_text}\n\n[Durable handoff summary]\n{handoff}"
+            if (parent_candidate is not None
+                    and resumes < MAX_SESSION_RESUMES
+                    and (tokens is None or tokens <= RESUME_CONTEXT_CAP_TOKENS)):
+                self.state["resumes"] = resumes + 1
+                self._log_resume_decision("wake", tokens, resume=True)
+                return short_resume_prompt
             else:
-                full_prompt = f"[relay-continuity attempt {{nonce}}]\n[Durable handoff summary]\n{handoff}"
-            return agent, full_prompt
+                self.state["resumes"] = 0
+                self.state["force_fresh_context"] = True
+                self._log_resume_decision("wake", tokens, resume=False)
+                task_text = self._mission_task() if (self.mission and rec) else None
+                handoff = f"{outcome_header}\n{items_text}"
+                if task_text:
+                    full_prompt = f"{task_text}\n\n[Durable handoff summary]\n{handoff}"
+                else:
+                    full_prompt = f"[relay-continuity attempt {{nonce}}]\n[Durable handoff summary]\n{handoff}"
+                return full_prompt
+
+        failed_agent = report.agent or self.state.get("agent") or PREFERRED
+        agent = self._choose(failed_agent)
+        if agent is None:
+            chosen = self._wait_or_hold(make_wake_prompt)
+            if isinstance(chosen, str):
+                return chosen
+            agent, prompt = chosen
+        else:
+            prompt = make_wake_prompt(agent)
+
+        wait["woken"] = True
+        wait["wake_reason"] = reason
+        wait["wake_agent"] = agent
+        wait["wake_prompt"] = prompt
+        self.save()
+        return agent, prompt
 
     def _poll_external_wait(self, wait: dict[str, Any], report: TurnReport) -> tuple[str, str] | str:
         wait_started_at = parse_ts(wait.get("started_at")) or self.host.now()
@@ -1455,13 +1488,9 @@ class Supervisor:
                 return False
             self.host.sleep(min(5.0, remaining))
 
-    def _launch(self, agent: str, prompt: str, previous: TurnReport) -> TurnReport | str:
-        if self.mission is not None and self._mission_task() is None:
-            return self._mission_complete()  # every task is recorded: never launch past the last one
-        # Only this process is excluded: a Relay REPL that is our ancestor is still a live coordinator.
+    def _pre_launch_probe(self) -> str | None:
+        """Probe reachability and coordinator conflicts before launching. None if clear to proceed."""
         if conflicts := self.host.conflicts({os.getpid()}):
-            # Another coordinator is acting on the repository: never a second writer. Nothing was launched, so
-            # the same decision is taken again once it has gone.
             self.host.log(f"another coordinator is active ({', '.join(conflicts)}); waiting")
             self.state["phase"] = "waiting"
             self.save()
@@ -1480,6 +1509,14 @@ class Supervisor:
             self.save()
             return "waiting"
         self.state["network_outage"] = False
+        return None
+
+    def _launch(self, agent: str, prompt: str, previous: TurnReport) -> TurnReport | str:
+        if self.mission is not None and self._mission_task() is None:
+            return self._mission_complete()  # every task is recorded: never launch past the last one
+        # Only this process is excluded: a Relay REPL that is our ancestor is still a live coordinator.
+        if (probe_res := self._pre_launch_probe()) is not None:
+            return probe_res
         digest = self.host.permissions_digest()
         if digest != self.state.get("permissions_digest"):
             return self.hold("permissions_changed")
@@ -1571,6 +1608,12 @@ class Supervisor:
         self.state["pending"] = pending  # intent is durable before anything is launched
         self.state["acknowledged"] = None  # the reviewed turn is now behind the chain
         self.state["agent"] = agent
+        self.state["wait"] = None
+        if (previous is not None and previous.agent == agent
+                and previous.outcome == "transient"
+                and previous.harness_cause in SAME_AGENT_CAUSES):
+            strikes = self.state["counters"].get(f"transient_{agent}", 0)
+            self.state["counters"][f"transient_{agent}"] = strikes + 1
         self.save()
         launch_journal = {"event": "launch", **{k: v for k, v in pending.items() if k != "fingerprint"},
                           **({"resume": resume} if resume else {})}
@@ -1732,6 +1775,7 @@ class Supervisor:
         is_external_wait = status == "continue" and bool(jobs or ci_waits)
 
         if not is_external_wait:
+            rec.setdefault("unsatisfied_wakes", {}).pop(str(index), None)
             counts = rec.setdefault("checkpoints", {})
             counts[str(index)] = counts.get(str(index), 0) + 1
             self.store.journal({"event": "task_checkpointed", **event, "checkpoints": counts[str(index)]})

@@ -438,8 +438,9 @@ def command_release(args: argparse.Namespace) -> int:
             rec["done"].append({"task": advanced, "session": None, "agent": None, "at": iso(now_utc()), "by": "maintainer",
                                 "outcome": "maintainer_attested", "note": args.note[:500]})
             rec["next"] += 1
-        if (released or {}).get("reason") == "task_checkpoint_limit" and (rec := state.get("mission")):
+        if (released or {}).get("reason") in ("task_checkpoint_limit", "task_wait_limit") and (rec := state.get("mission")):
             (rec.get("checkpoints") or {}).pop(str(rec["next"]), None)  # the maintainer allows a fresh bound
+            (rec.get("unsatisfied_wakes") or {}).pop(str(rec["next"]), None)
         held_turn = (released or {}).get("turn")
         previous = state.get("acknowledged") or {}
         if held_turn:
