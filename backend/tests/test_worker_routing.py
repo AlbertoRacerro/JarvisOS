@@ -589,6 +589,48 @@ def test_copilot_routing_priority_and_fourth_column() -> None:
     assert wr.decide("medium", "low", available)["worker"] == "terra"
 
 
+def test_copilot_monthly_reset_from_entitlement_or_next_month() -> None:
+    premium = {"has_quota": True, "percent_remaining": 70}
+    real = {"cli_enabled": True, "quota_reset_date": "2026-12-01", "quota_reset_date_utc": "2026-12-01T00:00:00.000Z",
+            "quota_snapshots": {"premium_interactions": premium}}
+    now = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
+    assert wr.parse_copilot(real, now).resets["monthly"] == datetime(2026, 12, 1, tzinfo=UTC)
+    for bad in (None, "not a date"):
+        missing = {**real, "quota_reset_date_utc": bad}
+        assert wr.parse_copilot(missing, now).resets["monthly"] == datetime(2026, 12, 1, tzinfo=UTC)
+    december = datetime(2026, 12, 31, 23, 0, tzinfo=UTC)
+    assert wr.parse_copilot({**real, "quota_reset_date_utc": None}, december).resets["monthly"] == datetime(
+        2027, 1, 1, tzinfo=UTC)
+
+
+def test_monthly_pool_behind_pace_wins_among_qualifying_workers() -> None:
+    now = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)  # 15.5 of 30 days elapsed
+
+    def copilot(free: float) -> Any:
+        reading = {"cli_enabled": True, "quota_reset_date_utc": "2026-12-01T00:00:00.000Z",
+                   "quota_snapshots": {"premium_interactions": {"has_quota": True, "percent_remaining": free * 100}}}
+        return wr.parse_copilot(reading, now)
+
+    behind = pools(copilot=copilot(0.70))
+    eligible, _ = wr.rank(1, behind, now=now)
+    assert eligible[0]["worker"] == "copilot-auto"
+    assert eligible[0]["pacing"] == "behind_pace"
+    decision = wr.decide("low", "low", behind, now=now)
+    assert decision["worker"] == "copilot-auto" and decision["pacing"] == "behind_pace"
+    assert "pacing:" in wr.render(decision)
+
+    ahead = pools(copilot=copilot(0.30))
+    eligible, _ = wr.rank(1, ahead, now=now)
+    assert eligible[0]["worker"] == "flash"
+    assert all("pacing" not in e for e in eligible)
+    assert "pacing" not in wr.decide("low", "low", ahead, now=now)
+
+    eligible, _ = wr.rank(2, behind, now=now)  # no Copilot model qualifies at tier 2
+    assert "copilot-auto" not in [e["worker"] for e in eligible]
+    assert eligible[0]["worker"] == wr.rank(2, ahead, now=now)[0][0]["worker"]
+    assert "pacing" not in eligible[0]
+
+
 def test_read_copilot_uses_dedicated_token_and_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     script = tmp_path / "gh"
     script.write_text("#!/usr/bin/env python3\nimport json, os\n"

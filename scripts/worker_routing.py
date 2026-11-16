@@ -293,7 +293,28 @@ def parse_claude(entry: Any, now: datetime | None = None) -> Pool:
     return Pool("claude", windows, min(windows.values()))
 
 
-def parse_copilot(reading: dict[str, Any] | None) -> Pool:
+def _month_shift(moment: datetime, months: int) -> datetime:
+    """The same day-of-month instant `months` calendar months away, clamped to the month's first day if absent."""
+    index = moment.year * 12 + moment.month - 1 + months
+    try:
+        return moment.replace(year=index // 12, month=index % 12 + 1)
+    except ValueError:
+        return moment.replace(year=index // 12, month=index % 12 + 1, day=1)
+
+
+def behind_pace(pool: Pool, now: datetime) -> bool:
+    """A monthly pool whose used fraction is below the elapsed share of its month (spec 290)."""
+    reset = pool.resets.get("monthly")
+    free = pool.windows.get("monthly")
+    if reset is None or free is None:
+        return False
+    start = _month_shift(reset, -1)
+    if not start <= now < reset:
+        return False
+    return 1 - free < (now - start) / (reset - start)
+
+
+def parse_copilot(reading: dict[str, Any] | None, now: datetime | None = None) -> Pool:
     """Premium interactions from GitHub's no-model-turn entitlement endpoint."""
     if not isinstance(reading, dict):
         return unreadable("copilot", "no_reading")
@@ -303,12 +324,17 @@ def parse_copilot(reading: dict[str, Any] | None) -> Pool:
     prem = snapshots.get("premium_interactions") if isinstance(snapshots, dict) else None
     if not isinstance(prem, dict):
         return unreadable("copilot", "bucket_missing")
+    reset = _parse_instant(reading.get("quota_reset_date_utc"))
+    if reset is None:
+        moment = (now or datetime.now(UTC)).astimezone(UTC)
+        reset = _month_shift(moment.replace(day=1, hour=0, minute=0, second=0, microsecond=0), 1)
+    resets = {"monthly": reset}
     if prem.get("unlimited") is True:
-        return Pool("copilot", {"monthly": 1.0}, 1.0)
+        return Pool("copilot", {"monthly": 1.0}, 1.0, resets=resets)
     if prem.get("has_quota") is False:
         if prem.get("entitlement") in (0, 0.0):
             return unreadable("copilot", "no_entitlement")
-        return Pool("copilot", {"monthly": 0.0}, 0.0)
+        return Pool("copilot", {"monthly": 0.0}, 0.0, resets=resets)
     pct_rem = prem.get("percent_remaining")
     if (isinstance(pct_rem, bool) or not isinstance(pct_rem, int | float)
             or not math.isfinite(pct_rem) or not 0 <= pct_rem <= 100):
@@ -320,7 +346,7 @@ def parse_copilot(reading: dict[str, Any] | None) -> Pool:
     fraction = float(pct_rem) / 100.0
     if remaining is not None and remaining <= 0:
         fraction = 0.0
-    return Pool("copilot", {"monthly": fraction}, fraction)
+    return Pool("copilot", {"monthly": fraction}, fraction, resets=resets)
 
 
 def read_copilot() -> Pool:
@@ -1035,7 +1061,7 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
     then most free quota."""
     now = now or datetime.now(UTC)
     by_key = {m.key: m for m in models}
-    eligible: list[tuple[tuple[int, int, int, float, float, int], dict[str, Any]]] = []
+    eligible: list[tuple[tuple[int, int, int, int, float, float, int], dict[str, Any]]] = []
     skipped: list[dict[str, Any]] = []
 
     failed_families: set[str] = set()
@@ -1111,10 +1137,16 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
             same = int(review_of is not None and family(model) == review_of)
             entry["same"] = same
             first = 0 if model.pool in FIRST_POOLS else 1
-            eligible.append(((same, model.capability - required, first, -expiry_score(pool, now), -pool.free, index),
-                             entry))
+            paced = 0 if behind_pace(pool, now) else 1
+            eligible.append(((same, model.capability - required, paced, first, -expiry_score(pool, now), -pool.free,
+                              index), entry))
 
-    today_sorted = [entry for _, entry in sorted(eligible, key=lambda item: item[0])]
+    ordered = sorted(eligible, key=lambda item: item[0])
+    today_sorted = [entry for _, entry in ordered]
+    if ordered:
+        unpaced = min(eligible, key=lambda item: item[0][:2] + item[0][3:])[1]
+        if unpaced is not ordered[0][1]:
+            ordered[0][1]["pacing"] = "behind_pace"
     result_list = list(today_sorted)
 
     for same_val in (0, 1):
@@ -1178,6 +1210,7 @@ def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | 
             "source": chosen["source"], "command": launch_command(by_key[chosen["worker"]]),
             "claude_pool_low": low, **({"note": CLAUDE_LOW_NOTE} if low else {}),
             "measured_cost": chosen.get("measured_cost"), "record_count": chosen.get("record_count", 0),
+            **({"pacing": chosen["pacing"]} if chosen.get("pacing") else {}),
             "alternatives": eligible[1:], "skipped": skipped}
 
 
@@ -1248,6 +1281,8 @@ def render(decision: dict[str, Any]) -> str:
              f"review: {decision['review']}"]
     if decision.get("note"):
         lines.append(f"note: {decision['note']}")
+    if decision.get("pacing"):
+        lines.append("pacing: monthly pool behind the elapsed share of its month, spent before the reset")
     if decision["alternatives"]:
         alt_strs = []
         for a in decision["alternatives"]:
