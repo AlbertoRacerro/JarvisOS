@@ -789,4 +789,3 @@ def test_bench_run_solid_declared_bbox_failure_reports_not_usable(
     assert (out_dir / "result.json").is_file()
     assert (out_dir / "manifest.json").is_file()
     assert (out_dir / "validation_report.json").is_file()
-
