@@ -7,6 +7,8 @@ usability through result_verdict without losing native reports or altering outpu
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 from datetime import UTC, datetime
@@ -17,6 +19,7 @@ from app.modules.ai.jarvis_context_models import SourceRef
 from app.modules.bluecad.export import sha256_file
 from app.modules.bluecad.models import BuildResult
 from app.modules.bluecad.registry import resolve_tool
+from app.modules.bluecad.spec import canonical_json
 from app.modules.engineering.evaluator_contracts import (
     REFUSAL_CATEGORIES,
     CheckStatus,
@@ -649,6 +652,86 @@ def _format_solid_code_failure_message(
     return msg[:240]
 
 
+def build_solid_code_manifest(
+    record: RunRecord,
+    artifact_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Build the canonical bluecad_manifest_v0_1 payload for a bluecad.solid_code run."""
+    facts = record.result if isinstance(record.result, dict) else {}
+    vol = float(facts["volume"])
+    min_f = [float(x) for x in facts["bbox_min"]]
+    max_f = [float(x) for x in facts["bbox_max"]]
+    if len(min_f) != 3 or len(max_f) != 3:
+        raise ValueError("bounding box needs three coordinates")
+
+    raw_ports = facts.get("ports")
+    ports_dict: dict[str, Any] = {}
+    if isinstance(raw_ports, dict):
+        for name, p in sorted(raw_ports.items()):
+            if not isinstance(p, dict):
+                continue
+            entry: dict[str, Any] = {
+                "origin": [round(float(v), 9) for v in p["origin"]],
+                "direction": [round(float(v), 9) for v in p["direction"]],
+                "interface": p["interface"],
+            }
+            if p["interface"] == "tube":
+                entry["outer_d"] = round(float(p["outer_d"]), 9)
+                entry["wall_t"] = round(float(p["wall_t"]), 9)
+            else:
+                entry["pad_d"] = round(float(p["pad_d"]), 9)
+            ports_dict[name] = entry
+
+    art_by_name = {art.name: art for art in record.artifacts}
+    artifacts_payload: dict[str, Any] = {}
+    for name in ("model.step", "model.stl", "model.glb"):
+        if name in art_by_name:
+            sha = art_by_name[name].sha256
+            if sha.startswith("sha256:"):
+                sha = sha[7:]
+            artifacts_payload[name] = {
+                "sha256": sha,
+                "bytes": art_by_name[name].size_bytes,
+            }
+        elif artifact_dir is not None and (artifact_dir / name).is_file():
+            path = artifact_dir / name
+            artifacts_payload[name] = {
+                "sha256": sha256_file(path),
+                "bytes": path.stat().st_size,
+            }
+        else:
+            artifacts_payload[name] = {"sha256": "", "bytes": 0}
+
+    payload: dict[str, Any] = {
+        "manifest_version": "bluecad_manifest_v0_1",
+        "spec_id": "solid_code",
+        "parts": {
+            "body": {
+                "kind": "solid_code",
+                "volume_mm3": round(vol, 9),
+                "bbox_mm": {
+                    "min": [round(x, 9) for x in min_f],
+                    "max": [round(x, 9) for x in max_f],
+                },
+                "ports": ports_dict,
+            }
+        },
+        "resolved_ports": {
+            "body": ports_dict,
+        },
+        "assembly": {
+            "total_volume_mm3": round(vol, 9),
+            "bbox_mm": {
+                "min": [round(x, 9) for x in min_f],
+                "max": [round(x, 9) for x in max_f],
+            },
+        },
+        "artifacts": artifacts_payload,
+    }
+    payload["manifest_digest"] = hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+    return payload
+
+
 def solid_code_run_record_to_evaluation_result(
     record: RunRecord,
     case: GeometryCase | dict[str, Any] | None = None,
@@ -656,6 +739,7 @@ def solid_code_run_record_to_evaluation_result(
     request: EvaluationRequest | None = None,
     workspace_id: str | None = None,
     started_at: datetime | None = None,
+    manifest: dict[str, Any] | None = None,
 ) -> EvaluationResult:
     """Convert a studio_runtime RunRecord into a checked EvaluationResult for bluecad.solid_code."""
     completed = datetime.now(UTC)
@@ -821,6 +905,18 @@ def solid_code_run_record_to_evaluation_result(
                 object_id=art.name,
                 workspace_id=ws_id,
                 content_digest=digest,
+            )
+        )
+    if manifest is not None and not any(art.object_id == "manifest.json" for art in artifacts_list):
+        manifest_text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+        manifest_sha = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
+        artifacts_list.append(
+            SourceRef(
+                authority_owner="bluecad",
+                object_type="artifact",
+                object_id="manifest.json",
+                workspace_id=ws_id,
+                content_digest=f"sha256:{manifest_sha}",
             )
         )
 

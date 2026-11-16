@@ -994,6 +994,15 @@ def test_solid_code_bench_run_fake_runtime(
     assert (out_1 / "artifacts" / "model.step").is_file()
     assert (out_1 / "artifacts" / "model.stl").is_file()
     assert (out_1 / "artifacts" / "model.glb").is_file()
+    assert (out_1 / "artifacts" / "manifest.json").is_file()
+    manifest_art = [a for a in doc["artifacts"] if a["object_id"] == "manifest.json"]
+    assert len(manifest_art) == 1
+    res_1 = json.loads((out_1 / "result.json").read_text(encoding="utf-8"))
+    assert any(a["object_id"] == "manifest.json" for a in res_1["output_artifacts"])
+    manifest_data = json.loads((out_1 / "artifacts" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest_data["manifest_version"] == "bluecad_manifest_v0_1"
+    assert manifest_data["spec_id"] == "solid_code"
+    assert "manifest_digest" in manifest_data
 
     # 2. Invalid shape -> exit 1, not_usable
     def fake_run_invalid(run_req: Any, profile: str = "geometry", artifact_dir: Path | None = None) -> RunRecord:
@@ -1104,4 +1113,281 @@ def test_solid_code_real_sandbox_proof(
     doc = json.loads(capsys.readouterr().out)
     assert doc["status"] == "succeeded"
     assert doc["verdict"] == "not_usable"
+
+
+def test_solid_code_manifest_emission_and_mesh_handoff_offline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC 2 & 3: Manifest emission from solid_code with ports and hand-off to bluecad.mesh (offline)."""
+    from app.modules.bluecad.mesh_adapter import _port
+    from app.modules.bluecad.spec import canonical_json
+
+    src_file = tmp_path / "model_ports.py"
+    src_file.write_text("def main(inputs): pass\n", encoding="utf-8")
+    req_file = tmp_path / "req_ports.json"
+    req_file.write_text(
+        json.dumps({"source_path": "model_ports.py", "inputs": {}}),
+        encoding="utf-8",
+    )
+
+    limits = AppliedLimits(wall_seconds=120, cpu_seconds=480, memory_bytes=4294967296, processes=32, file_bytes=67108864)
+
+    def fake_run(run_req: Any, profile: str = "geometry", artifact_dir: Path | None = None) -> RunRecord:
+        if artifact_dir is not None:
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            (artifact_dir / "model.step").write_text("ISO-10303-21;", encoding="utf-8")
+            (artifact_dir / "model.stl").write_text("solid test", encoding="utf-8")
+            (artifact_dir / "model.glb").write_bytes(b"glTF" + b"\x00" * 20)
+        return RunRecord(
+            source_sha256="abc",
+            limits=limits,
+            mechanism="bubblewrap-userns-v1",
+            duration_seconds=1.0,
+            classification="ok",
+            profile="geometry",
+            result={
+                "valid": True,
+                "solids": 1,
+                "volume": 8000.0,
+                "bbox_min": [-10.0, -10.0, -10.0],
+                "bbox_max": [10.0, 10.0, 10.0],
+                "ports": {
+                    "inlet": {
+                        "origin": [-10.0, 0.0, 0.0],
+                        "direction": [-1.0, 0.0, 0.0],
+                        "interface": "tube",
+                        "outer_d": 8.0,
+                        "wall_t": 1.0,
+                    },
+                    "outlet": {
+                        "origin": [10.0, 0.0, 0.0],
+                        "direction": [1.0, 0.0, 0.0],
+                        "interface": "pad",
+                        "pad_d": 10.0,
+                    },
+                },
+            },
+            artifacts=[
+                Artifact(name="model.step", sha256="1" * 64, size_bytes=100),
+                Artifact(name="model.stl", sha256="2" * 64, size_bytes=100),
+                Artifact(name="model.glb", sha256="3" * 64, size_bytes=100),
+            ],
+        )
+
+    monkeypatch.setattr(bench_module, "studio_runtime_run", fake_run)
+
+    out_solid = tmp_path / "out_solid"
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_file), "--out", str(out_solid), "--root", str(tmp_path)])
+    assert code == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["status"] == "succeeded"
+    assert doc["verdict"] == "usable"
+
+    manifest_path = out_solid / "artifacts" / "manifest.json"
+    assert manifest_path.is_file()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["manifest_version"] == "bluecad_manifest_v0_1"
+    assert manifest["spec_id"] == "solid_code"
+    assert "body" in manifest["parts"]
+    assert "inlet" in manifest["parts"]["body"]["ports"]
+    assert "outlet" in manifest["parts"]["body"]["ports"]
+    assert manifest["resolved_ports"] == {"body": manifest["parts"]["body"]["ports"]}
+    assert manifest["assembly"]["total_volume_mm3"] == 8000.0
+    assert manifest["assembly"]["bbox_mm"] == {"min": [-10.0, -10.0, -10.0], "max": [10.0, 10.0, 10.0]}
+    payload_without_digest = {k: v for k, v in manifest.items() if k != "manifest_digest"}
+    expected_digest = hashlib.sha256(canonical_json(payload_without_digest).encode("utf-8")).hexdigest()
+    assert manifest["manifest_digest"] == expected_digest
+
+    manifest_ref = next((a for a in doc["artifacts"] if a["object_id"] == "manifest.json"), None)
+    assert manifest_ref is not None
+    expected_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    assert manifest_ref["content_digest"] == f"sha256:{expected_sha}"
+    res_solid_doc = json.loads((out_solid / "result.json").read_text(encoding="utf-8"))
+    assert any(a["object_id"] == "manifest.json" for a in res_solid_doc["output_artifacts"])
+
+    # Verify bluecad.mesh consumes this solid_code output with body.inlet and body.outlet
+    mesh_spec_data = {
+        "schema_version": "bluecad_analysis_spec_v0_1",
+        "analysis_id": "bench-solid-code-mesh-test",
+        "geometry": {
+            "step_path": str(out_solid / "artifacts" / "model.step"),
+            "manifest_path": str(out_solid / "artifacts" / "manifest.json"),
+        },
+        "mesh": {"target_size": 2.0, "element_order": 1},
+        "bcs": [{"port_label": "body.inlet", "type": "fixed"}],
+        "loads": [{"port_label": "body.outlet", "type": "pressure", "value": 50.0}],
+    }
+    mesh_req_file = tmp_path / "mesh_req.json"
+    mesh_req_file.write_text(json.dumps(mesh_spec_data), encoding="utf-8")
+
+    def mock_mesh_analysis_spec(analysis_spec: dict[str, Any], out_d: Any, **kwargs: Any) -> dict[str, Any]:
+        out = Path(out_d)
+        out.mkdir(parents=True, exist_ok=True)
+        # Verify resolution of ports through _port
+        p_manifest = json.loads(Path(analysis_spec["geometry"]["manifest_path"]).read_text(encoding="utf-8"))
+        inlet_port = _port(p_manifest, "body.inlet")
+        outlet_port = _port(p_manifest, "body.outlet")
+        assert inlet_port["outer_d"] == 8.0
+        assert outlet_port["pad_d"] == 10.0
+
+        inp = out / "mesh.inp"
+        inp.write_text("*NODE\n1, 0, 0, 0\n*ELEMENT\n1, 1\n", encoding="utf-8")
+        inp_hash = hashlib.sha256(inp.read_bytes()).hexdigest()
+        log_file = out / "gmsh.log"
+        log_file.write_text("Info: worst = 0.5 / average = 0.8\n", encoding="utf-8")
+        return {
+            "schema_version": "bluecad_mesh_result_v0_1",
+            "verdict": "pass",
+            "attempts": [
+                {
+                    "counts": {"elements_total": 600, "nodes_total": 200},
+                    "artifacts": {"gmsh_log": {"path": str(log_file), "sha256": "sha256:" + "2" * 64}},
+                }
+            ],
+            "artifacts": {
+                "mesh_inp": {"path": str(inp), "sha256": f"sha256:{inp_hash}"},
+                "gmsh_log": {"path": str(log_file), "sha256": "sha256:" + "2" * 64},
+            },
+        }
+
+    monkeypatch.setattr(bench_module, "mesh_analysis_spec", mock_mesh_analysis_spec)
+    out_mesh = tmp_path / "out_mesh"
+    code_mesh = main(["run", "bluecad.mesh", str(mesh_req_file), "--out", str(out_mesh), "--root", str(tmp_path)])
+    assert code_mesh == 0
+    doc_mesh = json.loads(capsys.readouterr().out)
+    assert doc_mesh["status"] == "succeeded"
+    assert doc_mesh["verdict"] == "usable"
+
+
+def test_solid_code_invalid_ports_fail_cleanly_without_manifest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC 4: Invalid port definitions fail cleanly without emitting manifest.json."""
+    src_file = tmp_path / "bad_ports.py"
+    src_file.write_text("def main(inputs): pass\n", encoding="utf-8")
+    req_file = tmp_path / "req_bad.json"
+    req_file.write_text(
+        json.dumps({"source_path": "bad_ports.py", "inputs": {}}),
+        encoding="utf-8",
+    )
+
+    limits = AppliedLimits(wall_seconds=120, cpu_seconds=480, memory_bytes=4294967296, processes=32, file_bytes=67108864)
+
+    def fake_run_error(run_req: Any, profile: str = "geometry", artifact_dir: Path | None = None) -> RunRecord:
+        return RunRecord(
+            source_sha256="abc",
+            limits=limits,
+            mechanism="bubblewrap-userns-v1",
+            duration_seconds=0.2,
+            classification="error",
+            profile="geometry",
+            stderr="ValueError: port name must match '^[A-Za-z0-9_]+$', got 'bad-name'",
+            result=None,
+        )
+
+    monkeypatch.setattr(bench_module, "studio_runtime_run", fake_run_error)
+
+    out_bad = tmp_path / "out_bad"
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_file), "--out", str(out_bad), "--root", str(tmp_path)])
+    assert code == 2
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["status"] == "failed"
+    assert doc["verdict"] == "not_usable"
+    assert not (out_bad / "artifacts" / "manifest.json").exists()
+    assert not any(a["object_id"] == "manifest.json" for a in doc.get("artifacts", []))
+    res_bad_doc = json.loads((out_bad / "result.json").read_text(encoding="utf-8"))
+    assert not any(a["object_id"] == "manifest.json" for a in res_bad_doc.get("output_artifacts", []))
+
+
+def test_solid_code_real_sandbox_proof_with_ports_and_mesh(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC 1, 2, 3: Real execution of solid_code with ports in sandbox and mesh hand-off."""
+    monkeypatch.setenv("JARVISOS_STUDIO_USER_CODE_ENABLED", "1")
+    get_settings.cache_clear()
+
+    st = runtime_status()
+    if not st.get("available"):
+        pytest.skip(f"bubblewrap sandbox unavailable: {st.get('reason')}")
+
+    source_code = (
+        "import build123d as bd\n\n"
+        "def main(inputs):\n"
+        "    box = bd.Box(20.0, 20.0, 20.0)\n"
+        "    return {\n"
+        "        'shape': box,\n"
+        "        'ports': {\n"
+        "            'inlet': {\n"
+        "                'origin': [-10.0, 0.0, 0.0],\n"
+        "                'direction': [-1.0, 0.0, 0.0],\n"
+        "                'interface': 'pad',\n"
+        "                'pad_d': 20.0,\n"
+        "            },\n"
+        "            'outlet': {\n"
+        "                'origin': [10.0, 0.0, 0.0],\n"
+        "                'direction': [1.0, 0.0, 0.0],\n"
+        "                'interface': 'pad',\n"
+        "                'pad_d': 20.0,\n"
+        "            },\n"
+        "        },\n"
+        "    }\n"
+    )
+    src_file = tmp_path / "box_ports.py"
+    src_file.write_text(source_code, encoding="utf-8")
+
+    req = tmp_path / "req_real_ports.json"
+    req.write_text(
+        json.dumps({
+            "source_path": "box_ports.py",
+            "inputs": {},
+            "volume_min": 7900.0,
+            "volume_max": 8100.0,
+        }),
+        encoding="utf-8",
+    )
+
+    out_solid = tmp_path / "out_real_solid"
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req), "--out", str(out_solid), "--root", str(tmp_path)])
+    assert code == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["status"] == "succeeded"
+    assert doc["verdict"] == "usable"
+
+    manifest_path = out_solid / "artifacts" / "manifest.json"
+    assert manifest_path.is_file()
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest_data["manifest_version"] == "bluecad_manifest_v0_1"
+    assert "inlet" in manifest_data["resolved_ports"]["body"]
+    assert "outlet" in manifest_data["resolved_ports"]["body"]
+    assert any(a["object_id"] == "manifest.json" for a in doc["artifacts"])
+    res_solid_data = json.loads((out_solid / "result.json").read_text(encoding="utf-8"))
+    assert any(a["object_id"] == "manifest.json" for a in res_solid_data["output_artifacts"])
+
+    if not shutil.which("gmsh"):
+        pytest.skip("gmsh is not installed")
+    tool_reg = _make_working_tools_registry(tmp_path)
+    mesh_req = {
+        "schema_version": "bluecad_analysis_spec_v0_1",
+        "analysis_id": "real-solid-code-mesh",
+        "analysis_type": "static",
+        "geometry": {
+            "step_path": str(out_solid / "artifacts" / "model.step"),
+            "manifest_path": str(out_solid / "artifacts" / "manifest.json"),
+        },
+        "material": {"name": "steel", "E": 200000.0, "nu": 0.3, "rho": 7.8e-9, "yield_strength": 250.0},
+        "bcs": [{"port_label": "body.inlet", "kind": "fixed"}],
+        "loads": [{"port_label": "body.outlet", "type": "pressure", "value": 100.0}],
+        "mesh": {"target_size": 5.0, "element_order": 1},
+        "pass_criteria": [{"metric": "elements_total", "op": ">=", "value": 10}],
+        "timeout_s": 60.0,
+    }
+    mesh_req_file = tmp_path / "real_mesh_req.json"
+    mesh_req_file.write_text(json.dumps(mesh_req), encoding="utf-8")
+    out_mesh = tmp_path / "out_real_mesh"
+    code_mesh = main(["run", "bluecad.mesh", str(mesh_req_file), "--out", str(out_mesh), "--root", str(tmp_path), "--tool-registry", str(tool_reg)])
+    assert code_mesh == 0
+    doc_mesh = json.loads(capsys.readouterr().out)
+    assert doc_mesh["status"] == "succeeded"
+    assert doc_mesh["verdict"] == "usable"
+
 

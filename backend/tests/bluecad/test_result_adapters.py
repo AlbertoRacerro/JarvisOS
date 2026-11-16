@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from app.modules.bluecad.result_adapters import (
     SOLID_CODE_EVALUATOR_ID,
     SOLID_EVALUATOR_ID,
     SOLID_NATIVE_VALIDATION_SOURCE,
+    build_solid_code_manifest,
     fem_evaluator_descriptor,
     fem_result_to_evaluation_result,
     mesh_evaluator_descriptor,
@@ -1456,3 +1458,155 @@ def test_solid_code_adapter_ok_without_facts_is_parse_error_not_zeros() -> None:
         assert res.status == "failed"
         assert res.failure is not None and res.failure.category == "result_parse_error"
         assert res.outputs == ()
+
+
+def test_build_solid_code_manifest_with_ports() -> None:
+    from app.modules.bluecad.spec import canonical_json
+
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=1.0,
+        classification="ok",
+        profile="geometry",
+        result={
+            "valid": True,
+            "solids": 1,
+            "volume": 8000.0,
+            "bbox_min": [-10.0, -10.0, -10.0],
+            "bbox_max": [10.0, 10.0, 10.0],
+            "ports": {
+                "inlet": {
+                    "origin": [-10.0, 0.0, 0.0],
+                    "direction": [-1.0, 0.0, 0.0],
+                    "interface": "tube",
+                    "outer_d": 8.0,
+                    "wall_t": 1.0,
+                },
+                "pad1": {
+                    "origin": [0.0, 0.0, -10.0],
+                    "direction": [0.0, 0.0, -1.0],
+                    "interface": "pad",
+                    "pad_d": 12.0,
+                },
+            },
+        },
+        artifacts=[
+            Artifact(name="model.step", sha256="a" * 64, size_bytes=1000),
+            Artifact(name="model.stl", sha256="b" * 64, size_bytes=2000),
+            Artifact(name="model.glb", sha256="c" * 64, size_bytes=3000),
+        ],
+    )
+
+    manifest = build_solid_code_manifest(record)
+    assert manifest["manifest_version"] == "bluecad_manifest_v0_1"
+    assert manifest["spec_id"] == "solid_code"
+    assert "body" in manifest["parts"]
+    body = manifest["parts"]["body"]
+    assert body["kind"] == "solid_code"
+    assert body["volume_mm3"] == 8000.0
+    assert body["bbox_mm"] == {"min": [-10.0, -10.0, -10.0], "max": [10.0, 10.0, 10.0]}
+    assert "inlet" in body["ports"] and "pad1" in body["ports"]
+    assert body["ports"]["inlet"]["outer_d"] == 8.0
+    assert body["ports"]["pad1"]["pad_d"] == 12.0
+
+    assert manifest["resolved_ports"] == {"body": body["ports"]}
+    assert manifest["assembly"] == {
+        "total_volume_mm3": 8000.0,
+        "bbox_mm": {"min": [-10.0, -10.0, -10.0], "max": [10.0, 10.0, 10.0]},
+    }
+    assert manifest["artifacts"]["model.step"] == {"sha256": "a" * 64, "bytes": 1000}
+    assert manifest["artifacts"]["model.stl"] == {"sha256": "b" * 64, "bytes": 2000}
+    assert manifest["artifacts"]["model.glb"] == {"sha256": "c" * 64, "bytes": 3000}
+
+    # Verify manifest_digest
+    digest = manifest["manifest_digest"]
+    payload_without_digest = {k: v for k, v in manifest.items() if k != "manifest_digest"}
+    expected_digest = hashlib.sha256(canonical_json(payload_without_digest).encode("utf-8")).hexdigest()
+    assert digest == expected_digest
+
+
+def test_build_solid_code_manifest_bare_shape_has_empty_ports() -> None:
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=1.0,
+        classification="ok",
+        profile="geometry",
+        result={
+            "valid": True,
+            "solids": 1,
+            "volume": 1000.0,
+            "bbox_min": [0.0, 0.0, 0.0],
+            "bbox_max": [10.0, 10.0, 10.0],
+        },
+        artifacts=[
+            Artifact(name="model.step", sha256="1" * 64, size_bytes=100),
+            Artifact(name="model.stl", sha256="2" * 64, size_bytes=100),
+            Artifact(name="model.glb", sha256="3" * 64, size_bytes=100),
+        ],
+    )
+    manifest = build_solid_code_manifest(record)
+    assert manifest["parts"]["body"]["ports"] == {}
+    assert manifest["resolved_ports"] == {"body": {}}
+
+
+def test_build_solid_code_manifest_reads_artifact_dir_when_no_record_artifacts(tmp_path: Path) -> None:
+    art_dir = tmp_path / "artifacts"
+    art_dir.mkdir(parents=True)
+    (art_dir / "model.step").write_bytes(b"STEP DATA")
+    (art_dir / "model.stl").write_bytes(b"STL DATA")
+    (art_dir / "model.glb").write_bytes(b"GLB DATA")
+
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=1.0,
+        classification="ok",
+        profile="geometry",
+        result={
+            "valid": True,
+            "solids": 1,
+            "volume": 1000.0,
+            "bbox_min": [0.0, 0.0, 0.0],
+            "bbox_max": [10.0, 10.0, 10.0],
+        },
+        artifacts=[],
+    )
+    manifest = build_solid_code_manifest(record, artifact_dir=art_dir)
+    assert manifest["artifacts"]["model.step"]["sha256"] == hashlib.sha256(b"STEP DATA").hexdigest()
+    assert manifest["artifacts"]["model.step"]["bytes"] == len(b"STEP DATA")
+
+
+def test_solid_code_adapter_with_manifest_included_in_output_artifacts() -> None:
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=1.0,
+        classification="ok",
+        profile="geometry",
+        result={
+            "valid": True,
+            "solids": 1,
+            "volume": 1000.0,
+            "bbox_min": [0.0, 0.0, 0.0],
+            "bbox_max": [10.0, 10.0, 10.0],
+        },
+        artifacts=[
+            Artifact(name="model.step", sha256="1" * 64, size_bytes=100),
+            Artifact(name="model.stl", sha256="2" * 64, size_bytes=100),
+            Artifact(name="model.glb", sha256="3" * 64, size_bytes=100),
+        ],
+    )
+    manifest_data = build_solid_code_manifest(record)
+    res = solid_code_run_record_to_evaluation_result(record, manifest=manifest_data)
+    manifest_artifacts = [a for a in res.output_artifacts if a.object_id == "manifest.json"]
+    assert len(manifest_artifacts) == 1
+    ref = manifest_artifacts[0]
+    expected_text = json.dumps(manifest_data, indent=2, sort_keys=True) + "\n"
+    expected_digest = f"sha256:{hashlib.sha256(expected_text.encode('utf-8')).hexdigest()}"
+    assert ref.content_digest == expected_digest
