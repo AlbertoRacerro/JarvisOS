@@ -13,15 +13,20 @@ from app.modules.bluecad.result_adapters import (
     CHECK_BREP_VALID,
     CHECK_ELEMENT_QUALITY,
     CHECK_FORCE_EQUILIBRIUM,
+    CHECK_MAX_EXTENT,
     CHECK_SOLVER_COMPLETION,
+    CHECK_TOPOLOGY,
     CHECK_VOLUME_CONSERVATION,
     CHECK_VOLUME_ELEMENTS,
+    CHECK_VOLUME_MAX,
+    CHECK_VOLUME_MIN,
     CHECK_WATERTIGHT,
     FEM_EVALUATOR_ID,
     MESH_EVALUATOR_ID,
     MESH_QUALITY_POLICY_LIMIT,
     MESH_QUALITY_POLICY_SOURCE,
     SOLID_BBOX_SOURCE,
+    SOLID_CODE_EVALUATOR_ID,
     SOLID_EVALUATOR_ID,
     SOLID_NATIVE_VALIDATION_SOURCE,
     fem_evaluator_descriptor,
@@ -29,6 +34,8 @@ from app.modules.bluecad.result_adapters import (
     mesh_evaluator_descriptor,
     mesh_result_to_evaluation_result,
     solid_build_result_to_evaluation_result,
+    solid_code_evaluator_descriptor,
+    solid_code_run_record_to_evaluation_result,
     solid_evaluator_descriptor,
 )
 from app.modules.engineering.evaluator_contracts import (
@@ -36,6 +43,8 @@ from app.modules.engineering.evaluator_contracts import (
     result_verdict,
 )
 from app.modules.engineering.operator_service import evaluator_registry
+from app.modules.studio.geometry import GeometryCase
+from app.modules.studio_runtime.runtime import AppliedLimits, Artifact, RunRecord
 
 
 def _mock_build_result(
@@ -1103,3 +1112,347 @@ def test_evaluator_descriptors() -> None:
     assert fem_desc.backend_kind == "fem_solver"
     assert fem_desc.backend_name == "CalculiX"
     assert fem_desc.required_checks == (CHECK_SOLVER_COMPLETION, CHECK_FORCE_EQUILIBRIUM)
+
+    code_desc = solid_code_evaluator_descriptor()
+    assert code_desc.evaluator_id == SOLID_CODE_EVALUATOR_ID
+    assert code_desc.backend_kind == "cad_kernel"
+    assert code_desc.backend_name == "build123d"
+    assert code_desc.required_checks == (CHECK_TOPOLOGY,)
+    assert code_desc.advisory_checks == ()
+
+
+# ---------------------------------------------------------------------------
+# Solid Code (spec 285) tests
+# ---------------------------------------------------------------------------
+
+
+def _dummy_limits() -> AppliedLimits:
+    return AppliedLimits(
+        wall_seconds=120,
+        cpu_seconds=480,
+        memory_bytes=4 * 1024 * 1024 * 1024,
+        processes=32,
+        file_bytes=64 * 1024 * 1024,
+    )
+
+
+def test_solid_code_adapter_disabled() -> None:
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=0.1,
+        classification="disabled",
+        profile="geometry",
+    )
+    res = solid_code_run_record_to_evaluation_result(record)
+    desc = solid_code_evaluator_descriptor()
+
+    assert res.evaluator_id == SOLID_CODE_EVALUATOR_ID
+    assert res.status == "refused"
+    assert res.failure is not None
+    assert res.failure.category == "not_available"
+    assert res.failure.backend_code == "disabled"
+    assert "JARVISOS_STUDIO_USER_CODE_ENABLED=1" in (res.failure.message or "")
+    assert result_verdict(desc, res) == "not_usable"
+    assert len(res.checks) == 1
+    assert res.checks[0].id == CHECK_TOPOLOGY
+    assert res.checks[0].status == "not_evaluated"
+
+
+def test_solid_code_adapter_unavailable() -> None:
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=0.1,
+        classification="unavailable",
+        profile="geometry",
+    )
+    res = solid_code_run_record_to_evaluation_result(record)
+    desc = solid_code_evaluator_descriptor()
+
+    assert res.evaluator_id == SOLID_CODE_EVALUATOR_ID
+    assert res.status == "refused"
+    assert res.failure is not None
+    assert res.failure.category == "not_available"
+    assert res.failure.backend_code == "unavailable"
+    assert "bubblewrap" in (res.failure.message or "")
+    assert result_verdict(desc, res) == "not_usable"
+
+
+def test_solid_code_adapter_error_and_host_path_stripping() -> None:
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=0.5,
+        classification="error",
+        profile="geometry",
+        stderr='File "/opt/workspace/box.py", line 12\nZeroDivisionError: division by zero',
+    )
+    res = solid_code_run_record_to_evaluation_result(record)
+    desc = solid_code_evaluator_descriptor()
+
+    assert res.status == "failed"
+    assert res.failure is not None
+    assert res.failure.category == "solver_crash"
+    assert res.failure.backend_code == "EXECUTION_ERROR"
+    assert "/opt/workspace" not in (res.failure.message or "")
+    assert "ZeroDivisionError" in (res.failure.message or "")
+    assert len(res.failure.message or "") <= 240
+    assert result_verdict(desc, res) == "not_usable"
+
+
+def test_solid_code_adapter_timeout_and_limit() -> None:
+    # Timeout
+    record_timeout = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=120.1,
+        classification="timeout",
+        profile="geometry",
+        limit="wall_seconds",
+        limit_value=120,
+        stderr="subprocess timed out",
+    )
+    res_timeout = solid_code_run_record_to_evaluation_result(record_timeout)
+    desc = solid_code_evaluator_descriptor()
+    assert res_timeout.status == "failed"
+    assert res_timeout.failure is not None
+    assert res_timeout.failure.category == "timeout"
+    assert res_timeout.failure.backend_code == "TIMEOUT"
+    assert "wall_seconds=120" in (res_timeout.failure.message or "")
+    assert result_verdict(desc, res_timeout) == "not_usable"
+
+    # Limit
+    record_limit = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=5.0,
+        classification="limit",
+        profile="geometry",
+        limit="memory_bytes",
+        limit_value=1073741824,
+        stderr="MemoryError: memory limit reached",
+    )
+    res_limit = solid_code_run_record_to_evaluation_result(record_limit)
+    assert res_limit.status == "failed"
+    assert res_limit.failure is not None
+    assert res_limit.failure.category == "solver_crash"
+    assert res_limit.failure.backend_code == "LIMIT_MEMORY_BYTES"
+    assert "memory_bytes=1073741824" in (res_limit.failure.message or "")
+    assert result_verdict(desc, res_limit) == "not_usable"
+
+
+def test_solid_code_adapter_invalid_result() -> None:
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=0.2,
+        classification="invalid_result",
+        profile="geometry",
+        stderr="invalid result file",
+    )
+    res = solid_code_run_record_to_evaluation_result(record)
+    desc = solid_code_evaluator_descriptor()
+    assert res.status == "failed"
+    assert res.failure is not None
+    assert res.failure.category == "result_parse_error"
+    assert res.failure.backend_code == "INVALID_RESULT"
+    assert result_verdict(desc, res) == "not_usable"
+
+
+def test_solid_code_adapter_ok_valid_topology_derives_usable() -> None:
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=1.2,
+        classification="ok",
+        profile="geometry",
+        result={
+            "valid": True,
+            "solids": 1,
+            "volume": 1000.0,
+            "bbox_min": [0.0, 0.0, 0.0],
+            "bbox_max": [10.0, 10.0, 10.0],
+        },
+        artifacts=[
+            Artifact(name="model.step", sha256="1" * 64, size_bytes=123),
+            Artifact(name="model.stl", sha256="2" * 64, size_bytes=456),
+            Artifact(name="model.glb", sha256="3" * 64, size_bytes=789),
+        ],
+    )
+    res = solid_code_run_record_to_evaluation_result(record)
+    desc = solid_code_evaluator_descriptor()
+
+    assert res.status == "succeeded"
+    assert res.failure is None
+    outputs_by_name = {o.name: o.value for o in res.outputs}
+    assert outputs_by_name["total_volume"].value == 1000.0
+    assert outputs_by_name["total_volume"].unit == "mm**3"
+    assert outputs_by_name["total_volume"].value == 1000.0
+    assert outputs_by_name["bbox_dx"].value == 10.0
+    assert outputs_by_name["bbox_dx"].unit == "mm"
+
+    # 3 artifacts preserved
+    art_names = {a.object_id for a in res.output_artifacts}
+    assert art_names == {"model.step", "model.stl", "model.glb"}
+    art_by_name = {a.object_id: a.content_digest for a in res.output_artifacts}
+    assert art_by_name["model.step"] == f"sha256:{'1' * 64}"
+
+    # Topology check passes
+    checks_by_id = {c.id: c for c in res.checks}
+    assert checks_by_id[CHECK_TOPOLOGY].status == "pass"
+
+    # Usable verdict
+    assert result_verdict(desc, res) == "usable"
+
+    # Round trip serialization
+    dumped = res.model_dump(mode="json")
+    loaded = EvaluationResult.model_validate(dumped)
+    assert loaded == res
+
+
+def test_solid_code_adapter_ok_invalid_topology_derives_not_usable() -> None:
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=1.0,
+        classification="ok",
+        profile="geometry",
+        result={
+            "valid": False,
+            "solids": 0,
+            "volume": 500.0,
+            "bbox_min": [0.0, 0.0, 0.0],
+            "bbox_max": [5.0, 5.0, 5.0],
+        },
+        artifacts=[
+            Artifact(name="model.step", sha256="1" * 64, size_bytes=100),
+            Artifact(name="model.stl", sha256="2" * 64, size_bytes=100),
+            Artifact(name="model.glb", sha256="3" * 64, size_bytes=100),
+        ],
+    )
+    res = solid_code_run_record_to_evaluation_result(record)
+    desc = solid_code_evaluator_descriptor()
+
+    assert res.status == "succeeded"
+    outputs_by_name = {o.name: o.value for o in res.outputs}
+    # Numbers are never changed
+    assert outputs_by_name["total_volume"].value == 500.0
+
+    checks_by_id = {c.id: c for c in res.checks}
+    assert checks_by_id[CHECK_TOPOLOGY].status == "fail"
+
+    # Invalid shape derives not_usable
+    assert result_verdict(desc, res) == "not_usable"
+
+
+def test_solid_code_adapter_declared_bounds() -> None:
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=1.0,
+        classification="ok",
+        profile="geometry",
+        result={
+            "valid": True,
+            "solids": 1,
+            "volume": 1000.0,
+            "bbox_min": [0.0, 0.0, 0.0],
+            "bbox_max": [10.0, 10.0, 10.0],
+        },
+        artifacts=[
+            Artifact(name="model.step", sha256="1" * 64, size_bytes=100),
+            Artifact(name="model.stl", sha256="2" * 64, size_bytes=100),
+            Artifact(name="model.glb", sha256="3" * 64, size_bytes=100),
+        ],
+    )
+    desc = solid_code_evaluator_descriptor()
+
+    # 1. Bounds match
+    case_good = GeometryCase(
+        inputs={},
+        volume_min=900.0,
+        volume_max=1100.0,
+        max_extent=15.0,
+    )
+    res_good = solid_code_run_record_to_evaluation_result(record, case=case_good)
+    checks_good = {c.id: c for c in res_good.checks}
+    assert checks_good[CHECK_TOPOLOGY].status == "pass"
+    assert checks_good[CHECK_VOLUME_MIN].status == "pass"
+    assert checks_good[CHECK_VOLUME_MIN].actual == 1000.0
+    assert checks_good[CHECK_VOLUME_MIN].limit == 900.0
+    assert checks_good[CHECK_VOLUME_MIN].unit == "mm**3"
+    assert checks_good[CHECK_VOLUME_MAX].status == "pass"
+    assert checks_good[CHECK_MAX_EXTENT].status == "pass"
+    assert checks_good[CHECK_MAX_EXTENT].actual == 10.0
+    assert checks_good[CHECK_MAX_EXTENT].limit == 15.0
+    assert checks_good[CHECK_MAX_EXTENT].unit == "mm"
+    assert result_verdict(desc, res_good) == "usable"
+
+    # 2. Volume below volume_min fails
+    case_bad_vol = GeometryCase(inputs={}, volume_min=1500.0)
+    res_bad_vol = solid_code_run_record_to_evaluation_result(record, case=case_bad_vol)
+    checks_bad_vol = {c.id: c for c in res_bad_vol.checks}
+    assert checks_bad_vol[CHECK_VOLUME_MIN].status == "fail"
+    assert checks_bad_vol[CHECK_VOLUME_MIN].actual == 1000.0
+    assert checks_bad_vol[CHECK_VOLUME_MIN].limit == 1500.0
+    assert result_verdict(desc, res_bad_vol) == "not_usable"
+
+    # 3. Max extent exceeded fails
+    case_bad_extent = GeometryCase(inputs={}, max_extent=5.0)
+    res_bad_ext = solid_code_run_record_to_evaluation_result(record, case=case_bad_extent)
+    checks_bad_ext = {c.id: c for c in res_bad_ext.checks}
+    assert checks_bad_ext[CHECK_MAX_EXTENT].status == "fail"
+    assert checks_bad_ext[CHECK_MAX_EXTENT].actual == 10.0
+    assert checks_bad_ext[CHECK_MAX_EXTENT].limit == 5.0
+    assert result_verdict(desc, res_bad_ext) == "not_usable"
+
+
+def test_solid_code_adapter_missing_required_check_derives_unchecked() -> None:
+    record = RunRecord(
+        source_sha256="abc",
+        limits=_dummy_limits(),
+        mechanism="bubblewrap-userns-v1",
+        duration_seconds=1.0,
+        classification="ok",
+        profile="geometry",
+        result={"valid": True, "solids": 1, "volume": 1000.0, "bbox_min": [0.0, 0.0, 0.0], "bbox_max": [10.0, 10.0, 10.0]},
+        artifacts=[
+            Artifact(name="model.step", sha256="1" * 64, size_bytes=100),
+            Artifact(name="model.stl", sha256="2" * 64, size_bytes=100),
+            Artifact(name="model.glb", sha256="3" * 64, size_bytes=100),
+        ],
+    )
+    res = solid_code_run_record_to_evaluation_result(record)
+    # Strip the required topology check
+    res_no_checks = res.model_copy(update={"checks": ()})
+    desc = solid_code_evaluator_descriptor()
+    assert result_verdict(desc, res_no_checks) == "unchecked"
+
+
+
+def test_solid_code_adapter_ok_without_facts_is_parse_error_not_zeros() -> None:
+    for facts in ({"valid": True, "solids": 1}, {"valid": True, "solids": 1, "volume": 1.0, "bbox_min": [0.0],
+                                                  "bbox_max": [1.0]}, None):
+        record = RunRecord(
+            source_sha256="abc",
+            limits=_dummy_limits(),
+            mechanism="bubblewrap-userns-v1",
+            duration_seconds=0.1,
+            classification="ok",
+            profile="geometry",
+            result=facts,
+        )
+        res = solid_code_run_record_to_evaluation_result(record)
+        assert res.status == "failed"
+        assert res.failure is not None and res.failure.category == "result_parse_error"
+        assert res.outputs == ()

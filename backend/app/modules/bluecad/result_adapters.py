@@ -25,6 +25,7 @@ from app.modules.engineering.evaluator_contracts import (
     EvaluationResult,
     EvaluationStatus,
     EvaluatorDescriptor,
+    FailureCategory,
     NamedQuantity,
     NumericalDiagnostics,
     ResultCheck,
@@ -35,8 +36,11 @@ from app.modules.engineering.refs import (
     EvaluationResultRef,
     Quantity,
 )
+from app.modules.studio.geometry import GeometryCase
+from app.modules.studio_runtime.runtime import RunRecord
 
 SOLID_EVALUATOR_ID: Final = "bluecad.solid"
+SOLID_CODE_EVALUATOR_ID: Final = "bluecad.solid_code"
 MESH_EVALUATOR_ID: Final = "bluecad.mesh"
 FEM_EVALUATOR_ID: Final = "bluecad.fem"
 
@@ -44,6 +48,11 @@ CHECK_BREP_VALID: Final = "BREP_VALID"
 CHECK_WATERTIGHT: Final = "WATERTIGHT"
 CHECK_VOLUME_CONSERVATION: Final = "VOLUME_CONSERVATION"
 CHECK_BBOX_DECL: Final = "T1_BBOX_DECL"
+
+CHECK_TOPOLOGY: Final = "TOPOLOGY"
+CHECK_VOLUME_MIN: Final = "VOLUME_MIN"
+CHECK_VOLUME_MAX: Final = "VOLUME_MAX"
+CHECK_MAX_EXTENT: Final = "MAX_EXTENT"
 
 CHECK_VOLUME_ELEMENTS: Final = "VOLUME_ELEMENTS"
 CHECK_ELEMENT_QUALITY: Final = "ELEMENT_QUALITY"
@@ -65,6 +74,13 @@ FEM_SOLVER_SOURCE: Final = "policy:solver_completion"
 FEM_EQUILIBRIUM_SOURCE: Final = "policy:force_equilibrium"
 FEM_FORCE_EQUILIBRIUM_TOL_N: Final = 1e-3
 FEM_FORCE_EQUILIBRIUM_REL_TOL: Final = 0.01
+
+PATH_PATTERN = re.compile(r"(?<![\w.)\]])(?:\.\.[/\\]|/|[A-Za-z]:\\)(?:[^\s\"'/\\]+[/\\])*([^\s\"'/\\]+)")
+
+
+def _strip_paths(text: str) -> str:
+    return PATH_PATTERN.sub(r"\1", text)
+
 
 WORST_AVG_RE = re.compile(
     r"worst\s*=\s*(?P<worst>[0-9.eE+-]+)\s*/\s*average\s*=\s*(?P<average>[0-9.eE+-]+)",
@@ -94,6 +110,27 @@ def solid_evaluator_descriptor(registry_path: Path | None = None) -> EvaluatorDe
         capabilities=("geometry_build", "brep_export"),
         required_checks=(CHECK_BREP_VALID, CHECK_WATERTIGHT),
         advisory_checks=(CHECK_VOLUME_CONSERVATION,),
+    )
+
+
+def solid_code_evaluator_descriptor(registry_path: Path | None = None) -> EvaluatorDescriptor:
+    version = "0.11.1"
+    try:
+        import build123d
+
+        version = getattr(build123d, "__version__", version)
+    except ImportError:
+        pass
+    return EvaluatorDescriptor(
+        evaluator_id=SOLID_CODE_EVALUATOR_ID,
+        backend_kind="cad_kernel",
+        backend_name="build123d",
+        backend_version=version,
+        tool_registry_id="build123d",
+        fidelity="screening",
+        capabilities=("geometry_build", "brep_export"),
+        required_checks=(CHECK_TOPOLOGY,),
+        advisory_checks=(),
     )
 
 
@@ -581,6 +618,311 @@ def solid_build_result_to_evaluation_result(
         output_artifacts=artifacts,
         checks=tuple(checks_list),
         numerical=NumericalDiagnostics(),
+        started_at=started_at,
+        completed_at=completed,
+    )
+
+
+def _format_solid_code_failure_message(
+    classification: str,
+    limit: str | None = None,
+    limit_value: int | None = None,
+    stderr: str = "",
+) -> str:
+    lines = [line.strip() for line in (stderr or "").splitlines() if line.strip()]
+    last_line = _strip_paths(lines[-1]) if lines else ""
+    if limit is not None and limit_value is not None:
+        limit_desc = f"{limit}={limit_value}"
+        if last_line:
+            msg = f"{limit_desc}: {last_line}"
+        else:
+            msg = f"Limit exceeded: {limit_desc}"
+    elif limit is not None:
+        if last_line:
+            msg = f"{limit}: {last_line}"
+        else:
+            msg = f"Limit exceeded: {limit}"
+    elif last_line:
+        msg = last_line
+    else:
+        msg = f"Execution failed ({classification})"
+    return msg[:240]
+
+
+def solid_code_run_record_to_evaluation_result(
+    record: RunRecord,
+    case: GeometryCase | dict[str, Any] | None = None,
+    *,
+    request: EvaluationRequest | None = None,
+    workspace_id: str | None = None,
+    started_at: datetime | None = None,
+) -> EvaluationResult:
+    """Convert a studio_runtime RunRecord into a checked EvaluationResult for bluecad.solid_code."""
+    completed = datetime.now(UTC)
+    descriptor = solid_code_evaluator_descriptor()
+    backend_version = descriptor.backend_version
+
+    ws_id = request.request_ref.workspace_id if request else (workspace_id or "default")
+    if request:
+        req_ref = request.request_ref
+        res_ref = EvaluationResultRef(
+            authority_owner="bluecad",
+            object_type="evaluation_result",
+            object_id=f"res-{request.request_ref.object_id}",
+            workspace_id=ws_id,
+            revision="1",
+        )
+    else:
+        req_ref, res_ref = _synthesize_refs("solid_code", "bluecad", ws_id)
+
+    if record.classification in {"disabled", "unavailable"}:
+        hint = (
+            "Studio geometry code execution is disabled; set JARVISOS_STUDIO_USER_CODE_ENABLED=1."
+            if record.classification == "disabled"
+            else "Studio geometry code sandbox is unavailable; bubblewrap (bwrap) or Python environment missing."
+        )
+        checks = (
+            ResultCheck(
+                id=CHECK_TOPOLOGY,
+                family="input",
+                status="not_evaluated",
+                hint="topology check not evaluated: execution refused",
+                source=SOLID_TOPOLOGY_SOURCE,
+            ),
+        )
+        return EvaluationResult(
+            result_ref=res_ref,
+            request_ref=req_ref,
+            evaluator_id=SOLID_CODE_EVALUATOR_ID,
+            backend_version=backend_version,
+            status="refused",
+            failure=EvaluationFailure(
+                category="not_available",
+                backend_code=record.classification,
+                message=hint,
+            ),
+            fidelity="screening",
+            outputs=(),
+            output_artifacts=(),
+            checks=checks,
+            numerical=NumericalDiagnostics(wall_time_s=record.duration_seconds),
+            started_at=started_at,
+            completed_at=completed,
+        )
+
+    if record.classification != "ok":
+        category: FailureCategory
+        backend_code: str
+        if record.classification == "timeout":
+            category = "timeout"
+            backend_code = "TIMEOUT"
+        elif record.classification == "invalid_result":
+            category = "result_parse_error"
+            backend_code = "INVALID_RESULT"
+        elif record.classification == "limit":
+            category = "solver_crash"
+            backend_code = f"LIMIT_{record.limit.upper()}" if record.limit else "LIMIT"
+        else:
+            category = "solver_crash"
+            backend_code = "EXECUTION_ERROR"
+
+        message = _format_solid_code_failure_message(
+            record.classification,
+            limit=record.limit,
+            limit_value=record.limit_value,
+            stderr=record.stderr,
+        )
+        checks = (
+            ResultCheck(
+                id=CHECK_TOPOLOGY,
+                family="input",
+                status="not_evaluated",
+                hint="topology check not evaluated: execution failed",
+                source=SOLID_TOPOLOGY_SOURCE,
+            ),
+        )
+        return EvaluationResult(
+            result_ref=res_ref,
+            request_ref=req_ref,
+            evaluator_id=SOLID_CODE_EVALUATOR_ID,
+            backend_version=backend_version,
+            status="failed",
+            failure=EvaluationFailure(
+                category=category,
+                backend_code=backend_code,
+                message=message,
+            ),
+            fidelity="screening",
+            outputs=(),
+            output_artifacts=(),
+            checks=checks,
+            numerical=NumericalDiagnostics(wall_time_s=record.duration_seconds),
+            started_at=started_at,
+            completed_at=completed,
+        )
+
+    # Classification is "ok": facts come from the sandbox worker; a malformed set is a parse error, never zeros.
+    facts = record.result if isinstance(record.result, dict) else {}
+    try:
+        vol = float(facts["volume"])
+        min_f = [float(x) for x in facts["bbox_min"]]
+        max_f = [float(x) for x in facts["bbox_max"]]
+        if len(min_f) != 3 or len(max_f) != 3:
+            raise ValueError("bounding box needs three coordinates")
+    except (KeyError, TypeError, ValueError):
+        return EvaluationResult(
+            result_ref=res_ref,
+            request_ref=req_ref,
+            evaluator_id=SOLID_CODE_EVALUATOR_ID,
+            backend_version=backend_version,
+            status="failed",
+            failure=EvaluationFailure(
+                category="result_parse_error",
+                backend_code="INVALID_FACTS",
+                message="The sandbox returned no volume or bounding box for the shape.",
+            ),
+            fidelity="screening",
+            outputs=(),
+            output_artifacts=(),
+            checks=(
+                ResultCheck(
+                    id=CHECK_TOPOLOGY,
+                    family="input",
+                    status="not_evaluated",
+                    hint="topology check not evaluated: geometry facts missing",
+                    source=SOLID_TOPOLOGY_SOURCE,
+                ),
+            ),
+            numerical=NumericalDiagnostics(wall_time_s=record.duration_seconds),
+            started_at=started_at,
+            completed_at=completed,
+        )
+
+    outputs = (
+        NamedQuantity(name="total_volume", value=Quantity(value=vol, unit="mm**3")),
+        NamedQuantity(name="bbox_min_x", value=Quantity(value=min_f[0], unit="mm")),
+        NamedQuantity(name="bbox_min_y", value=Quantity(value=min_f[1], unit="mm")),
+        NamedQuantity(name="bbox_min_z", value=Quantity(value=min_f[2], unit="mm")),
+        NamedQuantity(name="bbox_max_x", value=Quantity(value=max_f[0], unit="mm")),
+        NamedQuantity(name="bbox_max_y", value=Quantity(value=max_f[1], unit="mm")),
+        NamedQuantity(name="bbox_max_z", value=Quantity(value=max_f[2], unit="mm")),
+        NamedQuantity(name="bbox_dx", value=Quantity(value=max_f[0] - min_f[0], unit="mm")),
+        NamedQuantity(name="bbox_dy", value=Quantity(value=max_f[1] - min_f[1], unit="mm")),
+        NamedQuantity(name="bbox_dz", value=Quantity(value=max_f[2] - min_f[2], unit="mm")),
+    )
+
+    artifacts_list: list[SourceRef] = []
+    for art in record.artifacts:
+        digest = f"sha256:{art.sha256}" if not art.sha256.startswith("sha256:") else art.sha256
+        artifacts_list.append(
+            SourceRef(
+                authority_owner="bluecad",
+                object_type="artifact",
+                object_id=art.name,
+                workspace_id=ws_id,
+                content_digest=digest,
+            )
+        )
+
+    # Topology check
+    is_valid_solid = bool(facts.get("valid")) and int(facts.get("solids", 0)) >= 1
+    checks_list: list[ResultCheck] = [
+        ResultCheck(
+            id=CHECK_TOPOLOGY,
+            family="input",
+            status="pass" if is_valid_solid else "fail",
+            hint="shape is a valid solid" if is_valid_solid else "The shape is not a valid solid.",
+            source=SOLID_TOPOLOGY_SOURCE,
+        ),
+    ]
+
+    # Declared bounds checks if declared
+    geom_case = case
+    if isinstance(geom_case, dict):
+        geom_case = GeometryCase(
+            inputs=geom_case.get("inputs", {}),
+            volume_min=geom_case.get("volume_min"),
+            volume_max=geom_case.get("volume_max"),
+            max_extent=geom_case.get("max_extent"),
+        )
+
+    if geom_case is not None:
+        if geom_case.volume_min is not None:
+            actual = vol
+            limit = geom_case.volume_min
+            is_pass = actual >= limit
+            hint = (
+                f"Volume {actual:.6g} is at or above declared minimum {limit:.6g}."
+                if is_pass
+                else f"Volume {actual:.6g} is below the declared minimum {limit:.6g}."
+            )
+            checks_list.append(
+                ResultCheck(
+                    id=CHECK_VOLUME_MIN,
+                    family="conservation",
+                    status="pass" if is_pass else "fail",
+                    actual=actual,
+                    limit=limit,
+                    unit="mm**3",
+                    hint=hint,
+                    source=SOLID_VOLUME_SOURCE,
+                )
+            )
+        if geom_case.volume_max is not None:
+            actual = vol
+            limit = geom_case.volume_max
+            is_pass = actual <= limit
+            hint = (
+                f"Volume {actual:.6g} is at or below declared maximum {limit:.6g}."
+                if is_pass
+                else f"Volume {actual:.6g} is above the declared maximum {limit:.6g}."
+            )
+            checks_list.append(
+                ResultCheck(
+                    id=CHECK_VOLUME_MAX,
+                    family="conservation",
+                    status="pass" if is_pass else "fail",
+                    actual=actual,
+                    limit=limit,
+                    unit="mm**3",
+                    hint=hint,
+                    source=SOLID_VOLUME_SOURCE,
+                )
+            )
+        if geom_case.max_extent is not None:
+            extents = [high - low for low, high in zip(min_f, max_f, strict=True)]
+            actual = max(extents) if extents else 0.0
+            limit = geom_case.max_extent
+            is_pass = actual <= limit
+            hint = (
+                f"Largest extent {actual:.6g} is within declared maximum {limit:.6g}."
+                if is_pass
+                else f"Largest extent {actual:.6g} exceeds the declared maximum {limit:.6g}."
+            )
+            checks_list.append(
+                ResultCheck(
+                    id=CHECK_MAX_EXTENT,
+                    family="plausibility",
+                    status="pass" if is_pass else "fail",
+                    actual=actual,
+                    limit=limit,
+                    unit="mm",
+                    hint=hint,
+                    source=SOLID_BBOX_SOURCE,
+                )
+            )
+
+    return EvaluationResult(
+        result_ref=res_ref,
+        request_ref=req_ref,
+        evaluator_id=SOLID_CODE_EVALUATOR_ID,
+        backend_version=backend_version,
+        status="succeeded",
+        fidelity="screening",
+        outputs=outputs,
+        output_artifacts=tuple(artifacts_list),
+        checks=tuple(checks_list),
+        numerical=NumericalDiagnostics(wall_time_s=record.duration_seconds),
         started_at=started_at,
         completed_at=completed,
     )

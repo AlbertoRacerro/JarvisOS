@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import re
+import math
 import sys
 import threading
 from collections.abc import Sequence
@@ -24,11 +24,14 @@ from app.modules.bluecad.fem_adapter import solve_static_analysis
 from app.modules.bluecad.mesh_adapter import mesh_analysis_spec
 from app.modules.bluecad.registry import ToolRegistryError, resolve_tool
 from app.modules.bluecad.result_adapters import (
+    PATH_PATTERN,
     fem_evaluator_descriptor,
     fem_result_to_evaluation_result,
     mesh_evaluator_descriptor,
     mesh_result_to_evaluation_result,
     solid_build_result_to_evaluation_result,
+    solid_code_evaluator_descriptor,
+    solid_code_run_record_to_evaluation_result,
     solid_evaluator_descriptor,
 )
 from app.modules.bluecad.service import build_geometry_spec_file
@@ -44,11 +47,18 @@ from app.modules.engineering.evaluator_contracts import (
 )
 from app.modules.engineering.operator_service import SAFE_ID, evaluator_registry
 from app.modules.engineering.refs import EvaluationResultRef
+from app.modules.studio.geometry import GeometryCase
+from app.modules.studio_runtime.runtime import (
+    MAX_SOURCE_BYTES,
+    RunRequest,
+)
+from app.modules.studio_runtime.runtime import run as studio_runtime_run
+from app.modules.studio_runtime.runtime import status as studio_runtime_status
 
 if TYPE_CHECKING:
     from app.modules.ai.agent_contracts import StructuredToolCall
 
-BLUECAD_EVALUATORS = {"bluecad.solid", "bluecad.mesh", "bluecad.fem"}
+BLUECAD_EVALUATORS = {"bluecad.solid", "bluecad.solid_code", "bluecad.mesh", "bluecad.fem"}
 MAX_VIEW_CHARS = 8000
 
 _ACTIVE_BENCH_WORKERS: set[str] = set()
@@ -124,6 +134,26 @@ def _check_fresh_out_dir(out_dir: Path) -> Path:
 def _check_bluecad_availability(
     evaluator_id: str, registry_path: Path | None
 ) -> tuple[AvailabilityState, str | None, str]:
+    if evaluator_id == "bluecad.solid_code":
+        st = studio_runtime_status()
+        if not st.get("enabled", False):
+            return "disabled", st.get("reason") or "disabled", "unavailable"
+        if not st.get("available", False):
+            runtime_state: AvailabilityState = (
+                "not_installed"
+                if st.get("reason") == "bubblewrap_or_python_unavailable"
+                else "unhealthy"
+            )
+            return runtime_state, st.get("reason") or "unavailable", "unavailable"
+        version = "0.11.1"
+        try:
+            import build123d
+
+            version = getattr(build123d, "__version__", "0.11.1")
+        except ImportError:
+            pass
+        return "available", None, version
+
     if evaluator_id == "bluecad.solid":
         tool_code = None
         try:
@@ -269,9 +299,10 @@ def list_evaluators(*, tool_registry: Path | None = None) -> list[dict[str, Any]
             }
         )
 
-    # 2. Three BLUECAD evaluators
+    # 2. Four BLUECAD evaluators
     descriptors = {
         "bluecad.solid": (solid_evaluator_descriptor(tool_registry), "geometry_spec"),
+        "bluecad.solid_code": (solid_code_evaluator_descriptor(tool_registry), "geometry_code"),
         "bluecad.mesh": (mesh_evaluator_descriptor(tool_registry), "analysis_spec"),
         "bluecad.fem": (fem_evaluator_descriptor(tool_registry), "analysis_spec"),
     }
@@ -390,6 +421,105 @@ def _run_bluecad_solid(
     build_result = build_geometry_spec_file(request_path, out_dir, timeout_s=timeout_s)
     eval_res = solid_build_result_to_evaluation_result(build_result)
     desc = solid_evaluator_descriptor(tool_registry)
+    verdict = result_verdict(desc, eval_res)
+    return eval_res, verdict
+
+
+def _run_bluecad_solid_code(
+    request_data: dict[str, Any],
+    request_path: Path,
+    out_dir: Path,
+    root: Path,
+    tool_registry: Path | None,
+    timeout_s: float,
+) -> tuple[EvaluationResult, str]:
+    if not isinstance(request_data, dict):
+        raise BenchInputError("INVALID_REQUEST", "Request must be a JSON object.")
+
+    allowed_keys = {"source_path", "inputs", "volume_min", "volume_max", "max_extent"}
+    unknown_keys = set(request_data.keys()) - allowed_keys
+    if unknown_keys:
+        raise BenchInputError(
+            "INVALID_REQUEST",
+            f"Unknown request field(s): {', '.join(sorted(unknown_keys))}. Allowed fields are: source_path, inputs, volume_min, volume_max, max_extent.",
+        )
+
+    if "source_path" not in request_data or not isinstance(request_data["source_path"], str) or not request_data["source_path"].strip():
+        raise BenchInputError("INVALID_REQUEST", "Request requires a non-empty 'source_path' string pointing to a .py file.")
+
+    raw_source = request_data["source_path"].strip()
+    if not raw_source.endswith(".py"):
+        raise BenchInputError("INVALID_REQUEST", f"source_path '{raw_source}' must be a .py file.")
+
+    req_dir = request_path.parent
+    raw_source_path = Path(raw_source)
+    source_path = _check_within_root(
+        raw_source_path if raw_source_path.is_absolute() else req_dir / raw_source_path,
+        root,
+        "source_path",
+    )
+    if not source_path.is_file():
+        raise BenchInputError("INPUT_NOT_FOUND", f"source_path not found: '{source_path}'")
+
+    source_bytes = source_path.read_bytes()
+    if len(source_bytes) > MAX_SOURCE_BYTES:
+        raise BenchInputError(
+            "SOURCE_OVERSIZED",
+            f"Source file '{source_path.name}' is {len(source_bytes)} bytes, exceeding the maximum allowed size of {MAX_SOURCE_BYTES} bytes. Reduce the source file size.",
+        )
+    try:
+        source_code = source_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise BenchInputError("INVALID_REQUEST", f"Source file '{source_path.name}' is not valid UTF-8: {exc}") from exc
+
+    raw_inputs = request_data.get("inputs")
+    if raw_inputs is None or not isinstance(raw_inputs, dict):
+        raise BenchInputError("INVALID_REQUEST", "Request requires 'inputs' mapping of names to finite numbers.")
+
+    inputs: dict[str, float] = {}
+    for key, val in raw_inputs.items():
+        if not isinstance(key, str):
+            raise BenchInputError("INVALID_REQUEST", "Input names must be strings.")
+        if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(val):
+            raise BenchInputError("INVALID_REQUEST", f"Input '{key}' must be a finite number, got {val!r}.")
+        inputs[key] = float(val)
+
+    vol_min = request_data.get("volume_min")
+    if vol_min is not None:
+        if isinstance(vol_min, bool) or not isinstance(vol_min, (int, float)) or not math.isfinite(vol_min):
+            raise BenchInputError("INVALID_REQUEST", f"volume_min must be a finite number, got {vol_min!r}.")
+        vol_min = float(vol_min)
+
+    vol_max = request_data.get("volume_max")
+    if vol_max is not None:
+        if isinstance(vol_max, bool) or not isinstance(vol_max, (int, float)) or not math.isfinite(vol_max):
+            raise BenchInputError("INVALID_REQUEST", f"volume_max must be a finite number, got {vol_max!r}.")
+        vol_max = float(vol_max)
+
+    max_extent = request_data.get("max_extent")
+    if max_extent is not None:
+        if isinstance(max_extent, bool) or not isinstance(max_extent, (int, float)) or not math.isfinite(max_extent) or max_extent <= 0:
+            raise BenchInputError("INVALID_REQUEST", f"max_extent must be a finite number greater than 0, got {max_extent!r}.")
+        max_extent = float(max_extent)
+
+    case = GeometryCase(
+        inputs=inputs,
+        volume_min=vol_min,
+        volume_max=vol_max,
+        max_extent=max_extent,
+    )
+
+    run_req = RunRequest(source=source_code, inputs=inputs)
+    artifact_dir = out_dir / "artifacts"  # out_dir is fresh, so the runtime creates this itself
+    started = datetime.now(UTC)
+    record = studio_runtime_run(run_req, profile="geometry", artifact_dir=artifact_dir)
+
+    eval_res = solid_code_run_record_to_evaluation_result(
+        record,
+        case=case,
+        started_at=started,
+    )
+    desc = solid_code_evaluator_descriptor(tool_registry)
     verdict = result_verdict(desc, eval_res)
     return eval_res, verdict
 
@@ -526,6 +656,8 @@ def run_evaluation(
 
         if evaluator_id == "bluecad.solid":
             result, verdict = _run_bluecad_solid(request_path, out_dir, tool_registry, timeout_s)
+        elif evaluator_id == "bluecad.solid_code":
+            result, verdict = _run_bluecad_solid_code(request_data, request_path, out_dir, root, tool_registry, timeout_s)
         elif evaluator_id == "bluecad.mesh":
             result, verdict = _run_bluecad_mesh(request_data, request_path, out_dir, root, tool_registry, timeout_s)
         elif evaluator_id == "bluecad.fem":
@@ -791,11 +923,18 @@ def show_run(
 
 # Evaluators the agent may run: they write only inside the run folder (or nothing) and finish within the
 # tool timeout. DWSIM, OpenFOAM and the day/night simulator write elsewhere or run on their own deadlines.
-AGENT_RUNNABLE_EVALUATORS = frozenset(BLUECAD_EVALUATORS | {
-    "fluids.pipe_pressure_drop", "ht.internal_convection", "coolprop.pure_fluid_properties"})
+# bluecad.solid_code is excluded: the agent tool does not execute model-written code in this slice (spec 285).
+AGENT_RUNNABLE_EVALUATORS = frozenset({
+    "bluecad.solid",
+    "bluecad.mesh",
+    "bluecad.fem",
+    "fluids.pipe_pressure_drop",
+    "ht.internal_convection",
+    "coolprop.pure_fluid_properties",
+})
 # An absolute or parent-relative path: "/a/b/c", "../run_x/c", "C:\\a\\c". Units ("W/(m**2*K)", "kg/m3") have a
 # word character or ")" before their slash and are left alone.
-_PATH = re.compile(r"(?<![\w.)\]])(?:\.\.[/\\]|/|[A-Za-z]:\\)(?:[^\s\"'/\\]+[/\\])*([^\s\"'/\\]+)")
+_PATH = PATH_PATTERN
 
 
 def _strip_paths(value: Any) -> Any:
