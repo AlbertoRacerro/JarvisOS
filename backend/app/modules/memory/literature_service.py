@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -8,6 +11,8 @@ from app.core.database import open_sqlite_connection
 from app.core.paths import build_paths
 from app.modules.engineering.evaluator_contracts import ResultCheck, Verdict
 from app.modules.events.service import utc_now
+from app.modules.files.models import ArtifactCreate
+from app.modules.files.service import create_artifact_record
 from app.modules.memory.literature_checks import check_datum
 from app.modules.memory.literature_models import (
     LiteratureBackingRead,
@@ -31,6 +36,13 @@ ALLOWED_PREVIEW_MIME_TYPES = frozenset(
 )
 ALLOWED_LITERATURE_ARTIFACT_TYPES = frozenset({"literature_source"})
 CURRENT_ARTIFACT_STATUS = "registered"
+MAX_LITERATURE_UPLOAD_BYTES = 20 * 1024 * 1024
+LITERATURE_UPLOAD_MIME_BY_SUFFIX = {
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".pdf": "application/pdf",
+}
 
 
 @dataclass(frozen=True)
@@ -560,3 +572,116 @@ def resolve_literature_content(workspace_id: str, source_id: str) -> LiteratureC
             media_type=str(artifact["mime_type"]),
             filename=str(artifact["filename"]),
         )
+
+
+def store_literature_file(workspace_id: str, filename: str, data: bytes) -> dict[str, object]:
+    """Store uploaded paper bytes under the artifacts directory and register a literature_source artifact."""
+    safe = Path(filename.replace("\\", "/")).name
+    if not safe or len(safe) > 255:
+        raise LiteratureError("literature_upload_filename_invalid", "Filename must be 1 to 255 characters.")
+    suffix = Path(safe).suffix.lower()
+    mime_type = LITERATURE_UPLOAD_MIME_BY_SUFFIX.get(suffix)
+    if mime_type is None:
+        raise LiteratureError(
+            "literature_upload_type_unsupported",
+            "Only .txt, .md, .markdown and .pdf files are accepted.",
+            status_code=415,
+        )
+    if len(data) > MAX_LITERATURE_UPLOAD_BYTES:
+        raise LiteratureError("literature_upload_too_large", "Upload exceeds 20 MiB.", status_code=413)
+    if not data:
+        raise LiteratureError("literature_upload_empty", "The file is empty.")
+    if mime_type == "application/pdf":
+        if not data.startswith(b"%PDF-"):
+            raise LiteratureError("literature_upload_invalid", "The file is not a PDF.", status_code=422)
+    else:
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise LiteratureError(
+                "literature_upload_invalid", "A text file must be UTF-8.", status_code=422
+            ) from exc
+    with open_sqlite_connection() as connection:
+        _require_workspace(connection, workspace_id)
+    digest = hashlib.sha256(data).hexdigest()
+    artifacts_dir = build_paths().artifacts_dir
+    target_dir = artifacts_dir / "literature" / workspace_id
+    try:
+        for directory in (artifacts_dir / "literature", target_dir):
+            if directory.is_symlink():
+                raise LiteratureError("literature_upload_unsafe", "Upload directory is not safe.", status_code=500)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if target_dir.is_symlink() or target_dir.resolve().parent.parent != artifacts_dir.resolve():
+            raise LiteratureError("literature_upload_unsafe", "Upload directory is not safe.", status_code=500)
+        target = target_dir / f"{digest}{suffix}"
+        if target.is_symlink():
+            raise LiteratureError("literature_upload_unsafe", "Upload target is not safe.", status_code=500)
+        if not target.exists():
+            handle, temp_name = tempfile.mkstemp(dir=target_dir, prefix=".upload-", suffix=".part")
+            try:
+                with os.fdopen(handle, "wb") as stream:
+                    stream.write(data)
+                os.replace(temp_name, target)
+            except BaseException:
+                Path(temp_name).unlink(missing_ok=True)
+                raise
+    except OSError as exc:
+        raise LiteratureError(
+            "literature_upload_failed", "The file could not be stored.", status_code=500
+        ) from exc
+    record = create_artifact_record(
+        workspace_id,
+        ArtifactCreate(
+            filename=safe,
+            stored_path=str(target),
+            artifact_type="literature_source",
+            mime_type=mime_type,
+            sha256=digest,
+            source_ref="literature_upload",
+            status=CURRENT_ARTIFACT_STATUS,
+        ),
+    )
+    return {
+        "artifact_id": record.id,
+        "filename": safe,
+        "mime_type": mime_type,
+        "sha256": digest,
+        "size": len(data),
+    }
+
+
+def attach_literature_backing(workspace_id: str, source_id: str, artifact_id: str) -> LiteratureSourceRead:
+    with open_sqlite_connection() as connection:
+        _require_workspace(connection, workspace_id)
+        source = _source_row(connection, workspace_id, source_id)
+        if source["artifact_id"] is not None:
+            raise LiteratureError(
+                "literature_backing_exists", "This source already has a file.", status_code=409
+            )
+        artifact = _artifact_row(connection, workspace_id, artifact_id)
+        if not _artifact_is_literature_eligible(artifact):
+            raise LiteratureError(
+                "literature_artifact_ineligible",
+                "Backing artifact is not an eligible current Literature source.",
+                status_code=409,
+            )
+        taken = connection.execute(
+            "SELECT 1 FROM literature_sources WHERE workspace_id = ? AND artifact_id = ?",
+            (workspace_id, artifact_id),
+        ).fetchone()
+        if taken is not None:
+            raise LiteratureError(
+                "literature_duplicate_artifact_conflict",
+                "Backing artifact is already registered to a literature source.",
+                status_code=409,
+            )
+        updated = connection.execute(
+            "UPDATE literature_sources SET artifact_id = ?, updated_at = ? WHERE id = ? AND workspace_id = ? AND artifact_id IS NULL",
+            (artifact_id, utc_now(), source_id, workspace_id),
+        )
+        if updated.rowcount != 1:
+            raise LiteratureError(
+                "literature_backing_exists", "This source already has a file.", status_code=409
+            )
+        connection.commit()
+        return _source_read(connection, _source_row(connection, workspace_id, source_id))

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listWorkspaces, type Workspace } from "../api/client";
-import { createLiteratureEntry, createLiteratureSource, listLiteratureSources, literatureContentUrl,
-  type LiteratureEntry, type LiteratureSource, type LiteratureEntryInput, type LiteratureSourceInput } from "../api/literature";
+import { attachLiteratureBacking, createLiteratureEntry, createLiteratureSource, uploadLiteratureFile, listLiteratureSources, literatureContentUrl,
+  type LiteratureEntry, type LiteratureSource, type LiteratureVerdict, type LiteratureEntryInput, type LiteratureSourceInput } from "../api/literature";
 import "./memory-recovery.css";
 
 import NumericInput from "../components/ui/NumericInput";
@@ -26,6 +26,13 @@ function entryValue(entry: LiteratureEntry): string {
   return `${entry.value_text ?? "Datum unavailable"}${entry.unit ? ` ${entry.unit}` : ""}`;
 }
 
+const VERDICT_WORDS: Record<LiteratureVerdict, string> = {
+  usable: "Checked against the source",
+  usable_with_warnings: "Checked, with warnings",
+  unchecked: "Not checked",
+  not_usable: "Does not match the source"
+};
+
 function normalizedSearch(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase().trim();
 }
@@ -45,31 +52,54 @@ function useRequestKey() {
   };
 }
 
-function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, onEntrySaved }: Readonly<{
+function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, onEntrySaved, onSourceUpdated }: Readonly<{
   source: LiteratureSource; open: boolean; onToggle: (open: boolean) => void; requestedEntryId: string | null;
-  onSelect: (ref: string, label?: string) => void; onEntrySaved: (entry: LiteratureEntry) => void;
+  onSelect: (ref: string, label?: string) => void; onEntrySaved: (entry: LiteratureEntry) => void; onSourceUpdated: (source: LiteratureSource) => void;
 }>) {
   const contentUrl = literatureContentUrl(source);
   const [kind, setKind] = useState<"claim" | "datum">("claim");
   const [value, setValue] = useState("");
   const [unit, setUnit] = useState("");
+  const [number, setNumber] = useState("");
+  const [lineFrom, setLineFrom] = useState("");
+  const [lineTo, setLineTo] = useState("");
   const [context, setContext] = useState("");
   const [saving, setSaving] = useState(false);
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const requestKey = useRequestKey();
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const backingUnavailable = source.backing && source.backing.availability !== "available";
+  const hasTextBacking = source.backing?.availability === "available" && (source.backing.mime_type === "text/plain" || source.backing.mime_type === "text/markdown");
+  const attachFile = async (file: File | undefined) => {
+    if (!file || attaching) return;
+    setAttaching(true); setAttachError(null);
+    try {
+      const uploaded = await uploadLiteratureFile(source.workspace_id, file);
+      const updated = await attachLiteratureBacking(source.workspace_id, source.id, uploaded.artifact_id);
+      if (alive.current) onSourceUpdated(updated);
+    } catch (cause) { if (alive.current) setAttachError(cause instanceof Error ? cause.message : "The file could not be attached."); }
+    finally { if (alive.current) setAttaching(false); }
+  };
   const saveEntry = async (event: React.FormEvent) => {
     event.preventDefault();
     if (saving || !value.trim()) return;
-    const payload: LiteratureEntryInput = { entry_kind: kind, ...(kind === "claim" ? { statement: value.trim() } : { value_text: value.trim(), unit: unit.trim() || undefined }), context_text: context.trim() || undefined };
+    const numeric = kind === "datum" && hasTextBacking && number.trim() !== "" ? Number(number) : undefined;
+    const from = kind === "datum" && hasTextBacking && lineFrom.trim() !== "" ? Number(lineFrom) : undefined;
+    const to = from !== undefined && lineTo.trim() !== "" ? Number(lineTo) : from;
+    if ((numeric !== undefined && !Number.isFinite(numeric)) || (from !== undefined && (!Number.isInteger(from) || from < 1)) || (to !== undefined && (!Number.isInteger(to) || (from !== undefined && to < from)))) {
+      setError("Enter a valid number and a line range with the last line not before the first."); return;
+    }
+    const located = from !== undefined ? { locator_kind: "line" as const, locator_start: from, locator_end: to } : {};
+    const payload: LiteratureEntryInput = { entry_kind: kind, ...(kind === "claim" ? { statement: value.trim() } : { value_text: value.trim(), unit: unit.trim() || undefined, ...(numeric !== undefined ? { value_number: numeric } : {}), ...located }), context_text: context.trim() || undefined };
     setSaving(true); setError(null); setNotice("");
     try {
       const entry = await createLiteratureEntry(source.workspace_id, source.id, payload, requestKey(payload));
       if (!alive.current) return;
-      onEntrySaved(entry); setValue(""); setUnit(""); setContext(""); setNotice("Saved as raw. This finding has not been accepted as engineering evidence.");
+      onEntrySaved(entry); setValue(""); setUnit(""); setNumber(""); setLineFrom(""); setLineTo(""); setContext(""); setNotice("Saved as raw. This finding has not been accepted as engineering evidence.");
     } catch (cause) { if (alive.current) setError(cause instanceof Error ? cause.message : "Finding could not be saved."); }
     finally { if (alive.current) setSaving(false); }
   };
@@ -82,12 +112,14 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
         {backingUnavailable ? <p role="status"><strong>Backing unavailable.</strong> The citation remains saved, but its file cannot currently be used as evidence.</p> : null}
         <p>{source.citation || "Citation not recorded."}</p>{source.publisher ? <p>{source.publisher}</p> : null}
         <p>{source.backing?.filename ?? "Citation only · no source file attached."}</p>
+        {!source.backing ? <div><label>Attach source file<input type="file" accept=".txt,.md,.markdown,.pdf" disabled={attaching} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; void attachFile(file); }} /></label>{attaching ? <p role="status">Attaching file…</p> : null}{attachError ? <p role="alert">{attachError}</p> : null}</div> : null}
         <button type="button" onClick={() => onSelect(source.source_ref, source.title)}>Select source for Jarvis</button>
         <details className="memory-technical"><summary>Source provenance</summary><small>{source.source_ref}</small>{source.backing ? <small>{source.backing.mime_type} · {source.backing.sha256}</small> : null}</details>
         <h3>Claims & data</h3>
         {!source.entries.length ? <p>No findings yet. Record a claim or datum below.</p> : source.entries.map((entry) => <details key={entry.id} className="literature-entry" data-entry-id={entry.id} open={entry.id === requestedEntryId || undefined}>
-          <summary><strong>{entryValue(entry)}</strong><span>{entry.entry_kind} · {entry.status}</span></summary>
-          <p>{locationLabel(entry)}</p>{entry.context_text ? <p>{entry.context_text}</p> : null}
+          <summary><strong>{entryValue(entry)}</strong><span>{entry.entry_kind} · {entry.status}</span>{entry.verdict ? <em data-verdict={entry.verdict}>{VERDICT_WORDS[entry.verdict]}</em> : null}</summary>
+          <p>{locationLabel(entry)}</p>
+          {entry.verdict ? <div className="literature-verdict">{entry.checks.filter((check) => check.status !== "pass").map((check) => <p key={check.id} data-check={check.id}>{check.hint}</p>)}</div> : null}{entry.context_text ? <p>{entry.context_text}</p> : null}
           <button type="button" onClick={() => onSelect(`literature_entry:${entry.id}`, entryValue(entry))}>Select finding for Jarvis</button>
           <div><strong>Used by</strong>{!entry.used_by.length ? <p>No canonical records reference this finding.</p> : <ul>{entry.used_by.map((use) => <li key={use.ref}>{use.kind}: {use.title}</li>)}</ul>}</div>
           <details className="memory-technical"><summary>Finding provenance</summary><small>{entry.provenance_ref}</small></details>
@@ -97,8 +129,13 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
             <label>Finding type<select value={kind} disabled={saving} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="claim">Claim</option><option value="datum">Datum</option></select></label>
             <label>{kind === "claim" ? "Claim statement" : "Reported value"}<textarea required maxLength={kind === "claim" ? 8000 : 4000} value={value} disabled={saving} onChange={(event) => setValue(event.target.value)} /></label>
             {kind === "datum" ? <label>Unit (optional)<input value={unit} maxLength={128} disabled={saving} onChange={(event) => setUnit(event.target.value)} /></label> : null}
+            {kind === "datum" && hasTextBacking ? <>
+              <label>Number (optional)<NumericInput value={number} disabled={saving} onValueChange={(text) => setNumber(text)} /></label>
+              <label>Lines from (optional)<NumericInput integer min={1} value={lineFrom} disabled={saving} onValueChange={(text) => setLineFrom(text)} /></label>
+              <label>Lines to (optional)<NumericInput integer min={1} value={lineTo} disabled={saving} onValueChange={(text) => setLineTo(text)} /></label>
+            </> : null}
             <label>Context or location notes (optional)<textarea value={context} maxLength={12000} disabled={saving} onChange={(event) => setContext(event.target.value)} /></label>
-            <p>Saved as raw. Notes are not a verified page or line reference.</p>
+            <p>Saved as raw. Notes are not a verified page or line reference.{kind === "datum" && hasTextBacking ? " A number with a line range is checked against the source text." : ""}</p>
             <button type="submit" disabled={saving || !value.trim()}>{saving ? "Saving finding…" : "Save raw finding"}</button>
           </form>
           {error ? <p role="alert">{error}</p> : null}{notice ? <p role="status">{notice}</p> : null}
@@ -125,6 +162,8 @@ export default function LiteratureKnowledge({ jarvis, searchPanel, workspaceId, 
   const [citation, setCitation] = useState("");
   const [publisher, setPublisher] = useState("");
   const [year, setYear] = useState("");
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
   const activeWorkspaceId = useMemo(() => workspaceId ?? workspaces[0]?.id ?? null, [workspaceId, workspaces]);
   const workspaceToken = useRef(activeWorkspaceId); workspaceToken.current = activeWorkspaceId;
   const requestKey = useRequestKey();
@@ -137,7 +176,7 @@ export default function LiteratureKnowledge({ jarvis, searchPanel, workspaceId, 
   }, [onWorkspaceChange, workspaceId]);
   useEffect(() => {
     let alive = true;
-    setSources([]); setTotal(0); setNextOffset(null); setOpenIds(new Set()); setError(null); setQuery(""); setNotice(""); setSaving(false); setTitle(""); setCitation(""); setPublisher(""); setYear(""); setRegisterOpen(false);
+    setSources([]); setTotal(0); setNextOffset(null); setOpenIds(new Set()); setError(null); setQuery(""); setNotice(""); setSaving(false); setTitle(""); setCitation(""); setPublisher(""); setYear(""); setSourceFile(null); setRegisterOpen(false);
     onKnowledgeSelectionChange?.(null);
     if (!activeWorkspaceId) { setLoading(false); return; }
     setLoading(true);
@@ -164,13 +203,14 @@ export default function LiteratureKnowledge({ jarvis, searchPanel, workspaceId, 
   const saveSource = async (event: React.FormEvent) => {
     event.preventDefault(); if (!activeWorkspaceId || saving || !title.trim()) return;
     const ws = activeWorkspaceId;
-    const payload: LiteratureSourceInput = { title: title.trim(), source_kind: sourceKind, citation: citation.trim() || null, publisher: publisher.trim() || null, published_year: year ? Number(year) : null };
     setSaving(true); setError(null); setNotice("");
     try {
+      const uploaded = sourceFile ? await uploadLiteratureFile(ws, sourceFile) : null;
+      const payload: LiteratureSourceInput = { title: title.trim(), source_kind: sourceKind, citation: citation.trim() || null, publisher: publisher.trim() || null, published_year: year ? Number(year) : null, ...(uploaded ? { artifact_id: uploaded.artifact_id } : {}) };
       const source = await createLiteratureSource(ws, payload, requestKey({ ws, ...payload }));
       if (workspaceToken.current !== ws) return;
       setSources((current) => [source, ...current.filter((item) => item.id !== source.id)]); setTotal((current) => current + 1); setOpenIds((current) => new Set([...current, source.id]));
-      setTitle(""); setCitation(""); setPublisher(""); setYear(""); setQuery(""); setRegisterOpen(false); setNotice("Source saved as raw. You can now record claims and data."); select(source.source_ref, source.title);
+      setTitle(""); setCitation(""); setPublisher(""); setYear(""); setSourceFile(null); setFileInputKey((key) => key + 1); setQuery(""); setRegisterOpen(false); setNotice("Source saved as raw. You can now record claims and data."); select(source.source_ref, source.title);
     } catch (cause) { if (workspaceToken.current === ws) setError(cause instanceof Error ? cause.message : "Source could not be saved."); }
     finally { if (workspaceToken.current === ws) setSaving(false); }
   };
@@ -181,10 +221,11 @@ export default function LiteratureKnowledge({ jarvis, searchPanel, workspaceId, 
       <div className="final-fusion__panel-heading"><div><h2>Literature</h2><p>Publications, reference sources and the findings you record from them.</p></div><button type="button" disabled={!activeWorkspaceId} onClick={() => setRegisterOpen((value) => !value)} aria-expanded={registerOpen}>+ Register source</button></div>
       <div className="literature-toolbar"><span>{total} sources</span><button type="button" onClick={() => setOpenIds(new Set())}>Collapse all</button></div>
       <p className="literature-context-note">Browsing does not add Jarvis context. Select a source or finding, then add it explicitly in Jarvis.</p>
-      {registerOpen ? <form className="literature-register" onSubmit={(event) => void saveSource(event)}><h3>Register a citation</h3><p>Save source metadata here. File upload is not available in this workspace.</p>
+      {registerOpen ? <form className="literature-register" onSubmit={(event) => void saveSource(event)}><h3>Register a citation</h3><p>Save source metadata here. A text, markdown or PDF file can be attached now or later.</p>
         <label>Source title<input required autoFocus maxLength={500} value={title} disabled={saving} onChange={(event) => setTitle(event.target.value)} /></label>
         <label>Source type<select value={sourceKind} disabled={saving} onChange={(event) => setSourceKind(event.target.value as typeof sourceKind)}>{["paper", "book", "report", "standard", "dataset", "web", "other"].map((kind) => <option key={kind} value={kind}>{kind}</option>)}</select></label>
         <label>Citation, DOI or URL (optional)<textarea maxLength={4000} value={citation} disabled={saving} onChange={(event) => setCitation(event.target.value)} /></label>
+        <label>Source file (optional)<input key={fileInputKey} type="file" accept=".txt,.md,.markdown,.pdf" disabled={saving} onChange={(event) => setSourceFile(event.target.files?.[0] ?? null)} /></label>
         <details><summary>Publication details</summary><label>Publisher<input maxLength={500} value={publisher} disabled={saving} onChange={(event) => setPublisher(event.target.value)} /></label><label>Publication year<NumericInput min={0} max={9999} value={year} disabled={saving} onValueChange={(text) => setYear(text)} /></label></details>
         <button type="submit" disabled={saving || !title.trim()}>{saving ? "Saving source…" : "Save source"}</button><button type="button" disabled={saving} onClick={() => setRegisterOpen(false)}>Cancel</button>
       </form> : null}
@@ -194,7 +235,7 @@ export default function LiteratureKnowledge({ jarvis, searchPanel, workspaceId, 
       {requestedSourceId && !loading && !sources.some((source) => source.id === requestedSourceId) ? <p role="status">Requested source is not in the loaded list. {nextOffset !== null ? "Load more sources below." : "It may no longer be available."}</p> : null}
       {!loading && !error && !sources.length ? <div className="final-fusion__source-empty"><strong>No literature sources yet</strong><p>Register a source above, then record the claims and data you want to keep.</p></div> : null}
       {sources.length > 0 && !filtered.length ? <p>No loaded sources match. Try another phrase{nextOffset !== null ? " or load more sources" : ""}.</p> : null}
-      <div className="final-fusion__source-list">{filtered.map((source) => <SourceDisclosure key={`${activeWorkspaceId}:${source.id}`} source={source} open={openIds.has(source.id)} onToggle={(open) => setOpenIds((current) => { if (current.has(source.id) === open) return current; const next = new Set(current); if (open) next.add(source.id); else next.delete(source.id); return next; })} requestedEntryId={source.id === requestedSourceId ? requestedEntryId : null} onSelect={select} onEntrySaved={(entry) => setSources((current) => current.map((item) => item.id === source.id ? { ...item, entries: [...item.entries.filter((old) => old.id !== entry.id), entry] } : item))} />)}</div>
+      <div className="final-fusion__source-list">{filtered.map((source) => <SourceDisclosure key={`${activeWorkspaceId}:${source.id}`} source={source} open={openIds.has(source.id)} onToggle={(open) => setOpenIds((current) => { if (current.has(source.id) === open) return current; const next = new Set(current); if (open) next.add(source.id); else next.delete(source.id); return next; })} requestedEntryId={source.id === requestedSourceId ? requestedEntryId : null} onSelect={select} onSourceUpdated={(updated) => setSources((current) => current.map((item) => item.id === updated.id ? updated : item))} onEntrySaved={(entry) => setSources((current) => current.map((item) => item.id === source.id ? { ...item, entries: [...item.entries.filter((old) => old.id !== entry.id), entry] } : item))} />)}</div>
       {nextOffset !== null ? <button type="button" disabled={loading} onClick={() => void loadMore()}>Load more sources</button> : null}
     </section><section className="final-fusion__panel final-fusion__jarvis" aria-label="Jarvis">{jarvis}</section>
   </div>;
