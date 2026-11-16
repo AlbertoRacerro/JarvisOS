@@ -1,6 +1,6 @@
 # 294 — LITERATURE-SOURCE-FILE-1: Attach a paper file to a literature source from the Literature page
 
-Status: ready
+Status: merged through PR #147
 Depends on: 293
 
 ## Goal
