@@ -7,7 +7,8 @@ failure keeps its backend-native code next to a shared category.
 
 Availability (can it run here, now) and qualification (should its results be
 trusted, 102 ledger) are separate. Numerical convergence is a diagnostic,
-never validation.
+never validation. Results declare typed checks against bounds, and a derived
+verdict determines usability from declared required and advisory checks.
 """
 
 from __future__ import annotations
@@ -74,6 +75,10 @@ FailureCategory = Literal[
 ]
 CapabilityToken = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 BackendCode = Annotated[str, StringConstraints(pattern=r"^[A-Za-z][A-Za-z0-9_.:-]{0,95}$")]
+CheckId = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]{0,63}$")]
+CheckFamily = Literal["input", "numerical", "conservation", "discretisation", "plausibility", "reference"]
+CheckStatus = Literal["pass", "warn", "fail", "not_evaluated"]
+Verdict = Literal["usable", "usable_with_warnings", "unchecked", "not_usable"]
 OptionValue = str | int | float | bool
 
 # Categories that mean "not attempted": the evaluator refused before running.
@@ -169,6 +174,19 @@ class EvaluatorDescriptor(FrozenContract):
     fidelity: FidelityTier
     capabilities: tuple[CapabilityToken, ...] = Field(default=(), max_length=MAX_ITEMS)
     qualification_record_ref: SourceRef | None = None
+    required_checks: tuple[CheckId, ...] = Field(default=(), max_length=MAX_ITEMS)
+    advisory_checks: tuple[CheckId, ...] = Field(default=(), max_length=MAX_ITEMS)
+
+    @model_validator(mode="after")
+    def validate_checks(self) -> EvaluatorDescriptor:
+        if len(set(self.required_checks)) != len(self.required_checks):
+            raise ValueError("required_checks ids must be unique")
+        if len(set(self.advisory_checks)) != len(self.advisory_checks):
+            raise ValueError("advisory_checks ids must be unique")
+        overlap = set(self.required_checks) & set(self.advisory_checks)
+        if overlap:
+            raise ValueError(f"required_checks and advisory_checks must be disjoint: {sorted(overlap)}")
+        return self
 
 
 class EvaluatorAvailability(FrozenContract):
@@ -248,6 +266,42 @@ class NumericalDiagnostics(FrozenContract):
     wall_time_s: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
 
 
+class ResultCheck(FrozenContract):
+    id: CheckId
+    family: CheckFamily
+    status: CheckStatus
+    actual: float | None = Field(default=None, allow_inf_nan=False)
+    limit: float | None = Field(default=None, allow_inf_nan=False)
+    unit: str | None = Field(default=None, min_length=1, max_length=64)
+    hint: str = Field(min_length=1, max_length=240)
+    source: str = Field(min_length=1, max_length=128)
+
+    @field_validator("actual", "limit", mode="before")
+    @classmethod
+    def reject_bool(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("check numeric values must not be boolean")
+        return value
+
+    @field_validator("hint")
+    @classmethod
+    def check_hint_one_line(cls, value: str) -> str:
+        if "\n" in value or "\r" in value:
+            raise ValueError("hint must be a single line")
+        return value
+
+    @model_validator(mode="after")
+    def validate_check(self) -> ResultCheck:
+        if self.status == "not_evaluated":
+            if self.actual is not None:
+                raise ValueError("a not_evaluated check must not carry an actual")
+            if self.limit is not None:
+                raise ValueError("a not_evaluated check must not carry a limit")
+        if self.unit is not None and self.actual is None:
+            raise ValueError("unit requires actual")
+        return self
+
+
 class EvaluationResult(FrozenContract):
     schema_version: EngineeringEvaluatorVersion = ENGINEERING_EVALUATOR_VERSION
     result_ref: EvaluationResultRef
@@ -259,6 +313,7 @@ class EvaluationResult(FrozenContract):
     fidelity: FidelityTier
     outputs: tuple[NamedQuantity, ...] = Field(default=(), max_length=MAX_ITEMS)
     output_artifacts: tuple[SourceRef, ...] = Field(default=(), max_length=MAX_ITEMS)
+    checks: tuple[ResultCheck, ...] = Field(default=(), max_length=MAX_ITEMS)
     numerical: NumericalDiagnostics = NumericalDiagnostics()
     validity: ValidityEnvelopeRef | None = None
     qualification_record_ref: SourceRef | None = None
@@ -270,6 +325,14 @@ class EvaluationResult(FrozenContract):
     @classmethod
     def check_outputs(cls, value: tuple[NamedQuantity, ...]) -> tuple[NamedQuantity, ...]:
         return _unique_names(value, "output")
+
+    @field_validator("checks")
+    @classmethod
+    def check_checks(cls, value: tuple[ResultCheck, ...]) -> tuple[ResultCheck, ...]:
+        ids = [item.id for item in value]
+        if len(set(ids)) != len(ids):
+            raise ValueError("check ids must be unique")
+        return value
 
     @model_validator(mode="after")
     def status_is_consistent(self) -> EvaluationResult:
@@ -317,6 +380,36 @@ def validate_evaluation_result(request: EvaluationRequest, result: EvaluationRes
         raise EvaluatorContractError(
             "a result below the requested fidelity is not an answer; refuse with unsupported_request instead"
         )
+
+
+def result_verdict(descriptor: EvaluatorDescriptor, result: EvaluationResult) -> Verdict:
+    """Derive an honest verdict for an evaluation result against its descriptor."""
+    if descriptor.evaluator_id != result.evaluator_id:
+        raise EvaluatorContractError(
+            f"evaluator mismatch: descriptor has '{descriptor.evaluator_id}' but result has '{result.evaluator_id}'"
+        )
+    if result.status != "succeeded" or any(check.status == "fail" for check in result.checks):
+        return "not_usable"
+
+    checks_by_id = {check.id: check for check in result.checks}
+
+    for req_id in descriptor.required_checks:
+        check = checks_by_id.get(req_id)
+        if check is None or check.status == "not_evaluated":
+            return "unchecked"
+
+    if not descriptor.required_checks:
+        return "unchecked"
+
+    if any(check.status == "warn" for check in result.checks):
+        return "usable_with_warnings"
+
+    for adv_id in descriptor.advisory_checks:
+        check = checks_by_id.get(adv_id)
+        if check is None or check.status == "not_evaluated":
+            return "usable_with_warnings"
+
+    return "usable"
 
 
 class EngineeringEvaluator(Protocol):
