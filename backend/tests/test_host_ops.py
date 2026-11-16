@@ -2587,7 +2587,7 @@ def semantic_policy(paths, **changes):
 def fake_semantic(host, monkeypatch, *, failure=None, restore_failure=False, replies_override=None,
                   row_override=None):
     paths, ex, calls = host
-    case = json.loads((SCRIPT.parents[1] / "eval/local/semantic_judgment/cases.json").read_text())["cases"][0]
+    case = json.loads((SCRIPT.parents[1] / "eval/local/semantic_judgment/cases.json").read_text(encoding="utf-8"))["cases"][0]
     row = {"name": case["id"], "prompt": "secret semantic prompt " * 6, "category": case["category"],
            "answer": case["answer"]}
     if row_override:
@@ -2849,7 +2849,7 @@ def test_semantic_eval_grades_and_restores_without_text(host, monkeypatch):
 def test_semantic_reply_total_limit_restores_without_text(host, monkeypatch):
     paths, _, _ = host
     semantic_policy(paths)
-    case = json.loads((SCRIPT.parents[1] / "eval/local/semantic_judgment/cases.json").read_text())["cases"][0]
+    case = json.loads((SCRIPT.parents[1] / "eval/local/semantic_judgment/cases.json").read_text(encoding="utf-8"))["cases"][0]
     reply = json.dumps(case["answer"])
     events, _ = fake_semantic(host, monkeypatch, replies_override=[reply] * 3)
     monkeypatch.setattr(h, "SEMANTIC_REPLIES_MAX_BYTES", len(reply.encode("utf-8")) * 2 - 1)
@@ -3372,7 +3372,7 @@ def test_semantic_restarts_uses_raw_initial_count(host, monkeypatch, initial, cu
 def test_semantic_four_attempts_require_strict_majority(host, monkeypatch, replies, expected_score):
     paths, _, _ = host
     semantic_policy(paths, attempts=4)
-    case = json.loads((SCRIPT.parents[1] / "eval/local/semantic_judgment/cases.json").read_text())["cases"][0]
+    case = json.loads((SCRIPT.parents[1] / "eval/local/semantic_judgment/cases.json").read_text(encoding="utf-8"))["cases"][0]
     other = [v for v in ("no_issue", "invalid_assumption", "cannot_conclude", "contradiction")
              if v != case["answer"]["verdict"]]
     verdicts = {"A": case["answer"]["verdict"], "B": other[0], "C": other[1]}
