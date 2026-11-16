@@ -1039,9 +1039,7 @@ class Supervisor:
         retry_same = (report.outcome == "transient" and report.harness_cause in SAME_AGENT_CAUSES
                       and failed_agent not in cleared
                       and counters.get(f"transient_{failed_agent}", 0) < self.limits.same_agent_retries)
-        if retry_same:
-            strikes = counters.get(f"transient_{failed_agent}", 0)
-        elif report.outcome in ("quota", "spend_limit", "transient", "auth") and failed_agent not in cleared:
+        if not retry_same and report.outcome in ("quota", "spend_limit", "transient", "auth") and failed_agent not in cleared:
             # A provider failure makes only that provider unavailable, until its reset or a backed-off retry.
             self.set_cooldown(failed_agent, report)
 
