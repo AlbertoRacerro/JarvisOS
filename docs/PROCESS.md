@@ -156,6 +156,8 @@ are away. Operations manual: `docs/implementation/relay-continuity-runbook.md`.
 
 ## 6. Convergence habits
 
+For outside technology intake, use `docs/strategy/RADAR.md`; accepted specs remain in `docs/specs/STATUS.md`.
+
 Before building a new capability, look for a mature existing library or tool and prefer depending on it, recording its name, version and licence (spec 239 inventory); keep author and licence attribution on any code copied on purpose, and never copy code of unknown provenance or with a licence incompatible with this all-rights-reserved repository.
 
 Finish rather than keep finding reasons not to finish. Before adding infrastructure, a workflow, a state store, a
