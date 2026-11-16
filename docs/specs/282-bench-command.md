@@ -1,6 +1,6 @@
 # 282 — Headless bench command over the evaluators
 
-Status: in_review
+Status: merged
 Depends on: 280, 281
 
 ## Goal
