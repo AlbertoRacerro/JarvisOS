@@ -722,3 +722,71 @@ def test_engine_exception_is_json_error(tmp_path: Path, capsys: pytest.CaptureFi
     doc = json.loads(capsys.readouterr().out)
     assert doc["code"] == "ENGINE_ERROR_KEYERROR"
     assert "\n" not in doc["hint"]
+
+
+def test_bench_run_solid_declared_bbox_failure_reports_not_usable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.modules.engineering.bench as bench_module
+    from app.modules.bluecad.models import BuildResult
+
+    spec = tmp_path / "geom.json"
+    spec.write_text("{}", encoding="utf-8")
+    out_dir = tmp_path / "out_bbox_fail"
+
+    def mock_build(*args: object, **kwargs: object) -> BuildResult:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = out_dir / "manifest.json"
+        report_path = out_dir / "validation_report.json"
+        step_path = out_dir / "model.step"
+        step_path.write_text("ISO-10303-21;", encoding="utf-8")
+        manifest = {
+            "assembly": {
+                "total_volume_mm3": 1000.0,
+                "bbox_mm": {"min": [0.0, 0.0, 0.0], "max": [10.0, 10.0, 10.0]},
+                "kernel_checks": {"p1": {"brep_valid": True, "manifold": True}},
+            },
+            "parts": {},
+        }
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        report = {
+            "report_version": "bluecad_validation_report_v0_1",
+            "spec_id": "sha256:test",
+            "verdict": "fail",
+            "checks": [
+                {"id": "T1_BREP_VALID", "status": "pass"},
+                {"id": "T1_WATERTIGHT", "status": "pass"},
+                {
+                    "id": "T1_BBOX_DECL",
+                    "status": "fail",
+                    "detail": {"max_abs_error": 5.0, "abs_tol": 0.1},
+                    "hint": "actual bbox max absolute error 5; tolerance 0.1",
+                },
+            ],
+            "errors": [],
+        }
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        return BuildResult(
+            spec_id="test",
+            out_dir=out_dir,
+            manifest_path=manifest_path,
+            report_path=report_path,
+            manifest=manifest,
+            report=report,
+            verdict="fail",
+            errors=[],
+        )
+
+    monkeypatch.setattr(bench_module, "build_geometry_spec_file", mock_build)
+    code = main(["run", "bluecad.solid", str(spec), "--out", str(out_dir), "--root", str(tmp_path)])
+
+    assert code == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["status"] == "succeeded"
+    assert doc["verdict"] == "not_usable"
+    failed_ids = [c["id"] for c in doc.get("failed_checks", [])]
+    assert "T1_BBOX_DECL" in failed_ids
+    assert (out_dir / "result.json").is_file()
+    assert (out_dir / "manifest.json").is_file()
+    assert (out_dir / "validation_report.json").is_file()
+

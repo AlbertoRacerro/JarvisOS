@@ -43,6 +43,7 @@ FEM_EVALUATOR_ID: Final = "bluecad.fem"
 CHECK_BREP_VALID: Final = "BREP_VALID"
 CHECK_WATERTIGHT: Final = "WATERTIGHT"
 CHECK_VOLUME_CONSERVATION: Final = "VOLUME_CONSERVATION"
+CHECK_BBOX_DECL: Final = "T1_BBOX_DECL"
 
 CHECK_VOLUME_ELEMENTS: Final = "VOLUME_ELEMENTS"
 CHECK_ELEMENT_QUALITY: Final = "ELEMENT_QUALITY"
@@ -57,6 +58,8 @@ MESH_QUALITY_POLICY_SOURCE: Final = "policy:gmsh_gamma_min"
 
 SOLID_TOPOLOGY_SOURCE: Final = "physical_limit"
 SOLID_VOLUME_SOURCE: Final = "policy:declared_volume"
+SOLID_BBOX_SOURCE: Final = "policy:declared_bbox"
+SOLID_NATIVE_VALIDATION_SOURCE: Final = "policy:native_validation"
 
 FEM_SOLVER_SOURCE: Final = "policy:solver_completion"
 FEM_EQUILIBRIUM_SOURCE: Final = "policy:force_equilibrium"
@@ -156,6 +159,13 @@ def _synthesize_refs(
         revision="1",
     )
     return req_ref, res_ref
+
+
+def _sanitize_check_id(raw_id: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", raw_id).upper()
+    if not cleaned or not cleaned[0].isalpha():
+        cleaned = f"CHECK_{cleaned}"
+    return cleaned[:64]
 
 
 def _classify_native_failure(
@@ -436,6 +446,119 @@ def solid_build_result_to_evaluation_result(
                 status="not_evaluated",
                 hint="no volume was declared in specification",
                 source=SOLID_VOLUME_SOURCE,
+            )
+        )
+
+    # Preserve every native validation check with status 'fail' or 'error' (Spec 284).
+    # Topology and declared volume are already mapped to CHECK_BREP_VALID,
+    # CHECK_WATERTIGHT, and CHECK_VOLUME_CONSERVATION.
+    mapped_native_checks: set[str] = {"T1_BREP_VALID", "T1_WATERTIGHT", "T1_VOLUME_DECL"}
+    seen_check_ids: set[str] = {c.id for c in checks_list}
+
+    for native_check in build_result.report.get("checks", []):
+        raw_status = native_check.get("status")
+        if raw_status not in {"fail", "error"}:
+            continue
+        raw_id = str(native_check.get("id") or "UNKNOWN_CHECK")
+        if raw_id in mapped_native_checks:
+            continue
+
+        check_id = _sanitize_check_id(raw_id)
+        if check_id in seen_check_ids:
+            base_id = check_id[:58]
+            idx = 2
+            while f"{base_id}_{idx}" in seen_check_ids:
+                idx += 1
+            check_id = f"{base_id}_{idx}"
+        seen_check_ids.add(check_id)
+
+        detail = native_check.get("detail")
+        actual_val: float | None = None
+        limit_val: float | None = None
+        unit_val: str | None = None
+
+        if raw_id == CHECK_BBOX_DECL:
+            source_val = SOLID_BBOX_SOURCE
+            if isinstance(detail, dict):
+                raw_err = detail.get("max_abs_error")
+                if raw_err is None and isinstance(detail.get("actual"), (int, float)):
+                    raw_err = detail.get("actual")
+                raw_tol = detail.get("abs_tol")
+                if raw_tol is None and isinstance(detail.get("limit"), (int, float)):
+                    raw_tol = detail.get("limit")
+                if not isinstance(raw_err, bool) and not isinstance(raw_tol, bool):
+                    try:
+                        if raw_err is not None and raw_tol is not None:
+                            err_f = float(raw_err)
+                            tol_f = float(raw_tol)
+                            if math.isfinite(err_f) and math.isfinite(tol_f):
+                                actual_val = err_f
+                                limit_val = tol_f
+                                unit_val = "mm"
+                    except (ValueError, TypeError):
+                        pass
+            raw_hint = native_check.get("hint")
+            if raw_hint:
+                hint_val = str(raw_hint).replace("\r", " ").replace("\n", " ").strip()
+            elif actual_val is not None and limit_val is not None:
+                hint_val = (
+                    f"declared bounding box maximum absolute error {actual_val:.6g} mm "
+                    f"exceeds tolerance {limit_val:.6g} mm"
+                )
+            else:
+                hint_val = "declared bounding box check failed"
+        else:
+            source_val = SOLID_NATIVE_VALIDATION_SOURCE
+            if isinstance(detail, dict):
+                raw_act = detail.get("actual")
+                raw_lim = detail.get("limit")
+                raw_u = detail.get("unit")
+                if not isinstance(raw_act, bool) and not isinstance(raw_lim, bool):
+                    try:
+                        if raw_act is not None and raw_lim is not None:
+                            act_f = float(raw_act)
+                            lim_f = float(raw_lim)
+                            if math.isfinite(act_f) and math.isfinite(lim_f):
+                                actual_val = act_f
+                                limit_val = lim_f
+                                unit_val = str(raw_u) if raw_u else None
+                    except (ValueError, TypeError):
+                        pass
+            raw_hint = native_check.get("hint")
+            if raw_hint:
+                hint_val = str(raw_hint).replace("\r", " ").replace("\n", " ").strip()
+            else:
+                hint_val = f"native validation check '{raw_id}' failed"
+
+        checks_list.append(
+            ResultCheck(
+                id=check_id,
+                family="input",
+                status="fail",
+                actual=actual_val,
+                limit=limit_val,
+                unit=unit_val,
+                hint=(hint_val or f"native check {raw_id} failed")[:240],
+                source=source_val,
+            )
+        )
+
+    # A native solid verdict='fail' must never become usable, usable_with_warnings or unchecked
+    if build_result.verdict == "fail" and not any(c.status == "fail" for c in checks_list):
+        fallback_id = "NATIVE_VALIDATION_FAILED"
+        if fallback_id in seen_check_ids:
+            idx = 2
+            while f"NATIVE_VALIDATION_FAILED_{idx}" in seen_check_ids:
+                idx += 1
+            fallback_id = f"NATIVE_VALIDATION_FAILED_{idx}"
+        seen_check_ids.add(fallback_id)
+        checks_list.append(
+            ResultCheck(
+                id=fallback_id,
+                family="input",
+                status="fail",
+                hint="native validation verdict is fail",
+                source=SOLID_NATIVE_VALIDATION_SOURCE,
             )
         )
 

@@ -9,6 +9,7 @@ from typing import Any
 from app.modules.bluecad.export import sha256_file
 from app.modules.bluecad.models import BuildResult
 from app.modules.bluecad.result_adapters import (
+    CHECK_BBOX_DECL,
     CHECK_BREP_VALID,
     CHECK_ELEMENT_QUALITY,
     CHECK_FORCE_EQUILIBRIUM,
@@ -20,7 +21,9 @@ from app.modules.bluecad.result_adapters import (
     MESH_EVALUATOR_ID,
     MESH_QUALITY_POLICY_LIMIT,
     MESH_QUALITY_POLICY_SOURCE,
+    SOLID_BBOX_SOURCE,
     SOLID_EVALUATOR_ID,
+    SOLID_NATIVE_VALIDATION_SOURCE,
     fem_evaluator_descriptor,
     fem_result_to_evaluation_result,
     mesh_evaluator_descriptor,
@@ -45,6 +48,9 @@ def _mock_build_result(
     manifold: bool = True,
     declared_volume_rel_error: float | None = None,
     declared_volume_rel_tol: float = 0.001,
+    declared_bbox_max_abs_error: float | None = None,
+    declared_bbox_abs_tol: float = 0.1,
+    extra_checks: list[dict[str, Any]] | None = None,
     verdict: str = "pass",
     errors: list[dict[str, Any]] | None = None,
 ) -> BuildResult:
@@ -83,6 +89,23 @@ def _mock_build_result(
                 },
             }
         )
+    if declared_bbox_max_abs_error is not None:
+        checks.append(
+            {
+                "id": "T1_BBOX_DECL",
+                "tier": 1,
+                "status": "pass" if declared_bbox_max_abs_error <= declared_bbox_abs_tol else "fail",
+                "detail": {
+                    "actual": {"min": list(bbox_min), "max": list(bbox_max)},
+                    "declared": {"min": list(bbox_min), "max": [x + declared_bbox_max_abs_error for x in bbox_max]},
+                    "abs_tol": declared_bbox_abs_tol,
+                    "max_abs_error": declared_bbox_max_abs_error,
+                },
+                "hint": f"actual bbox max absolute error {declared_bbox_max_abs_error:.6g}; tolerance {declared_bbox_abs_tol:.6g}",
+            }
+        )
+    if extra_checks:
+        checks.extend(extra_checks)
 
     report = {
         "report_version": "bluecad_validation_report_v0_1",
@@ -354,6 +377,215 @@ def test_solid_adapter_failure_paths_preserve_native_codes(tmp_path: Path) -> No
     assert res_inv.failure.category == "invalid_input"
     assert res_inv.failure.backend_code == "SPEC_INVALID"
     assert result_verdict(desc, res_inv) == "not_usable"
+
+
+# ---------------------------------------------------------------------------
+# Spec 284: native solid validation verdict repair tests
+# ---------------------------------------------------------------------------
+
+
+def test_solid_adapter_declared_bbox_failure_yields_not_usable_and_preserves_outputs(
+    tmp_path: Path,
+) -> None:
+    build_result = _mock_build_result(
+        tmp_path,
+        total_volume=1000.0,
+        bbox_min=(0.0, 0.0, 0.0),
+        bbox_max=(10.0, 10.0, 10.0),
+        declared_bbox_max_abs_error=2.5,
+        declared_bbox_abs_tol=0.1,
+        verdict="fail",
+    )
+
+    res = solid_build_result_to_evaluation_result(build_result)
+    desc = solid_evaluator_descriptor()
+
+    # Status remains succeeded (built shape exists)
+    assert res.status == "succeeded"
+    assert res.failure is None
+
+    # Measured outputs are preserved
+    outputs_by_name = {o.name: o.value for o in res.outputs}
+    assert outputs_by_name["total_volume"].value == 1000.0
+    assert outputs_by_name["bbox_min_x"].value == 0.0
+    assert outputs_by_name["bbox_max_x"].value == 10.0
+    assert outputs_by_name["bbox_dx"].value == 10.0
+
+    # Checks expose failed bounding box check with actual, limit, unit="mm"
+    checks_by_id = {c.id: c for c in res.checks}
+    assert CHECK_BBOX_DECL in checks_by_id
+    bbox_check = checks_by_id[CHECK_BBOX_DECL]
+    assert bbox_check.status == "fail"
+    assert bbox_check.actual == 2.5
+    assert bbox_check.limit == 0.1
+    assert bbox_check.unit == "mm"
+    assert bbox_check.source == SOLID_BBOX_SOURCE
+
+    # Derived verdict is not_usable
+    assert result_verdict(desc, res) == "not_usable"
+
+    # Artifacts (validation report, manifest, step) are preserved
+    artifact_names = {a.object_id for a in res.output_artifacts}
+    assert "manifest.json" in artifact_names
+    assert "validation_report.json" in artifact_names
+    assert "model.step" in artifact_names
+
+
+def test_solid_adapter_unrecognized_native_failure_yields_not_usable_and_names_check(
+    tmp_path: Path,
+) -> None:
+    extra = [
+        {
+            "id": "CUSTOM_SURFACE_CURVATURE",
+            "tier": 2,
+            "status": "fail",
+            "hint": "minimum radius of curvature 0.5 mm below threshold 1.0 mm",
+            "detail": {"actual": 0.5, "limit": 1.0, "unit": "mm"},
+        }
+    ]
+    build_result = _mock_build_result(
+        tmp_path,
+        total_volume=500.0,
+        extra_checks=extra,
+        verdict="fail",
+    )
+
+    res = solid_build_result_to_evaluation_result(build_result)
+    desc = solid_evaluator_descriptor()
+
+    assert res.status == "succeeded"
+    outputs_by_name = {o.name: o.value for o in res.outputs}
+    assert outputs_by_name["total_volume"].value == 500.0
+
+    checks_by_id = {c.id: c for c in res.checks}
+    assert "CUSTOM_SURFACE_CURVATURE" in checks_by_id
+    custom_check = checks_by_id["CUSTOM_SURFACE_CURVATURE"]
+    assert custom_check.status == "fail"
+    assert "CUSTOM_SURFACE_CURVATURE" in custom_check.hint or "radius" in custom_check.hint
+    assert custom_check.source == SOLID_NATIVE_VALIDATION_SOURCE
+
+    # Result verdict is not_usable
+    assert result_verdict(desc, res) == "not_usable"
+
+
+def test_solid_adapter_native_verdict_fail_without_explicit_check_fails_safe(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "empty_fail"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "assembly": {
+            "total_volume_mm3": 100.0,
+            "kernel_checks": {"part1": {"brep_valid": True, "manifold": True}},
+        },
+        "parts": {},
+    }
+    manifest_path = out_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    report = {
+        "report_version": "bluecad_validation_report_v0_1",
+        "spec_id": "sha256:empty_fail",
+        "verdict": "fail",
+        "checks": [],
+        "errors": [],
+    }
+    report_path = out_dir / "validation_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    build_result = BuildResult(
+        spec_id="empty_fail",
+        out_dir=out_dir,
+        manifest_path=manifest_path,
+        report_path=report_path,
+        manifest=manifest,
+        report=report,
+        verdict="fail",
+        errors=[],
+    )
+
+    res = solid_build_result_to_evaluation_result(build_result)
+    desc = solid_evaluator_descriptor()
+
+    assert res.status == "succeeded"
+    assert any(c.status == "fail" for c in res.checks)
+    assert result_verdict(desc, res) == "not_usable"
+
+
+def test_solid_adapter_passing_native_report_with_passing_bbox_preserves_verdict_and_outputs(
+    tmp_path: Path,
+) -> None:
+    build_result = _mock_build_result(
+        tmp_path,
+        total_volume=1000.0,
+        declared_bbox_max_abs_error=0.01,
+        declared_bbox_abs_tol=0.1,
+        verdict="pass",
+    )
+
+    res = solid_build_result_to_evaluation_result(build_result)
+    desc = solid_evaluator_descriptor()
+
+    assert res.status == "succeeded"
+    outputs_by_name = {o.name: o.value for o in res.outputs}
+    assert outputs_by_name["total_volume"].value == 1000.0
+
+    # No failed checks; volume wasn't declared so VOLUME_CONSERVATION is not_evaluated
+    assert not any(c.status == "fail" for c in res.checks)
+    assert result_verdict(desc, res) == "usable_with_warnings"
+
+
+def test_solid_adapter_declared_bbox_failure_without_finite_numbers_fails_safe(
+    tmp_path: Path,
+) -> None:
+    extra = [
+        {
+            "id": "T1_BBOX_DECL",
+            "tier": 1,
+            "status": "fail",
+            "detail": {"max_abs_error": None, "abs_tol": None},
+            "hint": "declared bounding box comparison failed",
+        }
+    ]
+    build_result = _mock_build_result(
+        tmp_path,
+        total_volume=800.0,
+        extra_checks=extra,
+        verdict="fail",
+    )
+
+    res = solid_build_result_to_evaluation_result(build_result)
+    desc = solid_evaluator_descriptor()
+
+    assert res.status == "succeeded"
+    checks_by_id = {c.id: c for c in res.checks}
+    assert CHECK_BBOX_DECL in checks_by_id
+    c = checks_by_id[CHECK_BBOX_DECL]
+    assert c.status == "fail"
+    assert c.actual is None
+    assert c.limit is None
+    assert c.unit is None
+    assert result_verdict(desc, res) == "not_usable"
+
+
+def test_solid_adapter_disambiguates_duplicate_native_check_ids(
+    tmp_path: Path,
+) -> None:
+    extra = [
+        {"id": "CUSTOM_CHECK", "status": "fail", "hint": "first fail"},
+        {"id": "CUSTOM_CHECK", "status": "fail", "hint": "second fail"},
+    ]
+    build_result = _mock_build_result(
+        tmp_path,
+        total_volume=500.0,
+        extra_checks=extra,
+        verdict="fail",
+    )
+
+    res = solid_build_result_to_evaluation_result(build_result)
+    check_ids = [c.id for c in res.checks]
+    assert len(set(check_ids)) == len(check_ids)
+    assert "CUSTOM_CHECK" in check_ids
+    assert "CUSTOM_CHECK_2" in check_ids
 
 
 # ---------------------------------------------------------------------------
