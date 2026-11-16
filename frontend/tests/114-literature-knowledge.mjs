@@ -32,7 +32,10 @@ assert.match(page, /Attach source file/);
 assert.match(page, /Number \(optional\)/);
 assert.match(page, /Lines from \(optional\)/);
 assert.match(page, /Lines to \(optional\)/);
-assert.match(page, /locator_kind: "line" as const/);
+assert.match(page, /locator_kind: hasPdfBacking \? "page" as const : "line" as const/);
+assert.match(page, /Pages from \(optional\)/);
+assert.match(page, /Pages to \(optional\)/);
+assert.match(page, /This PDF has no readable text \(it may be a scan\); values on it cannot be checked yet\./);
 for (const words of ["Checked against the source", "Checked, with warnings", "Not checked", "Does not match the source"]) assert.ok(page.includes(words), words);
 assert.match(page, /check\.status !== "pass"/);
 

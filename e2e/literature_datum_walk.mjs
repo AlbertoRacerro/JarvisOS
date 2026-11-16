@@ -16,13 +16,13 @@ const port = Number(process.env.JARVISOS_PROOF_PORT ?? 8791), base = `http://127
 if (!Number.isInteger(port) || port < 1 || port > 65535 || port === 8000) throw Error('Invalid proof port');
 await new Promise((ok, fail) => { const probe = createServer().once('error', error => fail(Error(`Cannot bind proof port ${port}: ${error.message}`))).once('listening', () => probe.close(ok)).listen(port, '127.0.0.1'); });
 const evidence = resolve(process.argv[2]); await mkdir(evidence, { recursive: true });
-const data = await mkdtemp(join(tmpdir(), 'jarvisos-294-')); await mkdir(join(data, 'host'));
+const data = await mkdtemp(join(tmpdir(), 'jarvisos-295-')); await mkdir(join(data, 'host'));
 const env = { ...process.env, PYTHONPATH: backend, JARVISOS_DATA_ROOT: data, XDG_STATE_HOME: join(data, 'host'), LOCALAPPDATA: join(data, 'host') };
 const log = openSync(join(evidence, 'backend.log'), 'w');
 const init = spawnSync(python, ['-c', 'from app.core.database import initialize_database\ninitialize_database()'], { cwd: backend, env, encoding: 'utf8' });
 if (init.status !== 0) throw Error(`database initialization failed: ${init.stderr}`);
 const server = spawn(python, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)], { cwd: backend, env, stdio: ['ignore', log, log] });
-const summary = { spec: 294, head: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(), steps: [], screenshots: [], errors: [] };
+const summary = { spec: 295, head: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(), steps: [], screenshots: [], errors: [] };
 let browser, failure;
 try {
   for (let i = 0; ; i++) { if (server.exitCode !== null) throw Error('backend exited'); try { if ((await fetch(base + '/health')).ok) break; } catch {} if (i > 120) throw Error('backend timeout'); await delay(500); }
@@ -70,6 +70,28 @@ try {
   const verdicts = page1.items[0].entries.map(e => e.verdict).sort();
   if (verdicts.join() !== 'not_usable,usable') throw Error(`Unexpected persisted verdicts: ${verdicts}`);
   summary.persisted_verdicts = verdicts;
+  const pdf = join(data, 'paper.pdf');
+  const pdfInit = spawnSync(python, ['-c', "from tests.test_literature_pdf_pages import make_pdf; import sys; open(sys.argv[1], 'wb').write(make_pdf(['k = 1.2 x 10^-3 s^-1', 'Introduction']))", pdf], { cwd: backend, env, encoding: 'utf8' });
+  if (pdfInit.status !== 0) throw Error(`PDF generation failed: ${pdfInit.stderr}`);
+  await page.getByRole('button', { name: '+ Register source' }).click();
+  await page.getByLabel('Source title').fill('PDF rate study');
+  await page.getByLabel('Source file (optional)').setInputFiles(pdf);
+  await page.getByRole('button', { name: 'Save source', exact: true }).click();
+  const pdfSource = page.locator('details[data-source-id]').filter({ hasText: 'PDF rate study' });
+  await pdfSource.getByText('Add a finding', { exact: true }).click();
+  const pdfForm = pdfSource.locator('.literature-add-finding form');
+  for (const pageNumber of ['1', '2']) {
+    await pdfForm.getByLabel('Finding type').selectOption('datum');
+    await pdfForm.getByLabel('Reported value').fill('rate');
+    await pdfForm.getByLabel('Unit (optional)').fill('1/s');
+    await pdfForm.getByLabel('Number (optional)').fill('0.0012');
+    await pdfForm.getByLabel('Pages from (optional)').fill(pageNumber);
+    await pdfForm.getByLabel('Pages to (optional)').fill(pageNumber);
+    await pdfForm.getByRole('button', { name: 'Save raw finding' }).click();
+    await pdfSource.locator('em', { hasText: pageNumber === '1' ? 'Checked against the source' : 'Does not match the source' }).waitFor();
+  }
+  await shot('pdf-verdicts.png');
+  summary.steps.push('PDF page 1 matches; page 2 does not match');
   if (summary.errors.length) throw Error('Page errors');
 } catch (error) { failure = error; summary.failure = String(error.stack ?? error); } finally {
   summary.result = failure ? 'fail' : 'pass'; await writeFile(join(evidence, 'evidence.json'), JSON.stringify(summary, null, 2) + '\n'); await browser?.close(); server.kill('SIGTERM'); await delay(500); await rm(data, { recursive: true, force: true });

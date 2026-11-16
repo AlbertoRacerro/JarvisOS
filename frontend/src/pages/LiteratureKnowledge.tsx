@@ -74,6 +74,8 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const backingUnavailable = source.backing && source.backing.availability !== "available";
   const hasTextBacking = source.backing?.availability === "available" && (source.backing.mime_type === "text/plain" || source.backing.mime_type === "text/markdown");
+  const hasPdfBacking = source.backing?.mime_type === "application/pdf" && source.backing.page_text === "available";
+  const hasLocatedBacking = hasTextBacking || hasPdfBacking;
   const attachFile = async (file: File | undefined) => {
     if (!file || attaching) return;
     setAttaching(true); setAttachError(null);
@@ -87,13 +89,13 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
   const saveEntry = async (event: React.FormEvent) => {
     event.preventDefault();
     if (saving || !value.trim()) return;
-    const numeric = kind === "datum" && hasTextBacking && number.trim() !== "" ? Number(number) : undefined;
-    const from = kind === "datum" && hasTextBacking && lineFrom.trim() !== "" ? Number(lineFrom) : undefined;
+    const numeric = kind === "datum" && hasLocatedBacking && number.trim() !== "" ? Number(number) : undefined;
+    const from = kind === "datum" && hasLocatedBacking && lineFrom.trim() !== "" ? Number(lineFrom) : undefined;
     const to = from !== undefined && lineTo.trim() !== "" ? Number(lineTo) : from;
     if ((numeric !== undefined && !Number.isFinite(numeric)) || (from !== undefined && (!Number.isInteger(from) || from < 1)) || (to !== undefined && (!Number.isInteger(to) || (from !== undefined && to < from)))) {
-      setError("Enter a valid number and a line range with the last line not before the first."); return;
+      setError("Enter a valid number and range with the end not before the start."); return;
     }
-    const located = from !== undefined ? { locator_kind: "line" as const, locator_start: from, locator_end: to } : {};
+    const located = from !== undefined ? { locator_kind: hasPdfBacking ? "page" as const : "line" as const, locator_start: from, locator_end: to } : {};
     const payload: LiteratureEntryInput = { entry_kind: kind, ...(kind === "claim" ? { statement: value.trim() } : { value_text: value.trim(), unit: unit.trim() || undefined, ...(numeric !== undefined ? { value_number: numeric } : {}), ...located }), context_text: context.trim() || undefined };
     setSaving(true); setError(null); setNotice("");
     try {
@@ -129,13 +131,14 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
             <label>Finding type<select value={kind} disabled={saving} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="claim">Claim</option><option value="datum">Datum</option></select></label>
             <label>{kind === "claim" ? "Claim statement" : "Reported value"}<textarea required maxLength={kind === "claim" ? 8000 : 4000} value={value} disabled={saving} onChange={(event) => setValue(event.target.value)} /></label>
             {kind === "datum" ? <label>Unit (optional)<input value={unit} maxLength={128} disabled={saving} onChange={(event) => setUnit(event.target.value)} /></label> : null}
-            {kind === "datum" && hasTextBacking ? <>
+            {kind === "datum" && hasLocatedBacking ? <>
               <label>Number (optional)<NumericInput value={number} disabled={saving} onValueChange={(text) => setNumber(text)} /></label>
-              <label>Lines from (optional)<NumericInput integer min={1} value={lineFrom} disabled={saving} onValueChange={(text) => setLineFrom(text)} /></label>
-              <label>Lines to (optional)<NumericInput integer min={1} value={lineTo} disabled={saving} onValueChange={(text) => setLineTo(text)} /></label>
+              <label>{hasPdfBacking ? "Pages from (optional)" : "Lines from (optional)"}<NumericInput integer min={1} value={lineFrom} disabled={saving} onValueChange={(text) => setLineFrom(text)} /></label>
+              <label>{hasPdfBacking ? "Pages to (optional)" : "Lines to (optional)"}<NumericInput integer min={1} value={lineTo} disabled={saving} onValueChange={(text) => setLineTo(text)} /></label>
             </> : null}
+            {kind === "datum" && source.backing?.page_text === "no_text" ? <p>This PDF has no readable text (it may be a scan); values on it cannot be checked yet.</p> : null}
             <label>Context or location notes (optional)<textarea value={context} maxLength={12000} disabled={saving} onChange={(event) => setContext(event.target.value)} /></label>
-            <p>Saved as raw. Notes are not a verified page or line reference.{kind === "datum" && hasTextBacking ? " A number with a line range is checked against the source text." : ""}</p>
+            <p>Saved as raw. Notes are not a verified page or line reference.{kind === "datum" && hasLocatedBacking ? ` A number with a ${hasPdfBacking ? "page" : "line"} range is checked against the source text.` : ""}</p>
             <button type="submit" disabled={saving || !value.trim()}>{saving ? "Saving finding…" : "Save raw finding"}</button>
           </form>
           {error ? <p role="alert">{error}</p> : null}{notice ? <p role="status">{notice}</p> : null}

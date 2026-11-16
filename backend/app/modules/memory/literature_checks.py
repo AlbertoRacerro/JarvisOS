@@ -96,19 +96,20 @@ def _value_check(
 ) -> ResultCheck:
     if locator_kind is None or locator_start is None:
         return _check("LIT_VALUE_AT_LOCATOR", "reference", "not_evaluated", "Add a line locator so the value can be checked.")
-    if locator_kind != "line":
+    if locator_kind not in {"line", "page"}:
         return _check(
             "LIT_VALUE_AT_LOCATOR", "reference", "not_evaluated",
             f"A {locator_kind} locator cannot be checked yet; only line locators on text or markdown are.",
         )
+    label_range = "pages" if locator_kind == "page" else "lines"
     if lines is None:
         reason = unavailable or "The backing text is not readable."
-        return _check("LIT_VALUE_AT_LOCATOR", "reference", "not_evaluated", f"{reason} Line locators need a readable text backing.")
+        return _check("LIT_VALUE_AT_LOCATOR", "reference", "not_evaluated", f"{reason} {locator_kind.capitalize()} locators need a readable text backing.")
     end = locator_end if locator_end is not None else locator_start
     if locator_start < 1 or end > len(lines):
         return _check(
             "LIT_VALUE_AT_LOCATOR", "reference", "fail",
-            "The locator is outside the current text; the backing changed, so fix the line range.",
+            f"The locator is outside the current text; the backing changed, so fix the {locator_kind} range.",
         )
     located = "\n".join(lines[locator_start - 1 : end])
     if value_number is not None:
@@ -118,10 +119,10 @@ def _value_check(
         found = _normalise(value_text or "") in _normalise(located)
         label = "value text"
     if found:
-        return _check("LIT_VALUE_AT_LOCATOR", "reference", "pass", f"The {label} appears in the located lines.")
+        return _check("LIT_VALUE_AT_LOCATOR", "reference", "pass", f"The {label} appears in the located {label_range}.")
     return _check(
         "LIT_VALUE_AT_LOCATOR", "reference", "fail",
-        f"The {label} is not in the located lines; correct the value or the locator.",
+        f"The {label} is not in the located {label_range}; correct the value or the locator.",
     )
 
 
