@@ -1,6 +1,6 @@
 # 281 — Checked results for solids, mesh and static FEM
 
-Status: in_review
+Status: merged
 Depends on: 280
 
 ## Goal
