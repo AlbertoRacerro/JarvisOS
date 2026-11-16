@@ -1,6 +1,6 @@
 # 292 — RETRIEVAL-BENCH-EVALUATOR-1: Headless retrieval evaluation in `bench`
 
-Status: ready
+Status: merged through PR #145
 Depends on: 282, 287, 289, 291
 
 ## Goal
