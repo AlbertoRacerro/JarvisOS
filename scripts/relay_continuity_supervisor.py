@@ -1639,6 +1639,10 @@ class Supervisor:
                 text += "\n\n" + self.host.worker_routing()
             except Exception as exc:  # noqa: BLE001 - routing advice is optional; the turn still launches
                 self.host.log(f"worker routing block skipped: {type(exc).__name__}")
+        if (previous is not None and previous.agent == agent
+                and previous.outcome == "transient"
+                and previous.harness_cause in SAME_AGENT_CAUSES):
+            pending["transient_retry"] = agent
         prior_wait = self.state.get("wait")
         self.state["wait"] = None
         self.state["pending"] = pending  # intent is durable before anything is launched
@@ -1661,11 +1665,10 @@ class Supervisor:
             return self.hold("relay_invocation_failed", self.attempts)
         pending["pid"] = getattr(proc, "pid", None)
         pending["pid_start"] = devctx.pid_start(pending["pid"]) if pending["pid"] else None
-        if (previous is not None and previous.agent == agent
-                and previous.outcome == "transient"
-                and previous.harness_cause in SAME_AGENT_CAUSES):
-            strikes = self.state["counters"].get(f"transient_{agent}", 0)
-            self.state["counters"][f"transient_{agent}"] = strikes + 1
+        if (retry_agent := pending.get("transient_retry")) and not pending.get("strike_counted"):
+            strikes = self.state["counters"].get(f"transient_{retry_agent}", 0)
+            self.state["counters"][f"transient_{retry_agent}"] = strikes + 1
+            pending["strike_counted"] = True
         self.save()
         try:
             try:
@@ -1741,10 +1744,26 @@ class Supervisor:
                 report.detail = f"{report.detail}; {diagnostics.strip()}" if report.detail else diagnostics.strip()
         report.agent = pending["agent"]
         report.reaped = reaped
+        retry_agent = pending.get("transient_retry")
+        if retry_agent is None and "transient_retry" not in pending:
+            head_sid = self.state.get("head_session")
+            if head_sid and (prev_turn := last_turn_dir(self.host.relay.sessions_dir() / head_sid)):
+                try:
+                    prev_report = classify_turn(prev_turn)
+                    if (prev_report.agent == pending.get("agent")
+                            and prev_report.outcome == "transient"
+                            and prev_report.harness_cause in SAME_AGENT_CAUSES
+                            and pending.get("pid") is None):
+                        retry_agent = pending.get("agent")
+                except Exception:  # noqa: BLE001 - advisory turn classification for legacy pending states
+                    pass
         self.state["head_session"] = session_id
         self.state["chain"] = (self.state.get("chain") or []) + [session_id]
         # Counted once per launched attempt. Provider failures are bounded by their cooldowns instead.
         counters = self.state["counters"]
+        if retry_agent and not pending.get("strike_counted"):
+            counters[f"transient_{retry_agent}"] = counters.get(f"transient_{retry_agent}", 0) + 1
+            pending["strike_counted"] = True
         # Only an unbroken run of crash/unknown turns counts: any other outcome ends the streak.
         # A turn cut by our own time limit still counts here: this is the loop guard (eight unbroken one-hour cuts
         # is a real problem), not a capability verdict; `harness_cause` in the journal keeps the two apart.

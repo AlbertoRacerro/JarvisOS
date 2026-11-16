@@ -16,6 +16,7 @@ from test_relay_continuity import (
     claude_result,
     mission_def,
     rc,
+    relay_prompt,
     write_turn,
 )
 
@@ -848,6 +849,327 @@ def test_stopped_owner_unatomic_disk_state_settles_and_does_not_duplicate_launch
     assert len(env.relay.launches) == 0
     assert sup.state.get("pending") is None
     assert sup.state.get("wait") is None
+
+
+def test_stopped_owner_after_start_returns_and_before_second_save_counts_strike_on_recovery(
+    tmp_path: Path,
+) -> None:
+    """Finding P2: For a same-agent transient retry, if owner stops after relay.start returns
+    but before the second save, recovery (_resolve_pending) settles the launched turn with
+    exactly one strike, ensuring crashes in this window cannot evade same_agent_retries.
+    """
+    env = Env(tmp_path, [("argon", []), ("argon", [])])
+    env.limits.same_agent_retries = 2
+    sid = "20261018-080000-prev01"
+    session_dir = env.relay.sessions_dir() / sid
+    turn_dir = session_dir / "turns" / "turn-001"
+    turn_dir.mkdir(parents=True)
+    (turn_dir / "native-result.json").write_text(json.dumps({
+        "schema": "argon-coordinator.v1",
+        "agent": "argon",
+        "launched": False,
+        "reason": "network_error",
+    }))
+    (turn_dir / "output.jsonl").write_text("")
+    (turn_dir / "state.json").write_text(json.dumps({"agent_key": "argon", "status": "propose_done"}))
+    (turn_dir / "prompt.md").write_text("task")
+
+    sup = env.supervisor()
+    sup.state.update({
+        "head_session": sid,
+        "agent": "argon",
+        "permissions_digest": env.perm["v"],
+    })
+    sup.save()
+
+    prev_report = rc.classify_turn(turn_dir)
+    assert prev_report.outcome == "transient"
+    assert prev_report.harness_cause == "provider_network"
+
+    decision = sup._decide(prev_report, None)
+    assert isinstance(decision, tuple)
+    agent, prompt = decision
+    assert agent == "argon"
+
+    orig_start = env.relay.start
+
+    def stopping_start(agent: str, parent: str | None, task: str, turns: int, **kwargs: Any) -> Any:
+        # Verify first pending save recorded the transient retry intent before relay.start
+        persisted = env.store.load()
+        assert persisted.get("pending") is not None
+        assert persisted["pending"]["transient_retry"] == "argon"
+        assert not persisted["pending"].get("strike_counted")
+        # On disk before second save, transient strike has not been added yet
+        assert persisted.get("counters", {}).get("transient_argon", 0) == 0
+
+        # Launch the turn and write the turn result so the session is durable for recovery
+        ts = env.clock.now().strftime("%Y%m%d-%H%M%S")
+        sid_retry = f"{ts}-retry01"
+        sdir = env.relay.sessions_dir() / sid_retry
+        turn = write_turn(sdir, [], agent=agent, prompt=relay_prompt(task), status="continue")
+        (turn / "native-result.json").write_text(json.dumps({
+            "schema": "argon-coordinator.v1",
+            "agent": "argon",
+            "launched": False,
+            "reason": "network_error",
+        }))
+        env.relay.launches.append({"agent": agent, "task": task})
+
+        # Abrupt stop: owner terminates right after start returns, BEFORE supervisor executes second save
+        raise KeyboardInterrupt("simulated stop after start returns before second save")
+
+    env.relay.start = stopping_start  # type: ignore[assignment]
+
+    try:
+        sup._launch(agent, prompt, prev_report)
+    except KeyboardInterrupt:
+        pass
+
+    # Durable state on disk immediately after crash: pending intent persisted, strike counter still 0
+    persisted = env.store.load()
+    assert persisted.get("pending") is not None
+    assert persisted["pending"]["transient_retry"] == "argon"
+    assert persisted["counters"].get("transient_argon", 0) == 0
+
+    # Recovery: a new supervisor recovers from disk
+    env.relay.start = orig_start
+    sup2 = env.supervisor()
+    sup2.state = env.store.load()
+    rep = sup2._resolve_pending()
+
+    # Recovery must settle the real launched retry and count exactly one strike
+    assert not isinstance(rep, str)
+    assert rep.outcome == "transient"
+    assert rep.harness_cause == "provider_network"
+    assert sup2.state["counters"]["transient_argon"] == 1
+    assert sup2.state.get("pending") is None
+
+    # Disk state reflects the counted strike
+    persisted2 = env.store.load()
+    assert persisted2["counters"]["transient_argon"] == 1
+    assert persisted2.get("pending") is None
+
+    # Subsequent crash in this same window advances the strike and cannot evade same_agent_retries
+    decision2 = sup2._decide(rep, None)
+    assert isinstance(decision2, tuple)
+    agent2, prompt2 = decision2
+    assert agent2 == "argon"
+
+    def stopping_start2(agent: str, parent: str | None, task: str, turns: int, **kwargs: Any) -> Any:
+        ts = env.clock.now().strftime("%Y%m%d-%H%M%S")
+        sid_retry2 = f"{ts}-retry02"
+        sdir2 = env.relay.sessions_dir() / sid_retry2
+        turn2 = write_turn(sdir2, [], agent=agent, prompt=relay_prompt(task), status="continue")
+        (turn2 / "native-result.json").write_text(json.dumps({
+            "schema": "argon-coordinator.v1",
+            "agent": "argon",
+            "launched": False,
+            "reason": "network_error",
+        }))
+        env.relay.launches.append({"agent": agent, "task": task})
+        raise KeyboardInterrupt("simulated stop after second retry start returns before second save")
+
+    env.relay.start = stopping_start2  # type: ignore[assignment]
+    try:
+        sup2._launch(agent2, prompt2, rep)
+    except KeyboardInterrupt:
+        pass
+
+    # Second recovery
+    env.relay.start = orig_start
+    sup3 = env.supervisor()
+    sup3.state = env.store.load()
+    rep2 = sup3._resolve_pending()
+    assert not isinstance(rep2, str)
+    # Recovery increments to 2 strikes
+    assert sup3.state["counters"]["transient_argon"] == 2
+
+    # Now same_agent_retries (limit=2) is exhausted: _decide will cool down argon and switch
+    decision3 = sup3._decide(rep2, None)
+    assert "argon" in sup3.state["cooldowns"]
+    assert isinstance(decision3, tuple)
+    assert decision3[0] != "argon"
+
+
+def test_transient_retry_no_launch_race_before_start_and_oserror_count_zero_strikes(
+    tmp_path: Path,
+) -> None:
+    """Finding P2: A race where owner stops before relay.start (no launch), or where relay.start
+    raises OSError, counts exactly zero strikes.
+    """
+    env = Env(tmp_path)
+
+    # 1. No-launch race before relay.start
+    nonce_no_launch = "rc-20261018T080100Z-11111111"
+    sup = env.supervisor()
+    sup.state.update({
+        "permissions_digest": env.perm["v"],
+        "pending": {
+            "nonce": nonce_no_launch,
+            "agent": "argon",
+            "parent": None,
+            "started_at": rc.iso(T0),
+            "pid": None,
+            "pid_start": None,
+            "fingerprint": env.fp["v"],
+            "attempt": 1,
+            "transient_retry": "argon",
+        },
+    })
+    sup.save()
+    res = sup._resolve_pending()
+    assert res == "held"
+    assert sup.state["hold"]["reason"] == "attempt_unresolved"
+    assert sup.state["counters"].get("transient_argon", 0) == 0
+
+    # 2. OSError on relay.start
+    report = rc.TurnReport(
+        outcome="transient",
+        detail="network timeout",
+        harness_cause="provider_network",
+        agent="argon",
+        turn_id="s1/turn-001",
+    )
+    sup.state.update({
+        "hold": None,
+        "head_session": "s1",
+        "agent": "argon",
+        "pending": None,
+    })
+    sup.save()
+
+    def fail_start(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("exec format error")
+
+    env.relay.start = fail_start  # type: ignore[assignment]
+    res_launch = sup._launch("argon", "some prompt", report)
+    assert res_launch == "held"
+    assert sup.state["hold"]["reason"] == "relay_invocation_failed"
+    assert sup.state["counters"].get("transient_argon", 0) == 0
+    assert sup.state["pending"] is None
+
+
+def test_transient_retry_ordinary_path_counts_strike_once(tmp_path: Path) -> None:
+    """Finding P2: In the ordinary path without crashes, a launched retry increments the strike
+    exactly once across both the second save and _settle (no double counting).
+    """
+    env = Env(tmp_path, [("argon", [])])
+    orig_finish = env.relay.finish
+
+    def finish_transient(proc: Any, **kw: Any) -> Any:
+        res = orig_finish(proc, **kw)
+        turn = rc.last_turn_dir(env.relay.sessions_dir() / res.session_id)
+        (turn / "native-result.json").write_text(json.dumps({
+            "schema": "argon-coordinator.v1",
+            "agent": "argon",
+            "launched": False,
+            "reason": "network_error",
+        }))
+        return res
+
+    env.relay.finish = finish_transient  # type: ignore[assignment]
+
+    sid = "20261018-080000-prev01"
+    session_dir = env.relay.sessions_dir() / sid
+    turn_dir = session_dir / "turns" / "turn-001"
+    turn_dir.mkdir(parents=True)
+    (turn_dir / "native-result.json").write_text(json.dumps({
+        "schema": "argon-coordinator.v1",
+        "agent": "argon",
+        "launched": False,
+        "reason": "network_error",
+    }))
+    (turn_dir / "output.jsonl").write_text("")
+    (turn_dir / "state.json").write_text(json.dumps({"agent_key": "argon", "status": "propose_done"}))
+    (turn_dir / "prompt.md").write_text("task")
+
+    sup = env.supervisor()
+    sup.state.update({
+        "head_session": sid,
+        "agent": "argon",
+        "permissions_digest": env.perm["v"],
+    })
+    sup.save()
+
+    prev_report = rc.classify_turn(turn_dir)
+    decision = sup._decide(prev_report, None)
+    assert isinstance(decision, tuple)
+    agent, prompt = decision
+
+    launched_rep = sup._launch(agent, prompt, prev_report)
+    assert not isinstance(launched_rep, str)
+
+    # Strike was counted exactly once (not twice)
+    assert sup.state["counters"]["transient_argon"] == 1
+    persisted = env.store.load()
+    assert persisted["counters"]["transient_argon"] == 1
+
+
+def test_transient_retry_old_pending_states_recovery(tmp_path: Path) -> None:
+    """Finding P2: Recovery safely handles old pending states without transient_retry field:
+    non-retry states count 0 strikes, while legacy retry states that stopped before second save
+    count exactly 1 strike.
+    """
+    env = Env(tmp_path)
+
+    # 1. Old pending state representing a non-retry attempt
+    nonce_regular = "rc-20261018T080200Z-22222222"
+    sid_regular = "20261018-080200-reg001"
+    sdir = env.relay.sessions_dir() / sid_regular
+    write_turn(sdir, [], agent="claude", prompt=relay_prompt(f"[relay-continuity attempt {nonce_regular}]"), status="propose_done")
+    sup = env.supervisor()
+    sup.state.update({
+        "permissions_digest": env.perm["v"],
+        "head_session": "prior-head",
+        "pending": {
+            "nonce": nonce_regular,
+            "agent": "claude",
+            "parent": None,
+            "started_at": rc.iso(T0),
+            "pid": None,
+            "pid_start": None,
+            "fingerprint": env.fp["v"],
+            "attempt": 1,
+        },
+    })
+    sup.save()
+    res = sup._resolve_pending()
+    assert not isinstance(res, str)
+    assert sup.state["counters"].get("transient_claude", 0) == 0
+
+    # 2. Old pending state representing a same-agent transient retry stopped before second save (pid=None)
+    sid_prev_transient = "20261018-080000-trans01"
+    sdir_prev = env.relay.sessions_dir() / sid_prev_transient
+    t_prev = write_turn(sdir_prev, [], agent="argon", prompt="task", status="continue")
+    (t_prev / "native-result.json").write_text(json.dumps({
+        "schema": "argon-coordinator.v1",
+        "agent": "argon",
+        "launched": False,
+        "reason": "network_error",
+    }))
+    nonce_old_retry = "rc-20261018T080300Z-33333333"
+    sid_retry = "20261018-080300-ret001"
+    sdir_retry = env.relay.sessions_dir() / sid_retry
+    write_turn(sdir_retry, [], agent="argon", prompt=relay_prompt(f"[relay-continuity attempt {nonce_old_retry}]"), status="continue")
+    sup.state.update({
+        "head_session": sid_prev_transient,
+        "agent": "argon",
+        "counters": {"consecutive_failures": 0, "crash_retries": 0, "transient_streak": 0},
+        "pending": {
+            "nonce": nonce_old_retry,
+            "agent": "argon",
+            "parent": None,
+            "started_at": rc.iso(T0),
+            "pid": None,
+            "pid_start": None,
+            "fingerprint": env.fp["v"],
+            "attempt": 1,
+        },
+    })
+    sup.save()
+    res2 = sup._resolve_pending()
+    assert not isinstance(res2, str)
+    assert sup.state["counters"]["transient_argon"] == 1
 
 
 MAX_REPEATS = rc.MAX_UNSATISFIED_WAKES + 1
