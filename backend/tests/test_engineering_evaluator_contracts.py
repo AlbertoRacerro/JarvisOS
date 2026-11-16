@@ -315,6 +315,13 @@ def test_verdict_branches() -> None:
     assert evc.result_verdict(desc_adv, res_all_pass) == "usable"
     assert evc.result_verdict(desc, _result("succeeded", checks=[_check(id="REQ1", status="pass")])) == "usable"
 
+    # nonnumeric check with status pass yields usable
+    res_nonnumeric_pass = _result(
+        "succeeded",
+        checks=[_check(id="REQ1", status="pass", actual=None, limit=None, unit=None)],
+    )
+    assert evc.result_verdict(desc, res_nonnumeric_pass) == "usable"
+
     # mismatched evaluator raises EvaluatorContractError
     desc_mismatch = _descriptor(evaluator_id="different_evaluator")
     with pytest.raises(evc.EvaluatorContractError, match="evaluator mismatch"):
@@ -338,7 +345,17 @@ def test_result_check_and_descriptor_validation_rejects_invalid_inputs() -> None
 
     # unit without actual
     with pytest.raises(ValidationError, match="unit requires actual"):
-        _check(actual=None, unit="m/s")
+        _check(actual=None, limit=None, unit="m/s")
+
+    # numeric checks require actual and limit together
+    with pytest.raises(ValidationError, match="numeric checks require actual and limit together"):
+        _check(actual=10.0, limit=None)
+    with pytest.raises(ValidationError, match="numeric checks require actual and limit together"):
+        _check(actual=None, limit=10.0)
+
+    # nonnumeric check allows both actual and limit null
+    nonnumeric = _check(actual=None, limit=None, unit=None)
+    assert nonnumeric.actual is None and nonnumeric.limit is None
 
     # not_evaluated check with actual or limit
     with pytest.raises(ValidationError, match="not_evaluated check must not carry an actual"):
@@ -370,7 +387,34 @@ def test_result_check_and_descriptor_validation_rejects_invalid_inputs() -> None
     with pytest.raises(ValidationError):
         _check(hint="x" * 241)
 
-    # source length constraint
+    # source accepted forms
+    assert _check(source="physical_limit").source == "physical_limit"
+    assert _check(source="policy:safety_margin").source == "policy:safety_margin"
+    assert _check(source="policy:ASME_VIII").source == "policy:ASME_VIII"
+    assert _check(source="constant:gravity").source == "constant:gravity"
+    assert _check(source="constant:standard_temp").source == "constant:standard_temp"
+    assert _check(source="value_store:cfd.pipe.v1").source == "value_store:cfd.pipe.v1"
+    assert _check(source="value_store:store_1:item-2").source == "value_store:store_1:item-2"
+
+    # source rejected forms
+    with pytest.raises(ValidationError):
+        _check(source="arbitrary text")
+    with pytest.raises(ValidationError):
+        _check(source="policy:")
+    with pytest.raises(ValidationError):
+        _check(source="constant:")
+    with pytest.raises(ValidationError):
+        _check(source="value_store:")
+    with pytest.raises(ValidationError):
+        _check(source="value_store:-bad")
+    with pytest.raises(ValidationError):
+        _check(source="value_store:_bad")
+    with pytest.raises(ValidationError):
+        _check(source="other:foo")
+    with pytest.raises(ValidationError):
+        _check(source="")
+    with pytest.raises(ValidationError):
+        _check(source="physical_limit:")
     with pytest.raises(ValidationError):
         _check(source="s" * 129)
 

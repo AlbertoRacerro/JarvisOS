@@ -78,6 +78,10 @@ BackendCode = Annotated[str, StringConstraints(pattern=r"^[A-Za-z][A-Za-z0-9_.:-
 CheckId = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]{0,63}$")]
 CheckFamily = Literal["input", "numerical", "conservation", "discretisation", "plausibility", "reference"]
 CheckStatus = Literal["pass", "warn", "fail", "not_evaluated"]
+CHECK_SOURCE_PATTERN: Final = (
+    r"^(physical_limit|(policy|constant):[A-Za-z0-9_.:-]+|value_store:[A-Za-z0-9][A-Za-z0-9_.:-]*)$"
+)
+CheckSource = Annotated[str, StringConstraints(min_length=1, max_length=128, pattern=CHECK_SOURCE_PATTERN)]
 Verdict = Literal["usable", "usable_with_warnings", "unchecked", "not_usable"]
 OptionValue = str | int | float | bool
 
@@ -274,7 +278,7 @@ class ResultCheck(FrozenContract):
     limit: float | None = Field(default=None, allow_inf_nan=False)
     unit: str | None = Field(default=None, min_length=1, max_length=64)
     hint: str = Field(min_length=1, max_length=240)
-    source: str = Field(min_length=1, max_length=128)
+    source: CheckSource
 
     @field_validator("actual", "limit", mode="before")
     @classmethod
@@ -297,6 +301,8 @@ class ResultCheck(FrozenContract):
                 raise ValueError("a not_evaluated check must not carry an actual")
             if self.limit is not None:
                 raise ValueError("a not_evaluated check must not carry a limit")
+        if (self.actual is None) != (self.limit is None):
+            raise ValueError("numeric checks require actual and limit together")
         if self.unit is not None and self.actual is None:
             raise ValueError("unit requires actual")
         return self

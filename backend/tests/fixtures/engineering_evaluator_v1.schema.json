@@ -1540,6 +1540,7 @@
             "source": {
               "maxLength": 128,
               "minLength": 1,
+              "pattern": "^(physical_limit|(policy|constant):[A-Za-z0-9_.:-]+|value_store:[A-Za-z0-9][A-Za-z0-9_.:-]*)$",
               "title": "Source",
               "type": "string"
             },

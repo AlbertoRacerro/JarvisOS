@@ -23,6 +23,9 @@ ignore = [
     "E501",  # line length is handled by the formatter, not enforced as an error
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
 [tool.mypy]
 python_version = "3.11"
 # Start lenient: surface obvious type bugs in the runtime backend without
