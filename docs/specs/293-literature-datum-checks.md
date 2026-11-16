@@ -1,6 +1,6 @@
 # 293 — LITERATURE-DATUM-CHECKS-1: A literature number is checked against its located source text
 
-Status: ready
+Status: merged through PR #146
 Depends on: 248
 
 ## Goal
