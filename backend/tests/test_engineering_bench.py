@@ -14,19 +14,34 @@ from typing import Any
 import pytest
 import yaml
 
+import app.modules.engineering.bench as bench_module
+from app.core.config import get_settings
+from app.modules.ai.agent_contracts import StructuredToolCall
 from app.modules.bluecad.models import BuildResult
 from app.modules.bluecad.result_adapters import (
     CHECK_BREP_VALID,
     CHECK_ELEMENT_QUALITY,
     CHECK_FORCE_EQUILIBRIUM,
     CHECK_SOLVER_COMPLETION,
+    CHECK_TOPOLOGY,
     CHECK_VOLUME_CONSERVATION,
     CHECK_VOLUME_ELEMENTS,
+    CHECK_VOLUME_MIN,
     CHECK_WATERTIGHT,
+    SOLID_CODE_EVALUATOR_ID,
 )
-from app.modules.engineering.bench import MAX_VIEW_CHARS, main
+from app.modules.engineering.bench import MAX_VIEW_CHARS, dispatch_bench_tool, main
 from app.modules.engineering.evaluator_contracts import (
     ResultCheck,
+)
+from app.modules.studio_runtime.runtime import (
+    MAX_SOURCE_BYTES,
+    AppliedLimits,
+    Artifact,
+    RunRecord,
+)
+from app.modules.studio_runtime.runtime import (
+    status as runtime_status,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "bluecad" / "fixtures"
@@ -171,7 +186,7 @@ def test_list_absent_tool_registry(tmp_path: Path, capsys: pytest.CaptureFixture
     captured = capsys.readouterr()
     data = json.loads(captured.out)
     assert isinstance(data, list)
-    assert len(data) == 9
+    assert len(data) == 10
 
     by_id = {row["evaluator_id"]: row for row in data}
     # Verify the six registry evaluators are present
@@ -182,12 +197,14 @@ def test_list_absent_tool_registry(tmp_path: Path, capsys: pytest.CaptureFixture
     assert "openfoam_channel_v1" in by_id
     assert "photobioreactor.day_night" in by_id
 
-    # Verify three BLUECAD evaluators are present and marked unavailable with reason codes
+    # Verify four BLUECAD evaluators are present and marked unavailable with reason codes
     solid_row = by_id["bluecad.solid"]
+    solid_code_row = by_id["bluecad.solid_code"]
     mesh_row = by_id["bluecad.mesh"]
     fem_row = by_id["bluecad.fem"]
 
     assert solid_row["state"] in {"disabled", "not_installed"}
+    assert solid_code_row["state"] in {"disabled", "not_installed", "unhealthy"}
     assert solid_row["reason_code"] in {"TOOL_DISABLED", "BUILD123D_NOT_INSTALLED"}
     assert solid_row["request_kind"] == "geometry_spec"
     assert CHECK_BREP_VALID in solid_row["required_checks"]
@@ -789,3 +806,302 @@ def test_bench_run_solid_declared_bbox_failure_reports_not_usable(
     assert (out_dir / "result.json").is_file()
     assert (out_dir / "manifest.json").is_file()
     assert (out_dir / "validation_report.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Solid Code (spec 285) bench tests
+# ---------------------------------------------------------------------------
+
+
+def test_solid_code_bench_list_and_run_disabled(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 1. With sandbox disabled
+    monkeypatch.setenv("JARVISOS_STUDIO_USER_CODE_ENABLED", "0")
+    get_settings.cache_clear()
+
+    # bench list shows it unavailable with reason
+    code = main(["list", "--root", str(tmp_path)])
+    assert code == 0
+    rows = json.loads(capsys.readouterr().out)
+    solid_code_rows = [r for r in rows if r["evaluator_id"] == SOLID_CODE_EVALUATOR_ID]
+    assert len(solid_code_rows) == 1
+    sc_row = solid_code_rows[0]
+    assert sc_row["availability_state"] == "disabled"
+    assert sc_row["reason_code"] == "disabled"
+    assert sc_row["request_kind"] == "geometry_code"
+    assert sc_row["required_checks"] == [CHECK_TOPOLOGY]
+
+    # bench run bluecad.solid_code exits 2 with status="refused" and hint naming setting
+    src_file = tmp_path / "model.py"
+    src_file.write_text("def main(inputs): return None\n", encoding="utf-8")
+    req_file = tmp_path / "req.json"
+    req_file.write_text(json.dumps({"source_path": "model.py", "inputs": {}}), encoding="utf-8")
+    out_dir = tmp_path / "out_disabled"
+
+    run_code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_file), "--out", str(out_dir), "--root", str(tmp_path)])
+    assert run_code == 2
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["status"] == "refused"
+    assert doc["failure"] is not None
+    assert "JARVISOS_STUDIO_USER_CODE_ENABLED=1" in doc["failure"]["message"]
+    assert (out_dir / "result.json").is_file()
+
+
+def test_solid_code_bench_input_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    src_file = tmp_path / "box.py"
+    src_file.write_text("def main(inputs): pass\n", encoding="utf-8")
+
+    out_base = tmp_path / "out"
+
+    # 1. Unknown request key
+    req_unknown = tmp_path / "req_unknown.json"
+    req_unknown.write_text(
+        json.dumps({"source_path": "box.py", "inputs": {}, "unexpected_flag": 123}),
+        encoding="utf-8",
+    )
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_unknown), "--out", str(out_base / "1"), "--root", str(tmp_path)])
+    assert code == 2
+    err_doc = json.loads(capsys.readouterr().out)
+    assert err_doc["code"] == "INVALID_REQUEST"
+    assert "unexpected_flag" in err_doc["hint"]
+
+    # 2. Missing source_path file
+    req_missing = tmp_path / "req_missing.json"
+    req_missing.write_text(
+        json.dumps({"source_path": "nonexistent.py", "inputs": {}}),
+        encoding="utf-8",
+    )
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_missing), "--out", str(out_base / "2"), "--root", str(tmp_path)])
+    assert code == 2
+    err_doc = json.loads(capsys.readouterr().out)
+    assert err_doc["code"] == "INPUT_NOT_FOUND"
+
+    # 3. Source path outside root
+    outside_dir = tmp_path.parent / "outside_root_dir"
+    outside_dir.mkdir(exist_ok=True)
+    outside_src = outside_dir / "outside.py"
+    outside_src.write_text("def main(inputs): pass\n", encoding="utf-8")
+
+    req_outside = tmp_path / "req_outside.json"
+    req_outside.write_text(
+        json.dumps({"source_path": str(outside_src), "inputs": {}}),
+        encoding="utf-8",
+    )
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_outside), "--out", str(out_base / "3"), "--root", str(tmp_path)])
+    assert code == 2
+    err_doc = json.loads(capsys.readouterr().out)
+    assert err_doc["code"] == "PATH_OUTSIDE_ROOT"
+
+    # 4. Non-finite inputs
+    req_bad_input = tmp_path / "req_bad_input.json"
+    req_bad_input.write_text(
+        '{"source_path": "box.py", "inputs": {"width": NaN}}',
+        encoding="utf-8",
+    )
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_bad_input), "--out", str(out_base / "4"), "--root", str(tmp_path)])
+    assert code == 2
+    err_doc = json.loads(capsys.readouterr().out)
+    assert err_doc["code"] in {"INVALID_REQUEST", "INVALID_JSON"}
+
+    # 5. Oversized source
+    oversized_src = tmp_path / "huge.py"
+    oversized_src.write_bytes(b"# comment\n" * (MAX_SOURCE_BYTES // 8 + 10))
+    req_oversized = tmp_path / "req_oversized.json"
+    req_oversized.write_text(
+        json.dumps({"source_path": "huge.py", "inputs": {}}),
+        encoding="utf-8",
+    )
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_oversized), "--out", str(out_base / "5"), "--root", str(tmp_path)])
+    assert code == 2
+    err_doc = json.loads(capsys.readouterr().out)
+    assert err_doc["code"] == "SOURCE_OVERSIZED"
+
+
+def test_solid_code_agent_dispatch_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(UTC)
+    call = StructuredToolCall(
+        call_id="call-solid-code-refuse",
+        capability_id="jarvis.bench_run",
+        grant_id="grant-1",
+        correlation_id="corr-1",
+        arguments={"evaluator_id": SOLID_CODE_EVALUATOR_ID, "request": {"inputs": {}}},
+        requested_at=now,
+        deadline_at=now + timedelta(seconds=60),
+    )
+    monkeypatch.setattr(
+        "app.modules.engineering.operator_service.workspace_dir",
+        lambda ws: tmp_path / "workspaces" / ws / "studies",
+    )
+    result, err = dispatch_bench_tool(call, "default", "initial_error")
+    assert result is None
+    assert err == "evaluator_not_agent_runnable"
+
+
+def test_solid_code_bench_run_fake_runtime(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src_file = tmp_path / "model.py"
+    src_file.write_text("def main(inputs): pass\n", encoding="utf-8")
+    req_file = tmp_path / "req.json"
+    req_file.write_text(
+        json.dumps({"source_path": "model.py", "inputs": {"l": 10.0}, "volume_min": 900.0, "volume_max": 1100.0}),
+        encoding="utf-8",
+    )
+
+    limits = AppliedLimits(wall_seconds=120, cpu_seconds=480, memory_bytes=4294967296, processes=32, file_bytes=67108864)
+
+    def fake_run(run_req: Any, profile: str = "geometry", artifact_dir: Path | None = None) -> RunRecord:
+        if artifact_dir is not None:
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            (artifact_dir / "model.step").write_text("ISO-10303-21;", encoding="utf-8")
+            (artifact_dir / "model.stl").write_text("solid test", encoding="utf-8")
+            (artifact_dir / "model.glb").write_bytes(b"glTF" + b"\x00" * 20)
+        return RunRecord(
+            source_sha256="abc",
+            limits=limits,
+            mechanism="bubblewrap-userns-v1",
+            duration_seconds=1.0,
+            classification="ok",
+            profile="geometry",
+            result={
+                "valid": True,
+                "solids": 1,
+                "volume": 1000.0,
+                "bbox_min": [0.0, 0.0, 0.0],
+                "bbox_max": [10.0, 10.0, 10.0],
+            },
+            artifacts=[
+                Artifact(name="model.step", sha256="1" * 64, size_bytes=100),
+                Artifact(name="model.stl", sha256="2" * 64, size_bytes=100),
+                Artifact(name="model.glb", sha256="3" * 64, size_bytes=100),
+            ],
+        )
+
+    monkeypatch.setattr(bench_module, "studio_runtime_run", fake_run)
+
+    # 1. Matching bounds -> exit 0, usable
+    out_1 = tmp_path / "out_1"
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_file), "--out", str(out_1), "--root", str(tmp_path)])
+    assert code == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["status"] == "succeeded"
+    assert doc["verdict"] == "usable"
+    assert (out_1 / "artifacts" / "model.step").is_file()
+    assert (out_1 / "artifacts" / "model.stl").is_file()
+    assert (out_1 / "artifacts" / "model.glb").is_file()
+
+    # 2. Invalid shape -> exit 1, not_usable
+    def fake_run_invalid(run_req: Any, profile: str = "geometry", artifact_dir: Path | None = None) -> RunRecord:
+        if artifact_dir is not None:
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+        return RunRecord(
+            source_sha256="abc",
+            limits=limits,
+            mechanism="bubblewrap-userns-v1",
+            duration_seconds=1.0,
+            classification="ok",
+            profile="geometry",
+            result={
+                "valid": False,
+                "solids": 0,
+                "volume": 1000.0,
+                "bbox_min": [0.0, 0.0, 0.0],
+                "bbox_max": [10.0, 10.0, 10.0],
+            },
+            artifacts=[
+                Artifact(name="model.step", sha256="1" * 64, size_bytes=100),
+                Artifact(name="model.stl", sha256="2" * 64, size_bytes=100),
+                Artifact(name="model.glb", sha256="3" * 64, size_bytes=100),
+            ],
+        )
+
+    monkeypatch.setattr(bench_module, "studio_runtime_run", fake_run_invalid)
+    out_2 = tmp_path / "out_2"
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_file), "--out", str(out_2), "--root", str(tmp_path)])
+    assert code == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["status"] == "succeeded"
+    assert doc["verdict"] == "not_usable"
+    assert any(c["id"] == CHECK_TOPOLOGY for c in doc.get("failed_checks", []))
+
+    # 3. Wrong declared volume -> exit 1, not_usable
+    req_wrong_vol = tmp_path / "req_wrong_vol.json"
+    req_wrong_vol.write_text(
+        json.dumps({"source_path": "model.py", "inputs": {"l": 10.0}, "volume_min": 5000.0}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bench_module, "studio_runtime_run", fake_run)
+    out_3 = tmp_path / "out_3"
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_wrong_vol), "--out", str(out_3), "--root", str(tmp_path)])
+    assert code == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["status"] == "succeeded"
+    assert doc["verdict"] == "not_usable"
+    assert any(c["id"] == CHECK_VOLUME_MIN for c in doc.get("failed_checks", []))
+
+
+def test_solid_code_real_sandbox_proof(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acceptance criterion 5: real run of build123d source in bubblewrap sandbox."""
+    monkeypatch.setenv("JARVISOS_STUDIO_USER_CODE_ENABLED", "1")
+    get_settings.cache_clear()
+
+    st = runtime_status()
+    if not st.get("available"):
+        pytest.skip(f"bubblewrap sandbox unavailable: {st.get('reason')}")
+
+    source_code = (
+        "import build123d as bd\n\n"
+        "def main(inputs):\n"
+        "    length = inputs.get('length', 10.0)\n"
+        "    width = inputs.get('width', 10.0)\n"
+        "    height = inputs.get('height', 10.0)\n"
+        "    return bd.Box(length, width, height)\n"
+    )
+    src_file = tmp_path / "box_model.py"
+    src_file.write_text(source_code, encoding="utf-8")
+
+    # 1. Matching volume (10 * 10 * 10 = 1000 mm3)
+    req_pass = tmp_path / "req_pass.json"
+    req_pass.write_text(
+        json.dumps({
+            "source_path": "box_model.py",
+            "inputs": {"length": 10.0, "width": 10.0, "height": 10.0},
+            "volume_min": 990.0,
+            "volume_max": 1010.0,
+        }),
+        encoding="utf-8",
+    )
+    out_pass = tmp_path / "out_pass"
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_pass), "--out", str(out_pass), "--root", str(tmp_path)])
+    assert code == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["status"] == "succeeded"
+    assert doc["verdict"] == "usable"
+    assert (out_pass / "artifacts" / "model.step").is_file()
+    assert (out_pass / "artifacts" / "model.stl").is_file()
+    assert (out_pass / "artifacts" / "model.glb").is_file()
+
+    # 2. Deliberately wrong declared volume -> exit 1, not_usable
+    req_fail = tmp_path / "req_fail.json"
+    req_fail.write_text(
+        json.dumps({
+            "source_path": "box_model.py",
+            "inputs": {"length": 10.0, "width": 10.0, "height": 10.0},
+            "volume_min": 5000.0,
+        }),
+        encoding="utf-8",
+    )
+    out_fail = tmp_path / "out_fail"
+    code = main(["run", SOLID_CODE_EVALUATOR_ID, str(req_fail), "--out", str(out_fail), "--root", str(tmp_path)])
+    assert code == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["status"] == "succeeded"
+    assert doc["verdict"] == "not_usable"
+
