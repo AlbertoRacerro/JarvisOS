@@ -139,12 +139,12 @@ def _check_bluecad_availability(
         if not st.get("enabled", False):
             return "disabled", st.get("reason") or "disabled", "unavailable"
         if not st.get("available", False):
-            state: AvailabilityState = (
+            runtime_state: AvailabilityState = (
                 "not_installed"
                 if st.get("reason") == "bubblewrap_or_python_unavailable"
                 else "unhealthy"
             )
-            return state, st.get("reason") or "unavailable", "unavailable"
+            return runtime_state, st.get("reason") or "unavailable", "unavailable"
         version = "0.11.1"
         try:
             import build123d
