@@ -1,0 +1,3 @@
+{"event":"init","conversation_id":"34271fd0-f4da-4e90-b701-c040d8358e6f","init":{"model":"gemini-4-argon-low"}}
+{"event":"step_update","step_update":{"conversation_id":"34271fd0-f4da-4e90-b701-c040d8358e6f","step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"git push origin HEAD"},"output":""}}}
+{"event":"step_update","step_update":{"conversation_id":"34271fd0-f4da-4e90-b701-c040d8358e6f","step_index":3,"state":"ERROR","step_type":"error","error":{"type":"INTERRUPTED","message":"error: interrupted"}}}
