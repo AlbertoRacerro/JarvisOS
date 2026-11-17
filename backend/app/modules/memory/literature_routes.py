@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
@@ -27,6 +27,15 @@ from app.modules.memory.literature_service import (
 router = APIRouter(prefix="/workspaces/{workspace_id}/literature", tags=["literature"])
 
 
+def _ingest_in_background(workspace_id: str, source_id: str) -> None:
+    from app.modules.memory.literature_ingest import ingest_source
+
+    try:
+        ingest_source(workspace_id, source_id)
+    except LiteratureError:
+        pass
+
+
 def _literature_error(exc: LiteratureError) -> HTTPException:
     return HTTPException(
         status_code=exc.status_code,
@@ -50,11 +59,15 @@ def list_literature_sources_endpoint(
 def create_literature_source_endpoint(
     workspace_id: str,
     payload: LiteratureSourceCreate,
+    background_tasks: BackgroundTasks,
 ) -> LiteratureSourceRead:
     try:
-        return create_literature_source(workspace_id, payload)
+        source = create_literature_source(workspace_id, payload)
     except LiteratureError as exc:
         raise _literature_error(exc) from exc
+    if source.backing is not None:
+        background_tasks.add_task(_ingest_in_background, workspace_id, source.id)
+    return source
 
 
 @router.get("/sources/{source_id}", response_model=LiteratureSourceRead)
@@ -114,11 +127,38 @@ def attach_literature_backing_endpoint(
     workspace_id: str,
     source_id: str,
     payload: LiteratureBackingAttach,
+    background_tasks: BackgroundTasks,
 ) -> LiteratureSourceRead:
     try:
-        return attach_literature_backing(workspace_id, source_id, payload.artifact_id)
+        source = attach_literature_backing(workspace_id, source_id, payload.artifact_id)
     except LiteratureError as exc:
         raise _literature_error(exc) from exc
+    background_tasks.add_task(_ingest_in_background, workspace_id, source_id)
+    return source
+
+
+@router.post("/sources/{source_id}/ingestion/retry", status_code=202)
+def retry_literature_ingestion_endpoint(workspace_id: str, source_id: str) -> dict[str, object]:
+    """Visible retry only for a batch that ended model_unavailable or failed; other states return the batch."""
+    from app.modules.memory.literature_ingest import ingest_source
+
+    try:
+        return {"batch_id": ingest_source(workspace_id, source_id, retry=True)}
+    except LiteratureError as exc:
+        raise _literature_error(exc) from exc
+
+
+@router.post("/sources/{source_id}/ingestion/{batch_id}/acknowledge")
+def acknowledge_literature_ingestion_endpoint(workspace_id: str, source_id: str, batch_id: str) -> dict[str, str]:
+    from app.modules.memory.literature_ingest import acknowledge_batch
+
+    try:
+        acknowledge_batch(workspace_id, source_id, batch_id)
+    except LookupError as exc:
+        raise _literature_error(
+            LiteratureError("literature_batch_not_found", "Ingestion batch not found.", status_code=404)
+        ) from exc
+    return {"notification_state": "read"}
 
 
 @router.get("/sources/{source_id}/structured")

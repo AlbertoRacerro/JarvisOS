@@ -6,13 +6,21 @@ conditions its label requires. Everything else is flagged with a reason; nothing
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.core.database import open_sqlite_connection
+from app.modules.ai.execution import run_ai_task
+from app.modules.events.service import utc_now
 from app.modules.memory.literature_checks import _NUMBER_TOKEN, number_tokens
+from app.modules.memory.pdf_text import PdfTextError, cached_pdf_pages
 from app.modules.process_kernel.errors import ProcessKernelError
 from app.modules.process_kernel.units import parse_unit_token, unit_registry
 
@@ -268,3 +276,290 @@ def _meaning_reason(proposal: Proposal, quote: str, label: QuantityLabel, result
     result.unit = unit
     result.conditions = [{"name": name, "value": value, "unit": unit} for name, value, unit in sorted(conditions)]
     return None
+
+
+# --- Batch ingestion (one stored PDF -> proposals -> checks -> entries) ----------------------------------------------
+
+MAX_INGEST_PAGES = 40
+MAX_MODEL_CALLS = 12
+MAX_PROPOSALS = 200
+WINDOW_CHARS = 12_000
+INGEST_ROUTE_CLASS = "local:general"
+_ADAPTERS: dict | None = None  # tests inject a scripted local adapter; production uses the default adapters
+RETRYABLE_STATES = frozenset({"model_unavailable", "failed"})
+
+_RESPONSE_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {"values": {"type": "array", "items": Proposal.model_json_schema()}},
+    "required": ["values"],
+}
+
+
+class _Reply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    values: list[Proposal] = Field(max_length=MAX_PROPOSALS)
+
+
+def _windows(pages: list[str]) -> list[list[int]]:
+    windows: list[list[int]] = []
+    current: list[int] = []
+    size = 0
+    for number, text in enumerate(pages, start=1):
+        if current and size + len(text) > WINDOW_CHARS:
+            windows.append(current)
+            current, size = [], 0
+        current.append(number)
+        size += len(text)
+    if current:
+        windows.append(current)
+    return windows
+
+
+def _prompt(pages: list[str], window: list[int]) -> str:
+    body = "\n".join(f"=== page {number} ===\n{pages[number - 1][:WINDOW_CHARS]}" for number in window)
+    return (
+        "List the numeric physical values stated in these pages of a published paper. Reply with one JSON object "
+        '{"values": [...]} and nothing else. Each value has quantity (as the paper words it), value_text (the number '
+        "exactly as written), unit (as written), conditions (list of {name, value_text, unit}), page (the page number "
+        "shown) and quote (the verbatim sentence or table row containing it). Copy text exactly; do not compute, "
+        "convert or infer values.\n" + body
+    )
+
+
+def _parse_reply(text: str) -> list[Proposal]:
+    body = text.strip()
+    if body.startswith("```"):
+        body = body.strip("`").removeprefix("json").strip()
+    return _Reply.model_validate(json.loads(body)).values
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _canonical_conditions(conditions: list[dict[str, object]]) -> str:
+    return json.dumps(conditions, sort_keys=True, separators=(",", ":"))
+
+
+def _range_and_dimension(connection, workspace_id: str, value: ValidatedValue) -> list[CheckOutcome]:
+    """Workspace dimension agreement and the sourced plausible range from accepted parameters of the same name."""
+    rows = connection.execute(
+        """
+        SELECT unit, value_min, value_max FROM parameters
+        WHERE workspace_id = ? AND lower(name) = lower(?) AND status = 'accepted' AND lifecycle_state = 'active'
+        """,
+        (workspace_id, value.quantity),
+    ).fetchall()
+    registry = unit_registry()
+    range_check = CheckOutcome("plausible_range", None, None)
+    for row in rows:
+        unit = str(row["unit"] or "")
+        if not _same_dimension(value.unit, unit):
+            return [CheckOutcome("unit_dimension", False, "workspace_unit_dimension_mismatch")]
+        if row["value_min"] is None and row["value_max"] is None or value.value_number is None:
+            continue
+        converted = registry.Quantity(value.value_number, parse_unit_token(value.unit)).to(parse_unit_token(unit))
+        number = float(converted.magnitude)
+        outside = (row["value_min"] is not None and number < float(row["value_min"])) or (
+            row["value_max"] is not None and number > float(row["value_max"]))
+        range_check = CheckOutcome("plausible_range", not outside, "outside_plausible_range" if outside else None)
+        if outside:
+            break
+    return [range_check]
+
+
+def _duplicate_or_contradiction(connection, workspace_id: str, value: ValidatedValue) -> tuple[CheckOutcome, str | None]:
+    rows = connection.execute(
+        """
+        SELECT id, value_number, unit FROM literature_entries
+        WHERE workspace_id = ? AND quantity = ? AND conditions_json = ? AND ingestion_status = 'source_checked'
+        ORDER BY created_at, id
+        """,
+        (workspace_id, value.quantity, _canonical_conditions(value.conditions)),
+    ).fetchall()
+    for row in rows:
+        if row["unit"] == value.unit and row["value_number"] == value.value_number:
+            return CheckOutcome("duplicate_contradiction", True, None), str(row["id"])
+    if any(row["unit"] == value.unit for row in rows):
+        return CheckOutcome("duplicate_contradiction", False, "contradiction"), None
+    return CheckOutcome("duplicate_contradiction", True, None), None
+
+
+def _batch_row(connection, source_id: str, sha256: str):
+    return connection.execute(
+        "SELECT * FROM literature_ingestion_batches WHERE source_id = ? AND source_sha256 = ? AND extractor_version = ?",
+        (source_id, sha256, EXTRACTOR_VERSION),
+    ).fetchone()
+
+
+def _finish(connection, batch_id: str, state: str, reason: str | None = None, **counts: object) -> None:
+    assignments = ", ".join(f"{name} = ?" for name in counts)
+    connection.execute(
+        f"UPDATE literature_ingestion_batches SET state = ?, reason = ?, updated_at = ?"
+        f"{', ' + assignments if assignments else ''} WHERE id = ?",
+        (state, reason, utc_now(), *counts.values(), batch_id),
+    )
+    connection.commit()
+
+
+def ingest_source(workspace_id: str, source_id: str, *, retry: bool = False) -> str | None:
+    """Ingest one source's stored PDF once per (source, bytes, extractor version); return the batch id."""
+    from app.modules.memory.literature_service import (
+        _artifact_row_or_none,
+        _content_state,
+        _require_workspace,
+        _source_row,
+    )
+
+    with open_sqlite_connection() as connection:
+        _require_workspace(connection, workspace_id)
+        source = _source_row(connection, workspace_id, source_id)
+        if source["artifact_id"] is None:
+            return None
+        artifact = _artifact_row_or_none(connection, workspace_id, str(source["artifact_id"]))
+        if artifact is None:
+            return None
+        availability, path = _content_state(artifact)
+        sha256 = _file_sha256(path) if path is not None and not path.is_symlink() else str(artifact["sha256"] or "")
+        existing = _batch_row(connection, source_id, sha256)
+        if existing is not None and not (retry and existing["state"] in RETRYABLE_STATES):
+            return str(existing["id"])
+        now = utc_now()
+        if existing is None:
+            batch_id = f"lib_{uuid4().hex}"
+            connection.execute(
+                """
+                INSERT INTO literature_ingestion_batches
+                    (id, workspace_id, source_id, source_sha256, extractor_version, state, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'running', ?, ?)
+                """,
+                (batch_id, workspace_id, source_id, sha256, EXTRACTOR_VERSION, now, now),
+            )
+        else:
+            batch_id = str(existing["id"])
+            connection.execute(
+                "UPDATE literature_ingestion_batches SET state = 'running', reason = NULL, updated_at = ? WHERE id = ?",
+                (now, batch_id),
+            )
+        connection.commit()
+
+        if str(artifact["mime_type"] or "") != "application/pdf":
+            _finish(connection, batch_id, "unavailable", "not_pdf")
+            return batch_id
+        if availability != "available" or path is None or path.is_symlink():
+            _finish(connection, batch_id, "unavailable", f"backing_{availability if availability != 'available' else 'unsafe'}")
+            return batch_id
+        try:
+            pages = cached_pdf_pages(path)
+        except PdfTextError:
+            _finish(connection, batch_id, "unavailable", "unreadable_pdf")
+            return batch_id
+        if not pages:
+            _finish(connection, batch_id, "unavailable", "no_text_layer")
+            return batch_id
+        truncated = len(pages) > MAX_INGEST_PAGES
+        windows = _windows(pages[:MAX_INGEST_PAGES])
+        if len(windows) > MAX_MODEL_CALLS:
+            windows, truncated = windows[:MAX_MODEL_CALLS], True
+
+        proposals: list[tuple[Proposal, str]] = []
+        job_ids: list[str] = []
+        for window in windows:
+            try:
+                outcome = run_ai_task(user_prompt=_prompt(pages, window), task_kind="general",
+                                      route_class=INGEST_ROUTE_CLASS, max_output_tokens=4096,
+                                      structured_output_schema=_RESPONSE_SCHEMA, workspace_id=workspace_id,
+                                      adapters=_ADAPTERS)
+            except Exception:  # noqa: BLE001 - any AI-route failure means no local model answered.
+                _finish(connection, batch_id, "model_unavailable", "ai_route_failed",
+                        ai_job_ids_json=json.dumps(job_ids))
+                return batch_id
+            job_ids.append(outcome.ledger_id)
+            if outcome.status != "success" or outcome.response is None or not outcome.response.text:
+                reason = outcome.decision.blocked_reason or outcome.error_type or outcome.status
+                _finish(connection, batch_id, "model_unavailable", str(reason)[:200],
+                        ai_job_ids_json=json.dumps(job_ids))
+                return batch_id
+            try:
+                found = _parse_reply(outcome.response.text)
+            except (ValueError, ValidationError):
+                _finish(connection, batch_id, "failed", "malformed_model_output", ai_job_ids_json=json.dumps(job_ids))
+                return batch_id
+            proposals.extend((item, outcome.ledger_id) for item in found)
+        if len(proposals) > MAX_PROPOSALS:
+            proposals, truncated = proposals[:MAX_PROPOSALS], True
+
+        checked = flagged = 0
+        duplicates: list[str] = []
+        for proposal, job_id in proposals:
+            value = validate_proposal(proposal, pages)
+            if value.status == "source_checked":
+                value.checks.extend(_range_and_dimension(connection, workspace_id, value))
+                duplicate_check, duplicate_of = _duplicate_or_contradiction(connection, workspace_id, value)
+                if duplicate_of is not None:
+                    duplicates.append(duplicate_of)
+                    continue
+                value.checks.append(duplicate_check)
+                if value.reasons:
+                    value.status = "flagged"
+            checked += value.status == "source_checked"
+            flagged += value.status == "flagged"
+            connection.execute(
+                """
+                INSERT INTO literature_entries
+                    (id, workspace_id, source_id, entry_kind, value_text, value_number, unit, status, locator_kind,
+                     locator_start, locator_end, context_text, quantity, conditions_json, ingestion_status,
+                     ingestion_reasons_json, batch_id, source_sha256, extractor_id, extractor_version, ai_job_id,
+                     created_at, updated_at)
+                VALUES (?, ?, ?, 'datum', ?, ?, ?, 'raw', 'page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"lit_entry_{uuid4().hex}", workspace_id, source_id, proposal.value_text.strip(),
+                 value.value_number, value.unit, value.page, value.page, value.quote, value.quantity,
+                 _canonical_conditions(value.conditions), value.status,
+                 json.dumps([{"check": item.check, "passed": item.passed, "reason": item.reason}
+                             for item in value.checks]),
+                 batch_id, sha256, EXTRACTOR_ID, EXTRACTOR_VERSION, job_id, utc_now(), utc_now()),
+            )
+        _finish(connection, batch_id, "done", "truncated" if truncated else None,
+                proposals_count=len(proposals), source_checked_count=checked, flagged_count=flagged,
+                duplicate_entry_ids_json=json.dumps(sorted(set(duplicates))), truncated=int(truncated),
+                notification_state="pending" if flagged else "none", ai_job_ids_json=json.dumps(job_ids))
+        return batch_id
+
+
+def acknowledge_batch(workspace_id: str, source_id: str, batch_id: str) -> None:
+    with open_sqlite_connection() as connection:
+        updated = connection.execute(
+            """
+            UPDATE literature_ingestion_batches SET notification_state = 'read', updated_at = ?
+            WHERE id = ? AND source_id = ? AND workspace_id = ? AND notification_state = 'pending'
+            """,
+            (utc_now(), batch_id, source_id, workspace_id),
+        )
+        connection.commit()
+        if updated.rowcount != 1:
+            exists = connection.execute(
+                "SELECT 1 FROM literature_ingestion_batches WHERE id = ? AND source_id = ? AND workspace_id = ?",
+                (batch_id, source_id, workspace_id),
+            ).fetchone()
+            if exists is None:
+                raise LookupError(batch_id)
+
+
+def ingestion_eligibility(row, current_sha256: str | None, verdict: str | None) -> tuple[bool, bool, list[str]]:
+    """The single read-time rule: (eligible_for_later_admission, stale_source, reasons). Grants no calculation use."""
+    if row["ingestion_status"] is None:
+        return False, False, ["not_ingested"]
+    stale = current_sha256 is None or row["source_sha256"] != current_sha256
+    reasons: list[str] = []
+    if row["ingestion_status"] != "source_checked":
+        reasons.append("flagged")
+    if stale:
+        reasons.append("stale_source")
+    if verdict == "not_usable":
+        reasons.append("datum_check_not_usable")
+    return not reasons, stale, reasons

@@ -30,8 +30,8 @@ SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_ID = "0029_geometry_feature_history"
 SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_NAME = "Design component parametric geometry feature history"
 SCHEMA_HERMES_ROLE_MODELS_MIGRATION_ID = "0032_hermes_role_models"
 SCHEMA_HERMES_ROLE_MODELS_MIGRATION_NAME = "Hermes per-role local inference routes"
-CURRENT_SCHEMA_MIGRATION_ID = "0032_hermes_role_models"
-CURRENT_SCHEMA_MIGRATION_NAME = "Hermes per-role local inference routes"
+CURRENT_SCHEMA_MIGRATION_ID = "0033_literature_ingestion"
+CURRENT_SCHEMA_MIGRATION_NAME = "Literature value ingestion batches and source-checked entry columns"
 
 SCHEMA_MIGRATION_RECORDS = [
     {
