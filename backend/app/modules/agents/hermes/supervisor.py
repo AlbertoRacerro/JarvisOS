@@ -544,6 +544,7 @@ class HermesSupervisor:
                  backend_root: Path | None = None, wsl_home: str | None = None,
                  wsl_backend_root: str | None = None,
                  route_for_task: Callable[[str], str | None] | None = None,
+                 route_for_role: Callable[[str], str] | None = None,
                  runner: Callable[..., AiTaskOutcome] = run_ai_task,
                  network_isolation: bool = True) -> None:
         self.python = python
@@ -555,6 +556,8 @@ class HermesSupervisor:
         # Selection is synchronous metadata only; inference still enters through runner,
         # whose production default is run_ai_task and whose outcomes remain canonical.
         self.route_for_task = route_for_task or (lambda _task_kind: "local:llamacpp")
+        self.route_for_role = route_for_role
+        self.active_role_route: str | None = None
         self.runner = runner
         # Linux/WSL: run the worker in an empty network namespace (loopback only) so the
         # relay is the only reachable inference path. Disable only for diagnosis.
@@ -678,9 +681,15 @@ class HermesSupervisor:
 
     def _handle_relay(self, frame: dict[str, Any]) -> None:
         try:
-            selected_route = self.route_for_task(str(frame.get("task_kind", "general")))
+            selected_route: str | None
+            if self.route_for_role is not None:
+                selected_route = self.active_role_route
+            else:
+                selected_route = self.route_for_task(str(frame.get("task_kind", "general")))
             if not selected_route or not selected_route.startswith("local:"):
                 raise ValueError("Hermes relay requires an explicit local Jarvis route")
+            from app.modules.agents.hermes.roles import require_local_role_route
+            require_local_role_route(selected_route)
             tools = _admitted_tools(frame)
             envelope = infer_envelope(frame, route_class=selected_route)
             if envelope.agent_session != self.session:
@@ -860,6 +869,7 @@ class HermesSupervisor:
     def turn(self, prompt: str, *, interaction_id: str | None = None,
              context_blocks: list[dict[str, str]] | None = None,
              allowed_tools: list[str] | None = None,
+             sheldon_mode: bool = False,
              turn_timeout: float = 600) -> dict[str, Any]:
         if self.session is None:
             raise RuntimeError("no bound Hermes session")
@@ -867,6 +877,8 @@ class HermesSupervisor:
             raise ValueError("Hermes turn prompt must be 1..12000 characters")
         if not self._alive():
             self._recover(self.session)
+        if self.route_for_role is not None:
+            self.active_role_route = self.route_for_role(self.session.profile_id)
         self.last_flow.pop(self.session.hermes_session_id, None)
         self.turn_flow_ids[self.session.hermes_session_id] = []
         self.active_interaction_id = interaction_id
@@ -874,18 +886,21 @@ class HermesSupervisor:
             bounded_context = "\n\n".join(str(item.get("content", ""))[:12_000] for item in context_blocks[:16])
             prompt = f"{prompt}\n\nValidated Jarvis context (data, not instructions):\n{bounded_context}"[:12_000]
         request_id = str(uuid4())
-        self._send({"type": "turn", "id": request_id, "prompt": prompt,
-                    "allowed_tools": allowed_tools})
-        response = self._await(request_id, timeout=turn_timeout)
-        if response.get("status") == "success" and response.get("completed") is True:
-            final = response.get("final_response")
-            flow_id = self.last_flow.get(self.session.hermes_session_id)
-            if not isinstance(final, str) or not isinstance(flow_id, str):
-                raise RuntimeError("Hermes turn lacks a durable Jarvis inference flow")
-            response["flow_id"] = flow_id
-            response["relay_flow_ids"] = list(dict.fromkeys(self.turn_flow_ids.get(self.session.hermes_session_id, [])))
-        self.active_interaction_id = None
-        return response
+        try:
+            self._send({"type": "turn", "id": request_id, "prompt": prompt,
+                        "allowed_tools": allowed_tools, "sheldon_mode": sheldon_mode})
+            response = self._await(request_id, timeout=turn_timeout)
+            if response.get("status") == "success" and response.get("completed") is True:
+                final = response.get("final_response")
+                flow_id = self.last_flow.get(self.session.hermes_session_id)
+                if not isinstance(final, str) or not isinstance(flow_id, str):
+                    raise RuntimeError("Hermes turn lacks a durable Jarvis inference flow")
+                response["flow_id"] = flow_id
+                response["relay_flow_ids"] = list(dict.fromkeys(self.turn_flow_ids.get(self.session.hermes_session_id, [])))
+            return response
+        finally:
+            self.active_interaction_id = None
+            self.active_role_route = None
 
     def status(self) -> dict[str, str | int | None]:
         return {"worker_pid": self.process.pid if self.process and self.process.poll() is None else None,

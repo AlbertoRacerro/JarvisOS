@@ -123,7 +123,7 @@ export function loadSystemInfo(): Promise<SystemInfoResponse> {
   return requestJson<SystemInfoResponse>("/system/info");
 }
 
-export function saveAISetting(payload: Record<string, number | boolean>): Promise<AISettings> {
+export function saveAISetting(payload: Record<string, number | boolean | Record<string, string>>): Promise<AISettings> {
   return requestJson<AISettings>("/ai/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

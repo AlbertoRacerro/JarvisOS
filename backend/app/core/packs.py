@@ -42,7 +42,7 @@ DEFAULT_WORKSPACE_DESCRIPTION = "Default workspace."
 
 _ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
-_KNOWN_KEYS = {"id", "workspace", "sensitivity", "ui_labels", "studio"}
+_KNOWN_KEYS = {"id", "workspace", "sensitivity", "ui_labels", "studio", "hermes_roles"}
 
 
 class PackError(RuntimeError):
@@ -58,6 +58,7 @@ class Pack:
     sensitivity_terms: tuple[str, ...] = ()
     ui_labels: dict[str, str] = field(default_factory=dict)
     studio_examples_dir: Path | None = None
+    hermes_roles: dict[str, str] = field(default_factory=dict)
 
 
 def _table(data: dict, key: str, manifest: Path) -> dict:
@@ -106,6 +107,15 @@ def read_pack(directory: Path) -> Pack:
         examples_dir = (root / examples).resolve()
         if not examples_dir.is_dir() or root not in examples_dir.parents:
             raise PackError(f"{manifest}: studio.examples_dir {examples!r} must be a directory inside the pack")
+    roles = _table(data, "hermes_roles", manifest)
+    if not all(isinstance(key, str) and isinstance(value, str) for key, value in roles.items()):
+        raise PackError(f"{manifest}: hermes_roles values must be strings")
+    for role_name, route in roles.items():
+        from app.modules.agents.hermes.roles import ROLES
+        if role_name not in ROLES:
+            raise PackError(f"{manifest}: unknown Hermes role {role_name!r}")
+        if not route.startswith("local:"):
+            raise PackError(f"{manifest}: hermes_roles.{role_name} route must start with 'local:'")
     return Pack(
         id=pack_id,
         root=root,
@@ -114,6 +124,7 @@ def read_pack(directory: Path) -> Pack:
         sensitivity_terms=tuple(term.strip() for term in terms),
         ui_labels=dict(labels),
         studio_examples_dir=examples_dir,
+        hermes_roles=dict(roles),
     )
 
 
@@ -175,3 +186,11 @@ def ui_labels() -> dict[str, str]:
 
 def studio_example_dirs() -> tuple[Path, ...]:
     return tuple(pack.studio_examples_dir for pack in load_packs() if pack.studio_examples_dir)
+
+
+def hermes_role_pack_defaults() -> dict[str, str]:
+    """Default local routes for Hermes roles from loaded packs (later pack overrides earlier)."""
+    defaults: dict[str, str] = {}
+    for pack in load_packs():
+        defaults.update(pack.hermes_roles)
+    return defaults

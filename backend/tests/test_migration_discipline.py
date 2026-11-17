@@ -348,6 +348,32 @@ def test_fresh_database_equals_upgraded_database(monkeypatch, tmp_path) -> None:
     assert upgraded["indexes"] == fresh["indexes"]
 
 
+def test_hermes_role_routes_upgrade_preserves_existing_ai_settings(monkeypatch, tmp_path) -> None:
+    _isolate_data_root(monkeypatch, tmp_path)
+    from app.core.database import initialize_database, open_sqlite_connection
+    from app.core.schema import SCHEMA_HERMES_ROLE_MODELS_MIGRATION_ID
+    from app.modules.ai.settings import ensure_ai_settings
+
+    initialize_database()
+    ensure_ai_settings()
+    with open_sqlite_connection() as connection:
+        connection.execute("UPDATE ai_settings SET max_direct_continuations = 3 WHERE id = 'default'")
+        connection.execute("ALTER TABLE ai_settings DROP COLUMN hermes_role_routes_json")
+        connection.commit()
+
+    initialize_database()
+    with open_sqlite_connection() as connection:
+        row = connection.execute(
+            "SELECT max_direct_continuations, hermes_role_routes_json FROM ai_settings WHERE id = 'default'"
+        ).fetchone()
+        recorded = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE migration_id = ?", (SCHEMA_HERMES_ROLE_MODELS_MIGRATION_ID,)
+        ).fetchone()
+    assert SCHEMA_HERMES_ROLE_MODELS_MIGRATION_ID == "0032_hermes_role_models"
+    assert tuple(row) == (3, "{}")
+    assert recorded is not None
+
+
 def test_fk_constrained_parameter_column_upgrades_from_legacy_table(monkeypatch, tmp_path) -> None:
     """Exercise the one column that cannot be DROPped from a fresh SQLite table."""
     _isolate_data_root(monkeypatch, tmp_path)

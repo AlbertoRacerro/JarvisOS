@@ -2,6 +2,17 @@ import { API_BASE_URL } from "./client";
 import type { KnowledgeContextPreview } from "./knowledgeActions";
 import type { ActionOutcome, SurfaceRef } from "./workspaceActions";
 
+export type HermesRoleOption = {
+  role_id: string;
+  display_name: string;
+  purpose: string;
+  route: string;
+  model_id: string;
+  available: boolean;
+  unavailable_reason: string | null;
+  reason_code?: string | null;
+};
+
 export type ConversationRoute = {
   route_class: string;
   label: string;
@@ -16,6 +27,7 @@ export type ConversationRoute = {
     reason_code: string | null;
     message: string;
   };
+  roles?: HermesRoleOption[] | null;
 };
 
 export type ThreadSummary = {
@@ -42,6 +54,8 @@ export type ThreadInteraction = {
   terminal_attempt_id: string | null;
   route_class?: string | null;
   execution_class?: string | null;
+  role_id?: string | null;
+  sheldon_mode?: boolean;
   /** BUBU-2: screenshots sent with the turn, and whether the answering model could not see them. */
   image_count?: number;
   images_unsupported?: boolean;
@@ -172,7 +186,7 @@ export async function listThreads(workspaceId: string): Promise<ThreadSummary[]>
   return result.threads;
 }
 
-export function getConversationOptions(): Promise<{routes: ConversationRoute[]; availability: "configured" | "unavailable"}> {
+export function getConversationOptions(): Promise<{routes: ConversationRoute[]; availability: "configured" | "unavailable"; roles?: HermesRoleOption[]}> {
   return requestJson("/ai/threads/conversation-options");
 }
 
@@ -212,7 +226,14 @@ export async function submitThreadInteraction(
   requestId: string,
   prompt: string,
   context?: { selection: ContextSelection; expectedDigest: string },
-  options?: { routeClass: string; knowledgeContext?: KnowledgeContextPreview | null; surfaceContext?: SurfaceRef; ui_context?: ThreadUiContext; images?: string[] }
+  options?: {
+    routeClass: string;
+    roleId?: string | null;
+    sheldonMode?: boolean;
+    knowledgeContext?: KnowledgeContextPreview | null;
+    surfaceContext?: SurfaceRef;
+    ui_context?: ThreadUiContext; images?: string[];
+  }
 ): Promise<ThreadInteraction> {
   const result = await requestJson<{ interaction: ThreadInteraction }>(
     `/ai/threads/${encodeURIComponent(threadId)}/interactions?workspace_id=${encodeURIComponent(workspaceId)}`,
@@ -222,6 +243,8 @@ export async function submitThreadInteraction(
         request_id: requestId,
         prompt,
         ...(options ? { route_class: options.routeClass } : {}),
+        ...(options?.roleId ? { role_id: options.roleId } : {}),
+        ...(options?.sheldonMode !== undefined ? { sheldon_mode: options.sheldonMode } : {}),
         ...(options?.surfaceContext ? { surface_context: options.surfaceContext } : {}),
         ...(options?.ui_context ? { ui_context: options.ui_context } : {}),
         ...(options?.images?.length ? { images: options.images } : {}),

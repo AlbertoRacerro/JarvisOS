@@ -180,6 +180,9 @@ def submit_interaction(
         "route_class": payload.route_class,
         "max_tokens": payload.max_tokens,
     }
+    if payload.route_class == "hermes:agent":
+        digest_payload["role_id"] = payload.role_id
+        digest_payload["sheldon_mode"] = payload.sheldon_mode
     if payload.context_selection is not None:
         digest_payload["context_selection"] = payload.context_selection.model_dump()
         digest_payload["expected_context_digest"] = payload.expected_context_digest
@@ -282,6 +285,8 @@ def submit_interaction(
     )
 
     if payload.route_class == "hermes:agent":
+        from app.modules.agents.hermes.roles import get_role
+        get_role(payload.role_id)
         return _submit_hermes_interaction(
             workspace_id=workspace_id, thread_id=thread_id, prompt=prompt, payload=payload,
             request_id=request_id, request_digest=request_digest, interaction_id=interaction_id,
@@ -446,6 +451,15 @@ def _submit_hermes_interaction(
         _mark_hermes_failed(interaction_id, reservation_flow_id, "Hermes agent is unavailable")
         return AIThreadSubmitRead(interaction=_read_interaction(
             workspace_id=workspace_id, thread_id=thread_id, interaction_id=interaction_id))
+    from app.modules.agents.hermes.roles import get_role
+    selected_role = get_role(payload.role_id).role_id
+    role_options = route.get("roles") if isinstance(route, dict) else None
+    selected_option = next((item for item in role_options if isinstance(item, dict)
+                            and item.get("role_id") == selected_role), None) if isinstance(role_options, list) else None
+    if selected_option is None or selected_option.get("available") is not True:
+        _mark_hermes_failed(interaction_id, reservation_flow_id, "Selected Hermes role model is unavailable")
+        return AIThreadSubmitRead(interaction=_read_interaction(
+            workspace_id=workspace_id, thread_id=thread_id, interaction_id=interaction_id))
     pool = getattr(app_state, "hermes_supervisor", None)
     if pool is None or not hasattr(pool, "for_thread"):
         _mark_hermes_failed(interaction_id, reservation_flow_id, "Hermes session owner is unavailable")
@@ -455,7 +469,7 @@ def _submit_hermes_interaction(
         worker = pool.for_thread(thread_id)
         lock = pool.lock_for(thread_id)
         with lock:
-            _ensure_hermes_thread_session(worker, thread_id=thread_id, workspace_id=workspace_id)
+            _ensure_hermes_thread_session(worker, thread_id=thread_id, workspace_id=workspace_id, role_id=payload.role_id)
             # The page description leads the context so a long prompt cannot push it past the turn limit.
             blocks = list(context_blocks or [])
             agent_blocks = [b for b in blocks if b.get("source") == VISIBLE_PAGE_SOURCE] + [
@@ -466,7 +480,8 @@ def _submit_hermes_interaction(
             if grant_text:
                 agent_blocks.append({"source": "jarvis:agent-grant", "content": grant_text})
             result = worker.turn(prompt, interaction_id=interaction_id, context_blocks=agent_blocks,
-                                 allowed_tools=_turn_tools(surface_brief.surface))
+                                 allowed_tools=_turn_tools(surface_brief.surface),
+                                 sheldon_mode=payload.sheldon_mode)
     except Exception as exc:
         _LOGGER.warning("Hermes turn %s raised %s: %.300s", interaction_id, type(exc).__name__, exc)
         _mark_hermes_failed(interaction_id, reservation_flow_id, exc)
@@ -511,14 +526,17 @@ def _submit_hermes_interaction(
                                    (technical_details, interaction_id))
                 connection.execute("UPDATE ai_threads SET last_activity_at = ? WHERE id = ?", (now, thread_id))
                 from app.modules.events.service import log_event
+                bound_role = worker.session.profile_id if worker.session else (payload.role_id or "isaac")
                 log_event(connection, event_type="hermes.interaction_flows", actor="jarvis",
                           target_type="ai_thread_interaction", target_id=interaction_id,
                           workspace_id=workspace_id,
                           payload={"interaction_id": interaction_id, "reservation_flow_id": reservation_flow_id,
                                    "final_flow_id": relay_flow_id,
+                                   "role_id": bound_role,
+                                   "sheldon_mode": payload.sheldon_mode,
                                    "relay_flow_ids": [str(value) for value in relay_flow_ids[:32]
                                                       if isinstance(value, str)] if isinstance(relay_flow_ids, list) else [relay_flow_id],
-                                   "route_class": worker.route_for_task(payload.task_kind)})
+                                   "route_class": relay_flow.get("requested_route_class")})
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -543,22 +561,26 @@ def _mark_hermes_failed(interaction_id: str, reservation_flow_id: str, error: ob
                                      error if isinstance(error, Exception) else RuntimeError(str(error)))
 
 
-def _ensure_hermes_thread_session(worker: HermesSupervisor, *, thread_id: str, workspace_id: str) -> None:
+def _ensure_hermes_thread_session(worker: HermesSupervisor, *, thread_id: str, workspace_id: str, role_id: str | None = None) -> None:
+    from app.modules.agents.hermes.roles import get_role
     from app.modules.agents.hermes.supervisor import (
         UPSTREAM_REVISION,
         bind_session,
         current_mapping,
         durable_history,
     )
+
+    target_role = get_role(role_id).role_id
     if worker.session is not None and worker.session.jarvis_thread_id == thread_id \
-            and worker.session.workspace_id == workspace_id and worker._alive():
+            and worker.session.workspace_id == workspace_id and worker.session.profile_id == target_role \
+            and worker._alive():
         return
     worker.start()
     with open_sqlite_connection() as connection:
         current = current_mapping(connection, thread_id)
         generation = current.generation if current else 0
         ref = bind_session(connection, thread_id=thread_id, workspace_id=workspace_id,
-                           profile_id="default", hermes_session_id=str(uuid4()))
+                           profile_id=target_role, hermes_session_id=str(uuid4()))
         if ref.generation != generation + 1 or ref.upstream_revision != UPSTREAM_REVISION:
             raise AIThreadConflictError("Hermes session generation or revision changed")
         connection.commit()
@@ -1062,6 +1084,17 @@ def _reserve_interaction(
                     now,
                 ),
             )
+            if payload.route_class == "hermes:agent":
+                from app.modules.agents.hermes.roles import get_role
+                from app.modules.events.service import log_event
+
+                log_event(
+                    connection, event_type="hermes.interaction_requested", actor="user",
+                    target_type="ai_thread_interaction", target_id=interaction_id,
+                    workspace_id=workspace_id,
+                    payload={"role_id": get_role(payload.role_id).role_id,
+                             "sheldon_mode": payload.sheldon_mode},
+                )
             connection.commit()
             return None
         except sqlite3.IntegrityError as exc:
@@ -1265,6 +1298,49 @@ def _interaction_from_row(
     activity = None
     if not terminal and connection is not None:
         activity = interaction_activity(connection, str(row["id"]))
+    role_id = None
+    sheldon_mode = False
+    is_hermes = str(row["requested_route_class"]) == "hermes:agent"
+    if connection is not None:
+        try:
+            import json
+            requested = connection.execute(
+                "SELECT payload FROM events WHERE event_type = 'hermes.interaction_requested' "
+                "AND target_id = ? ORDER BY rowid DESC LIMIT 1",
+                (str(row["id"]),)
+            ).fetchone()
+            if requested:
+                requested_payload = json.loads(requested["payload"])
+                role_id = requested_payload.get("role_id")
+                sheldon_mode = requested_payload.get("sheldon_mode") is True
+                is_hermes = True
+            evt = connection.execute(
+                "SELECT payload FROM events WHERE event_type = 'hermes.interaction_flows' "
+                "AND target_id = ? ORDER BY rowid DESC LIMIT 1",
+                (str(row["id"]),)
+            ).fetchone()
+            if evt:
+                event_payload = json.loads(evt["payload"])
+                if not requested and event_payload.get("final_flow_id") == str(row["flow_id"]):
+                    is_hermes = True
+                    role_id = event_payload.get("role_id")
+                    sheldon_mode = event_payload.get("sheldon_mode") is True
+            if is_hermes and not role_id:
+                mapping = connection.execute(
+                    "SELECT payload FROM events WHERE event_type = 'hermes.session_bound' "
+                    "AND target_id = ? AND created_at <= ? ORDER BY rowid DESC LIMIT 1",
+                    (str(row["thread_id"]), str(row["created_at"]))
+                ).fetchone() or connection.execute(
+                    "SELECT payload FROM events WHERE event_type = 'hermes.session_bound' "
+                    "AND target_id = ? ORDER BY rowid DESC LIMIT 1",
+                    (str(row["thread_id"]),)
+                ).fetchone()
+                if mapping:
+                    role_id = json.loads(mapping["payload"]).get("session_ref", {}).get("profile_id")
+        except Exception:
+            role_id = None
+    if is_hermes and (not role_id or role_id == "default"):
+        role_id = "isaac"
     return AIThreadInteractionRead(
         provider_id=row["provider_id"],
         input_tokens=row["input_tokens"],
@@ -1288,9 +1364,11 @@ def _interaction_from_row(
         terminal_reason=row["terminal_reason"],
         attempt_count=int(row["attempt_count"]),
         terminal_attempt_id=row["terminal_attempt_id"],
-        route_class=row["requested_route_class"],
-        execution_class=row["execution_class"],
+        route_class="hermes:agent" if is_hermes else row["requested_route_class"],
+        execution_class="agent" if is_hermes else row["execution_class"],
         model_id=row["model_id"],
+        role_id=role_id,
+        sheldon_mode=sheldon_mode,
         proposal_ids=proposal_ids[:_MAX_PROPOSAL_IDS],
         proposal_count=len(proposal_ids),
         proposals_truncated=len(proposal_ids) > _MAX_PROPOSAL_IDS,

@@ -21,6 +21,7 @@ import {
   type EscalationDraft,
   type RelayEscalationDraft,
   type ConversationRoute,
+  type HermesRoleOption,
   type RelayRunRead,
   type RelayStatus,
   listThreads,
@@ -50,6 +51,45 @@ const KNOWLEDGE_ROUTES = new Set(["memory-project-basis", "memory-models", "memo
 const TERMINAL_FLOW_STATES = new Set(["complete", "partial_terminal", "failed_terminal", "cancelled_terminal"]);
 const RESPONDER_STORAGE_KEY = "jarvisos.jarvis.responder";
 
+const DEFAULT_ROLES: HermesRoleOption[] = [
+  {
+    role_id: "isaac",
+    display_name: "Isaac",
+    purpose: "Scientific reasoning colleague; analytical problem solving and theory.",
+    route: "local:llamacpp",
+    model_id: "default",
+    available: false,
+    unavailable_reason: "Checking role model availability.",
+  },
+  {
+    role_id: "gregor",
+    display_name: "Gregor",
+    purpose: "Scientific internet researcher (runs with existing broker tools until web research is brokered).",
+    route: "local:llamacpp",
+    model_id: "default",
+    available: false,
+    unavailable_reason: "Checking role model availability.",
+  },
+  {
+    role_id: "q",
+    display_name: "Q",
+    purpose: "Tool-using agent for workspace operations and procedure execution.",
+    route: "local:llamacpp",
+    model_id: "default",
+    available: false,
+    unavailable_reason: "Checking role model availability.",
+  },
+  {
+    role_id: "alfred",
+    display_name: "Alfred",
+    purpose: "Mail, calendar, and documents assistant (runs with existing broker tools until mail and calendar are brokered).",
+    route: "local:llamacpp",
+    model_id: "default",
+    available: false,
+    unavailable_reason: "Checking role model availability.",
+  },
+];
+
 function productDisplayText(text: string): string {
   return text.replace(/\bBLUECAD\b/g, "BlueCad");
 }
@@ -71,9 +111,20 @@ type PendingSubmit = Readonly<{
   knowledgeContext: KnowledgeContextPreview | null;
   surfaceContext: SurfaceRef;
   extras?: BubuExtras;
+  roleId?: string | null;
+  sheldonMode?: boolean;
 }>;
 
-type InFlight = Readonly<{ workspaceId: string; threadId: string | null; requestId: string | null; prompt: string; routeClass: string; startedAt: number }>;
+type InFlight = Readonly<{
+  workspaceId: string;
+  threadId: string | null;
+  requestId: string | null;
+  prompt: string;
+  routeClass: string;
+  startedAt: number;
+  roleId?: string | null;
+  sheldonMode?: boolean;
+}>;
 
 function selectionIdentity(selection: StageSelection | null): string {
   if (selection === null) return "none";
@@ -97,6 +148,7 @@ function responderLabel(route: ConversationRoute): string {
 }
 
 function preferredRoute(routes: ConversationRoute[], current: string): string {
+  if (current === "hermes:agent" && routes.some(route => route.route_class === current)) return current;
   if (routes.some(route => route.route_class === current && routeUsable(route))) return current;
   let stored: string | null = null;
   try { stored = window.localStorage.getItem(RESPONDER_STORAGE_KEY); } catch { stored = null; }
@@ -111,18 +163,17 @@ function preferredRoute(routes: ConversationRoute[], current: string): string {
 
 type Readiness = Readonly<{ tone: "ready" | "busy" | "warning" | "down"; label: string; detail: string }>;
 
-function readiness(route: ConversationRoute | undefined, routes: ConversationRoute[], optionsError: boolean, loaded: boolean): Readiness {
+function readiness(route: ConversationRoute | undefined, role: HermesRoleOption | undefined, optionsError: boolean, loaded: boolean): Readiness {
   if (optionsError) return { tone: "down", label: "Offline", detail: "The JarvisOS server is not reachable. It may be restarting; this panel retries automatically." };
   if (!loaded) return { tone: "busy", label: "Checking", detail: "Checking which responders are available…" };
   if (!route) return { tone: "down", label: "Unavailable", detail: "No conversation responder is configured on this machine." };
-  const llama = routes.find(item => item.route_class === "local:llamacpp");
   if (route.execution_class === "agent") {
-    if (!route.availability.runtime_reachable) return { tone: "down", label: "Unavailable", detail: route.availability.message };
-    if (llama && !routeUsable(llama)) {
-      return llama.availability.reason_code === "LLAMACPP_LOADING"
-        ? { tone: "busy", label: "Loading model", detail: `The local model ${modelDisplayName(llama.model_id)} is still loading. Messages will wait for it.` }
-        : { tone: "warning", label: "Model unavailable", detail: llama.availability.message };
+    if (role && !role.available) {
+      return role.reason_code === "LLAMACPP_LOADING"
+        ? { tone: "busy", label: "Loading model", detail: role.unavailable_reason ?? "The role model is loading." }
+        : { tone: "warning", label: "Model unavailable", detail: role.unavailable_reason ?? "The role model is unavailable." };
     }
+    if (!route.availability.runtime_reachable) return { tone: "down", label: "Unavailable", detail: route.availability.message };
     return { tone: "ready", label: "Ready", detail: route.availability.model_loaded ? "Jarvis agent is running on the local model." : "Jarvis agent starts with your first message (a few seconds)." };
   }
   if (route.execution_class === "synthetic") return { tone: "warning", label: "Test mode", detail: "Synthetic test responder: replies are canned, not AI answers." };
@@ -228,6 +279,9 @@ export function useJarvisSidecar(
   const [preview, setPreview] = useState<ContextPackPreview | null>(null);
   const [projectPackEnabled, setContextEnabled] = useState(false);
   const [routes, setRoutes] = useState<ConversationRoute[]>([]);
+  const [hermesRoles, setHermesRoles] = useState<HermesRoleOption[]>(DEFAULT_ROLES);
+  const [selectedRoleId, setSelectedRoleId] = useState<string>("isaac");
+  const [sheldonMode, setSheldonMode] = useState<boolean>(false);
   const [processSurface, setProcessSurface] = useState<ProcessSurface>(() => currentProcessSurface());
   const [surfaceBrief, setSurfaceBrief] = useState<Awaited<ReturnType<typeof getSurfaceBrief>> | null>(null);
   const guidedTourActive = useGuidedTourActive();
@@ -239,12 +293,23 @@ export function useJarvisSidecar(
   const contextEnabled = projectPackEnabled && !activeKnowledge;
   const activeRoute = routes.find(route => route.route_class === routeClass);
   const activeRouteAvailable = routeUsable(activeRoute);
+  const isAgent = activeRoute?.execution_class === "agent";
+  const currentRoleOption = hermesRoles.find(r => r.role_id === selectedRoleId) ?? hermesRoles[0] ?? DEFAULT_ROLES[0];
+  const roleAvailable = !isAgent || (currentRoleOption ? currentRoleOption.available : true);
+  const effectiveRouteAvailable = activeRouteAvailable && roleAvailable;
+  const roleUnavailableReason = isAgent && currentRoleOption && !currentRoleOption.available
+    ? (currentRoleOption.unavailable_reason ?? `The configured model for ${currentRoleOption.display_name} is unavailable.`)
+    : null;
 
   useEffect(() => {
     let alive = true;
     const refresh = () => void getConversationOptions().then(result => {
       if (!alive) return;
       setRoutes(result.routes);
+      const incomingRoles = result.roles ?? result.routes.find(r => r.execution_class === "agent")?.roles;
+      if (incomingRoles && incomingRoles.length > 0) {
+        setHermesRoles(incomingRoles);
+      }
       setRoutesLoaded(true);
       setOptionsError(false);
       setRouteClass(current => preferredRoute(result.routes, current));
@@ -686,7 +751,7 @@ export function useJarvisSidecar(
     // Wait for thread ownership to settle before auto-creating or dispatching.
     // Otherwise a delayed initial list (or explicit creation) can select a
     // different thread while this submit publishes its transcript.
-    const unavailable = !activeRoute || !activeRouteAvailable || activeKnowledge?.route_id === "memory-project-basis";
+    const unavailable = !activeRoute || !effectiveRouteAvailable || activeKnowledge?.route_id === "memory-project-basis";
     if (fromBubble && workspaceId && text && (loadingThreads || submitting || unavailable)) {
       setError(loadingThreads || submitting ? "Jarvis is still busy. Try again in a moment." : "Jarvis is not available right now.");
       publishBubuFailedPrompt(text);
@@ -695,7 +760,7 @@ export function useJarvisSidecar(
     const workspaceToken = workspaceOwner.current;
     const creationToken = ++submitOwner.current;
     setError(null);
-    setInFlight({ workspaceId, threadId: selectedThreadId, requestId: null, prompt: text, routeClass, startedAt: Date.now() });
+    setInFlight({ workspaceId, threadId: selectedThreadId, requestId: null, prompt: text, routeClass, startedAt: Date.now(), roleId: isAgent ? selectedRoleId : undefined, sheldonMode: isAgent && selectedRoleId === "isaac" && sheldonMode });
     let threadId = selectedThreadId;
     if (!threadId) {
       try {
@@ -721,6 +786,8 @@ export function useJarvisSidecar(
       && pending.prompt === text
       && pending.contextEnabled === contextEnabled
       && pending.routeClass === routeClass
+      && pending.roleId === (isAgent ? selectedRoleId : undefined)
+      && pending.sheldonMode === (isAgent && selectedRoleId === "isaac" ? sheldonMode : false)
       && JSON.stringify(pending.surfaceContext) === surfaceContextKey
       && pending.knowledgeContext?.context_digest === activeKnowledge?.context_digest;
     const currentDigest = contextEnabled
@@ -747,10 +814,12 @@ export function useJarvisSidecar(
           routeClass,
           knowledgeContext: activeKnowledge,
           surfaceContext,
-          extras: bubble
+          extras: bubble,
+          roleId: isAgent ? selectedRoleId : undefined,
+          sheldonMode: isAgent && selectedRoleId === "isaac" ? sheldonMode : false
         };
     setPending(captured);
-    setInFlight({ workspaceId, threadId, requestId: captured.requestId, prompt: text, routeClass, startedAt: Date.now() });
+    setInFlight({ workspaceId, threadId, requestId: captured.requestId, prompt: text, routeClass, startedAt: Date.now(), roleId: captured.roleId, sheldonMode: captured.sheldonMode });
     if (!fromBubble) setPrompt("");
     try {
       await submitThreadInteraction(
@@ -761,7 +830,14 @@ export function useJarvisSidecar(
         captured.contextEnabled && captured.expectedDigest
           ? { selection: DEFAULT_SELECTION, expectedDigest: captured.expectedDigest }
           : undefined,
-        { routeClass: captured.routeClass, knowledgeContext: captured.knowledgeContext, surfaceContext: captured.surfaceContext, ui_context: captured.extras?.ui_context, images: captured.extras?.images }
+        {
+          routeClass: captured.routeClass,
+          knowledgeContext: captured.knowledgeContext,
+          surfaceContext: captured.surfaceContext,
+          ui_context: captured.extras?.ui_context, images: captured.extras?.images,
+          roleId: captured.roleId ?? undefined,
+          sheldonMode: captured.sheldonMode ?? false
+        }
       );
       if (workspaceOwner.current !== workspaceToken) return;
       setPending(null);
@@ -796,6 +872,8 @@ export function useJarvisSidecar(
       && pending.prompt === prompt.trim()
       && pending.contextEnabled === contextEnabled
       && pending.routeClass === routeClass
+      && pending.roleId === (isAgent ? selectedRoleId : undefined)
+      && pending.sheldonMode === (isAgent && selectedRoleId === "isaac" ? sheldonMode : false)
       && JSON.stringify(pending.surfaceContext) === surfaceContextKey
       && pending.knowledgeContext?.context_digest === activeKnowledge?.context_digest
       && (!contextEnabled || pending.expectedDigest)
@@ -805,11 +883,13 @@ export function useJarvisSidecar(
   const stageContextClassName = KNOWLEDGE_ROUTES.has(routeId)
     ? "jarvis-sidecar__stage-context jarvis-sidecar__stage-context--visible"
     : "jarvis-sidecar__stage-context";
-  const state = readiness(activeRoute, routes, optionsError, routesLoaded);
+  const state = readiness(activeRoute, currentRoleOption, optionsError, routesLoaded);
   const usableRoutes = routes.filter(routeUsable);
   const unavailableRoutes = routes.filter((route) => !routeUsable(route));
   const serverHasInFlight = Boolean(inFlight?.requestId && detail?.interactions.some((interaction) => interaction.request_id === inFlight.requestId));
   const showOptimistic = inFlight && inFlight.workspaceId === workspaceId && (inFlight.threadId === selectedThreadId || inFlight.threadId === null) && !serverHasInFlight;
+  const inFlightRole = inFlight?.roleId ? hermesRoles.find(r => r.role_id === inFlight.roleId) : null;
+  const optimisticAuthor = inFlight?.sheldonMode ? "Sheldon" : inFlightRole ? inFlightRole.display_name : (isAgent ? currentRoleOption?.display_name ?? "Jarvis" : "Jarvis");
   const hermesCold = activeRoute?.execution_class === "agent" && !activeRoute.availability.model_loaded;
 
   // Bubu's speech bubble shows the tail of the same conversation through a tiny external store.
@@ -937,12 +1017,18 @@ export function useJarvisSidecar(
   const renderInteraction = (interaction: ThreadInteraction) => {
     const running = !TERMINAL_FLOW_STATES.has(interaction.flow_state);
     const notice = outcomeNotice(interaction);
-    const viaAgent = interaction.execution_class === "agent";
+    const viaAgent = interaction.route_class === "hermes:agent";
     const synthetic = interaction.execution_class === "synthetic";
     const elapsed = interaction.elapsed_ms ?? interaction.latency_ms;
     const providerKind = interaction.execution_class === "external_provider" ? "cloud" : interaction.execution_class === "synthetic" ? "synthetic" : "local";
     const modelName = interaction.model_id ? modelDisplayName(interaction.model_id) : null;
     const unsafeAssistantText = isToolCallShaped(interaction.assistant_text);
+    const roleMatch = interaction.role_id ? hermesRoles.find(r => r.role_id === interaction.role_id) : null;
+    const authorLabel = synthetic
+      ? "Test responder"
+      : viaAgent
+        ? (interaction.sheldon_mode ? "Sheldon" : roleMatch?.display_name ?? interaction.role_id ?? "Jarvis")
+        : "Jarvis";
     const metadata = [modelName ?? "Model unknown", viaAgent ? "Jarvis agent" : null, providerKind, elapsed != null ? `${(elapsed / 1000).toFixed(1)}s` : null, interaction.cost_estimate_usd ? `$${interaction.cost_estimate_usd.toFixed(4)}` : null].filter(Boolean).join(" · ");
     const escalatable = !running && Boolean(interaction.assistant_text) && (interaction.execution_class === "local_compute" || viaAgent);
     const followups = sortCreatedChronologically([
@@ -955,7 +1041,7 @@ export function useJarvisSidecar(
       </li>,
       <li key={interaction.id} className="jarvis-turn">
         <div className={`jarvis-bubble jarvis-bubble--jarvis${running ? " is-working" : ""}${notice && !interaction.assistant_text ? " is-failed" : ""}`}>
-          <div className="jarvis-bubble__meta"><span className="jarvis-bubble__author">{synthetic ? "Test responder" : "Jarvis"}</span>{running ? <span>working…</span> : null}</div>
+          <div className="jarvis-bubble__meta"><span className="jarvis-bubble__author">{authorLabel}</span>{running ? <span>working…</span> : null}</div>
           {running
             ? <p className="jarvis-working"><span className="jarvis-working__dots" aria-hidden="true"><i /><i /><i /></span>{interaction.activity ?? "Thinking…"} · {Math.max(0, Math.floor((now - Date.parse(interaction.created_at)) / 1000))}s</p>
             : interaction.assistant_text ? unsafeAssistantText ? <p role="status">Jarvis could not turn this into a valid change, so nothing was changed. Try rephrasing, or use Escalate for a stronger model.</p> : <JarvisMessageText text={interaction.assistant_text} /> : null}
@@ -988,7 +1074,7 @@ export function useJarvisSidecar(
   }));
   const optionItems: ContextMenuItem[] = [
     ...responderItems,
-    ...unavailableRoutes.map(route => ({ id: `off-${route.route_class}`, label: `${responderLabel(route)} — unavailable`, hint: route.availability.message, disabled: true, onSelect: () => undefined })),
+    ...unavailableRoutes.map(route => ({ id: `off-${route.route_class}`, label: `${responderLabel(route)} — unavailable`, hint: route.availability.message, disabled: route.execution_class !== "agent", onSelect: () => { if (route.execution_class === "agent") chooseResponder(route.route_class); } })),
     { id: "target-jarvis", label: `${composerTarget === "jarvis" ? "✓ " : ""}Send to Jarvis`, onSelect: () => setComposerTarget("jarvis") },
     ...(relayStatus?.enabled ? relayStatus.agents.map(agent => ({ id: `relay-${agent}`, label: `${composerTarget === "relay" && relayAgent === agent ? "✓ " : ""}Send task to Relay · ${modelDisplayName(null, agent)}`, onSelect: () => { setRelayAgent(agent); setComposerTarget("relay"); } })) : [])
   ];
@@ -1014,7 +1100,7 @@ export function useJarvisSidecar(
         <li className="jarvis-turn jarvis-turn--user" key="in-flight-user"><div className="jarvis-bubble jarvis-bubble--user"><p>{inFlight.prompt}</p></div></li>,
         <li className="jarvis-turn" key="in-flight">
           <div className="jarvis-bubble jarvis-bubble--jarvis is-working">
-            <div className="jarvis-bubble__meta"><span className="jarvis-bubble__author">Jarvis</span><span>working…</span></div>
+            <div className="jarvis-bubble__meta"><span className="jarvis-bubble__author">{optimisticAuthor}</span><span>working…</span></div>
             <p className="jarvis-working"><span className="jarvis-working__dots" aria-hidden="true"><i /><i /><i /></span>{workingLabel(inFlight.startedAt, inFlight.routeClass)}</p>
             {hermesCold ? <p className="jarvis-bubble__notice">The first message starts the agent; later replies are faster.</p> : null}
           </div>
@@ -1036,9 +1122,38 @@ export function useJarvisSidecar(
         <p className="jarvis-sidecar__hint">Task for {modelDisplayName(null, relayAgent)} via Relay · {accessModeLabel(relayStatus.access_mode)} access at level {relayStatus.repository_level}. {relayStatus.blocked_reason ?? "Only submit a task that contains no strategic or domain IP."}</p>
         <label className="jarvis-sidecar__toggle"><input type="checkbox" checked={relayAttested} disabled={relayWorking} onChange={event => setRelayAttested(event.target.checked)} />This task contains no strategic/domain IP (cloud-safe)</label>
       </div> : null}
+      {composerTarget === "jarvis" && isAgent ? <div className="jarvis-role-chooser" role="radiogroup" aria-label="Hermes persona">
+        <div className="jarvis-role-options">
+          {hermesRoles.map(role => (
+            <label key={role.role_id} className={`jarvis-role-option${selectedRoleId === role.role_id ? " is-selected" : ""}${!role.available ? " is-unavailable" : ""}`}>
+              <input
+                type="radio"
+                name="hermes-role"
+                value={role.role_id}
+                checked={selectedRoleId === role.role_id}
+                onChange={() => setSelectedRoleId(role.role_id)}
+                disabled={submitting}
+              />
+              <span className="jarvis-role-name">{role.display_name}</span>
+              <span className="jarvis-role-purpose">{role.purpose}</span>
+              {!role.available && <span className="jarvis-role-badge">unavailable</span>}
+            </label>
+          ))}
+        </div>
+        {selectedRoleId === "isaac" ? <label className="jarvis-sidecar__toggle jarvis-sheldon-mode">
+          <input
+            type="checkbox"
+            checked={sheldonMode}
+            onChange={e => setSheldonMode(e.target.checked)}
+            disabled={submitting}
+          />
+          Sheldon mode (devil&apos;s advocate / rigor review)
+        </label> : null}
+        {roleUnavailableReason ? <p className="jarvis-sidecar__error jarvis-role-unavailable" role="alert">{roleUnavailableReason}</p> : null}
+      </div> : null}
       <div className="jarvis-sidecar__input">
         <textarea id="jarvis-prompt" aria-label={composerTarget === "relay" ? "Task for the Relay agent" : "Message"} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} maxLength={12000} rows={Math.min(8, Math.max(2, prompt.split("\n").length))} disabled={!workspaceId} placeholder={composerTarget === "relay" ? "Task for the Relay agent…" : "Ask Jarvis…"} />
-        <button type="submit" disabled={!workspaceId || !prompt.trim() || loadingThreads || (composerTarget === "jarvis" ? (!activeRoute || !activeRouteAvailable || submitting || !contextReady) : (!relayAgent || !relayAttested || relayWorking || Boolean(relayStatus?.blocked_reason)))} className="jarvis-send" aria-label={composerTarget === "relay" ? "Send to Relay agent" : composerLabel} title={composerTarget === "relay" ? "Send to Relay agent" : composerLabel}>{submitting || relayWorking ? <span className="jarvis-working__dots" aria-hidden="true"><i /><i /><i /></span> : <ArrowUp size={16} weight="bold" aria-hidden="true" />}</button>
+        <button type="submit" disabled={!workspaceId || !prompt.trim() || loadingThreads || (composerTarget === "jarvis" ? (!activeRoute || !effectiveRouteAvailable || submitting || !contextReady) : (!relayAgent || !relayAttested || relayWorking || Boolean(relayStatus?.blocked_reason)))} className="jarvis-send" aria-label={composerTarget === "relay" ? "Send to Relay agent" : composerLabel} title={composerTarget === "relay" ? "Send to Relay agent" : composerLabel}>{submitting || relayWorking ? <span className="jarvis-working__dots" aria-hidden="true"><i /><i /><i /></span> : <ArrowUp size={16} weight="bold" aria-hidden="true" />}</button>
       </div>
       <div className="jarvis-sidecar__composer-bar">
         <ResponderMenu items={optionItems} disabled={submitting || relayWorking}>{activeResponderName} ▾</ResponderMenu>
@@ -1052,7 +1167,7 @@ export function useJarvisSidecar(
             {pendingRetryReady && contextEnabled ? <p className="jarvis-sidecar__hint">A retry keeps the originally inspected context digest.</p> : null}
           </div>
         </details>
-        {sendDisabledReason && !activeRouteAvailable && composerTarget === "jarvis" ? <small className="jarvis-sidecar__hint">{sendDisabledReason}</small> : null}
+        {sendDisabledReason && !effectiveRouteAvailable && composerTarget === "jarvis" ? <small className="jarvis-sidecar__hint">{roleUnavailableReason ?? sendDisabledReason}</small> : null}
       </div>
     </form>
 

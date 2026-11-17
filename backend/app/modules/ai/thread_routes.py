@@ -26,6 +26,7 @@ from app.modules.ai.thread_models import (
     AIThreadSubmit,
     AIThreadSubmitRead,
     AIThreadSummary,
+    HermesRoleOption,
 )
 from app.modules.ai.thread_service import (
     AIThreadConflictError,
@@ -164,54 +165,25 @@ def read_conversation_options(request: Request) -> AIConversationOptions:
             route_class=route, label=label, model_id=binding.model_id,
             execution_class=binding.execution_class, availability=availability,
         ))
-    agent_availability = _hermes_agent_availability(request)
+    role_options = _hermes_roles_availability(request)
+    agent_availability = _hermes_agent_availability(request, role_options)
     routes.append(AIConversationRoute(
         route_class="hermes:agent", label="Jarvis agent (Hermes)", model_id="hermes:agent",
-        execution_class="agent", availability=agent_availability,
+        execution_class="agent", availability=agent_availability, roles=role_options,
     ))
-    return AIConversationOptions(routes=routes, availability="configured" if routes else "unavailable")
+    return AIConversationOptions(routes=routes, availability="configured" if routes else "unavailable", roles=role_options)
 
 
-def _hermes_agent_availability(request: Request | None) -> AIConversationRouteAvailability:
-    import os
-    import shutil
-    from pathlib import Path
-
-    from app.modules.agents.hermes.supervisor import UPSTREAM_REVISION
-
-    venv = os.getenv("JARVIS_HERMES_VENV", "")
-    python = Path(venv) / ("Scripts/python.exe" if os.name == "nt" else "bin/python") if venv else None
-    if python is None or not python.is_file():
-        reason, message = "HERMES_VENV_MISSING", "Hermes agent runtime is not configured."
-    elif os.name == "nt" and not os.getenv("JARVIS_HERMES_WSL_DISTRO"):
-        reason, message = "HERMES_ISOLATION_UNAVAILABLE", "Hermes requires a configured isolated WSL runtime."
-    elif os.name != "nt" and not shutil.which("bwrap"):
-        reason, message = "HERMES_ISOLATION_UNAVAILABLE", "Hermes network isolation is unavailable."
-    elif not _hermes_revision_qualified(python, UPSTREAM_REVISION):
-        reason, message = "HERMES_REVISION_UNQUALIFIED", "The configured Hermes runtime does not match the pinned revision."
-    else:
-        route = os.getenv("JARVIS_HERMES_INFERENCE_ROUTE", "local:llamacpp")
-        if not route.startswith("local:"):
-            reason, message = "HERMES_RUNTIME_UNCONFIGURED", "Hermes requires an explicitly configured local Jarvis inference route."
-        else:
-            from app.modules.ai.execution import resolve_binding
-            try:
-                binding, _ = resolve_binding(route)
-            except Exception:
-                binding = None
-            if binding is None:
-                reason, message = "HERMES_RUNTIME_UNCONFIGURED", "The configured local Jarvis inference route is unavailable."
-            else:
-                probe = _llamacpp_route_availability if binding.provider_id == "local_llamacpp" else _ollama_route_availability
-                try:
-                    route_status = probe(route, binding.model_id)
-                except Exception:
-                    route_status = None
-                if (route_status is None or not route_status.runtime_reachable or route_status.model_installed is False
-                        or route_status.reason_code not in {None, "LLAMACPP_LOADING"}):
-                    reason, message = "HERMES_RUNTIME_UNCONFIGURED", "The configured local Jarvis inference model is not ready."
-                else:
-                    reason, message = None, "Hermes agent is ready; its worker starts on the first turn."
+def _hermes_agent_availability(
+    request: Request | None, roles: list[HermesRoleOption] | None = None,
+) -> AIConversationRouteAvailability:
+    roles = roles if roles is not None else _hermes_roles_availability(request)
+    ready = any(role.available for role in roles)
+    first_error = next((role for role in roles if not role.available), None)
+    reason = None if ready else (first_error.reason_code if first_error else "HERMES_RUNTIME_UNCONFIGURED")
+    message = ("Hermes agent is ready; its worker starts on the first turn." if ready
+               else first_error.unavailable_reason or "No Hermes role model is ready."
+               if first_error else "No Hermes role model is ready.")
     supervisor = request.app.state._state.get("hermes_supervisor") if request is not None else None
     status = supervisor.status() if supervisor is not None else {}
     state = status.get("state")
@@ -221,14 +193,122 @@ def _hermes_agent_availability(request: Request | None) -> AIConversationRouteAv
         and any(isinstance(item, dict) and item.get("last_error") == "worker_lost"
                 for item in per_thread.values())
     )
-    if worker_lost and reason is None:
+    if worker_lost and ready:
         reason, message = "HERMES_WORKER_LOST", "Hermes worker was lost; the next turn will recover the session."
     return AIConversationRouteAvailability(
         # A lost worker is recovered by the next turn, so it must stay submittable.
-        configured=bool(python and python.is_file()), runtime_reachable=reason in {None, "HERMES_WORKER_LOST"},
-        model_installed=bool(python and python.is_file()), model_loaded=state == "running",
+        configured=bool(roles), runtime_reachable=reason in {None, "HERMES_WORKER_LOST"},
+        model_installed=ready, model_loaded=state == "running",
         qualified="unknown", reason_code=reason, message=message,
     )
+
+
+def _hermes_roles_availability(request: Request | None) -> list[HermesRoleOption]:
+    import os
+    import shutil
+    from pathlib import Path
+
+    from app.modules.agents.hermes.roles import list_roles, require_local_role_route
+    from app.modules.agents.hermes.supervisor import UPSTREAM_REVISION
+    from app.modules.ai.execution import resolve_binding
+    from app.modules.ai.settings import resolve_role_route
+
+    venv = os.getenv("JARVIS_HERMES_VENV", "")
+    python = Path(venv) / ("Scripts/python.exe" if os.name == "nt" else "bin/python") if venv else None
+    runtime_error: tuple[str, str] | None = None
+    if python is None or not python.is_file():
+        runtime_error = ("HERMES_VENV_MISSING", "Hermes agent runtime is not configured.")
+    elif os.name == "nt" and not os.getenv("JARVIS_HERMES_WSL_DISTRO"):
+        runtime_error = ("HERMES_ISOLATION_UNAVAILABLE", "Hermes requires a configured isolated WSL runtime.")
+    elif os.name != "nt" and not shutil.which("bwrap"):
+        runtime_error = ("HERMES_ISOLATION_UNAVAILABLE", "Hermes network isolation is unavailable.")
+    elif not _hermes_revision_qualified(python, UPSTREAM_REVISION):
+        runtime_error = ("HERMES_REVISION_UNQUALIFIED", "The configured Hermes runtime does not match the pinned revision.")
+
+    role_options: list[HermesRoleOption] = []
+    for role in list_roles():
+        route = resolve_role_route(role.role_id)
+        if runtime_error:
+            role_options.append(HermesRoleOption(
+                role_id=role.role_id,
+                display_name=role.display_name,
+                purpose=role.purpose,
+                route=route,
+                model_id=route,
+                available=False,
+                unavailable_reason=runtime_error[1],
+                reason_code=runtime_error[0],
+            ))
+            continue
+
+        try:
+            require_local_role_route(route)
+        except ValueError:
+            role_options.append(HermesRoleOption(
+                role_id=role.role_id,
+                display_name=role.display_name,
+                purpose=role.purpose,
+                route=route,
+                model_id=route,
+                available=False,
+                unavailable_reason="Hermes role requires an explicitly configured local Jarvis inference route.",
+                reason_code="HERMES_RUNTIME_UNCONFIGURED",
+            ))
+            continue
+
+        try:
+            binding, _ = resolve_binding(route)
+        except Exception:
+            binding = None
+
+        if binding is None:
+            role_options.append(HermesRoleOption(
+                role_id=role.role_id,
+                display_name=role.display_name,
+                purpose=role.purpose,
+                route=route,
+                model_id=route,
+                available=False,
+                unavailable_reason="The configured local Jarvis inference route is unavailable.",
+                reason_code="HERMES_RUNTIME_UNCONFIGURED",
+            ))
+            continue
+
+        probe = _llamacpp_route_availability if binding.provider_id == "local_llamacpp" else _ollama_route_availability
+        try:
+            route_status = probe(route, binding.model_id)
+        except Exception:
+            route_status = None
+
+        if (
+            route_status is None
+            or not route_status.runtime_reachable
+            or route_status.model_installed is False
+            or route_status.reason_code not in {None, "LLAMACPP_LOADING"}
+        ):
+            role_options.append(HermesRoleOption(
+                role_id=role.role_id,
+                display_name=role.display_name,
+                purpose=role.purpose,
+                route=route,
+                model_id=binding.model_id,
+                available=False,
+                unavailable_reason=route_status.message if route_status else "The configured local Jarvis inference model is not ready.",
+                reason_code=route_status.reason_code if route_status else "HERMES_RUNTIME_UNCONFIGURED",
+            ))
+        else:
+            role_options.append(HermesRoleOption(
+                role_id=role.role_id,
+                display_name=role.display_name,
+                purpose=role.purpose,
+                route=route,
+                model_id=binding.model_id,
+                available=True,
+                unavailable_reason=None,
+                reason_code=None,
+            ))
+
+    return role_options
 
 
 def _hermes_revision_qualified(python: object, revision: str) -> bool:

@@ -260,6 +260,7 @@ export type AISettings = {
   max_direct_continuations_min: number;
   max_direct_continuations_max: number;
   direct_continuation_policy_version: string;
+  hermes_role_routes: Record<string, string>;
   updated_at: string;
 };
 

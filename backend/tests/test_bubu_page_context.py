@@ -222,7 +222,8 @@ def test_agent_path_receives_visible_page_block_first() -> None:
     pool = SimpleNamespace(for_thread=lambda _t: worker,
                            lock_for=lambda _t: contextmanager(lambda: (yield))(),
                            schedule_idle_stop=lambda _t: None)
-    availability = [{"route_class": "hermes:agent", "availability": {"runtime_reachable": True}}]
+    availability = [{"route_class": "hermes:agent", "availability": {"runtime_reachable": True},
+                     "roles": [{"role_id": "isaac", "available": True}]}]
     payload = AIThreadSubmit(request_id="agent-ui-1", prompt="show me the plant", route_class="hermes:agent",
                              ui_context=_ui(), images=[_url(PNG)])
     interaction = submit_interaction(workspace_id=workspace_id, thread_id=thread.id, payload=payload,
