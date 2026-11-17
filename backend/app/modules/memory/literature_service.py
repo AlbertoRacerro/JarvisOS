@@ -293,7 +293,7 @@ def _entry_read(connection, row, backing: _BackingText | None = None) -> Literat
             lines=lines,
             unavailable=unavailable,
         )
-    ingestion: dict[str, Any] = {}
+    ingestion: dict[str, Any] = {"eligibility_reasons": ["not_ingested"]}  # hand-typed entries
     if row["ingestion_status"] is not None:
         if backing is None:
             source_row = _source_row(connection, str(row["workspace_id"]), str(row["source_id"]))

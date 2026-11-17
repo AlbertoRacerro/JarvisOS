@@ -202,6 +202,11 @@ def test_duplicate_contradiction_and_replaced_bytes(client: TestClient, monkeypa
     assert changed["entries"][0]["verdict"] == "usable"
     assert all(entry["stale_source"] and not entry["eligible_for_later_admission"] for entry in changed["entries"])
     assert changed["ingestion_batch"]["current"] is False
+    typed = client.post(f"{url}/entries", json={"entry_kind": "datum", "value_text": "0.05", "unit": "m",
+                                                "locator_kind": "page", "locator_start": 1, "locator_end": 1})
+    assert typed.status_code in (200, 201), typed.text
+    assert typed.json()["eligible_for_later_admission"] is False
+    assert typed.json()["eligibility_reasons"] == ["not_ingested"]
 
 
 def test_unexpected_error_fails_the_batch_and_an_interrupted_run_is_retryable(
