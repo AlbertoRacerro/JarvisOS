@@ -80,7 +80,7 @@ export function BenchRunDetailView({ run }: Readonly<{ run: BenchRunDetail }>) {
           <td><span className="bench-light" aria-hidden="true" />{CHECK_STATUS_LABELS[check.status] ?? check.status}</td>
           <td>{num(check.actual)}</td><td>{num(check.limit)}</td><td>{check.unit ?? "—"}</td><td>{check.hint}</td><td>{check.source}</td>
         </tr>)}</tbody></table>}
-    {run.truncated ? <p className="bench-note">Vista abbreviata: l'elenco dei controlli superati può essere incompleto.</p> : null}
+    {run.truncated ? <p className="bench-note">Vista abbreviata: i controlli superati o non valutati possono mancare.</p> : null}
     <h4>Risultati</h4>
     {run.outputs_withheld ? <p>Risultati non mostrati: il verdetto è «non utilizzabile».</p>
       : run.outputs.length === 0 ? <p>Nessun risultato numerico.</p>

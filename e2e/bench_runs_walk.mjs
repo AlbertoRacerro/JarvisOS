@@ -73,7 +73,7 @@ runs = {
                          [check("aspect_ratio", "not_evaluated", None, None, None, "mesh")], []),
   "run_fem_failed": ("bluecad.fem", "failed", "not_usable", "2026-11-17T13:00:00Z",
                      {"code": "SOLVER_DIVERGED", "message": "il solutore non converge"},
-                     [check("equilibrium", "fail", 0.2, 0.01, "1", "equilibrium")], []),
+                     [check("equilibrium", "fail", 0.2, 0.01, "1", "structure")], []),
 }
 for run_id, (ev, status, verdict, done, failure, checks, outputs) in runs.items():
     folder = bench / run_id
