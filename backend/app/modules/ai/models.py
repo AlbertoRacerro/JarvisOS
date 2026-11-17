@@ -1,7 +1,7 @@
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.packs import default_workspace_slug
 from app.modules.ai.context_builder import DEFAULT_CONTEXT_BUDGET_CHARS, MAX_CONTEXT_BLOCKS
@@ -30,6 +30,19 @@ class AISettingsUpdate(BaseModel):
     scaleway_output_tokens_month_to_date: int | None = Field(default=None, ge=0)
     smoke_test_mode_enabled: bool | None = None
     max_direct_continuations: int | None = Field(default=None, ge=0, le=16, strict=True)
+    hermes_role_routes: dict[str, str] | None = None
+
+    @field_validator("hermes_role_routes")
+    @classmethod
+    def validate_hermes_role_routes(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if value is None:
+            return value
+        from app.modules.agents.hermes.roles import ROLES, require_local_role_route
+        for role_id, route in value.items():
+            if role_id not in ROLES:
+                raise ValueError(f"unknown Hermes role: {role_id}")
+            require_local_role_route(route)
+        return value
 
 
 class AISettingsRead(BaseModel):
@@ -55,6 +68,7 @@ class AISettingsRead(BaseModel):
     max_direct_continuations_min: int = 0
     max_direct_continuations_max: int = 16
     direct_continuation_policy_version: str
+    hermes_role_routes: dict[str, str] = Field(default_factory=dict)
     updated_at: str
 
 

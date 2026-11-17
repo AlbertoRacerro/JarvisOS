@@ -340,13 +340,15 @@ def test_relay_defaults_to_explicit_llamacpp_and_accepts_only_explicit_local_fal
     supervisor._handle_relay(_frame())
     assert observed == ["local:llamacpp"]
 
-    supervisor.route_for_task = lambda _task: "local:ollama"
+    supervisor.route_for_task = lambda _task: "local:gemma"
     supervisor._handle_relay(_frame())
-    assert observed == ["local:llamacpp", "local:ollama"]
+    assert observed == ["local:llamacpp", "local:gemma"]
 
-    supervisor.route_for_task = lambda _task: "openai:external"
-    supervisor._handle_relay(_frame())
-    assert observed == ["local:llamacpp", "local:ollama"]
+    # A local: prefix without a registered local-compute binding never reaches inference.
+    for route in ("openai:external", "local:ollama"):
+        supervisor.route_for_task = lambda _task, route=route: route
+        supervisor._handle_relay(_frame())
+    assert observed == ["local:llamacpp", "local:gemma"]
 
 
 def test_session_mapping_control_event_order_and_recovery() -> None:

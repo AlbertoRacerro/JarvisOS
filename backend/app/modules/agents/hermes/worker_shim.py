@@ -405,6 +405,17 @@ class Worker:
         from run_agent import AIAgent  # Hermes is installed only in its own venv.
         from tools.mcp_tool_discovery import register_mcp_servers
 
+        from app.modules.agents.hermes.roles import get_role, get_role_instructions
+
+        role_id = (self.session or {}).get("profile_id")
+        if role_id is None:
+            toolsets = list(ENABLED_TOOLSETS)
+            instructions = PRESENTATION_INSTRUCTIONS
+        else:
+            role = get_role(role_id)
+            toolsets = list(role.toolsets)
+            instructions = get_role_instructions(role_id)
+
         registered = register_mcp_servers(pinned_config(self.base_url, self.token)["mcp_servers"])
         if not {"mcp__jarvis__jarvis_context_preview", "mcp__jarvis__jarvis_retrieval_query"} <= set(registered):
             raise RuntimeError("Jarvis capability broker unavailable")
@@ -415,16 +426,17 @@ class Worker:
         agent = AIAgent(
             base_url=self.base_url, api_key=self.token, provider="custom",
             api_mode="chat_completions", model="jarvis-relay", session_id=self.session_id(),
-            enabled_toolsets=list(ENABLED_TOOLSETS), disabled_toolsets=list(DISABLED_TOOLSETS),
+            enabled_toolsets=toolsets, disabled_toolsets=list(DISABLED_TOOLSETS),
             skip_context_files=True, skip_memory=True, skip_background_review=True,
             load_soul_identity=False, quiet_mode=True, session_db=self.session_db,
             fallback_model=[], checkpoints_enabled=False,
-            ephemeral_system_prompt=PRESENTATION_INSTRUCTIONS,
+            ephemeral_system_prompt=instructions,
         )
         self.tool_names = withhold_tools(agent)
         return agent
 
-    def run_turn(self, request_id: str, prompt: str, allowed_tools: list[str] | None = None) -> None:
+    def run_turn(self, request_id: str, prompt: str, allowed_tools: list[str] | None = None,
+                 sheldon_mode: bool = False) -> None:
         if not self.turn_lock.acquire(blocking=False):
             self.send({"type": "turn_result", "id": request_id, "status": "failed", "error": "turn_busy"})
             return
@@ -433,6 +445,11 @@ class Worker:
             self.active_turn_tools = allowed_tools
             if self.agent is None:
                 self.agent = self._build_agent()
+            role_id = (self.session or {}).get("profile_id", "isaac")
+            from app.modules.agents.hermes.roles import get_role_instructions
+            instructions = get_role_instructions(role_id, sheldon_mode=sheldon_mode)
+            if hasattr(self.agent, "ephemeral_system_prompt"):
+                self.agent.ephemeral_system_prompt = instructions
             result = self.agent.run_conversation(
                 user_message=prompt, conversation_history=list(self.history), task_id=self.session_id())
             self.history = compact_history(result.get("messages") or self.history)
@@ -462,6 +479,64 @@ class Worker:
             self.active_turn_tools = None
             self.turn_lock.release()
 
+    def handle_frame(self, frame: dict[str, Any]) -> bool:
+        kind = frame["type"]
+        if kind in {"relay_result", "tool_result"}:
+            with self.pending_lock:
+                pending = self.pending.get(frame["id"])
+            if pending is not None:
+                pending.put_nowait(frame)
+        elif kind == "bind":
+            if self.turn_lock.locked():
+                self.send({"type": "error", "id": frame["id"], "error": "turn_busy"})
+            else:
+                if self.agent is not None and (
+                        (self.session or {}).get("hermes_session_id") != frame["session_ref"]["hermes_session_id"]
+                        or (self.session or {}).get("profile_id") != frame["session_ref"].get("profile_id")):
+                    self.agent.close()
+                    self.agent = None
+                if self.agent is None:
+                    # A new Hermes session starts only from history Jarvis durably recorded.
+                    seed = frame.get("history") or []
+                    if not isinstance(seed, list) or any(
+                            not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}
+                            or not isinstance(item.get("content"), str) for item in seed):
+                        raise ValueError("invalid history seed")
+                    self.history = [{"role": item["role"], "content": item["content"]} for item in seed]
+                self.session = frame["session_ref"]
+                self.sequence = self.sequences.get(
+                    (self.session["hermes_session_id"], self.session["generation"]), 0)
+                if self.agent is None:
+                    # Validate the MCP bridge and the complete model-visible tool set
+                    # before acknowledging that this session is ready for turns.
+                    self.agent = self._build_agent()
+                self.send({"type": "ack", "id": frame["id"], "tools": self.tool_names,
+                           "history_messages": len(self.history)})
+        elif kind == "turn":
+            allowed_tools = frame.get("allowed_tools")
+            if allowed_tools is not None and (not isinstance(allowed_tools, list)
+                    or any(name not in ADMITTED_TOOLS for name in allowed_tools)):
+                raise ValueError("invalid per-turn tools")
+            sheldon_mode = bool(frame.get("sheldon_mode", False))
+            threading.Thread(target=self.run_turn,
+                             args=(frame["id"], frame["prompt"], allowed_tools, sheldon_mode), daemon=True).start()
+        elif kind == "interrupt":
+            if self.agent is not None:
+                self.agent.interrupt(hard_cancel=True)
+            self.send({"type": "ack", "id": frame["id"]})
+        elif kind == "resume":
+            if self.agent is not None:
+                self.agent.clear_interrupt()
+            self.send({"type": "ack", "id": frame["id"]})
+        elif kind == "close":
+            if self.agent is not None:
+                self.agent.close()
+                self.agent = None
+            self.server.shutdown()
+            self.send({"type": "ack", "id": frame["id"]})
+            return False
+        return True
+
     def run(self) -> None:
         # Hermes prints progress on stdout even in quiet mode. Keep that output
         # away from the line-delimited control channel.
@@ -480,58 +555,7 @@ class Worker:
                 frame = json.loads(line)
                 if not isinstance(frame, dict):
                     raise ValueError("worker command must be an object")
-                kind = frame["type"]
-                if kind in {"relay_result", "tool_result"}:
-                    with self.pending_lock:
-                        pending = self.pending.get(frame["id"])
-                    if pending is not None:
-                        pending.put_nowait(frame)
-                elif kind == "bind":
-                    if self.turn_lock.locked():
-                        self.send({"type": "error", "id": frame["id"], "error": "turn_busy"})
-                    else:
-                        if self.agent is not None and (self.session or {}).get("hermes_session_id") != \
-                                frame["session_ref"]["hermes_session_id"]:
-                            self.agent.close()
-                            self.agent = None
-                        if self.agent is None:
-                            # A new Hermes session starts only from history Jarvis durably recorded.
-                            seed = frame.get("history") or []
-                            if not isinstance(seed, list) or any(
-                                    not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}
-                                    or not isinstance(item.get("content"), str) for item in seed):
-                                raise ValueError("invalid history seed")
-                            self.history = [{"role": item["role"], "content": item["content"]} for item in seed]
-                        self.session = frame["session_ref"]
-                        self.sequence = self.sequences.get(
-                            (self.session["hermes_session_id"], self.session["generation"]), 0)
-                        if self.agent is None:
-                            # Validate the MCP bridge and the complete model-visible tool set
-                            # before acknowledging that this session is ready for turns.
-                            self.agent = self._build_agent()
-                        self.send({"type": "ack", "id": frame["id"], "tools": self.tool_names,
-                                   "history_messages": len(self.history)})
-                elif kind == "turn":
-                    allowed_tools = frame.get("allowed_tools")
-                    if allowed_tools is not None and (not isinstance(allowed_tools, list)
-                            or any(name not in ADMITTED_TOOLS for name in allowed_tools)):
-                        raise ValueError("invalid per-turn tools")
-                    threading.Thread(target=self.run_turn,
-                                     args=(frame["id"], frame["prompt"], allowed_tools), daemon=True).start()
-                elif kind == "interrupt":
-                    if self.agent is not None:
-                        self.agent.interrupt(hard_cancel=True)
-                    self.send({"type": "ack", "id": frame["id"]})
-                elif kind == "resume":
-                    if self.agent is not None:
-                        self.agent.clear_interrupt()
-                    self.send({"type": "ack", "id": frame["id"]})
-                elif kind == "close":
-                    if self.agent is not None:
-                        self.agent.close()
-                        self.agent = None
-                    self.server.shutdown()
-                    self.send({"type": "ack", "id": frame["id"]})
+                if not self.handle_frame(frame):
                     return
             except (ValueError, KeyError, json.JSONDecodeError):
                 self.send({"type": "protocol_error", "id": frame.get("id")

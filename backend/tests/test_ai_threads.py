@@ -163,7 +163,8 @@ def test_hermes_relay_verification_failure_terminalizes_reservation_and_rebinds_
     worker = Worker()
     pool = SimpleNamespace(for_thread=lambda _thread_id: worker, lock_for=lambda _thread_id: contextmanager(
         lambda: (yield))(), schedule_idle_stop=lambda _thread_id: None)
-    availability = [{"route_class": "hermes:agent", "availability": {"runtime_reachable": True}}]
+    availability = [{"route_class": "hermes:agent", "availability": {"runtime_reachable": True},
+                     "roles": [{"role_id": "isaac", "available": True}]}]
     payload = AIThreadSubmit(request_id="agent-request-relay", prompt="Use the agent", route_class="hermes:agent")
 
     interaction = submit_interaction(workspace_id=workspace_id, thread_id=thread.id, payload=payload,

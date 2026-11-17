@@ -46,9 +46,34 @@ def _policy_mode_value(value: object) -> str:
 
 
 def _row_to_settings(row: sqlite3.Row) -> AISettingsRead:
+    import json
+    import os
+
+    from app.core.packs import hermes_role_pack_defaults
+    from app.modules.agents.hermes.roles import ROLES
+
     data = dict(row)
     input_tokens = int(data["scaleway_input_tokens_month_to_date"])
     output_tokens = int(data["scaleway_output_tokens_month_to_date"])
+    raw_routes = data.get("hermes_role_routes_json")
+    stored_routes: dict[str, str] = {}
+    if raw_routes:
+        try:
+            decoded = json.loads(raw_routes) if isinstance(raw_routes, str) else dict(raw_routes)
+            if isinstance(decoded, dict):
+                stored_routes = {key: value for key, value in decoded.items()
+                                 if isinstance(key, str) and isinstance(value, str)}
+        except Exception:
+            stored_routes = {}
+    pack_defaults = hermes_role_pack_defaults()
+    env_default = os.getenv("JARVIS_HERMES_INFERENCE_ROUTE", "local:llamacpp")
+    effective_routes: dict[str, str] = {}
+    for role_id in ROLES:
+        effective_routes[role_id] = (
+            stored_routes.get(role_id)
+            or pack_defaults.get(role_id)
+            or env_default
+        )
     return AISettingsRead(
         policy_mode=_policy_mode(data.get("policy_mode")),
         monthly_api_budget_usd=float(data["monthly_api_budget_usd"]),
@@ -70,6 +95,7 @@ def _row_to_settings(row: sqlite3.Row) -> AISettingsRead:
         smoke_test_mode_enabled=_to_bool(data["smoke_test_mode_enabled"]),
         max_direct_continuations=int(data["max_direct_continuations"]),
         direct_continuation_policy_version=str(data["direct_continuation_policy_version"]),
+        hermes_role_routes=effective_routes,
         updated_at=data["updated_at"],
     )
 
@@ -88,8 +114,9 @@ def ensure_ai_settings() -> AISettingsRead:
                 scaleway_live_smoke_test_enabled,
                 scaleway_monthly_token_cap, scaleway_hard_stop_token_cap,
                 scaleway_free_tier_reference_tokens, scaleway_input_tokens_month_to_date,
-                scaleway_output_tokens_month_to_date, smoke_test_mode_enabled, updated_at
-            ) VALUES (?, ?, 0, 0, 0, 'fake', 'fake-modeling-draft-v1', 'fake', 1, 0, 0, 0, 0, 0, 500000, 800000, 1000000, 0, 0, 0, ?)
+                scaleway_output_tokens_month_to_date, smoke_test_mode_enabled,
+                hermes_role_routes_json, updated_at
+            ) VALUES (?, ?, 0, 0, 0, 'fake', 'fake-modeling-draft-v1', 'fake', 1, 0, 0, 0, 0, 0, 500000, 800000, 1000000, 0, 0, 0, '{}', ?)
             """,
             (SETTINGS_ID, DEFAULT_POLICY_MODE.value, now),
         )
@@ -106,6 +133,9 @@ def get_ai_settings() -> AISettingsRead:
 
 
 def update_ai_settings(payload: AISettingsUpdate) -> AISettingsRead:
+    import json
+
+    # AISettingsUpdate.validate_hermes_role_routes already admitted only known roles on local-compute routes.
     current = get_ai_settings()
     values = current.model_dump()
     updates = payload.model_dump(exclude_unset=True)
@@ -113,6 +143,17 @@ def update_ai_settings(payload: AISettingsUpdate) -> AISettingsRead:
 
     now = utc_now()
     with open_sqlite_connection() as connection:
+        raw_current = {}
+        row = connection.execute("SELECT hermes_role_routes_json FROM ai_settings WHERE id = ?", (SETTINGS_ID,)).fetchone()
+        if row and row["hermes_role_routes_json"]:
+            try:
+                raw_current = json.loads(row["hermes_role_routes_json"])
+            except Exception:
+                raw_current = {}
+        if payload.hermes_role_routes is not None:
+            raw_current.update(payload.hermes_role_routes)
+        routes_json = json.dumps(raw_current)
+
         connection.execute(
             """
             UPDATE ai_settings
@@ -123,7 +164,8 @@ def update_ai_settings(payload: AISettingsUpdate) -> AISettingsRead:
                 scaleway_monthly_token_cap = ?, scaleway_hard_stop_token_cap = ?,
                 scaleway_input_tokens_month_to_date = ?,
                 scaleway_output_tokens_month_to_date = ?,
-                smoke_test_mode_enabled = ?, max_direct_continuations = ?, updated_at = ?
+                smoke_test_mode_enabled = ?, max_direct_continuations = ?,
+                hermes_role_routes_json = ?, updated_at = ?
             WHERE id = ?
             """,
             (
@@ -143,12 +185,36 @@ def update_ai_settings(payload: AISettingsUpdate) -> AISettingsRead:
                 int(values["scaleway_output_tokens_month_to_date"]),
                 int(bool(values["smoke_test_mode_enabled"])),
                 int(values["max_direct_continuations"]),
+                routes_json,
                 now,
                 SETTINGS_ID,
             ),
         )
         connection.commit()
     return get_ai_settings()
+
+
+def resolve_role_route(role_id: str) -> str:
+    """Resolve the effective local route for a Hermes role.
+
+    Resolution order:
+    1. Explicit stored setting in ai_settings
+    2. Loaded pack default ([hermes_roles] in pack manifest)
+    3. JARVIS_HERMES_INFERENCE_ROUTE env var (default 'local:llamacpp')
+    """
+    import os
+
+    from app.core.packs import hermes_role_pack_defaults
+    from app.modules.agents.hermes.roles import get_role
+
+    role = get_role(role_id)
+    try:
+        return get_ai_settings().hermes_role_routes[role.role_id]
+    except sqlite3.OperationalError as exc:
+        if "no such table: ai_settings" not in str(exc):
+            raise
+        return (hermes_role_pack_defaults().get(role.role_id)
+                or os.getenv("JARVIS_HERMES_INFERENCE_ROUTE", "local:llamacpp"))
 
 
 def record_scaleway_token_usage(*, input_tokens: int, output_tokens: int) -> AISettingsRead:

@@ -56,6 +56,12 @@ const numericKeys: NumericKey[] = [
   "scaleway_hard_stop_token_cap",
   "max_direct_continuations"
 ];
+const hermesRoleNames: ReadonlyArray<Readonly<{ id: string; name: string }>> = [
+  { id: "isaac", name: "Isaac" },
+  { id: "gregor", name: "Gregor" },
+  { id: "q", name: "Q" },
+  { id: "alfred", name: "Alfred" }
+];
 
 const accentLabels: Readonly<Record<AccentPreset, string>> = {
   microalgae: "Microalgae",
@@ -118,6 +124,7 @@ function Settings() {
   const [secret, setSecret] = useState<SettingsSecretStatus | null>(null);
   const [system, setSystem] = useState<SystemInfoResponse | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [roleRouteDraft, setRoleRouteDraft] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [credentialBusy, setCredentialBusy] = useState(false);
@@ -136,12 +143,14 @@ function Settings() {
     setSecret(null);
     setSystem(null);
     setDraft(null);
+    setRoleRouteDraft({});
   }, []);
 
   const loadCanonical = useCallback(async (
     preserveDraft = false,
     savedKey?: EditableKey,
-    projectFailure = true
+    projectFailure = true,
+    savedRoleId?: string
   ): Promise<boolean> => {
     const owner = ++generation.current;
     setLoading(true);
@@ -174,6 +183,13 @@ function Settings() {
         if (!preserveDraft || !current) return canonicalDraft;
         if (!savedKey) return current;
         return { ...current, [savedKey]: canonicalDraft[savedKey] };
+      });
+      setRoleRouteDraft(current => {
+        const canonical = snapshot.settings.hermes_role_routes ?? {};
+        if (!preserveDraft) return canonical;
+        const merged = { ...canonical, ...current };
+        if (savedRoleId) merged[savedRoleId] = canonical[savedRoleId] ?? "";
+        return merged;
       });
       setUncertain(false);
       return true;
@@ -208,8 +224,8 @@ function Settings() {
     setAccent(nextAccent);
   }), []);
 
-  const refreshAfterMutation = async (savedKey?: EditableKey): Promise<boolean> => {
-    const refreshed = await loadCanonical(true, savedKey, false);
+  const refreshAfterMutation = async (savedKey?: EditableKey, savedRoleId?: string): Promise<boolean> => {
+    const refreshed = await loadCanonical(true, savedKey, false, savedRoleId);
     if (!refreshed && mounted.current) {
       setUncertain(true);
       setError("State uncertain — canonical reread failed. Reload before another mutation.");
@@ -273,6 +289,28 @@ function Settings() {
     } finally {
       submitted.replace(/./g, "");
       if (mounted.current) setCredentialBusy(false);
+    }
+  };
+
+  const saveRoleRoute = async (roleId: string) => {
+    if (settingsBusy || uncertain) return;
+    const route = roleRouteDraft[roleId]?.trim() ?? "";
+    if (!route.startsWith("local:")) {
+      setError("Enter a configured local: route for this role.");
+      return;
+    }
+    setSettingsBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await saveAISetting({ hermes_role_routes: { [roleId]: route } });
+      if (await refreshAfterMutation(undefined, roleId)) setMessage("Role model saved. Canonical settings reloaded.");
+    } catch (caught) {
+      const failure = displayError(caught, "Role model write failed.");
+      const refreshed = await refreshAfterMutation();
+      if (refreshed && mounted.current) setError(`${failure} Canonical state was reloaded; no retry was attempted.`);
+    } finally {
+      if (mounted.current) setSettingsBusy(false);
     }
   };
 
@@ -389,6 +427,22 @@ function Settings() {
               <label><span>Direct continuations <small>0–16</small></span><span className="settings-field"><input inputMode="numeric" value={draft.max_direct_continuations} disabled={allMutationsBusy} onChange={(event) => setDraft({ ...draft, max_direct_continuations: event.target.value })} /><button disabled={allMutationsBusy} onClick={() => void save("max_direct_continuations")}>Save</button></span></label>
             </div>
           )}
+        </Surface>
+
+        <Surface className="settings-card" data-hermes-role-models>
+          <h2>Hermes role models</h2>
+          <p className="settings-card__summary">Choose a configured local inference route for each role. Changes take effect on the next turn.</p>
+          <div className="settings-fields">
+            {hermesRoleNames.map(role => <label key={role.id}>
+              <span>{role.name} model route</span>
+              <span className="settings-field">
+                <input aria-label={`${role.name} model route`} value={roleRouteDraft[role.id] ?? ""} disabled={allMutationsBusy || !settings}
+                  onChange={event => setRoleRouteDraft(current => ({ ...current, [role.id]: event.target.value }))} />
+                <button disabled={allMutationsBusy || !settings || roleRouteDraft[role.id] === settings.hermes_role_routes?.[role.id]}
+                  onClick={() => void saveRoleRoute(role.id)}>Save</button>
+              </span>
+            </label>)}
+          </div>
         </Surface>
 
         <Surface className="settings-card">

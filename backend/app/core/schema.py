@@ -28,8 +28,10 @@ SCHEMA_BUBU_TURN_EXTRAS_MIGRATION_ID = "0028_bubu_turn_extras"
 SCHEMA_BUBU_TURN_EXTRAS_MIGRATION_NAME = "Bubu page description and screenshot references per AI thread turn"
 SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_ID = "0029_geometry_feature_history"
 SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_NAME = "Design component parametric geometry feature history"
-CURRENT_SCHEMA_MIGRATION_ID = "0031_sim_result_value_versions"
-CURRENT_SCHEMA_MIGRATION_NAME = "Simulation result value version history"
+SCHEMA_HERMES_ROLE_MODELS_MIGRATION_ID = "0032_hermes_role_models"
+SCHEMA_HERMES_ROLE_MODELS_MIGRATION_NAME = "Hermes per-role local inference routes"
+CURRENT_SCHEMA_MIGRATION_ID = "0032_hermes_role_models"
+CURRENT_SCHEMA_MIGRATION_NAME = "Hermes per-role local inference routes"
 
 SCHEMA_MIGRATION_RECORDS = [
     {
@@ -95,6 +97,11 @@ SCHEMA_MIGRATION_RECORDS = [
     {
         "migration_id": SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_ID,
         "name": SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_NAME,
+        "checksum": None,
+    },
+    {
+        "migration_id": SCHEMA_HERMES_ROLE_MODELS_MIGRATION_ID,
+        "name": SCHEMA_HERMES_ROLE_MODELS_MIGRATION_NAME,
         "checksum": None,
     },
 ]
@@ -637,12 +644,14 @@ SCHEMA_STATEMENTS = [
         scaleway_input_tokens_month_to_date INTEGER NOT NULL DEFAULT 0,
         scaleway_output_tokens_month_to_date INTEGER NOT NULL DEFAULT 0,
         smoke_test_mode_enabled INTEGER NOT NULL DEFAULT 0,
+        hermes_role_routes_json TEXT NOT NULL DEFAULT '{}',
         updated_at TEXT NOT NULL
     )
     """,
 ]
 
 SCHEMA_MIGRATION_STATEMENTS = [
+    "ALTER TABLE ai_settings ADD COLUMN hermes_role_routes_json TEXT NOT NULL DEFAULT '{}'",
     "ALTER TABLE ai_settings ADD COLUMN policy_mode TEXT NOT NULL DEFAULT 'STRICT_IP'",
     "ALTER TABLE ai_settings ADD COLUMN scaleway_smoke_test_enabled INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE ai_settings ADD COLUMN scaleway_live_smoke_test_enabled INTEGER NOT NULL DEFAULT 0",

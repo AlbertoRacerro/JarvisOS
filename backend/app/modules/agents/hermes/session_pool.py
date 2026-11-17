@@ -107,7 +107,12 @@ class HermesSessionPool:
 
 
 def configured_supervisor() -> HermesSupervisor:
+    from app.modules.ai.settings import resolve_role_route
+
     venv = os.getenv("JARVIS_HERMES_VENV", "")
     python = str(Path(venv) / ("Scripts/python.exe" if os.name == "nt" else "bin/python")) if venv else ""
-    return HermesSupervisor(python, route_for_task=lambda _task: os.getenv(
-        "JARVIS_HERMES_INFERENCE_ROUTE", "local:llamacpp"))
+    return HermesSupervisor(
+        python,
+        route_for_task=lambda _task: os.getenv("JARVIS_HERMES_INFERENCE_ROUTE", "local:llamacpp"),
+        route_for_role=resolve_role_route,
+    )

@@ -25,17 +25,30 @@ class AIConversationRouteAvailability(BaseModel):
     message: str
 
 
+class HermesRoleOption(BaseModel):
+    role_id: str
+    display_name: str
+    purpose: str
+    route: str
+    model_id: str
+    available: bool
+    unavailable_reason: str | None = None
+    reason_code: str | None = None
+
+
 class AIConversationRoute(BaseModel):
     route_class: str
     label: str
     model_id: str
     execution_class: Literal["local_compute", "synthetic", "agent"]
     availability: AIConversationRouteAvailability
+    roles: list[HermesRoleOption] | None = None
 
 
 class AIConversationOptions(BaseModel):
     routes: list[AIConversationRoute]
     availability: Literal["configured", "unavailable"]
+    roles: list[HermesRoleOption] = Field(default_factory=list)
 
 
 class AIThreadSubmit(BaseModel):
@@ -43,6 +56,8 @@ class AIThreadSubmit(BaseModel):
     prompt: str = Field(min_length=1, max_length=12000)
     task_kind: str = Field(default="general", pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
     route_class: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$")
+    role_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    sheldon_mode: bool = False
     max_tokens: int | None = Field(default=None, gt=0)
     context_selection: ContextPackSelectionRequest | None = None
     expected_context_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
@@ -54,6 +69,15 @@ class AIThreadSubmit(BaseModel):
     # Bubu: DOM-first page description and optional screenshots (see thread_ui_context).
     ui_context: UiContext | None = None
     images: list[str] | None = Field(default=None, max_length=MAX_IMAGES)
+
+    @field_validator("role_id")
+    @classmethod
+    def validate_role_id(cls, value: str | None) -> str | None:
+        if value is not None:
+            from app.modules.agents.hermes.roles import ROLES
+            if value not in ROLES:
+                raise ValueError(f"unknown Hermes role: {value}")
+        return value
 
     @field_validator("images")
     @classmethod
@@ -96,6 +120,8 @@ class AIThreadInteractionRead(BaseModel):
     route_class: str | None = None
     execution_class: str | None = None
     model_id: str | None = None
+    role_id: str | None = None
+    sheldon_mode: bool = False
     proposal_ids: list[str] = Field(default_factory=list)
     proposal_count: int = 0
     proposals_truncated: bool = False
