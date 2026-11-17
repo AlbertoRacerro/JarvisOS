@@ -1,6 +1,6 @@
 # 298 — ACTIVITY-PANEL-1: One read-only Activity panel for long-running work, first slice of the front-end plan
 
-Status: draft
+Status: ready
 Depends on: none
 
 ## Goal
@@ -67,7 +67,7 @@ Out of scope (binding non-goals):
 ## Files likely touched
 
 - `backend/app/modules/coding/activity.py` (new), `backend/app/modules/coding/runtime_routes.py`
-- `frontend/src/components/ActivityPanel.tsx` (new), the app shell, `frontend/src/api/generated` (regenerated)
+- `frontend/src/components/ActivityPanel.tsx` (new), `frontend/src/components/Layout.tsx`, `frontend/src/api/generated` (regenerated)
 - `backend/tests/test_activity.py`, `frontend/tests/activity-panel.test.mjs`, `frontend/package.json`
 
 ## Design constraints
@@ -98,7 +98,8 @@ Out of scope (binding non-goals):
 - Backend: fixture job records and relay state under a temporary control root; one per source, merge order, bound,
   failing source, secret refusal, path scrub, visible-text pattern check.
 - Frontend `.mjs`: the control label, the empty-download text, the indeterminate state without a total.
-- Browser walk in `e2e/` from a clean profile at `/`, attached as evidence.
+- Browser walk in `e2e/` from a clean profile at `/`, attached as evidence, with fixture supervisor state under a
+  temporary `RELAY_CONTINUITY_DIR` as `e2e/coding_supervisor_walk.mjs` does; never the live control root.
 
 ## Front-end plan (directive placement, later slices, not part of this spec)
 
