@@ -21,8 +21,8 @@ const env = { ...process.env, PYTHONPATH: backend, JARVISOS_DATA_ROOT: data, XDG
 const log = openSync(join(evidence, 'backend.log'), 'w');
 const init = spawnSync(python, ['-c', 'from app.core.database import initialize_database\ninitialize_database()'], { cwd: backend, env, encoding: 'utf8' });
 if (init.status !== 0) throw Error(`database initialization failed: ${init.stderr}`);
-const server = spawn(python, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)], { cwd: backend, env, stdio: ['ignore', log, log] });
-const summary = { spec: '295+296', head: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(), steps: [], screenshots: [], errors: [] };
+const server = spawn(python, [join(root, 'e2e/literature_fake_server.py')], { cwd: root, env: { ...env, JARVISOS_PROOF_PORT: String(port) }, stdio: ['ignore', log, log] });
+const summary = { spec: '295+296+297', head: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(), steps: [], screenshots: [], errors: [] };
 let browser, failure;
 try {
   for (let i = 0; ; i++) { if (server.exitCode !== null) throw Error('backend exited'); try { if ((await fetch(base + '/health')).ok) break; } catch {} if (i > 120) throw Error('backend timeout'); await delay(500); }
@@ -92,6 +92,27 @@ try {
   }
   await shot('pdf-verdicts.png');
   summary.steps.push('PDF page 1 matches; page 2 does not match');
+  const ingestPdf = join(data, 'ingest.pdf');
+  const ingestInit = spawnSync(python, ['-c', "from tests.test_literature_pdf_pages import make_pdf; import sys; open(sys.argv[1], 'wb').write(make_pdf(['Introduction', 'The solubility of CO2 = 0.8 g/L at 25 K. Table 2: run A 1.2 3.4 5.6']))", ingestPdf], { cwd: backend, env, encoding: 'utf8' });
+  if (ingestInit.status !== 0) throw Error(`Ingestion PDF generation failed: ${ingestInit.stderr}`);
+  await page.getByRole('button', { name: '+ Register source' }).click();
+  await page.getByLabel('Source title').fill('Automatic value reading');
+  await page.getByLabel('Source file (optional)').setInputFiles(ingestPdf);
+  await page.getByRole('button', { name: 'Save source', exact: true }).click();
+  const ingested = page.locator('details[data-source-id]').filter({ hasText: 'Automatic value reading' });
+  await ingested.locator('[data-ingestion-state="done"]').waitFor();
+  const state = await ingested.locator('[data-ingestion-state="done"]').innerText();
+  if (!state.includes('1 source checked') || !state.includes('1 need attention')) throw Error(`Wrong ingestion counts: ${state}`);
+  await ingested.getByRole('alert').getByText('1 of 2 values need attention').waitFor();
+  await ingested.getByRole('alert').getByRole('link', { name: /Page 2/ }).click();
+  await ingested.locator('[data-ingestion-check="meaning_and_conditions"]').getByText('table_meaning_unverified').waitFor();
+  await ingested.getByText('Source checked only; not used in calculations.', { exact: true }).first().waitFor();
+  if (await ingested.getByRole('button', { name: /save|confirm/i }).count() > 0) {
+    const candidateControls = await ingested.locator('.literature-ingestion').getByRole('button', { name: /save|confirm/i }).count();
+    if (candidateControls) throw Error('Automatic value reading has a per-value save or confirm control');
+  }
+  await shot('automatic-ingestion.png');
+  summary.steps.push('Automatic PDF ingestion: one source-checked value, one flagged table value, one batch notice and a visible reason');
   const tablePdf = process.env.JARVISOS_WALK_TABLE_PDF;
   if (tablePdf && process.env.JARVISOS_DOCLING_PYTHON && process.env.JARVISOS_DOCLING_ARTIFACTS) {
     await page.getByRole('button', { name: '+ Register source' }).click();

@@ -15,6 +15,13 @@ export type LiteratureUsedBy = {
   ref: string;
 };
 
+export type LiteratureIngestionCheck = { check: string; passed: boolean | null; reason: string | null };
+export type LiteratureIngestionBatch = {
+  id: string; state: "running" | "done" | "failed" | "model_unavailable" | "unavailable"; reason: string | null;
+  proposals_count: number; source_checked_count: number; flagged_count: number; duplicate_entry_ids: string[];
+  truncated: boolean; notification_state: "none" | "pending" | "read"; current: boolean;
+};
+
 export type LiteratureEntry = {
   id: string;
   workspace_id: string;
@@ -31,6 +38,13 @@ export type LiteratureEntry = {
   context_text: string | null;
   checks: LiteratureCheck[];
   verdict: LiteratureVerdict | null;
+  quantity: string | null;
+  conditions: { name: string; value: number; unit: string }[];
+  ingestion_status: "source_checked" | "flagged" | null;
+  ingestion_checks: LiteratureIngestionCheck[];
+  stale_source: boolean;
+  eligible_for_later_admission: boolean;
+  eligibility_reasons: string[];
   provenance_ref: string;
   used_by: LiteratureUsedBy[];
   created_at: string;
@@ -58,6 +72,7 @@ export type LiteratureSource = {
     page_text: "available" | "no_text" | "unreadable" | null;
   };
   entries: LiteratureEntry[];
+  ingestion_batch: LiteratureIngestionBatch | null;
   created_at: string;
   updated_at: string;
 };
@@ -74,6 +89,22 @@ export async function listLiteratureSources(workspaceId: string, offset = 0): Pr
   const response = await fetch(`${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/literature/sources?limit=100&offset=${offset}`);
   if (!response.ok) throw new Error(`Literature request failed with ${response.status}`);
   return response.json() as Promise<LiteratureSourcePage>;
+}
+
+export async function getLiteratureSource(workspaceId: string, sourceId: string): Promise<LiteratureSource> {
+  const response = await fetch(`${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/literature/sources/${encodeURIComponent(sourceId)}`);
+  if (!response.ok) throw new Error(`Literature source request failed with ${response.status}`);
+  return response.json() as Promise<LiteratureSource>;
+}
+
+export async function retryLiteratureIngestion(workspaceId: string, sourceId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/literature/sources/${encodeURIComponent(sourceId)}/ingestion/retry`, { method: "POST" });
+  if (!response.ok) throw new Error(await literatureErrorMessage(response, `Could not retry ingestion (${response.status}).`));
+}
+
+export async function acknowledgeLiteratureIngestion(workspaceId: string, sourceId: string, batchId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/literature/sources/${encodeURIComponent(sourceId)}/ingestion/${encodeURIComponent(batchId)}/acknowledge`, { method: "POST" });
+  if (!response.ok) throw new Error(await literatureErrorMessage(response, `Could not acknowledge ingestion (${response.status}).`));
 }
 
 export function literatureContentUrl(source: LiteratureSource): string | null {

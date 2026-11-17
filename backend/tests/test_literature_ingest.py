@@ -1,8 +1,17 @@
 from __future__ import annotations
 
-import pytest
+import json
 
+import pytest
+from fastapi.testclient import TestClient
+
+from app.core.database import open_sqlite_connection
+from app.modules.ai.contracts import AIRequest, AIResponse, AIUsage
+from app.modules.memory import literature_ingest
 from app.modules.memory.literature_ingest import QUANTITY_LABELS, Proposal, validate_proposal
+from tests.test_literature_knowledge import _workspace_ids, client  # noqa: F401
+from tests.test_literature_pdf_pages import make_pdf
+from tests.test_literature_source_file import _source, _upload
 
 PAGE_2 = (
     "Results\nThe solubility of CO2 = 0.8 g/L at 25 °C in fresh water.\n"
@@ -97,3 +106,99 @@ def test_core_label_table_is_generic_and_every_reference_unit_parses() -> None:
     for label in QUANTITY_LABELS:
         for unit in label.reference_units:
             parse_unit_token(unit)
+
+
+def test_read_time_eligibility_requires_current_source_and_a_checked_datum() -> None:
+    row = {"ingestion_status": "source_checked", "source_sha256": "a" * 64}
+    assert literature_ingest.ingestion_eligibility(row, "a" * 64, "usable") == (True, False, [])
+    assert literature_ingest.ingestion_eligibility(row, "b" * 64, "usable") == (False, True, ["stale_source"])
+    assert literature_ingest.ingestion_eligibility(row, "a" * 64, "unchecked") == (False, False, ["datum_check_unchecked"])
+
+
+class _ScriptedAdapter:
+    provider_id = "fake"
+
+    def __init__(self, values: list[dict[str, object]]) -> None:
+        self.values = values
+        self.requests: list[AIRequest] = []
+
+    def complete(self, request: AIRequest) -> AIResponse:
+        self.requests.append(request)
+        body = json.dumps({"values": self.values})
+        return AIResponse(provider_id="fake", model_id="fake-model", request_id=request.request_id,
+                          text=body, content=body,
+                          usage=AIUsage(provider_id="fake", model_id="fake-model", input_tokens=1, output_tokens=1),
+                          finish_reason="stop", safety_status="allowed")
+
+
+def _script(monkeypatch: pytest.MonkeyPatch, values: list[dict[str, object]]) -> _ScriptedAdapter:
+    adapter = _ScriptedAdapter(values)
+    monkeypatch.setattr(literature_ingest, "INGEST_ROUTE_CLASS", "local:fake")
+    monkeypatch.setattr(literature_ingest, "_ADAPTERS", {"fake": adapter})
+    return adapter
+
+
+def test_pdf_upload_ingests_once_and_retains_flagged_values(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
+    workspace, _ = _workspace_ids(client)
+    values = [_proposal(quote="The solubility of CO2 = 0.8 g/L at 25 K.",
+                        conditions=[{"name": "temperature", "value_text": "25", "unit": "K"}]).model_dump(),
+              _proposal(quantity="solubility", value_text="3.4", unit="g/L",
+              conditions=[], quote="Table 2: run A 1.2 3.4 5.6").model_dump()]
+    adapter = _script(monkeypatch, values)
+    pdf = make_pdf(["Introduction", "The solubility of CO2 = 0.8 g/L at 25 K. Table 2: run A 1.2 3.4 5.6"])
+    artifact = _upload(client, workspace, "paper.pdf", pdf).json()["artifact_id"]
+    created = _source(client, workspace, artifact_id=artifact)
+    source = client.get(f"/workspaces/{workspace}/literature/sources/{created['id']}").json()
+    source_id = source["id"]
+    batch = source["ingestion_batch"]
+    assert batch["state"] == "done" and batch["notification_state"] == "pending"
+    assert batch["source_checked_count"] == 1 and batch["flagged_count"] == 1
+    entries = {entry["ingestion_status"]: entry for entry in source["entries"]}
+    assert entries["source_checked"]["eligible_for_later_admission"] is True
+    assert entries["source_checked"]["value_number"] == 0.8
+    assert entries["flagged"]["eligible_for_later_admission"] is False
+    assert any(check["reason"] == "table_meaning_unverified" for check in entries["flagged"]["ingestion_checks"])
+    assert len(adapter.requests) == 1
+    assert len(batch["ai_job_ids"]) == 1
+    with open_sqlite_connection() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM ai_jobs WHERE id = ?", (batch["ai_job_ids"][0],)).fetchone()[0] == 1
+    replay = client.post(f"/workspaces/{workspace}/literature/sources/{source_id}/backing",
+                         json={"artifact_id": artifact})
+    assert replay.status_code == 409  # Existing backing cannot be re-attached.
+    assert literature_ingest.ingest_source(workspace, source_id) == batch["id"]
+    assert len(adapter.requests) == 1
+    assert len(client.get(f"/workspaces/{workspace}/literature/sources/{source_id}").json()["entries"]) == 2
+    acknowledged = client.post(f"/workspaces/{workspace}/literature/sources/{source_id}/ingestion/{batch['id']}/acknowledge")
+    assert acknowledged.status_code == 200
+    assert client.get(f"/workspaces/{workspace}/literature/sources/{source_id}").json()["ingestion_batch"]["notification_state"] == "read"
+
+
+def test_duplicate_contradiction_and_replaced_bytes(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
+    workspace, _ = _workspace_ids(client)
+    first = "The inner diameter is 0.05 m."
+    second = "The inner diameter is 0.06 m."
+    values = [_proposal(quantity="inner diameter", value_text="0.05", unit="m", conditions=[], page=1,
+                        quote=first).model_dump(),
+              _proposal(quantity="inner diameter", value_text="0.05", unit="m", conditions=[], page=1,
+                        quote=first).model_dump(),
+              _proposal(quantity="inner diameter", value_text="0.06", unit="m", conditions=[], page=1,
+                        quote=second).model_dump()]
+    _script(monkeypatch, values)
+    pdf = make_pdf([f"{first} {second}"])
+    artifact = _upload(client, workspace, "a.pdf", pdf).json()["artifact_id"]
+    created = _source(client, workspace, artifact_id=artifact)
+    url = f"/workspaces/{workspace}/literature/sources/{created['id']}"
+    source = client.get(url).json()
+    assert source["ingestion_batch"]["duplicate_entry_ids"] == [source["entries"][0]["id"]]
+    assert len(source["entries"]) == 2
+    assert source["ingestion_batch"]["source_checked_count"] == 1
+    assert source["ingestion_batch"]["flagged_count"] == 1
+    assert any(check["reason"] == "contradiction" for check in source["entries"][1]["ingestion_checks"])
+    replacement = _upload(client, workspace, "b.pdf", pdf + b"\n% changed container\n").json()["artifact_id"]
+    with open_sqlite_connection() as connection:
+        connection.execute("UPDATE literature_sources SET artifact_id = ? WHERE id = ?", (replacement, created["id"]))
+        connection.commit()
+    changed = client.get(url).json()
+    assert changed["entries"][0]["verdict"] == "usable"
+    assert all(entry["stale_source"] and not entry["eligible_for_later_admission"] for entry in changed["entries"])
+    assert changed["ingestion_batch"]["current"] is False

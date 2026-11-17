@@ -560,6 +560,6 @@ def ingestion_eligibility(row, current_sha256: str | None, verdict: str | None) 
         reasons.append("flagged")
     if stale:
         reasons.append("stale_source")
-    if verdict == "not_usable":
-        reasons.append("datum_check_not_usable")
+    if verdict not in {"usable", "usable_with_warnings"}:
+        reasons.append("datum_check_not_usable" if verdict == "not_usable" else "datum_check_unchecked")
     return not reasons, stale, reasons
