@@ -134,7 +134,7 @@ def test_show_missing_and_unreadable_runs(client: TestClient) -> None:
     _write(ws, "run_bad", "{nope")
     assert client.get(_url(ws, "runs/run_missing")).status_code == 404
     assert client.get(_url(ws, "runs/run_bad")).status_code == 404
-    assert client.get(f"/workspaces/missing-ws/engineering/bench/runs").status_code == 404
+    assert client.get("/workspaces/missing-ws/engineering/bench/runs").status_code == 404
 
 
 @pytest.mark.parametrize("run_id", ["..", "a%2Fb", "%2Fetc", "..%2F..", "a b", "x" * 200, "%2E%2E"])
