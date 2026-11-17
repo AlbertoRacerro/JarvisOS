@@ -119,3 +119,21 @@ def attach_literature_backing_endpoint(
         return attach_literature_backing(workspace_id, source_id, payload.artifact_id)
     except LiteratureError as exc:
         raise _literature_error(exc) from exc
+
+
+@router.get("/sources/{source_id}/structured")
+def get_structured_pdf_endpoint(workspace_id: str, source_id: str) -> dict:
+    from app.modules.memory.structured_pdf import structured_view
+    try:
+        return structured_view(workspace_id, source_id)
+    except LiteratureError as exc:
+        raise _literature_error(exc) from exc
+
+
+@router.post("/sources/{source_id}/structured", status_code=202)
+def start_structured_pdf_endpoint(workspace_id: str, source_id: str) -> dict:
+    from app.modules.memory.structured_pdf import structured_view
+    try:
+        return structured_view(workspace_id, source_id, start=True)
+    except LiteratureError as exc:
+        raise _literature_error(exc) from exc

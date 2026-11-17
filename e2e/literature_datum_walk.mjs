@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-if (process.argv.includes('--help')) { console.log('node e2e/literature_datum_walk.mjs <evidence-dir>'); process.exit(0); }
+if (process.argv.includes('--help')) { console.log('node e2e/literature_datum_walk.mjs <evidence-dir>\nOptional structured PDF part: JARVISOS_DOCLING_PYTHON, JARVISOS_DOCLING_ARTIFACTS and JARVISOS_WALK_TABLE_PDF (a two-page PDF whose page 2 has a table with the cell 0.0012)'); process.exit(0); }
 if (!process.argv[2]) throw Error('evidence directory required');
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? 'playwright');
 const root = resolve(new URL('../', import.meta.url).pathname), backend = join(root, 'backend');
@@ -22,7 +22,7 @@ const log = openSync(join(evidence, 'backend.log'), 'w');
 const init = spawnSync(python, ['-c', 'from app.core.database import initialize_database\ninitialize_database()'], { cwd: backend, env, encoding: 'utf8' });
 if (init.status !== 0) throw Error(`database initialization failed: ${init.stderr}`);
 const server = spawn(python, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)], { cwd: backend, env, stdio: ['ignore', log, log] });
-const summary = { spec: 295, head: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(), steps: [], screenshots: [], errors: [] };
+const summary = { spec: '295+296', head: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(), steps: [], screenshots: [], errors: [] };
 let browser, failure;
 try {
   for (let i = 0; ; i++) { if (server.exitCode !== null) throw Error('backend exited'); try { if ((await fetch(base + '/health')).ok) break; } catch {} if (i > 120) throw Error('backend timeout'); await delay(500); }
@@ -92,6 +92,40 @@ try {
   }
   await shot('pdf-verdicts.png');
   summary.steps.push('PDF page 1 matches; page 2 does not match');
+  const tablePdf = process.env.JARVISOS_WALK_TABLE_PDF;
+  if (tablePdf && process.env.JARVISOS_DOCLING_PYTHON && process.env.JARVISOS_DOCLING_ARTIFACTS) {
+    await page.getByRole('button', { name: '+ Register source' }).click();
+    await page.getByLabel('Source title').fill('Table PDF');
+    await page.getByLabel('Source file (optional)').setInputFiles(tablePdf);
+    await page.getByRole('button', { name: 'Save source', exact: true }).click();
+    const tableSource = page.locator('details[data-source-id]').filter({ hasText: 'Table PDF' });
+    const sourceId = await tableSource.getAttribute('data-source-id');
+    const entryCount = async () => (await (await fetch(`${base}/workspaces/${ws.id}/literature/sources/${sourceId}`)).json()).entries.length;
+    await tableSource.getByRole('button', { name: 'Extract page text and tables locally' }).click();
+    await tableSource.locator('[data-extraction-state="running"]').waitFor();
+    await shot('extract-running.png');
+    await tableSource.locator('[data-extraction-state="available"]').waitFor({ timeout: 180000 });
+    const cell = tableSource.locator('td').filter({ hasText: '0.0012' }).getByRole('button', { name: '0.0012', exact: true });
+    await cell.waitFor();
+    if (await tableSource.locator('section', { has: page.getByRole('heading', { name: 'Page 2', exact: true }) }).locator('td').count() < 4) throw Error('Table cells missing on page 2');
+    if (await entryCount() !== 0) throw Error('Extraction created an entry');
+    await shot('extract-available.png');
+    await cell.click();
+    await tableSource.locator('[data-extraction-selection]').filter({ hasText: 'not what it means in the table' }).waitFor();
+    const tableForm = tableSource.locator('.literature-add-finding form');
+    const prefilled = { value: await tableForm.getByLabel('Reported value').inputValue(), number: await tableForm.getByLabel('Number (optional)').inputValue(), from: await tableForm.getByLabel('Pages from (optional)').inputValue(), to: await tableForm.getByLabel('Pages to (optional)').inputValue() };
+    if (prefilled.value !== '0.0012' || Number(prefilled.number) !== 0.0012 || prefilled.from !== '2' || prefilled.to !== '2') throw Error(`Unexpected prefill ${JSON.stringify(prefilled)}`);
+    if (await entryCount() !== 0) throw Error('Selection created an entry');
+    summary.prefill = prefilled;
+    await shot('selection-prefill.png');
+    await tableForm.getByLabel('Unit (optional)').fill('1/s');
+    await tableForm.getByRole('button', { name: 'Save raw finding' }).click();
+    await tableSource.locator('summary em[data-verdict]').waitFor();
+    summary.table_datum_verdict = await tableSource.locator('summary em[data-verdict]').first().innerText();
+    if (!/Checked/.test(summary.table_datum_verdict)) throw Error(`Cell on page 2 not found by the source check: ${summary.table_datum_verdict}`);
+    await shot('table-datum-check.png');
+    summary.steps.push('Extraction ran locally from the Literature screen; selecting cell 0.0012 on page 2 prefilled the form without saving; the saved datum shows its page-2 check: ' + summary.table_datum_verdict);
+  } else summary.steps.push('Structured PDF part skipped: no local Docling environment configured');
   if (summary.errors.length) throw Error('Page errors');
 } catch (error) { failure = error; summary.failure = String(error.stack ?? error); } finally {
   summary.result = failure ? 'fail' : 'pass'; await writeFile(join(evidence, 'evidence.json'), JSON.stringify(summary, null, 2) + '\n'); await browser?.close(); server.kill('SIGTERM'); await delay(500); await rm(data, { recursive: true, force: true });
