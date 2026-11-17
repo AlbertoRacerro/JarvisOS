@@ -129,7 +129,7 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
   };
   const chooseToken = (token: string, page: number) => {
     if (!hasPdfBacking) return;
-    setKind("datum"); setValue(token); setNumber(token.replace("−", "-").replace(",", "."));
+    setKind("datum"); setValue(token); setNumber(token.includes(",") ? "" : token.replace("−", "-")); // a comma may be decimal or thousands: the operator types the number
     setLineFrom(String(page)); setLineTo(String(page));
     setContext("Selected from the extracted PDF view; verify against the original page before use.");
     setSelected({ token, page }); setAddOpen(true); setNotice(""); setError(null);

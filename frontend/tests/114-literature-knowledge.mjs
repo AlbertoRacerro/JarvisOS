@@ -50,7 +50,7 @@ assert.match(page, /Extracting locally…/);
 assert.match(page, /text\.matchAll\(NUMERIC_TOKEN\)/);
 assert.match(page, /<button key=\{at\} type="button" className="literature-token" data-token=\{match\[0\]\}/);
 assert.match(page, /onClick=\{\(\) => onChoose\(match\[0\], page\)\}>\{match\[0\]\}<\/button>/);
-assert.match(page, /setValue\(token\); setNumber\(token\.replace/);
+assert.match(page, /setValue\(token\); setNumber\(token\.includes\(","\) \? "" : token\.replace/);
 assert.match(page, /setLineFrom\(String\(page\)\); setLineTo\(String\(page\)\)/);
 assert.match(page, /The source check confirms this number appears on that PDF page, not what it means in the table\./);
 assert.match(page, /nothing is saved until you save it/);
