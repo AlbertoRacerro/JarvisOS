@@ -74,3 +74,9 @@ assert.match(page, /Browsing does not add Jarvis context\./);
 assert.doesNotMatch(page, /\b(?:postJson|putJson|deleteJson)\b/);
 
 console.log("114 literature knowledge frontend contract: PASS");
+// Spec 297: polling stops once no batch is coming; a source never read offers a visible read action.
+assert.match(page, /function awaitingFirstBatch/);
+assert.match(page, /Read values from this PDF/);
+// Spec 297 criterion 9: automatic values are never described as usable for calculations.
+const ingestionUi = page.slice(page.indexOf('className="literature-ingestion"'), page.indexOf('Extracted PDF view'));
+for (const forbidden of [/\busable\b/i, /\bvalidated\b/i, /available for calculations/i]) assert.doesNotMatch(ingestionUi, forbidden);

@@ -107,6 +107,12 @@ def _artifact_is_literature_eligible(row) -> bool:
     )
 
 
+def _backing_is_linked(row) -> bool:
+    """True when the stored path or any parent is a symlink (refused as in spec 296); _content_state resolves links."""
+    raw = Path(str(row["stored_path"]))
+    return raw.is_symlink() or any(parent.is_symlink() for parent in raw.parents)
+
+
 def _content_state(row) -> tuple[str, Path | None]:
     if not _artifact_is_literature_eligible(row):
         return "ineligible", None
@@ -210,7 +216,7 @@ class _BackingText:
             artifact = (_artifact_row_or_none(self._connection, self._workspace_id, str(self._artifact_id))
                         if self._artifact_id is not None else None)
             availability, path = _content_state(artifact) if artifact is not None else ("missing", None)
-            if availability == "available" and path is not None and not path.is_symlink():
+            if availability == "available" and path is not None and not _backing_is_linked(artifact):
                 try:
                     digest = hashlib.sha256()
                     with path.open("rb") as stream:

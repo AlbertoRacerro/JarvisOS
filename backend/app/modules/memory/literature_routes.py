@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
@@ -24,6 +26,7 @@ from app.modules.memory.literature_service import (
     store_literature_file,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/workspaces/{workspace_id}/literature", tags=["literature"])
 
 
@@ -32,8 +35,8 @@ def _ingest_in_background(workspace_id: str, source_id: str) -> None:
 
     try:
         ingest_source(workspace_id, source_id)
-    except LiteratureError:
-        pass
+    except Exception:  # noqa: BLE001 - the batch row records the outcome; a background task has no caller to tell.
+        logger.exception("literature ingestion trigger failed for source %s", source_id)
 
 
 def _literature_error(exc: LiteratureError) -> HTTPException:

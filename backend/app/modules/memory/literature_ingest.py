@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -287,7 +287,6 @@ MAX_PROPOSALS = 200
 WINDOW_CHARS = 12_000
 INGEST_ROUTE_CLASS = "local:general"
 _ADAPTERS: dict | None = None  # tests inject a scripted local adapter; production uses the default adapters
-RETRYABLE_STATES = frozenset({"model_unavailable", "failed"})
 INTERRUPTED_AFTER_SECONDS = 1800  # a running batch with no heartbeat for this long was cut off (restart, crash)
 
 
@@ -385,9 +384,12 @@ def _range_and_dimension(connection, workspace_id: str, value: ValidatedValue) -
 def _duplicate_or_contradiction(connection, workspace_id: str, value: ValidatedValue) -> tuple[CheckOutcome, str | None]:
     rows = connection.execute(
         """
-        SELECT id, value_number, unit FROM literature_entries
-        WHERE workspace_id = ? AND quantity = ? AND conditions_json = ? AND ingestion_status = 'source_checked'
-        ORDER BY created_at, id
+        SELECT e.id, e.value_number, e.unit FROM literature_entries e
+        JOIN literature_sources s ON s.id = e.source_id AND s.workspace_id = e.workspace_id
+        JOIN artifacts a ON a.id = s.artifact_id AND a.workspace_id = s.workspace_id
+        WHERE e.workspace_id = ? AND e.quantity = ? AND e.conditions_json = ? AND e.ingestion_status = 'source_checked'
+          AND e.source_sha256 = a.sha256
+        ORDER BY e.created_at, e.id
         """,
         (workspace_id, value.quantity, _canonical_conditions(value.conditions)),
     ).fetchall()
@@ -420,6 +422,7 @@ def ingest_source(workspace_id: str, source_id: str, *, retry: bool = False) -> 
     """Ingest one source's stored PDF once per (source, bytes, extractor version); return the batch id."""
     from app.modules.memory.literature_service import (
         _artifact_row_or_none,
+        _backing_is_linked,
         _content_state,
         _require_workspace,
         _source_row,
@@ -434,27 +437,39 @@ def ingest_source(workspace_id: str, source_id: str, *, retry: bool = False) -> 
         if artifact is None:
             return None
         availability, path = _content_state(artifact)
-        sha256 = _file_sha256(path) if path is not None and not path.is_symlink() else str(artifact["sha256"] or "")
+        if _backing_is_linked(artifact):
+            availability, path = "unsafe", None
+        sha256 = _file_sha256(path) if path is not None else str(artifact["sha256"] or "")
         existing = _batch_row(connection, source_id, sha256)
-        if existing is not None and not (retry and (existing["state"] in RETRYABLE_STATES or is_interrupted(existing))):
-            return str(existing["id"])
         now = utc_now()
         if existing is None:
             batch_id = f"lib_{uuid4().hex}"
-            connection.execute(
+            inserted = connection.execute(
                 """
-                INSERT INTO literature_ingestion_batches
+                INSERT OR IGNORE INTO literature_ingestion_batches
                     (id, workspace_id, source_id, source_sha256, extractor_version, state, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, 'running', ?, ?)
                 """,
                 (batch_id, workspace_id, source_id, sha256, EXTRACTOR_VERSION, now, now),
             )
+            if inserted.rowcount != 1:  # a concurrent create/attach trigger won the same (source, bytes, version)
+                connection.commit()
+                return str(_batch_row(connection, source_id, sha256)["id"])
         else:
             batch_id = str(existing["id"])
-            connection.execute(
-                "UPDATE literature_ingestion_batches SET state = 'running', reason = NULL, updated_at = ? WHERE id = ?",
-                (now, batch_id),
+            if not retry:
+                return batch_id
+            cutoff = (datetime.now(UTC) - timedelta(seconds=INTERRUPTED_AFTER_SECONDS)).isoformat()
+            claimed = connection.execute(
+                """
+                UPDATE literature_ingestion_batches SET state = 'running', reason = NULL, updated_at = ?
+                WHERE id = ? AND (state IN ('model_unavailable', 'failed') OR (state = 'running' AND updated_at < ?))
+                """,
+                (now, batch_id, cutoff),
             )
+            if claimed.rowcount != 1:  # not retryable, or another retry already claimed it
+                connection.commit()
+                return batch_id
         connection.commit()
         try:
             _run_batch(connection, workspace_id, source_id, batch_id, artifact, availability, path, sha256)
@@ -469,7 +484,7 @@ def _run_batch(connection, workspace_id: str, source_id: str, batch_id: str, art
     if str(artifact["mime_type"] or "") != "application/pdf":
         _finish(connection, batch_id, "unavailable", "not_pdf")
         return
-    if availability != "available" or path is None or path.is_symlink():
+    if availability != "available" or path is None:
         _finish(connection, batch_id, "unavailable", f"backing_{availability if availability != 'available' else 'unsafe'}")
         return
     try:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -241,3 +242,102 @@ def test_unexpected_error_fails_the_batch_and_an_interrupted_run_is_retryable(
     assert client.post(f"{url}/ingestion/retry").status_code == 202
     done = client.get(url).json()
     assert done["ingestion_batch"]["state"] == "done" and done["ingestion_batch"]["source_checked_count"] == 1
+
+
+_SOLUBILITY = "The solubility of CO2 = 0.8 g/L at 25 K."
+
+
+def _solubility() -> dict[str, object]:
+    return _proposal(quote=_SOLUBILITY,
+                     conditions=[{"name": "temperature", "value_text": "25", "unit": "K"}]).model_dump()
+
+
+def test_replaced_bytes_with_the_same_value_store_a_fresh_entry_not_a_stale_duplicate(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    workspace, _ = _workspace_ids(client)
+    _script(monkeypatch, [_solubility()])
+    pdf = make_pdf(["Introduction", _SOLUBILITY])
+    created = _source(client, workspace, artifact_id=_upload(client, workspace, "a.pdf", pdf).json()["artifact_id"])
+    replacement = _upload(client, workspace, "b.pdf", pdf + b"\n% changed container\n").json()["artifact_id"]
+    with open_sqlite_connection() as connection:
+        connection.execute("UPDATE literature_sources SET artifact_id = ? WHERE id = ?", (replacement, created["id"]))
+        connection.commit()
+    literature_ingest.ingest_source(workspace, created["id"])
+    source = client.get(f"/workspaces/{workspace}/literature/sources/{created['id']}").json()
+    assert source["ingestion_batch"]["duplicate_entry_ids"] == []
+    current = [entry for entry in source["entries"] if not entry["stale_source"]]
+    assert len(current) == 1 and current[0]["ingestion_status"] == "source_checked", current[0]["ingestion_checks"]
+
+
+def test_symlinked_backing_is_refused_and_never_sent_to_the_model(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    workspace, _ = _workspace_ids(client)
+    adapter = _script(monkeypatch, [_solubility()])
+    artifact = _upload(client, workspace, "a.pdf", make_pdf(["Introduction", _SOLUBILITY])).json()["artifact_id"]
+    with open_sqlite_connection() as connection:
+        stored = Path(connection.execute("SELECT stored_path FROM artifacts WHERE id = ?", (artifact,)).fetchone()[0])
+    target = stored.with_name("target.pdf")
+    stored.rename(target)
+    stored.symlink_to(target)
+    created = _source(client, workspace, artifact_id=artifact)
+    batch = client.get(f"/workspaces/{workspace}/literature/sources/{created['id']}").json()["ingestion_batch"]
+    assert (batch["state"], batch["reason"]) == ("unavailable", "backing_unsafe")
+    assert adapter.requests == []
+
+
+class _Down:
+    def complete(self, request: AIRequest) -> AIResponse:
+        raise ConnectionError("local model offline")
+
+
+@pytest.mark.parametrize(("reply", "state", "reason"), [
+    (None, "model_unavailable", None),
+    ("not json", "failed", "malformed_model_output"),
+])
+def test_model_down_or_malformed_reply_stores_nothing_and_retry_is_claimed_once(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, reply: str | None, state: str, reason: str | None  # noqa: F811
+) -> None:
+    workspace, other = _workspace_ids(client)
+    adapter = _script(monkeypatch, [])
+    if reply is None:
+        monkeypatch.setattr(literature_ingest, "_ADAPTERS", {"fake": _Down()})
+    else:
+        adapter.complete = lambda request: AIResponse(  # type: ignore[method-assign]
+            provider_id="fake", model_id="fake-model", request_id=request.request_id, text=reply, content=reply,
+            usage=AIUsage(provider_id="fake", model_id="fake-model", input_tokens=1, output_tokens=1),
+            finish_reason="stop", safety_status="allowed")
+    created = _source(client, workspace,
+                      artifact_id=_upload(client, workspace, "a.pdf", make_pdf(["Introduction", _SOLUBILITY])).json()["artifact_id"])
+    url = f"/workspaces/{workspace}/literature/sources/{created['id']}"
+    source = client.get(url).json()
+    assert source["ingestion_batch"]["state"] == state and source["entries"] == []
+    if reason:
+        assert source["ingestion_batch"]["reason"] == reason
+    batch_id = source["ingestion_batch"]["id"]
+    with open_sqlite_connection() as connection:  # another retry already holds the claim
+        connection.execute("UPDATE literature_ingestion_batches SET state = 'running', updated_at = ? WHERE id = ?",
+                           (literature_ingest.utc_now(), batch_id))
+        connection.commit()
+    fresh = _script(monkeypatch, [_solubility()])
+    assert literature_ingest.ingest_source(workspace, created["id"], retry=True) == batch_id
+    assert fresh.requests == []
+    missing = client.post(f"/workspaces/{other}/literature/sources/{created['id']}/ingestion/{batch_id}/acknowledge")
+    assert missing.status_code == 404
+
+
+def test_markdown_backing_is_not_read_for_values(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
+    workspace, _ = _workspace_ids(client)
+    adapter = _script(monkeypatch, [_solubility()])
+    created = _source(client, workspace, artifact_id=_upload(client, workspace, "a.md", b"# notes\n0.8 g/L").json()["artifact_id"])
+    batch = client.get(f"/workspaces/{workspace}/literature/sources/{created['id']}").json()["ingestion_batch"]
+    assert (batch["state"], batch["reason"]) == ("unavailable", "not_pdf") and adapter.requests == []
+
+
+def test_no_calculation_code_reads_ingestion_fields() -> None:
+    app_root = Path(literature_ingest.__file__).resolve().parents[2]
+    readers = [path for path in app_root.rglob("*.py") if "memory" not in path.parts and path.name != "literature_schema.py"
+               and ("eligible_for_later_admission" in path.read_text(encoding="utf-8")
+                    or "ingestion_status" in path.read_text(encoding="utf-8"))]
+    assert readers == []

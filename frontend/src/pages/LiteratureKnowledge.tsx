@@ -76,6 +76,11 @@ function ExtractedBlockView({ block, page, onChoose }: Readonly<{ block: Extract
     : <p><TokenText text={block.text} page={page} onChoose={onChoose} /></p>;
 }
 
+// A new PDF source gets its first batch from a background task; after this window, no batch means it was never read.
+function awaitingFirstBatch(source: LiteratureSource): boolean {
+  return Date.now() - Date.parse(source.updated_at) < 120_000;
+}
+
 function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, onEntrySaved, onSourceUpdated }: Readonly<{
   source: LiteratureSource; open: boolean; onToggle: (open: boolean) => void; requestedEntryId: string | null;
   onSelect: (ref: string, label?: string) => void; onEntrySaved: (entry: LiteratureEntry) => void; onSourceUpdated: (source: LiteratureSource) => void;
@@ -180,7 +185,8 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
         <p>{source.backing?.filename ?? "Citation only · no source file attached."}</p>
         {source.backing?.mime_type === "application/pdf" ? <section className="literature-ingestion" aria-label="PDF value reading">
           <h3>Values found in this PDF</h3>
-          {!source.ingestion_batch ? <p role="status">Reading the PDF for numeric values…</p> : <>
+          {!source.ingestion_batch ? (awaitingFirstBatch(source) ? <p role="status">Reading the PDF for numeric values…</p> :
+            <><p>Values in this PDF have not been read yet.</p><button type="button" onClick={() => void retryIngestion()}>Read values from this PDF</button></>) : <>
             <p role="status" data-ingestion-state={source.ingestion_batch.state}>
               {source.ingestion_batch.state === "running" ? "Reading the PDF for numeric values…" :
                 source.ingestion_batch.state === "done" ? `${source.ingestion_batch.source_checked_count} source checked · ${source.ingestion_batch.flagged_count} need attention` :
@@ -305,7 +311,7 @@ export default function LiteratureKnowledge({ jarvis, searchPanel, workspaceId, 
   useEffect(() => {
     if (!activeWorkspaceId) return;
     const pending = sources.filter((source) => source.backing?.mime_type === "application/pdf" &&
-      (!source.ingestion_batch || source.ingestion_batch.state === "running"));
+      (source.ingestion_batch ? source.ingestion_batch.state === "running" : awaitingFirstBatch(source)));
     if (!pending.length) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
