@@ -202,3 +202,37 @@ def test_duplicate_contradiction_and_replaced_bytes(client: TestClient, monkeypa
     assert changed["entries"][0]["verdict"] == "usable"
     assert all(entry["stale_source"] and not entry["eligible_for_later_admission"] for entry in changed["entries"])
     assert changed["ingestion_batch"]["current"] is False
+
+
+def test_unexpected_error_fails_the_batch_and_an_interrupted_run_is_retryable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    workspace, _ = _workspace_ids(client)
+    adapter = _script(monkeypatch, [_proposal(quote="The solubility of CO2 = 0.8 g/L at 25 K.",
+                                              conditions=[{"name": "temperature", "value_text": "25", "unit": "K"}]
+                                              ).model_dump()])
+
+    def boom(*_args: object) -> object:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(literature_ingest, "_duplicate_or_contradiction", boom)
+    pdf = make_pdf(["Introduction", "The solubility of CO2 = 0.8 g/L at 25 K."])
+    artifact = _upload(client, workspace, "paper.pdf", pdf).json()["artifact_id"]
+    created = _source(client, workspace, artifact_id=artifact)
+    url = f"/workspaces/{workspace}/literature/sources/{created['id']}"
+    failed = client.get(url).json()
+    assert failed["ingestion_batch"]["state"] == "failed"
+    assert failed["ingestion_batch"]["reason"] == "internal_error"
+    assert failed["entries"] == []  # nothing half-written survives the rollback
+
+    with open_sqlite_connection() as connection:
+        connection.execute("UPDATE literature_ingestion_batches SET state = 'running', updated_at = ? WHERE id = ?",
+                           ("2000-01-01T00:00:00+00:00", failed["ingestion_batch"]["id"]))
+        connection.commit()
+    interrupted = client.get(url).json()["ingestion_batch"]
+    assert (interrupted["state"], interrupted["reason"]) == ("failed", "interrupted")
+    monkeypatch.undo()
+    _script(monkeypatch, adapter.values)
+    assert client.post(f"{url}/ingestion/retry").status_code == 202
+    done = client.get(url).json()
+    assert done["ingestion_batch"]["state"] == "done" and done["ingestion_batch"]["source_checked_count"] == 1

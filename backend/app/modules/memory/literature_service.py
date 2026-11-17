@@ -16,7 +16,7 @@ from app.modules.events.service import utc_now
 from app.modules.files.models import ArtifactCreate
 from app.modules.files.service import create_artifact_record
 from app.modules.memory.literature_checks import check_datum
-from app.modules.memory.literature_ingest import ingestion_eligibility
+from app.modules.memory.literature_ingest import ingestion_eligibility, is_interrupted
 from app.modules.memory.literature_models import (
     LiteratureBackingRead,
     LiteratureEntryCreate,
@@ -341,10 +341,11 @@ def _latest_batch(connection, source_id: str, backing: _BackingText) -> Literatu
     ).fetchone()
     if batch is None:
         return None
+    interrupted = is_interrupted(batch)
     return LiteratureIngestionBatchRead(
         id=str(batch["id"]),
-        state=batch["state"],
-        reason=batch["reason"],
+        state="failed" if interrupted else batch["state"],
+        reason="interrupted" if interrupted else batch["reason"],
         proposals_count=int(batch["proposals_count"]),
         source_checked_count=int(batch["source_checked_count"]),
         flagged_count=int(batch["flagged_count"]),

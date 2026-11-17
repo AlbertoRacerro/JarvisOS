@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -287,6 +288,15 @@ WINDOW_CHARS = 12_000
 INGEST_ROUTE_CLASS = "local:general"
 _ADAPTERS: dict | None = None  # tests inject a scripted local adapter; production uses the default adapters
 RETRYABLE_STATES = frozenset({"model_unavailable", "failed"})
+INTERRUPTED_AFTER_SECONDS = 1800  # a running batch with no heartbeat for this long was cut off (restart, crash)
+
+
+def is_interrupted(batch) -> bool:
+    """A 'running' batch whose last heartbeat is older than the limit; read and retried as failed/interrupted."""
+    if batch["state"] != "running":
+        return False
+    age = datetime.now(UTC) - datetime.fromisoformat(str(batch["updated_at"]))
+    return age.total_seconds() > INTERRUPTED_AFTER_SECONDS
 
 _RESPONSE_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -426,7 +436,7 @@ def ingest_source(workspace_id: str, source_id: str, *, retry: bool = False) -> 
         availability, path = _content_state(artifact)
         sha256 = _file_sha256(path) if path is not None and not path.is_symlink() else str(artifact["sha256"] or "")
         existing = _batch_row(connection, source_id, sha256)
-        if existing is not None and not (retry and existing["state"] in RETRYABLE_STATES):
+        if existing is not None and not (retry and (existing["state"] in RETRYABLE_STATES or is_interrupted(existing))):
             return str(existing["id"])
         now = utc_now()
         if existing is None:
@@ -446,89 +456,100 @@ def ingest_source(workspace_id: str, source_id: str, *, retry: bool = False) -> 
                 (now, batch_id),
             )
         connection.commit()
-
-        if str(artifact["mime_type"] or "") != "application/pdf":
-            _finish(connection, batch_id, "unavailable", "not_pdf")
-            return batch_id
-        if availability != "available" or path is None or path.is_symlink():
-            _finish(connection, batch_id, "unavailable", f"backing_{availability if availability != 'available' else 'unsafe'}")
-            return batch_id
         try:
-            pages = cached_pdf_pages(path)
-        except PdfTextError:
-            _finish(connection, batch_id, "unavailable", "unreadable_pdf")
-            return batch_id
-        if not pages:
-            _finish(connection, batch_id, "unavailable", "no_text_layer")
-            return batch_id
-        truncated = len(pages) > MAX_INGEST_PAGES
-        windows = _windows(pages[:MAX_INGEST_PAGES])
-        if len(windows) > MAX_MODEL_CALLS:
-            windows, truncated = windows[:MAX_MODEL_CALLS], True
-
-        proposals: list[tuple[Proposal, str]] = []
-        job_ids: list[str] = []
-        for window in windows:
-            try:
-                outcome = run_ai_task(user_prompt=_prompt(pages, window), task_kind="general",
-                                      route_class=INGEST_ROUTE_CLASS, max_output_tokens=4096,
-                                      structured_output_schema=_RESPONSE_SCHEMA, workspace_id=workspace_id,
-                                      adapters=_ADAPTERS)
-            except Exception:  # noqa: BLE001 - any AI-route failure means no local model answered.
-                _finish(connection, batch_id, "model_unavailable", "ai_route_failed",
-                        ai_job_ids_json=json.dumps(job_ids))
-                return batch_id
-            job_ids.append(outcome.ledger_id)
-            if outcome.status != "success" or outcome.response is None or not outcome.response.text:
-                reason = outcome.decision.blocked_reason or outcome.error_type or outcome.status
-                _finish(connection, batch_id, "model_unavailable", str(reason)[:200],
-                        ai_job_ids_json=json.dumps(job_ids))
-                return batch_id
-            try:
-                found = _parse_reply(outcome.response.text)
-            except (ValueError, ValidationError):
-                _finish(connection, batch_id, "failed", "malformed_model_output", ai_job_ids_json=json.dumps(job_ids))
-                return batch_id
-            proposals.extend((item, outcome.ledger_id) for item in found)
-        if len(proposals) > MAX_PROPOSALS:
-            proposals, truncated = proposals[:MAX_PROPOSALS], True
-
-        checked = flagged = 0
-        duplicates: list[str] = []
-        for proposal, job_id in proposals:
-            value = validate_proposal(proposal, pages)
-            if value.status == "source_checked":
-                value.checks.extend(_range_and_dimension(connection, workspace_id, value))
-                duplicate_check, duplicate_of = _duplicate_or_contradiction(connection, workspace_id, value)
-                if duplicate_of is not None:
-                    duplicates.append(duplicate_of)
-                    continue
-                value.checks.append(duplicate_check)
-                if value.reasons:
-                    value.status = "flagged"
-            checked += value.status == "source_checked"
-            flagged += value.status == "flagged"
-            connection.execute(
-                """
-                INSERT INTO literature_entries
-                    (id, workspace_id, source_id, entry_kind, value_text, value_number, unit, status, locator_kind,
-                     locator_start, locator_end, context_text, quantity, conditions_json, ingestion_status,
-                     ingestion_reasons_json, batch_id, source_sha256, extractor_id, extractor_version, ai_job_id,
-                     created_at, updated_at)
-                VALUES (?, ?, ?, 'datum', ?, ?, ?, 'raw', 'page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (f"lit_entry_{uuid4().hex}", workspace_id, source_id, proposal.value_text.strip(),
-                 value.value_number, value.unit, value.page, value.page, value.quote, value.quantity,
-                 _canonical_conditions(value.conditions), value.status,
-                 json.dumps([{"check": item.check, "passed": item.passed, "reason": item.reason}
-                             for item in value.checks]),
-                 batch_id, sha256, EXTRACTOR_ID, EXTRACTOR_VERSION, job_id, utc_now(), utc_now()),
-            )
-        _finish(connection, batch_id, "done", "truncated" if truncated else None,
-                proposals_count=len(proposals), source_checked_count=checked, flagged_count=flagged,
-                duplicate_entry_ids_json=json.dumps(sorted(set(duplicates))), truncated=int(truncated),
-                notification_state="pending" if flagged else "none", ai_job_ids_json=json.dumps(job_ids))
+            _run_batch(connection, workspace_id, source_id, batch_id, artifact, availability, path, sha256)
+        except Exception:  # noqa: BLE001 - never leave a batch 'running' with no worker behind it.
+            connection.rollback()
+            _finish(connection, batch_id, "failed", "internal_error")
         return batch_id
+
+
+def _run_batch(connection, workspace_id: str, source_id: str, batch_id: str, artifact, availability: str,
+               path: Path | None, sha256: str) -> None:
+    if str(artifact["mime_type"] or "") != "application/pdf":
+        _finish(connection, batch_id, "unavailable", "not_pdf")
+        return
+    if availability != "available" or path is None or path.is_symlink():
+        _finish(connection, batch_id, "unavailable", f"backing_{availability if availability != 'available' else 'unsafe'}")
+        return
+    try:
+        pages = cached_pdf_pages(path)
+    except PdfTextError:
+        _finish(connection, batch_id, "unavailable", "unreadable_pdf")
+        return
+    if not pages:
+        _finish(connection, batch_id, "unavailable", "no_text_layer")
+        return
+    truncated = len(pages) > MAX_INGEST_PAGES
+    windows = _windows(pages[:MAX_INGEST_PAGES])
+    if len(windows) > MAX_MODEL_CALLS:
+        windows, truncated = windows[:MAX_MODEL_CALLS], True
+
+    proposals: list[tuple[Proposal, str]] = []
+    job_ids: list[str] = []
+    for window in windows:
+        try:
+            outcome = run_ai_task(user_prompt=_prompt(pages, window), task_kind="general",
+                                  route_class=INGEST_ROUTE_CLASS, max_output_tokens=4096,
+                                  structured_output_schema=_RESPONSE_SCHEMA, workspace_id=workspace_id,
+                                  adapters=_ADAPTERS)
+        except Exception:  # noqa: BLE001 - any AI-route failure means no local model answered.
+            _finish(connection, batch_id, "model_unavailable", "ai_route_failed",
+                    ai_job_ids_json=json.dumps(job_ids))
+            return
+        job_ids.append(outcome.ledger_id)
+        connection.execute("UPDATE literature_ingestion_batches SET updated_at = ? WHERE id = ?", (utc_now(), batch_id))
+        connection.commit()
+        if outcome.status != "success" or outcome.response is None or not outcome.response.text:
+            reason = outcome.decision.blocked_reason or outcome.error_type or outcome.status
+            _finish(connection, batch_id, "model_unavailable", str(reason)[:200],
+                    ai_job_ids_json=json.dumps(job_ids))
+            return
+        try:
+            found = _parse_reply(outcome.response.text)
+        except (ValueError, ValidationError):
+            _finish(connection, batch_id, "failed", "malformed_model_output", ai_job_ids_json=json.dumps(job_ids))
+            return
+        proposals.extend((item, outcome.ledger_id) for item in found)
+    if len(proposals) > MAX_PROPOSALS:
+        proposals, truncated = proposals[:MAX_PROPOSALS], True
+
+    checked = flagged = 0
+    duplicates: list[str] = []
+    for proposal, job_id in proposals:
+        value = validate_proposal(proposal, pages)
+        if value.status == "source_checked":
+            value.checks.extend(_range_and_dimension(connection, workspace_id, value))
+            duplicate_check, duplicate_of = _duplicate_or_contradiction(connection, workspace_id, value)
+            if duplicate_of is not None:
+                duplicates.append(duplicate_of)
+                continue
+            value.checks.append(duplicate_check)
+            if value.reasons:
+                value.status = "flagged"
+        checked += value.status == "source_checked"
+        flagged += value.status == "flagged"
+        connection.execute(
+            """
+            INSERT INTO literature_entries
+                (id, workspace_id, source_id, entry_kind, value_text, value_number, unit, status, locator_kind,
+                 locator_start, locator_end, context_text, quantity, conditions_json, ingestion_status,
+                 ingestion_reasons_json, batch_id, source_sha256, extractor_id, extractor_version, ai_job_id,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, 'datum', ?, ?, ?, 'raw', 'page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (f"lit_entry_{uuid4().hex}", workspace_id, source_id, proposal.value_text.strip(),
+             value.value_number, value.unit, value.page, value.page, value.quote, value.quantity,
+             _canonical_conditions(value.conditions), value.status,
+             json.dumps([{"check": item.check, "passed": item.passed, "reason": item.reason}
+                         for item in value.checks]),
+             batch_id, sha256, EXTRACTOR_ID, EXTRACTOR_VERSION, job_id, utc_now(), utc_now()),
+        )
+    _finish(connection, batch_id, "done", "truncated" if truncated else None,
+            proposals_count=len(proposals), source_checked_count=checked, flagged_count=flagged,
+            duplicate_entry_ids_json=json.dumps(sorted(set(duplicates))), truncated=int(truncated),
+            notification_state="pending" if flagged else "none", ai_job_ids_json=json.dumps(job_ids))
+    return
 
 
 def acknowledge_batch(workspace_id: str, source_id: str, batch_id: str) -> None:
