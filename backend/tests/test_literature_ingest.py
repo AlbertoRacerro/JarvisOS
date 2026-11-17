@@ -341,3 +341,64 @@ def test_no_calculation_code_reads_ingestion_fields() -> None:
                and ("eligible_for_later_admission" in path.read_text(encoding="utf-8")
                     or "ingestion_status" in path.read_text(encoding="utf-8"))]
     assert readers == []
+
+
+@pytest.mark.parametrize(("data", "reason"), [
+    (make_pdf(["", ""]), "no_text_layer"),
+    (b"%PDF-1.4\nnot really a pdf\n%%EOF\n", "unreadable_pdf"),
+])
+def test_pdf_without_readable_text_is_unavailable_with_its_reason(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, data: bytes, reason: str  # noqa: F811
+) -> None:
+    workspace, _ = _workspace_ids(client)
+    adapter = _script(monkeypatch, [_solubility()])
+    created = _source(client, workspace, artifact_id=_upload(client, workspace, "a.pdf", data).json()["artifact_id"])
+    batch = client.get(f"/workspaces/{workspace}/literature/sources/{created['id']}").json()["ingestion_batch"]
+    assert (batch["state"], batch["reason"]) == ("unavailable", reason) and adapter.requests == []
+
+
+@pytest.mark.parametrize(("bounds", "passed"), [((None, None), None), ((0.1, 1.0), True), ((1.0, 2.0), False)])
+def test_plausible_range_comes_from_an_accepted_parameter_bound(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, bounds: tuple, passed: bool | None  # noqa: F811
+) -> None:
+    workspace, _ = _workspace_ids(client)
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO parameters (id, workspace_id, name, value, unit, value_min, value_max, value_status, status,
+                                    origin, source_ref, created_at, updated_at)
+            VALUES ('p-range', ?, 'solubility of CO2', '0.5', 'g/L', ?, ?, 'explicit', 'accepted', 'user', NULL,
+                    '2026-11-17T00:00:00+00:00', '2026-11-17T00:00:00+00:00')
+            """,
+            (workspace, *bounds),
+        )
+        connection.commit()
+    _script(monkeypatch, [_solubility()])
+    created = _source(client, workspace, artifact_id=_upload(
+        client, workspace, "a.pdf", make_pdf(["Introduction", _SOLUBILITY])).json()["artifact_id"])
+    entry = client.get(f"/workspaces/{workspace}/literature/sources/{created['id']}").json()["entries"][0]
+    check = next(item for item in entry["ingestion_checks"] if item["check"] == "plausible_range")
+    assert check["passed"] is passed
+    assert entry["ingestion_status"] == ("flagged" if passed is False else "source_checked")
+
+
+def test_ingestion_routes_and_reads_are_workspace_scoped(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
+    workspace, other = _workspace_ids(client)
+    adapter = _script(monkeypatch, [_solubility()])
+    created = _source(client, workspace, artifact_id=_upload(
+        client, workspace, "a.pdf", make_pdf(["Introduction", _SOLUBILITY])).json()["artifact_id"])
+    assert client.get(f"/workspaces/{other}/literature/sources/{created['id']}").status_code == 404
+    assert client.post(f"/workspaces/{other}/literature/sources/{created['id']}/ingestion/retry").status_code == 404
+    assert all(source["id"] != created["id"]
+               for source in client.get(f"/workspaces/{other}/literature/sources").json()["items"])
+    assert len(adapter.requests) == 1
+
+
+def test_ingestion_runs_without_docling_and_says_nothing_about_calculation_use() -> None:
+    source = Path(literature_ingest.__file__).read_text(encoding="utf-8")
+    assert "docling" not in source.lower()
+    fields = set(literature_ingest.Proposal.model_fields)
+    from app.modules.memory.literature_models import LiteratureEntryRead, LiteratureIngestionBatchRead
+    names = " ".join([*LiteratureEntryRead.model_fields, *LiteratureIngestionBatchRead.model_fields, *fields])
+    for forbidden in ("usable", "validated", "available_for_calculation"):
+        assert forbidden not in names
