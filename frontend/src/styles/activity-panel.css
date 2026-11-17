@@ -1,0 +1,10 @@
+.activity-control { position: fixed; top: 8px; right: 12px; z-index: 40; padding: 4px 10px; border: 1px solid var(--color-border-default); border-radius: 6px; background: var(--color-bg-surface-raised); color: var(--color-text-primary); cursor: pointer; }
+.activity-count { margin-inline-start: 6px; padding: 0 6px; border-radius: 8px; background: var(--color-accent-border-strong, #2a6); color: #fff; }
+.activity-panel { position: fixed; top: 44px; right: 12px; z-index: 40; width: min(420px, 94vw); max-height: 80vh; overflow: auto; padding: 12px; border: 1px solid var(--color-border-default); border-radius: 8px; background: var(--color-bg-surface-raised); color: var(--color-text-primary); }
+.activity-panel header { display: flex; justify-content: space-between; align-items: center; }
+.activity-list { list-style: none; margin: 0; padding: 0; }
+.activity-row__open { display: grid; gap: 2px; width: 100%; text-align: start; padding: 6px 0; border: 0; background: none; color: inherit; cursor: pointer; }
+.activity-row__meta, .activity-row__step, .activity-quota { color: var(--color-text-secondary); font-size: 12px; }
+.activity-spinner { width: 14px; height: 14px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: activity-spin 1s linear infinite; }
+@keyframes activity-spin { to { transform: rotate(360deg); } }
+.activity-detail pre { max-height: 40vh; overflow: auto; white-space: pre-wrap; font-size: 12px; }

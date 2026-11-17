@@ -288,3 +288,13 @@ export function controlRelaySupervisor(action: RelayControlAction, note?: string
 export function answerRelayQuestion(questionId: string, payload: { option_index?: number; custom_text?: string }, repository = CODING_REPOSITORY): Promise<RelayControlResult> {
   return requestJson("/api/coding/relay-monitor/questions/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repository, question_id: questionId, ...payload }) });
 }
+
+export type { ActivityRead, ActivityRow, ActivityDetailRead } from "./generated/activity";
+
+export function readActivity(): Promise<import("./generated/activity").ActivityRead> {
+  return requestJson("/api/coding/activity");
+}
+
+export function readActivityDetail(key: string): Promise<import("./generated/activity").ActivityDetailRead> {
+  return requestJson(`/api/coding/activity/detail?${query({ key })}`);
+}

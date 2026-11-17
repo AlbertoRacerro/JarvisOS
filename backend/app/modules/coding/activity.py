@@ -27,6 +27,7 @@ LOG_LINE_CHARS = 400
 SCAN_FILES = 150
 
 Runner = Literal["supervisione", "modello di lavoro", "motore locale", "lavoro notturno"]
+State = Literal["running", "done", "failed", "unknown"]
 
 
 class ActivityProgress(BaseModel):
@@ -48,7 +49,7 @@ class ActivityRow(BaseModel):
     runner: Runner
     started_at: str | None
     ended_at: str | None
-    state: Literal["running", "done", "failed", "unknown"]
+    state: State
     state_word: str
     progress: ActivityProgress | None
     step: str | None
@@ -98,7 +99,7 @@ _ID_LIKE = re.compile(
 _COMMAND_LIKE = re.compile(r"(?:^|\s)(?:\$ |python3?\b|git\s|pip\s|npm\s|node\s|bash\s|sh\s|scripts/|--[a-z])")
 _SPEC_NUMBER = re.compile(r"\b(\d{3}[a-z]?)\b")
 
-JOB_WORDS = {
+JOB_WORDS: dict[str, tuple[State, str]] = {
     "starting": ("running", "in avvio"),
     "running": ("running", "in corso"),
     "orphaned": ("unknown", "da verificare"),
@@ -110,14 +111,14 @@ JOB_WORDS = {
     "interrupted": ("failed", "interrotto"),
     "lost": ("failed", "perso"),
 }
-DYNAMIC_WORDS = {
+DYNAMIC_WORDS: dict[str, tuple[State, str]] = {
     "queued": ("running", "in coda"),
     "running": ("running", "in corso"),
     "succeeded": ("done", "completato"),
     "failed": ("failed", "non riuscito"),
     "cancelled": ("failed", "annullato"),
 }
-RUNNER_WORDS = {**DYNAMIC_WORDS, "timeout": ("failed", "tempo scaduto")}
+RUNNER_WORDS: dict[str, tuple[State, str]] = {**DYNAMIC_WORDS, "timeout": ("failed", "tempo scaduto")}
 MISSION_WORDS = {
     "running": "in corso",
     "checkpointed": "in corso",
@@ -135,7 +136,7 @@ AI_ERROR_WORDS = {
     "config_error": "configurazione non valida",
 }
 NOT_VERIFIABLE = "stato non verificabile da qui"
-UNAVAILABLE = "non disponibile"
+UNAVAILABLE: Literal["non disponibile"] = "non disponibile"
 
 
 def _iso(moment: datetime) -> str:
