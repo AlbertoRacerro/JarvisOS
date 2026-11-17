@@ -1,0 +1,15 @@
+.bench-panel { margin-top: 16px; padding: 12px; border: 1px solid var(--color-border-default); border-radius: 8px; }
+.bench-panel header { display: flex; justify-content: space-between; align-items: center; }
+.bench-list ul { list-style: none; margin: 0; padding: 0; }
+.bench-row { display: flex; align-items: center; gap: 8px; }
+.bench-row[data-selected="true"] { background: var(--color-bg-surface-raised); }
+.bench-row__open { display: grid; gap: 2px; flex: 1; text-align: start; padding: 6px 0; border: 0; background: none; color: inherit; cursor: pointer; }
+.bench-row__meta, .bench-note { color: var(--color-text-secondary); font-size: 12px; }
+.bench-light { display: inline-block; width: 10px; height: 10px; margin-inline-end: 6px; border-radius: 50%; background: #888; }
+[data-verdict="usable"] .bench-light, tr[data-status="pass"] .bench-light { background: #2a8; }
+[data-verdict="usable_with_warnings"] .bench-light, tr[data-status="warn"] .bench-light { background: #d9a400; }
+[data-verdict="not_usable"] .bench-light, tr[data-status="fail"] .bench-light { background: #c33; }
+[data-verdict="unchecked"] .bench-light, tr[data-status="not_evaluated"] .bench-light { background: transparent; border: 2px solid #888; }
+.bench-checks { border-collapse: collapse; width: 100%; font-size: 13px; }
+.bench-checks th, .bench-checks td, .bench-compare td, .bench-compare th { padding: 4px 8px; border-bottom: 1px solid var(--color-border-default); text-align: start; }
+.bench-failure { color: #c33; }

@@ -6,6 +6,7 @@ import {
   type RunInputsManifestRead
 } from "../api/projectKnowledge";
 import { RunsRequestError, getRun, listRunArtifacts, listRunLogs, listRuns, type RunArtifact, type RunLog, type SimulationRunDetail, type SimulationRunSummary } from "../api/runs";
+import BenchRunsPanel from "../components/BenchRunsPanel";
 import { parseSourceRunTarget, type SourceRunTarget } from "../components/analytics/variantComparisonNavigation";
 import type { EngineeringPropertiesController } from "../components/engineering/EngineeringProperties";
 import ValueHistoryModal, { type HistoryTarget } from "../components/fusion/ValueHistoryModal";
@@ -459,6 +460,8 @@ function RunsWorkbench({ workspaceId, onWorkspaceChange, engineeringProperties }
           </>}
         </main>
       </div>
+
+      <BenchRunsPanel workspaceId={workspaceId} />
 
       {activeHistoryTarget && workspaceId && (
         <ValueHistoryModal
