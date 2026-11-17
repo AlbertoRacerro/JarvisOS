@@ -24,6 +24,9 @@ MAX_ROWS = 50
 WINDOW = timedelta(hours=24)
 LOG_LINES = 40
 LOG_LINE_CHARS = 400
+LOG_TAIL_BYTES = 65_536
+WORKER_CLIS = frozenset({"claude", "codex", "gemini", "copilot", "agy"})
+ACTIVE_MISSION = frozenset({"running", "checkpointed", "queued", "waiting"})
 SCAN_FILES = 150
 
 Runner = Literal["supervisione", "modello di lavoro", "motore locale", "lavoro notturno"]
@@ -205,7 +208,7 @@ def _supervisor_rows(now: datetime, registry: dict[str, RegistryRow]) -> list[Ac
     rows = [ActivityRow(
         key="mission", kind="supervisor", title="Il supervisore sta portando avanti il lavoro",
         runner="supervisione", started_at=since, ended_at=None,
-        state="unknown" if word == NOT_VERIFIABLE else "running", state_word=word, progress=None,
+        state="running" if state in ACTIVE_MISSION else "unknown", state_word=word, progress=None,
         step=word, outcome=None, links=[])]
     if mission.get("agent") and state in ("running", "checkpointed"):
         rows.append(ActivityRow(
@@ -213,6 +216,12 @@ def _supervisor_rows(now: datetime, registry: dict[str, RegistryRow]) -> list[Ac
             runner="modello di lavoro", started_at=since, ended_at=None, state="running", state_word="in corso",
             progress=None, step="sto lavorando al compito assegnato", outcome=None, links=[]))
     return rows
+
+
+def _job_runner(job: dict[str, Any]) -> Runner:
+    """A worker model when the job launches a worker CLI, otherwise local computation."""
+    argv = " ".join(str(part) for part in job.get("argv") or [])
+    return "modello di lavoro" if WORKER_CLIS & set(re.findall(r"[a-z]+", argv)) else "motore locale"
 
 
 def _job_rows(now: datetime, registry: dict[str, RegistryRow]) -> list[ActivityRow]:
@@ -234,7 +243,7 @@ def _job_rows(now: datetime, registry: dict[str, RegistryRow]) -> list[ActivityR
         spec = _spec_row(job.get("spec"), registry)
         rows.append(ActivityRow(
             key=f"job:{job['id']}", kind="job", title=_titled("Un lavoro di calcolo registrato", spec),
-            runner="lavoro notturno", started_at=job.get("started_at") or job.get("created_at"), ended_at=ended,
+            runner=_job_runner(job), started_at=job.get("started_at") or job.get("created_at"), ended_at=ended,
             state=kind, state_word=word, progress=None,
             step="sto elaborando" if kind == "running" else None,
             outcome=word if kind in ("done", "failed") else None, links=_spec_links(spec)))
@@ -378,7 +387,10 @@ def detail(key: str, now: datetime | None = None) -> ActivityDetailRead:
     path = _log_path(job, root)
     if path is not None:
         try:
-            lines = [line[:LOG_LINE_CHARS] for line in path.read_text(errors="replace").splitlines()[-LOG_LINES:]]
+            with path.open("rb") as handle:
+                handle.seek(max(0, path.stat().st_size - LOG_TAIL_BYTES))
+                tail = handle.read().decode("utf-8", errors="replace")
+            lines = [line[:LOG_LINE_CHARS] for line in tail.splitlines()[-LOG_LINES:]]
         except OSError:
             lines = []
     checked = relay_monitor._checked({"label": str(job.get("label") or ""), "lines": lines}, snapshot_paths=True)

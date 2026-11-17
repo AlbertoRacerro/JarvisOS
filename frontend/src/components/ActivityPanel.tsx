@@ -25,7 +25,7 @@ export function ActivityRowView({ row, now, onOpen }: Readonly<{ row: ActivityRo
         ? <progress value={row.progress.done} max={row.progress.total} aria-label="Avanzamento" />
         : running ? <span className="activity-spinner" role="status" aria-label="In corso, avanzamento non misurabile" /> : null}
       {row.step ? <span className="activity-row__step">{row.step}</span> : null}
-      {row.outcome ? <span className="activity-row__outcome">{row.outcome}</span> : null}
+      {row.outcome && row.outcome !== row.state_word ? <span className="activity-row__outcome">{row.outcome}</span> : null}
     </button>
   </li>;
 }

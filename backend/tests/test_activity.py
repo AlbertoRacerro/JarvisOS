@@ -28,14 +28,14 @@ def job_id(minutes_ago: int, tail: str = "abcdef") -> str:
 
 
 def write_job(root: Path, minutes_ago: int, *, status: str, tail: str = "abcdef", log: str | None = None,
-              spec: str | None = None, ended: bool = True) -> str:
+              spec: str | None = None, ended: bool = True, argv: list[str] | None = None) -> str:
     jid = job_id(minutes_ago, tail)
     path = rj.jobs_dir(root) / f"{jid}.log"
     path.parent.mkdir(parents=True, exist_ok=True)
     if log is not None:
         path.write_text(log)
     rj.write_json_atomic(rj.job_path(jid, root), {
-        "schema": rj.SCHEMA, "id": jid, "label": "overnight sweep 298 cycle 7", "spec": spec, "status": status,
+        "schema": rj.SCHEMA, "id": jid, "argv": argv or ["python3", "solve.py"], "label": "overnight sweep 298 cycle 7", "spec": spec, "status": status,
         "created_at": stamp(minutes_ago), "started_at": stamp(minutes_ago), "log": str(path), "exit_code": 0,
         "ended_at": stamp(minutes_ago - 1) if ended else None, "pid_namespace": "pid:[999999]"})
     return jid
@@ -105,6 +105,21 @@ def test_supervisor_mission_and_worker_rows(control: Path, monkeypatch: pytest.M
         "state": "running", "at": stamp(1), "mission": {"id": "m-x", "task": "1/1", "agent": "claude"}, "turn": {}})
     rows = [r for r in activity.read(NOW).rows if r.kind in ("supervisor", "worker")]
     assert {r.runner for r in rows} == {"supervisione", "modello di lavoro"}
+
+
+def test_job_runner_follows_its_command(control: Path) -> None:
+    write_job(control, 20, status="succeeded", argv=["bash", "-c", "cd w && claude -p < task"])
+    write_job(control, 10, status="succeeded", tail="cccccc")
+    runners = {r.started_at: r.runner for r in activity.read(NOW).rows if r.kind == "job"}
+    assert runners == {stamp(20): "modello di lavoro", stamp(10): "motore locale"}
+
+
+@pytest.mark.parametrize("state", ["paused", "held", "stopped"])
+def test_inactive_mission_is_not_counted_running(control: Path, monkeypatch: pytest.MonkeyPatch, state: str) -> None:
+    monkeypatch.setattr(relay_monitor, "snapshot", lambda now=None: {
+        "state": state, "at": stamp(1), "mission": {"id": "m-x", "task": "1/1", "agent": "claude"}, "turn": {}})
+    rows = [r for r in activity.read(NOW).rows if r.kind in ("supervisor", "worker")]
+    assert [r.state for r in rows] == ["unknown"]
 
 
 def test_bound_and_window(control: Path) -> None:
