@@ -1,6 +1,6 @@
 # 296 — LITERATURE-STRUCTURED-PDF-1: Read PDF tables beside the source
 
-Status: draft; technical readiness probe pending
+Status: ready
 Depends on: 295
 
 ## Goal
@@ -33,9 +33,11 @@ Docling pipeline needs local model artifacts and must never download them during
 
 In scope:
 
-- Add a pinned, locally run Docling installation and record its exact version, licence and local model artifacts in the
-  PR. Conversion uses only an already stored literature PDF, never a URL. Layout and table extraction run with network
-  access disabled and with an explicit artifacts directory; missing artifacts give a clear unavailable state.
+- Add a pinned optional Docling installation in a separate local Python environment, with a documented setup command.
+  Keep it out of the default backend requirements: the measured environment occupies 6.2 GB. Record its exact version,
+  MIT licence and local model artifacts in the PR. Conversion uses only an already stored literature PDF, never a URL.
+  Layout and table extraction run with network access disabled and with an explicit artifacts directory; missing
+  interpreter or artifacts give a clear unavailable state.
 - Produce a bounded, derived structured view keyed by source SHA-256 and extractor/model version: ordered page blocks,
   table captions where available, table cells and page numbers. Preserve the original PDF and the spec-295 page cache.
   Cache writes are atomic and never follow a symlink. A changed extractor or source rebuilds the derived view.
@@ -70,9 +72,10 @@ Out of scope (binding non-goals):
 
 ## Design constraints
 
-- The conversion must be bounded by input size, pages, output size and a wall limit. Conversion cannot run while
-  listing sources or rendering a source page; it must be an explicit asynchronous task with a visible progress/error
-  state. A repeated request for the same source and extractor version reuses the result or joins the same task.
+- The conversion must be bounded by input size, pages, output size, memory and a wall limit. Start it only on an explicit
+  action, in a separate process using the existing background-job pattern; the request returns promptly with a task
+  state that can be polled. A repeated request for the same source and extractor version reuses the result or joins the
+  same task. Source list/read never converts. A server restart marks an orphaned task failed and permits a retry.
 - Installation and model prefetch are explicit setup steps; ordinary operation is offline. Tests use a small generated
   PDF and fake converter output, so CI never downloads a model or needs a paid provider.
 - Every displayed block retains its PDF page. If Docling cannot establish a page for a table cell, show it as
@@ -80,6 +83,8 @@ Out of scope (binding non-goals):
 - The source SHA-256 comes from the registered artifact after the workspace check. Client-provided paths, hashes and
   cache filenames are never trusted.
 - A returned `available` view is evidence of conversion only, not evidence that all tables or values were extracted.
+  The existing source check verifies that the number occurs on the cited page, not that it belongs to the inferred
+  table cell. The UI must make this limit clear at selection.
 
 ## Acceptance criteria
 
@@ -108,14 +113,15 @@ Out of scope (binding non-goals):
 The extraction and selection path is usable in the Literature screen, the accepted checks still gate datum usability,
 the browser walk and test gate pass, and the STATUS row is reconciled.
 
-## Before acceptance
+## Readiness evidence and limits
 
-The first local proof used Docling 2.150.1 and an explicit offline bundle of layout and table models. A generated
-two-page PDF with a ruled table produced one table, its cells and page 2 provenance in 17.9 s, with 2.6 GB peak
-resident memory. The isolated environment occupied 6.2 GB and the model bundle 669 MB. A simpler unruled text sample
-converted but produced no table. These are one-run observations on generated inputs, not a claim about arbitrary papers.
+Docling 2.150.1 with an explicit offline layout/table model bundle converted a generated two-page PDF with a ruled
+table: one table, cells attributed to page 2, 17.9 s, 2.6 GB peak resident memory. The isolated environment occupied
+6.2 GB and the model bundle 669 MB. A simpler unruled text sample converted but produced no table.
 
-Before acceptance, decide how to package this optional large dependency and run a bounded conversion without blocking
-source reads or adding a second job framework. Verify a real public paper's table and page attribution using an
-offline-only conversion. Narrow this spec if those checks do not support a reliable page-located table view. No
-implementation begins from this draft.
+The same offline configuration converted the public paper [*Nutrient removal from agricultural run-off in demonstrative
+full scale tubular photobioreactors for microalgae growth*](https://arxiv.org/abs/1807.05189), PDF SHA-256
+`7f041d9031de769cf9b2c3032d9f4a7cd40f6829798601f5775893f8b65b249c`: two tables were extracted with
+cell text, one attributed to page 13 and one to page 15, in 22.5 s at 3.0 GB peak resident memory. The PDF text layer
+also contains these tables. This is one public paper, not a completeness benchmark. The product therefore presents
+Docling's table as an inspectable view and retains the original PDF and page-level deterministic check as the authority.
