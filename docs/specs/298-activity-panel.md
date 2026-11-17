@@ -31,8 +31,13 @@ and honest.
   workspace and one draft.
 - `backend/app/modules/coding/provider_quota.py::read_all` reads the quota of each worker pool without running a model
   turn.
-- The `ai_jobs` and `runner_jobs` tables in `backend/app/core/schema.py` hold status and timestamps of AI calls and
-  script runs; neither records a progress total.
+- `backend/app/modules/ai/execution.py::_write_ai_job` writes an `ai_jobs` row only when a call has finished
+  (`success`, `provider_error`, `route_unavailable`, `validation_error`, `config_error`); a running local generation
+  exists as a token flow opened by `backend/app/modules/ai/execution.py::_create_local_flow`.
+- The `runner_jobs` table in `backend/app/core/schema.py` holds status and timestamps of script runs; no source records
+  a progress total.
+- Registered job labels are free English text written by coordinators and often name spec numbers;
+  `backend/app/modules/coding/control_room.py::short_title` turns a registry code name into a readable title.
 - Model or file downloads have no recorded state in `backend/app` (searched for download, gguf and hub calls; none
   found). Not checked: downloads run by scripts outside the backend.
 
@@ -41,7 +46,8 @@ and honest.
 In scope:
 - One backend read model `activity` that merges, newest first and bounded (at most 50 rows, finished rows from the last
   24 hours): supervisor missions and the worker each executes (relay snapshot and registered jobs), dynamic simulation
-  jobs and script runs, and AI jobs that are still running or failed in the window.
+  jobs and script runs (a workspace-wide listing over the same job files, not per draft), running local generations
+  (open token flows) and AI calls that ended in an error in the window.
 - One `GET` route returning rows with: kind, plain title, runner (`supervisione`, `modello di lavoro`, `motore locale`,
   `lavoro notturno`), started and ended time, state word, optional `progress {done,total,unit}`, current step, outcome,
   and links (PR, run, file) as in-app routes or the PR URL.
@@ -68,6 +74,11 @@ Out of scope (binding non-goals):
 
 - Read only. Each source is read independently; an unreadable source yields one row group marked `non disponibile`
   with a reason, never an error for the whole panel.
+- Read registered jobs newest first by file name and stop at the bound; never load every record on a poll.
+- A row's visible title never shows a job label verbatim: it is a fixed Italian phrase per kind, plus the readable
+  spec title from the registry when the job names a spec; the label appears only in the detail, scrubbed.
+- A supervisor row whose status is `unknown` (the reader cannot see the job's process) says "stato non verificabile
+  da qui", never running or failed.
 - Status words come from a fixed table per source; `relay_jobs.effective_status` and the relay snapshot are the
   authority for supervisor rows.
 - Visible language follows the Slack message rules: Italian, "sto facendo X", no ids, SHAs, cycles or commands.
