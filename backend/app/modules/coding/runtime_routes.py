@@ -20,7 +20,7 @@ from app.modules.ai.jarvis_context_models import (
     JarvisResolvedRef,
     JarvisRouteDescriptor,
 )
-from app.modules.coding import provider_quota, relay_monitor
+from app.modules.coding import activity, provider_quota, relay_monitor
 from app.modules.coding.actions import (
     CodingActionError,
     CodingActionsService,
@@ -352,6 +352,17 @@ def provider_quotas(repository: str, refresh: bool = False) -> dict[str, object]
     """Read-only account usage; explicit refresh bypasses the TTL without starting a model turn."""
     _require_runtime_repository(repository)
     return provider_quota.quotas(refresh=refresh)
+
+
+@router.get("/activity", response_model=activity.ActivityRead)
+def activity_panel() -> activity.ActivityRead:
+    """Read-only list of running and recently finished long work (spec 298)."""
+    return activity.read()
+
+
+@router.get("/activity/detail", response_model=activity.ActivityDetailRead)
+def activity_detail(key: str = Query(max_length=160)) -> activity.ActivityDetailRead:
+    return activity.detail(key)
 
 
 @router.get("/relay-monitor/timeline")

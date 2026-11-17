@@ -35,6 +35,7 @@ TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "modeling.ts"
 ENGINEERING_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "engineering.ts"
 EDITOR_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "dwsimEditor.ts"
 PROJECT_KNOWLEDGE_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "projectKnowledge.ts"
+ACTIVITY_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "activity.ts"
 HEADER = (
     "// GENERATED FILE — DO NOT EDIT.\n"
     f"// Source: {SOURCE_LABEL}\n"
@@ -48,6 +49,11 @@ EDITOR_HEADER = (
 PROJECT_KNOWLEDGE_HEADER = (
     "// GENERATED FILE — DO NOT EDIT.\n"
     "// Source: backend/app/modules/project_knowledge/value_history.py\n"
+    "// Regenerate with: python scripts/generate_frontend_contracts.py\n\n"
+)
+ACTIVITY_HEADER = (
+    "// GENERATED FILE — DO NOT EDIT.\n"
+    "// Source: backend/app/modules/coding/activity.py\n"
     "// Regenerate with: python scripts/generate_frontend_contracts.py\n\n"
 )
 
@@ -194,6 +200,26 @@ def render_project_knowledge_contracts() -> str:
     return "\n".join(rendered)
 
 
+def render_activity_contracts() -> str:
+    from app.modules.coding.activity import (
+        ActivityDetailRead,
+        ActivityGroup,
+        ActivityLink,
+        ActivityProgress,
+        ActivityQuota,
+        ActivityQuotaPool,
+        ActivityRead,
+        ActivityRow,
+    )
+
+    models = [ActivityProgress, ActivityLink, ActivityRow, ActivityGroup, ActivityQuotaPool, ActivityQuota,
+              ActivityRead, ActivityDetailRead]
+    return "\n".join(
+        render_model(model, model.__name__, header=ACTIVITY_HEADER if index == 0 else "")
+        for index, model in enumerate(models)
+    )
+
+
 def _matches(path: Path, expected: str, *, report: bool = False) -> bool:
     try:
         actual = path.read_text(encoding="utf-8")
@@ -294,12 +320,14 @@ def main() -> int:
     engineering_expected = render_engineering_reads()
     editor_expected = render_editor_contracts()
     project_knowledge_expected = render_project_knowledge_contracts()
+    activity_expected = render_activity_contracts()
     if args.check:
         if (
             _matches(TARGET, expected, report=True)
             and _matches(ENGINEERING_TARGET, engineering_expected, report=True)
             and _matches(EDITOR_TARGET, editor_expected, report=True)
             and _matches(PROJECT_KNOWLEDGE_TARGET, project_knowledge_expected, report=True)
+            and _matches(ACTIVITY_TARGET, activity_expected, report=True)
         ):
             print("frontend generated contracts are current")
             return 0
@@ -313,6 +341,7 @@ def main() -> int:
     EDITOR_TARGET.write_text(editor_expected, encoding="utf-8", newline="\n")
     PROJECT_KNOWLEDGE_TARGET.parent.mkdir(parents=True, exist_ok=True)
     PROJECT_KNOWLEDGE_TARGET.write_text(project_knowledge_expected, encoding="utf-8", newline="\n")
+    ACTIVITY_TARGET.write_text(activity_expected, encoding="utf-8", newline="\n")
     print(f"wrote {TARGET.relative_to(REPO_ROOT)}")
     return 0
 
