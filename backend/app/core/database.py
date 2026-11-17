@@ -52,8 +52,10 @@ from app.core.grade_schema import (
     GRADE_SCHEMA_STATEMENTS,
 )
 from app.core.literature_schema import (
+    LITERATURE_INGESTION_MIGRATION_RECORD,
     LITERATURE_SCHEMA_INDEX_STATEMENTS,
     LITERATURE_SCHEMA_MIGRATION_RECORD,
+    LITERATURE_SCHEMA_MIGRATION_STATEMENTS,
     LITERATURE_SCHEMA_STATEMENTS,
 )
 from app.core.paths import build_paths
@@ -229,6 +231,7 @@ def initialize_database() -> DatabaseInfo:
             *RUNNER_CREATE_REQUEST_MIGRATION_STATEMENTS,
             *PROJECT_KNOWLEDGE_MIGRATION_STATEMENTS,
             *RELAY_GATEWAY_MIGRATION_STATEMENTS,
+            *LITERATURE_SCHEMA_MIGRATION_STATEMENTS,
         ]:
             try:
                 connection.execute(statement)
@@ -433,6 +436,7 @@ def _record_schema_migrations(connection: sqlite3.Connection) -> None:
         SIM_RESULT_INGESTION_MIGRATION_RECORD,
         SIM_RESULT_VALUE_VERSIONS_MIGRATION_RECORD,
         LITERATURE_SCHEMA_MIGRATION_RECORD,
+        LITERATURE_INGESTION_MIGRATION_RECORD,
         DEVELOPMENT_SCHEMA_MIGRATION_RECORD,
         BRAINSTORM_SCHEMA_MIGRATION_RECORD,
         CLOUD_ESCALATION_MIGRATION_RECORD,

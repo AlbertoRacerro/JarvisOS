@@ -78,6 +78,12 @@ class LiteratureUsedByRead(StrictLiteratureModel):
     ref: str
 
 
+class LiteratureIngestionCheckRead(StrictLiteratureModel):
+    check: str
+    passed: bool | None
+    reason: str | None
+
+
 class LiteratureEntryRead(StrictLiteratureModel):
     id: str
     workspace_id: str
@@ -96,6 +102,30 @@ class LiteratureEntryRead(StrictLiteratureModel):
     used_by: list[LiteratureUsedByRead]
     checks: list[ResultCheck] = Field(default_factory=list)
     verdict: Verdict | None = None
+    quantity: str | None = None
+    conditions: list[dict[str, object]] = Field(default_factory=list)
+    ingestion_status: Literal["source_checked", "flagged"] | None = None
+    ingestion_checks: list[LiteratureIngestionCheckRead] = Field(default_factory=list)
+    batch_id: str | None = None
+    stale_source: bool = False
+    eligible_for_later_admission: bool = False
+    eligibility_reasons: list[str] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+class LiteratureIngestionBatchRead(StrictLiteratureModel):
+    id: str
+    state: Literal["running", "done", "failed", "model_unavailable", "unavailable"]
+    reason: str | None
+    proposals_count: int
+    source_checked_count: int
+    flagged_count: int
+    duplicate_entry_ids: list[str]
+    truncated: bool
+    notification_state: Literal["none", "pending", "read"]
+    ai_job_ids: list[str]
+    current: bool
     created_at: str
     updated_at: str
 
@@ -112,6 +142,7 @@ class LiteratureSourceRead(StrictLiteratureModel):
     source_ref: str
     backing: LiteratureBackingRead | None
     entries: list[LiteratureEntryRead]
+    ingestion_batch: LiteratureIngestionBatchRead | None = None
     created_at: str
     updated_at: str
 

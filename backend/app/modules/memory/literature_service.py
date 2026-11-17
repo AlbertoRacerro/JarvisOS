@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from app.core.database import open_sqlite_connection
@@ -14,10 +16,13 @@ from app.modules.events.service import utc_now
 from app.modules.files.models import ArtifactCreate
 from app.modules.files.service import create_artifact_record
 from app.modules.memory.literature_checks import check_datum
+from app.modules.memory.literature_ingest import ingestion_eligibility, is_interrupted
 from app.modules.memory.literature_models import (
     LiteratureBackingRead,
     LiteratureEntryCreate,
     LiteratureEntryRead,
+    LiteratureIngestionBatchRead,
+    LiteratureIngestionCheckRead,
     LiteratureSourceCreate,
     LiteratureSourcePage,
     LiteratureSourceRead,
@@ -100,6 +105,12 @@ def _artifact_is_literature_eligible(row) -> bool:
         str(row["artifact_type"] or "") in ALLOWED_LITERATURE_ARTIFACT_TYPES
         and str(row["status"] or "") == CURRENT_ARTIFACT_STATUS
     )
+
+
+def _backing_is_linked(row) -> bool:
+    """True when the stored path or any parent is a symlink (refused as in spec 296); _content_state resolves links."""
+    raw = Path(str(row["stored_path"]))
+    return raw.is_symlink() or any(parent.is_symlink() for parent in raw.parents)
 
 
 def _content_state(row) -> tuple[str, Path | None]:
@@ -195,6 +206,26 @@ class _BackingText:
         self._loaded = False
         self._lines: list[str] | None = None
         self._reason = ""
+        self._sha_loaded = False
+        self._sha256: str | None = None
+
+    def current_sha256(self) -> str | None:
+        """SHA-256 of the backing bytes as stored now; None when absent, unsafe or unreadable."""
+        if not self._sha_loaded:
+            self._sha_loaded = True
+            artifact = (_artifact_row_or_none(self._connection, self._workspace_id, str(self._artifact_id))
+                        if self._artifact_id is not None else None)
+            availability, path = _content_state(artifact) if artifact is not None else ("missing", None)
+            if availability == "available" and path is not None and not _backing_is_linked(artifact):
+                try:
+                    digest = hashlib.sha256()
+                    with path.open("rb") as stream:
+                        for chunk in iter(lambda: stream.read(1 << 20), b""):
+                            digest.update(chunk)
+                    self._sha256 = digest.hexdigest()
+                except OSError:
+                    self._sha256 = None
+        return self._sha256
 
     def get(self) -> tuple[list[str] | None, str]:
         if not self._loaded:
@@ -268,6 +299,23 @@ def _entry_read(connection, row, backing: _BackingText | None = None) -> Literat
             lines=lines,
             unavailable=unavailable,
         )
+    ingestion: dict[str, Any] = {"eligibility_reasons": ["not_ingested"]}  # hand-typed entries
+    if row["ingestion_status"] is not None:
+        if backing is None:
+            source_row = _source_row(connection, str(row["workspace_id"]), str(row["source_id"]))
+            backing = _BackingText(connection, str(row["workspace_id"]), source_row)
+        eligible, stale, reasons = ingestion_eligibility(row, backing.current_sha256(), verdict)
+        ingestion = {
+            "quantity": row["quantity"],
+            "conditions": json.loads(row["conditions_json"] or "[]"),
+            "ingestion_status": row["ingestion_status"],
+            "ingestion_checks": [LiteratureIngestionCheckRead(**item)
+                                 for item in json.loads(row["ingestion_reasons_json"] or "[]")],
+            "batch_id": row["batch_id"],
+            "stale_source": stale,
+            "eligible_for_later_admission": eligible,
+            "eligibility_reasons": reasons,
+        }
     return LiteratureEntryRead(
         id=entry_id,
         workspace_id=str(row["workspace_id"]),
@@ -286,8 +334,34 @@ def _entry_read(connection, row, backing: _BackingText | None = None) -> Literat
         used_by=_used_by(connection, str(row["workspace_id"]), entry_id),
         checks=checks,
         verdict=verdict,
+        **ingestion,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+    )
+
+
+def _latest_batch(connection, source_id: str, backing: _BackingText) -> LiteratureIngestionBatchRead | None:
+    batch = connection.execute(
+        "SELECT * FROM literature_ingestion_batches WHERE source_id = ? ORDER BY created_at DESC, id LIMIT 1",
+        (source_id,),
+    ).fetchone()
+    if batch is None:
+        return None
+    interrupted = is_interrupted(batch)
+    return LiteratureIngestionBatchRead(
+        id=str(batch["id"]),
+        state="failed" if interrupted else batch["state"],
+        reason="interrupted" if interrupted else batch["reason"],
+        proposals_count=int(batch["proposals_count"]),
+        source_checked_count=int(batch["source_checked_count"]),
+        flagged_count=int(batch["flagged_count"]),
+        duplicate_entry_ids=json.loads(batch["duplicate_entry_ids_json"] or "[]"),
+        truncated=bool(batch["truncated"]),
+        notification_state=batch["notification_state"],
+        ai_job_ids=json.loads(batch["ai_job_ids_json"] or "[]"),
+        current=batch["source_sha256"] == backing.current_sha256(),
+        created_at=str(batch["created_at"]),
+        updated_at=str(batch["updated_at"]),
     )
 
 
@@ -323,6 +397,7 @@ def _source_read(connection, row) -> LiteratureSourceRead:
         source_ref=f"literature_source:{source_id}",
         backing=artifact,
         entries=[_entry_read(connection, entry_row, backing) for entry_row in entry_rows],
+        ingestion_batch=_latest_batch(connection, source_id, backing),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )

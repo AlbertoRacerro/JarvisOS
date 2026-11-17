@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listWorkspaces, type Workspace } from "../api/client";
-import { attachLiteratureBacking, createLiteratureEntry, createLiteratureSource, uploadLiteratureFile, listLiteratureSources, literatureContentUrl, structuredLiteraturePdf, type StructuredPdfView,
+import { acknowledgeLiteratureIngestion, attachLiteratureBacking, createLiteratureEntry, createLiteratureSource, getLiteratureSource, retryLiteratureIngestion, uploadLiteratureFile, listLiteratureSources, literatureContentUrl, structuredLiteraturePdf, type StructuredPdfView,
   type LiteratureEntry, type LiteratureSource, type LiteratureVerdict, type LiteratureEntryInput, type LiteratureSourceInput } from "../api/literature";
 import "./memory-recovery.css";
 
@@ -76,6 +76,11 @@ function ExtractedBlockView({ block, page, onChoose }: Readonly<{ block: Extract
     : <p><TokenText text={block.text} page={page} onChoose={onChoose} /></p>;
 }
 
+// A new PDF source gets its first batch from a background task; after this window, no batch means it was never read.
+function awaitingFirstBatch(source: LiteratureSource): boolean {
+  return Date.now() - Date.parse(source.updated_at) < 120_000;
+}
+
 function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, onEntrySaved, onSourceUpdated }: Readonly<{
   source: LiteratureSource; open: boolean; onToggle: (open: boolean) => void; requestedEntryId: string | null;
   onSelect: (ref: string, label?: string) => void; onEntrySaved: (entry: LiteratureEntry) => void; onSourceUpdated: (source: LiteratureSource) => void;
@@ -97,6 +102,7 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
   const [extractOpen, setExtractOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [selected, setSelected] = useState<{ token: string; page: number } | null>(null);
+  const [ingestionError, setIngestionError] = useState<string | null>(null);
   const requestKey = useRequestKey();
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -113,6 +119,21 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
       if (alive.current) onSourceUpdated(updated);
     } catch (cause) { if (alive.current) setAttachError(cause instanceof Error ? cause.message : "The file could not be attached."); }
     finally { if (alive.current) setAttaching(false); }
+  };
+  const refreshIngestion = async () => {
+    const updated = await getLiteratureSource(source.workspace_id, source.id);
+    if (alive.current) onSourceUpdated(updated);
+  };
+  const retryIngestion = async () => {
+    setIngestionError(null);
+    try { await retryLiteratureIngestion(source.workspace_id, source.id); await refreshIngestion(); }
+    catch (cause) { if (alive.current) setIngestionError(cause instanceof Error ? cause.message : "Could not retry reading this PDF."); }
+  };
+  const acknowledgeIngestion = async () => {
+    if (!source.ingestion_batch) return;
+    setIngestionError(null);
+    try { await acknowledgeLiteratureIngestion(source.workspace_id, source.id, source.ingestion_batch.id); await refreshIngestion(); }
+    catch (cause) { if (alive.current) setIngestionError(cause instanceof Error ? cause.message : "Could not mark this notice read."); }
   };
   useEffect(() => {
     if (!open || !extractOpen || structured?.state !== "running") return;
@@ -162,6 +183,30 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
         {backingUnavailable ? <p role="status"><strong>Backing unavailable.</strong> The citation remains saved, but its file cannot currently be used as evidence.</p> : null}
         <p>{source.citation || "Citation not recorded."}</p>{source.publisher ? <p>{source.publisher}</p> : null}
         <p>{source.backing?.filename ?? "Citation only · no source file attached."}</p>
+        {source.backing?.mime_type === "application/pdf" ? <section className="literature-ingestion" aria-label="PDF value reading">
+          <h3>Values found in this PDF</h3>
+          {!source.ingestion_batch ? (awaitingFirstBatch(source) ? <p role="status">Reading the PDF for numeric values…</p> :
+            <><p>Values in this PDF have not been read yet.</p><button type="button" onClick={() => void retryIngestion()}>Read values from this PDF</button></>) : <>
+            <p role="status" data-ingestion-state={source.ingestion_batch.state}>
+              {source.ingestion_batch.state === "running" ? "Reading the PDF for numeric values…" :
+                source.ingestion_batch.state === "done" ? `${source.ingestion_batch.source_checked_count} source checked · ${source.ingestion_batch.flagged_count} need attention` :
+                source.ingestion_batch.state === "model_unavailable" ? "Local model unavailable. No values were added." :
+                source.ingestion_batch.state === "failed" ? "PDF value reading failed. No values were added." :
+                `PDF values unavailable: ${source.ingestion_batch.reason ?? "source cannot be read"}.`}
+            </p>
+            {source.ingestion_batch.truncated ? <p>Only part of this PDF was read; the extraction limit was reached.</p> : null}
+            {source.ingestion_batch.notification_state === "pending" ? <div className="literature-ingestion__notice" role="alert">
+              <strong>{source.ingestion_batch.flagged_count} of {source.ingestion_batch.proposals_count} values need attention</strong>
+              <ul>{source.entries.filter((entry) => entry.ingestion_status === "flagged" && !entry.stale_source).map((entry) =>
+                <li key={entry.id}><a href={`#literature-entry-${entry.id}`}>Page {entry.locator_start}: {entry.quantity ?? "Unknown quantity"} {entry.value_text} {entry.unit}</a></li>)}</ul>
+              <button type="button" onClick={() => void acknowledgeIngestion()}>Mark notice read</button>
+            </div> : null}
+            {source.ingestion_batch.state === "model_unavailable" || source.ingestion_batch.state === "failed" ?
+              <button type="button" onClick={() => void retryIngestion()}>Retry PDF value reading</button> : null}
+          </>}
+          {ingestionError ? <p role="alert">{ingestionError}</p> : null}
+          <p>Source checked only; not used in calculations.</p>
+        </section> : null}
         {!source.backing ? <div><label>Attach source file<input type="file" accept=".txt,.md,.markdown,.pdf" disabled={attaching} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; void attachFile(file); }} /></label>{attaching ? <p role="status">Attaching file…</p> : null}{attachError ? <p role="alert">{attachError}</p> : null}</div> : null}
         <button type="button" onClick={() => onSelect(source.source_ref, source.title)}>Select source for Jarvis</button>
         <details className="memory-technical"><summary>Source provenance</summary><small>{source.source_ref}</small>{source.backing ? <small>{source.backing.mime_type} · {source.backing.sha256}</small> : null}</details>
@@ -180,9 +225,14 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
           {selected ? <p role="status" data-extraction-selection>Selected {selected.token} from page {selected.page}. The source check confirms this number appears on that PDF page, not what it means in the table. Review the finding below and save it to run the check.</p> : null}
         </section> : null}
         <h3>Claims & data</h3>
-        {!source.entries.length ? <p>No findings yet. Record a claim or datum below.</p> : source.entries.map((entry) => <details key={entry.id} className="literature-entry" data-entry-id={entry.id} open={entry.id === requestedEntryId || undefined}>
-          <summary><strong>{entryValue(entry)}</strong><span>{entry.entry_kind} · {entry.status}</span>{entry.verdict ? <em data-verdict={entry.verdict}>{VERDICT_WORDS[entry.verdict]}</em> : null}</summary>
+        {!source.entries.length ? <p>No findings yet. Record a claim or datum below.</p> : source.entries.map((entry) => <details key={entry.id} id={`literature-entry-${entry.id}`} className="literature-entry" data-entry-id={entry.id} open={entry.id === requestedEntryId || (entry.ingestion_status === "flagged" && source.ingestion_batch?.notification_state === "pending") || undefined}>
+          <summary><strong>{entryValue(entry)}</strong><span>{entry.entry_kind} · {entry.status}{entry.ingestion_status ? ` · ${entry.ingestion_status === "source_checked" ? "source checked" : "needs attention"}` : ""}{entry.stale_source ? " · stale source" : ""}</span>{entry.verdict && !entry.ingestion_status ? <em data-verdict={entry.verdict}>{VERDICT_WORDS[entry.verdict]}</em> : null}</summary>
           <p>{locationLabel(entry)}</p>
+          {entry.ingestion_status ? <div className="literature-ingestion__entry">
+            <p>{entry.quantity ?? "Unknown quantity"}: {entry.value_number ?? entry.value_text} {entry.unit}{entry.conditions.length ? ` · ${entry.conditions.map((condition) => `${condition.name} ${condition.value} ${condition.unit}`).join(", ")}` : ""}</p>
+            <p>Source checked only; not used in calculations.{entry.stale_source ? " The source file has changed." : ""}</p>
+            {entry.ingestion_checks.filter((check) => check.passed === false).map((check) => <p key={check.check} data-ingestion-check={check.check}>{check.reason ?? check.check}</p>)}
+          </div> : null}
           {entry.verdict ? <div className="literature-verdict">{entry.checks.filter((check) => check.status !== "pass").map((check) => <p key={check.id} data-check={check.id}>{check.hint}</p>)}</div> : null}{entry.context_text ? <p>{entry.context_text}</p> : null}
           <button type="button" onClick={() => onSelect(`literature_entry:${entry.id}`, entryValue(entry))}>Select finding for Jarvis</button>
           <div><strong>Used by</strong>{!entry.used_by.length ? <p>No canonical records reference this finding.</p> : <ul>{entry.used_by.map((use) => <li key={use.ref}>{use.kind}: {use.title}</li>)}</ul>}</div>
@@ -258,6 +308,18 @@ export default function LiteratureKnowledge({ jarvis, searchPanel, workspaceId, 
     const entry = source.entries.find((item) => item.id === requestedEntryId);
     onKnowledgeSelectionChange?.(entry ? `literature_entry:${entry.id}` : source.source_ref, entry ? entryValue(entry) : source.title);
   }, [requestedSourceId, requestedEntryId, sources, onKnowledgeSelectionChange]);
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    const pending = sources.filter((source) => source.backing?.mime_type === "application/pdf" &&
+      (source.ingestion_batch ? source.ingestion_batch.state === "running" : awaitingFirstBatch(source)));
+    if (!pending.length) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void Promise.all(pending.map((source) => getLiteratureSource(activeWorkspaceId, source.id).catch(() => null)))
+        .then((updated) => { if (!cancelled && workspaceToken.current === activeWorkspaceId) setSources((current) => current.map((source) => updated.find((item) => item?.id === source.id) ?? source)); });
+    }, 1500);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [activeWorkspaceId, sources]);
   const loadMore = async () => {
     if (!activeWorkspaceId || nextOffset === null || loading) return;
     const ws = activeWorkspaceId; setLoading(true); setError(null);

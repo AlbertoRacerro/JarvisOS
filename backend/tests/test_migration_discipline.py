@@ -48,7 +48,9 @@ LEGACY_CREATE_ONLY_COLUMNS: dict[tuple[str, str], str] = {}
 # Reviewed for spec 253: simulation_result_batches, simulation_result_values,
 # simulation_result_checks and simulation_result_resolutions are new CREATE IF NOT EXISTS tables, not columns on old tables.
 # Reviewed for spec 258: simulation_result_value_versions is a new CREATE IF NOT EXISTS table.
-BASE_CREATE_ONLY_SHA256 = "8fcb4476c7efc26dfef2326a5b33409477a2408243b6d1aad4d1ae704cd59e45"
+# Reviewed for spec 297: literature_ingestion_batches is a new CREATE IF NOT EXISTS table; the new
+# literature_entries columns are in both the CREATE and LITERATURE_SCHEMA_MIGRATION_STATEMENTS.
+BASE_CREATE_ONLY_SHA256 = "725bb111ebb79cae826e8447e98daabe8f9df29ccd780f4ed19b9e871a5f7357"
 
 # KNOWN DRIFT (spec 028, recorded not fixed): columns added by a migration
 # statement but absent from their owner's CREATE TABLE. A fresh database only has
@@ -372,6 +374,39 @@ def test_hermes_role_routes_upgrade_preserves_existing_ai_settings(monkeypatch, 
     assert SCHEMA_HERMES_ROLE_MODELS_MIGRATION_ID == "0032_hermes_role_models"
     assert tuple(row) == (3, "{}")
     assert recorded is not None
+
+
+def test_literature_ingestion_upgrade_keeps_hand_typed_entries(monkeypatch, tmp_path) -> None:
+    _isolate_data_root(monkeypatch, tmp_path)
+    from app.core.database import initialize_database, open_sqlite_connection
+
+    initialize_database()
+    columns = ("quantity", "conditions_json", "ingestion_status", "ingestion_reasons_json", "batch_id",
+               "source_sha256", "extractor_id", "extractor_version", "ai_job_id")
+    with open_sqlite_connection() as connection:
+        connection.execute("INSERT INTO workspaces (id, name, slug, status, created_at, updated_at) "
+                           "VALUES ('w', 'W', 'w', 'active', 't', 't')")
+        connection.execute("INSERT INTO literature_sources (id, workspace_id, title, source_kind, created_at, updated_at) "
+                           "VALUES ('s', 'w', 'S', 'paper', 't', 't')")
+        connection.execute("INSERT INTO literature_entries (id, workspace_id, source_id, entry_kind, value_text, "
+                           "created_at, updated_at) VALUES ('e', 'w', 's', 'datum', '4.2', 't', 't')")
+        connection.execute("DROP INDEX idx_literature_entries_workspace_quantity")
+        connection.execute("DROP TABLE literature_ingestion_batches")
+        for column in columns:
+            connection.execute(f"ALTER TABLE literature_entries DROP COLUMN {column}")
+        connection.execute("DELETE FROM schema_migrations WHERE migration_id = '0033_literature_ingestion'")
+        connection.commit()
+
+    initialize_database()
+    with open_sqlite_connection() as connection:
+        row = connection.execute(f"SELECT value_text, {', '.join(columns)} FROM literature_entries WHERE id = 'e'").fetchone()
+        recorded = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE migration_id = '0033_literature_ingestion'"
+        ).fetchone()
+        batches = connection.execute("SELECT COUNT(*) FROM literature_ingestion_batches").fetchone()[0]
+    assert tuple(row) == ("4.2", *([None] * len(columns)))
+    assert recorded is not None
+    assert batches == 0
 
 
 def test_fk_constrained_parameter_column_upgrades_from_legacy_table(monkeypatch, tmp_path) -> None:

@@ -25,6 +25,15 @@ assert.match(page, /createLiteratureEntry/);
 assert.match(page, /onKnowledgeSelectionChange/);
 assert.match(api, /request_key/);
 assert.match(api, /\/literature\/files\?filename=/);
+assert.match(api, /ingestion\/retry/);
+assert.match(api, /ingestion\/\$\{encodeURIComponent\(batchId\)\}\/acknowledge/);
+assert.match(page, /data-ingestion-state=\{source\.ingestion_batch\.state\}/);
+assert.match(page, /source_checked_count/);
+assert.match(page, /flagged_count/);
+assert.match(page, /notification_state === "pending"/);
+assert.match(page, /Source checked only; not used in calculations\./);
+assert.match(page, /data-ingestion-check=\{check\.check\}/);
+assert.match(page, /stale source/);
 assert.match(api, /\/backing`/);
 assert.match(api, /value_number\?: number/);
 assert.match(page, /Source file \(optional\)/);
@@ -65,3 +74,9 @@ assert.match(page, /Browsing does not add Jarvis context\./);
 assert.doesNotMatch(page, /\b(?:postJson|putJson|deleteJson)\b/);
 
 console.log("114 literature knowledge frontend contract: PASS");
+// Spec 297: polling stops once no batch is coming; a source never read offers a visible read action.
+assert.match(page, /function awaitingFirstBatch/);
+assert.match(page, /Read values from this PDF/);
+// Spec 297 criterion 9: automatic values are never described as usable for calculations.
+const ingestionUi = page.slice(page.indexOf('className="literature-ingestion"'), page.indexOf('Extracted PDF view'));
+for (const forbidden of [/\busable\b/i, /\bvalidated\b/i, /available for calculations/i]) assert.doesNotMatch(ingestionUi, forbidden);
