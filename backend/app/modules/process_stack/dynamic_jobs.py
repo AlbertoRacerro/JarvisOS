@@ -286,6 +286,19 @@ def list_jobs(workspace_id: str, draft_id: str, limit: int = 50) -> list[dict[st
     return rows[:limit]
 
 
+def list_recent(limit: int = 50) -> list[dict[str, Any]]:
+    """Newest job records across every workspace and draft (read only); reads at most ``limit`` files."""
+    base = build_paths().data_root / "process_dynamic"
+    newest = sorted(base.glob("*/*/job.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:limit]
+    rows = []
+    for path in newest:
+        try:
+            rows.append(_read_json(path))
+        except DynamicJobError:
+            continue
+    return rows
+
+
 def cancel(workspace_id: str, draft_id: str, job_id: str) -> dict[str, Any]:
     with _lock:
         directory, record = _owned(workspace_id, draft_id, job_id)
