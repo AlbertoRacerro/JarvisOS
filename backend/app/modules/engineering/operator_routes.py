@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from app.modules.ai.context_builder import canonical_digest
+from app.modules.engineering import bench_runs_view
 from app.modules.engineering.multifidelity import MultifidelityStudyRun, escalate_study
 from app.modules.engineering.operator_models import CapabilityRead, EscalationRequest, EvaluatorRead
 from app.modules.engineering.operator_service import (
@@ -40,6 +41,13 @@ def _directory(workspace_id: str, study_id: str):
         raise HTTPException(404, detail={"code": "workspace_not_found"}) from exc
     except ValueError as exc:
         raise HTTPException(422, detail={"code": "study_id_invalid"}) from exc
+
+
+def _bench(call, *args: str) -> dict[str, Any]:
+    try:
+        return call(*args)
+    except bench_runs_view.BenchViewError as exc:
+        raise HTTPException(exc.status, detail={"code": exc.code}) from exc
 
 
 def _persist(path, model: Any) -> None:
@@ -152,3 +160,18 @@ def list_escalations(workspace_id: str, study_id: str, digest: str) -> list[Mult
     directory = _directory(workspace_id, study_id) / "escalations"
     rows = [read_record(path, MultifidelityStudyRun) for path in record_paths(directory, "")]
     return [row for row in rows if row.base_run_digest == digest]
+
+
+@router.get("/bench/runs")
+def list_bench_runs(workspace_id: str) -> dict[str, Any]:
+    return _bench(bench_runs_view.list_runs, workspace_id)
+
+
+@router.get("/bench/compare")
+def compare_bench_runs(workspace_id: str, run_a: str, run_b: str) -> dict[str, Any]:
+    return _bench(bench_runs_view.compare, workspace_id, run_a, run_b)
+
+
+@router.get("/bench/runs/{run_id}")
+def show_bench_run(workspace_id: str, run_id: str) -> dict[str, Any]:
+    return _bench(bench_runs_view.show, workspace_id, run_id)
