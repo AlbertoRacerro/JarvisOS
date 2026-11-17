@@ -46,3 +46,7 @@
 
 /* Keep model guidance legible beside the compact version list. */
 .models-recovery :is(.final-fusion__searchbox, .final-fusion__context-strip, .final-fusion__lineage-slot, .final-fusion__panel-head > span) { font-size: 11px; line-height: 1.45; }
+
+.literature-structured table { border-collapse: collapse; }
+.literature-structured td { border: 1px solid var(--fusion-border, #8884); padding: 2px 6px; }
+.literature-token { font: inherit; padding: 0 3px; margin: 0 1px; }

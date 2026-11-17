@@ -127,3 +127,21 @@ export async function attachLiteratureBacking(workspaceId: string, sourceId: str
   if (!response.ok) throw new Error(await literatureErrorMessage(response, `Could not attach the file (${response.status}).`));
   return response.json() as Promise<LiteratureSource>;
 }
+
+export type StructuredPdfBlock = { kind: "text"; text: string } | { kind: "table"; text: string; rows: string[][] };
+export type StructuredPdfReasonCode = "" | "not_started" | "no_text_layer" | "unreadable" | "too_many_pages" | "unsafe_cache"
+  | "bundle_missing" | "running" | "conversion_failed" | "timeout";
+export type StructuredPdfView = {
+  state: "available" | "unavailable" | "failed" | "running";
+  reason_code: StructuredPdfReasonCode;
+  reason: string;
+  pages: { page: number; blocks: StructuredPdfBlock[] }[];
+  unlocated: StructuredPdfBlock[];
+};
+
+export async function structuredLiteraturePdf(workspaceId: string, sourceId: string, start = false): Promise<StructuredPdfView> {
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}/literature/sources/${encodeURIComponent(sourceId)}/structured`;
+  const response = await fetch(`${API_BASE_URL}${path}`, { method: start ? "POST" : "GET" });
+  if (!response.ok) throw new Error(await literatureErrorMessage(response, `Could not read extracted PDF (${response.status}).`));
+  return response.json() as Promise<StructuredPdfView>;
+}

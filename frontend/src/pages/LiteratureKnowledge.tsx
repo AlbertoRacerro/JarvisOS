@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listWorkspaces, type Workspace } from "../api/client";
-import { attachLiteratureBacking, createLiteratureEntry, createLiteratureSource, uploadLiteratureFile, listLiteratureSources, literatureContentUrl,
+import { attachLiteratureBacking, createLiteratureEntry, createLiteratureSource, uploadLiteratureFile, listLiteratureSources, literatureContentUrl, structuredLiteraturePdf, type StructuredPdfView,
   type LiteratureEntry, type LiteratureSource, type LiteratureVerdict, type LiteratureEntryInput, type LiteratureSourceInput } from "../api/literature";
 import "./memory-recovery.css";
 
@@ -52,6 +52,30 @@ function useRequestKey() {
   };
 }
 
+const NUMERIC_TOKEN = /(?<![\w.,])[+−-]?(?:\d+(?:[.,]\d+)?|\.\d+)(?:[eE][+−-]?\d+)?/g;
+
+function TokenText({ text, page, onChoose }: Readonly<{ text: string; page: number | null; onChoose: (token: string, page: number) => void }>) {
+  if (page === null) return <>{text}</>;
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(NUMERIC_TOKEN)) {
+    const at = match.index ?? 0;
+    if (at > last) parts.push(text.slice(last, at));
+    parts.push(<button key={at} type="button" className="literature-token" data-token={match[0]} data-page={page} onClick={() => onChoose(match[0], page)}>{match[0]}</button>);
+    last = at + match[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return <>{parts}</>;
+}
+
+type ExtractedBlock = StructuredPdfView["pages"][number]["blocks"][number];
+
+function ExtractedBlockView({ block, page, onChoose }: Readonly<{ block: ExtractedBlock; page: number | null; onChoose: (token: string, page: number) => void }>) {
+  return block.kind === "table"
+    ? <div><strong>{block.text || "Table"}</strong><table><tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, colIndex) => <td key={colIndex}><TokenText text={cell} page={page} onChoose={onChoose} /></td>)}</tr>)}</tbody></table></div>
+    : <p><TokenText text={block.text} page={page} onChoose={onChoose} /></p>;
+}
+
 function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, onEntrySaved, onSourceUpdated }: Readonly<{
   source: LiteratureSource; open: boolean; onToggle: (open: boolean) => void; requestedEntryId: string | null;
   onSelect: (ref: string, label?: string) => void; onEntrySaved: (entry: LiteratureEntry) => void; onSourceUpdated: (source: LiteratureSource) => void;
@@ -69,6 +93,10 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
   const [attachError, setAttachError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  const [structured, setStructured] = useState<StructuredPdfView | null>(null);
+  const [extractOpen, setExtractOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [selected, setSelected] = useState<{ token: string; page: number } | null>(null);
   const requestKey = useRequestKey();
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -86,6 +114,26 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
     } catch (cause) { if (alive.current) setAttachError(cause instanceof Error ? cause.message : "The file could not be attached."); }
     finally { if (alive.current) setAttaching(false); }
   };
+  useEffect(() => {
+    if (!open || !extractOpen || structured?.state !== "running") return;
+    const timer = window.setInterval(() => {
+      void structuredLiteraturePdf(source.workspace_id, source.id).then((view) => { if (alive.current) setStructured(view); })
+        .catch(() => { if (alive.current) setStructured({ state: "failed", reason_code: "conversion_failed", reason: "Could not poll local extraction.", pages: [], unlocated: [] }); });
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [open, extractOpen, source.workspace_id, source.id, structured?.state]);
+  const extract = async () => {
+    setExtractOpen(true);
+    try { setStructured(await structuredLiteraturePdf(source.workspace_id, source.id, true)); }
+    catch (cause) { setStructured({ state: "failed", reason_code: "conversion_failed", reason: cause instanceof Error ? cause.message : "Local extraction failed.", pages: [], unlocated: [] }); }
+  };
+  const chooseToken = (token: string, page: number) => {
+    if (!hasPdfBacking) return;
+    setKind("datum"); setValue(token); setNumber(token.replace("−", "-").replace(",", "."));
+    setLineFrom(String(page)); setLineTo(String(page));
+    setContext("Selected from the extracted PDF view; verify against the original page before use.");
+    setSelected({ token, page }); setAddOpen(true); setNotice(""); setError(null);
+  };
   const saveEntry = async (event: React.FormEvent) => {
     event.preventDefault();
     if (saving || !value.trim()) return;
@@ -101,7 +149,7 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
     try {
       const entry = await createLiteratureEntry(source.workspace_id, source.id, payload, requestKey(payload));
       if (!alive.current) return;
-      onEntrySaved(entry); setValue(""); setUnit(""); setNumber(""); setLineFrom(""); setLineTo(""); setContext(""); setNotice("Saved as raw. This finding has not been accepted as engineering evidence.");
+      onEntrySaved(entry); setValue(""); setUnit(""); setNumber(""); setLineFrom(""); setLineTo(""); setContext(""); setSelected(null); setNotice("Saved as raw. This finding has not been accepted as engineering evidence.");
     } catch (cause) { if (alive.current) setError(cause instanceof Error ? cause.message : "Finding could not be saved."); }
     finally { if (alive.current) setSaving(false); }
   };
@@ -117,6 +165,20 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
         {!source.backing ? <div><label>Attach source file<input type="file" accept=".txt,.md,.markdown,.pdf" disabled={attaching} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; void attachFile(file); }} /></label>{attaching ? <p role="status">Attaching file…</p> : null}{attachError ? <p role="alert">{attachError}</p> : null}</div> : null}
         <button type="button" onClick={() => onSelect(source.source_ref, source.title)}>Select source for Jarvis</button>
         <details className="memory-technical"><summary>Source provenance</summary><small>{source.source_ref}</small>{source.backing ? <small>{source.backing.mime_type} · {source.backing.sha256}</small> : null}</details>
+        {source.backing?.mime_type === "application/pdf" ? <section className="literature-structured">
+          <h3>Extracted PDF view</h3>
+          <button type="button" onClick={() => void extract()}>Extract page text and tables locally</button>
+          {extractOpen && structured ? <div role="status" data-extraction-state={structured.state} data-reason-code={structured.reason_code}>
+            {structured.state === "running" ? <p>Extracting locally…</p> : null}
+            {structured.state !== "available" && structured.state !== "running" ? <p>{structured.reason}</p> : null}
+            {structured.state === "available" ? <><p>Extraction is an inspectable view, not an accepted value. Select a number to prefill a finding; nothing is saved until you save it.</p>
+              {structured.pages.map((page) => <section key={page.page}><h4>Page {page.page}</h4>{page.blocks.map((block, index) => <ExtractedBlockView key={index} block={block} page={page.page} onChoose={chooseToken} />)}</section>)}
+              {structured.unlocated.length ? <section data-unlocated><h4>Unlocated items</h4><p>Docling could not place these on a PDF page, so they cannot prefill a finding.</p>
+                {structured.unlocated.map((block, index) => <ExtractedBlockView key={index} block={block} page={null} onChoose={chooseToken} />)}</section> : null}
+            </> : null}
+          </div> : null}
+          {selected ? <p role="status" data-extraction-selection>Selected {selected.token} from page {selected.page}. The source check confirms this number appears on that PDF page, not what it means in the table. Review the finding below and save it to run the check.</p> : null}
+        </section> : null}
         <h3>Claims & data</h3>
         {!source.entries.length ? <p>No findings yet. Record a claim or datum below.</p> : source.entries.map((entry) => <details key={entry.id} className="literature-entry" data-entry-id={entry.id} open={entry.id === requestedEntryId || undefined}>
           <summary><strong>{entryValue(entry)}</strong><span>{entry.entry_kind} · {entry.status}</span>{entry.verdict ? <em data-verdict={entry.verdict}>{VERDICT_WORDS[entry.verdict]}</em> : null}</summary>
@@ -126,7 +188,7 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
           <div><strong>Used by</strong>{!entry.used_by.length ? <p>No canonical records reference this finding.</p> : <ul>{entry.used_by.map((use) => <li key={use.ref}>{use.kind}: {use.title}</li>)}</ul>}</div>
           <details className="memory-technical"><summary>Finding provenance</summary><small>{entry.provenance_ref}</small></details>
         </details>)}
-        <details className="literature-add-finding"><summary>Add a finding</summary>
+        <details className="literature-add-finding" open={addOpen} onToggle={(event) => setAddOpen(event.currentTarget.open)}><summary>Add a finding</summary>
           <form onSubmit={(event) => void saveEntry(event)}>
             <label>Finding type<select value={kind} disabled={saving} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="claim">Claim</option><option value="datum">Datum</option></select></label>
             <label>{kind === "claim" ? "Claim statement" : "Reported value"}<textarea required maxLength={kind === "claim" ? 8000 : 4000} value={value} disabled={saving} onChange={(event) => setValue(event.target.value)} /></label>

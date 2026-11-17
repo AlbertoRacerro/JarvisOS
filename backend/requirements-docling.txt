@@ -1,0 +1,3 @@
+# Optional offline structured PDF converter; install only in a separate local environment.
+# Docling 2.150.1, MIT license. Model artifacts must be prefetched during setup.
+docling==2.150.1

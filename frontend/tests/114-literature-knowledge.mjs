@@ -39,6 +39,28 @@ assert.match(page, /This PDF has no readable text \(it may be a scan\); values o
 for (const words of ["Checked against the source", "Checked, with warnings", "Not checked", "Does not match the source"]) assert.ok(page.includes(words), words);
 assert.match(page, /check\.status !== "pass"/);
 
+// Structured PDF view (spec 296): states, per-token selection, selection note, unlocated items.
+assert.match(api, /\/structured`/);
+assert.match(api, /reason_code: StructuredPdfReasonCode/);
+for (const code of ["not_started", "no_text_layer", "unreadable", "too_many_pages", "unsafe_cache", "bundle_missing", "running", "conversion_failed", "timeout"]) assert.ok(api.includes(`"${code}"`), code);
+assert.match(api, /unlocated: StructuredPdfBlock\[\]/);
+assert.match(page, /Extract page text and tables locally/);
+assert.match(page, /data-extraction-state=\{structured\.state\}/);
+assert.match(page, /Extracting locally…/);
+assert.match(page, /text\.matchAll\(NUMERIC_TOKEN\)/);
+assert.match(page, /<button key=\{at\} type="button" className="literature-token" data-token=\{match\[0\]\}/);
+assert.match(page, /onClick=\{\(\) => onChoose\(match\[0\], page\)\}>\{match\[0\]\}<\/button>/);
+assert.match(page, /setValue\(token\); setNumber\(token\.replace/);
+assert.match(page, /setLineFrom\(String\(page\)\); setLineTo\(String\(page\)\)/);
+assert.match(page, /The source check confirms this number appears on that PDF page, not what it means in the table\./);
+assert.match(page, /nothing is saved until you save it/);
+assert.match(page, /Unlocated items/);
+assert.match(page, /cannot prefill a finding/);
+assert.match(page, /page=\{null\}/);
+assert.match(page, /if \(page === null\) return <>\{text\}<\/>/);
+const chooseBody = page.slice(page.indexOf("const chooseToken"), page.indexOf("const saveEntry"));
+assert.doesNotMatch(chooseBody, /createLiteratureEntry/);
+
 assert.match(page, /Browsing does not add Jarvis context\./);
 assert.doesNotMatch(page, /\b(?:postJson|putJson|deleteJson)\b/);
 
