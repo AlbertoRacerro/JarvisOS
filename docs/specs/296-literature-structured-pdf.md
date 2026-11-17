@@ -110,7 +110,12 @@ the browser walk and test gate pass, and the STATUS row is reconciled.
 
 ## Before acceptance
 
-Run a local offline Docling proof on a generated two-page PDF with a numeric table. Confirm the exact package and model
-versions, installation footprint, conversion time and memory on this machine, page attribution for cells, and whether
-the existing product job path can run the conversion without adding a second job framework. Narrow this spec if the
-proof does not support its bounds or a reliable page-located table view. No implementation begins from this draft.
+The first local proof used Docling 2.150.1 and an explicit offline bundle of layout and table models. A generated
+two-page PDF with a ruled table produced one table, its cells and page 2 provenance in 17.9 s, with 2.6 GB peak
+resident memory. The isolated environment occupied 6.2 GB and the model bundle 669 MB. A simpler unruled text sample
+converted but produced no table. These are one-run observations on generated inputs, not a claim about arbitrary papers.
+
+Before acceptance, decide how to package this optional large dependency and run a bounded conversion without blocking
+source reads or adding a second job framework. Verify a real public paper's table and page attribution using an
+offline-only conversion. Narrow this spec if those checks do not support a reliable page-located table view. No
+implementation begins from this draft.
