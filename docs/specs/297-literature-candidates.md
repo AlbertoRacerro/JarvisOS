@@ -1,6 +1,6 @@
 # 297 — LITERATURE-CANDIDATES-1: Automatic value ingestion from one stored PDF, flagged by exception
 
-Status: planned (planning checkpoint; migration and validation boundaries need further review before acceptance)
+Status: ready (accepted after coordinator critical review at `28c83e99`; see "Acceptance review")
 Depends on: 295, 296
 
 ## Goal
@@ -25,13 +25,17 @@ approval by exception). Specs 295 and 296 check and display what an operator sel
 Jarvis finds the values itself. Revision 2 over-claimed (`calculation_usable`, "available for calculations") while wiring no
 reader; this revision removes that claim and tightens what may pass.
 
-## Code facts checked at `2248354a`, and the conflict they raise
+## Code facts checked at `28c83e99`, and the conflict they raise
 
 - `backend/app/modules/memory/pdf_text.py::cached_pdf_pages` gives cached per-page text (pypdfium2, keyed by SHA-256);
-  `literature_checks.py::number_tokens` and `check_datum` re-derive a number from page text and check locator, value and unit.
+  `backend/app/modules/memory/literature_checks.py::number_tokens` and
+  `backend/app/modules/memory/literature_checks.py::check_datum` re-derive a number from page text and check locator, value and unit.
   `check_datum` sees only the current backing's page text and knows nothing about which bytes an entry was ingested from.
-- `backend/app/modules/process_kernel/units.py::parse_unit_token` and `resolve_unit` validate a unit and give its physical
-  dimension.
+- `backend/app/modules/process_kernel/units.py::parse_unit_token` validates any Pint unit token, including temperature,
+  rates and amounts. `backend/app/modules/process_kernel/units.py::resolve_unit` is **not** usable here: it rejects every
+  dimension outside the process-kernel set (`°C`, `K` and `1/h` raise `unit_dimension_unsupported`, checked at
+  `28c83e99`). Dimension comparison therefore uses Pint dimensionality from
+  `backend/app/modules/process_kernel/units.py::unit_registry`.
 - `backend/app/modules/ai/execution.py::run_ai_task` accepts `structured_output_schema` and `workspace_id` and writes the
   `ai_jobs` row; `backend/app/modules/studio/workshop_draft.py::draft` is the in-repo pattern (schema, parse, refuse, degrade).
 - `literature_entries` (`backend/app/core/literature_schema.py`) has no quantity, conditions, extractor, batch, ingestion
@@ -58,7 +62,7 @@ In scope:
    same bytes return the existing batch and never call a model twice. No online search, no other source kind, no manual
    "extract" button as the normal path (a visible retry exists only for a batch in `model_unavailable` or `failed`).
 2. **Proposal (model).** The cached pages are sent in bounded windows with a structured-output schema. Each proposal has
-   `quantity` (name as the paper words it), `value_text` (the literal as written), `unit`, `dimension`, `conditions`
+   `quantity` (name as the paper words it), `value_text` (the literal as written), `unit`, `conditions`
    (name, literal value, unit) and `page` plus `quote` (the verbatim sentence or row). Route class is local only; `auto` never
    reaches an external provider (Never 1). With no local model the batch ends `model_unavailable`, ingests nothing, and says
    so. Model output is a proposal (Never 7); a malformed reply is a recorded batch failure, never a value.
@@ -70,9 +74,9 @@ In scope:
 4. **Validation (deterministic, once per value and extractor version).** Each result is a separate check with a reason code:
    - `source_occurrence`: `quote` occurs verbatim (whitespace-normalised) on the cited page, and `value_text` is a number
      `number_tokens` extracts from that quote. The stored number is the one re-derived from the page text, never the model's.
-   - `unit_dimension`: `parse_unit_token(unit)` succeeds and `resolve_unit(unit).physical_dimension` equals the proposed
-     `dimension`; where the workspace has an active accepted parameter or requirement for the same quantity name, its unit's
-     dimension must match too.
+   - `unit_dimension`: `parse_unit_token(unit)` succeeds and the unit's Pint dimensionality equals that of the matched
+     label's reference unit (the model states no dimension; the table decides it). Where the workspace has an active
+     accepted parameter or requirement for the same quantity name, its unit's dimensionality must match too.
    - `plausible_range`: checked only when a sourced bound exists (accepted workspace parameter with `value_min`/`value_max`
      in a compatible unit); `not_applicable` otherwise, which does not flag.
    - `duplicate_contradiction`: among existing entries of the same workspace with the same quantity and canonical
@@ -86,14 +90,17 @@ In scope:
    - **Label–value–unit:** a quantity label from a small fixed table (name and aliases, each tied to one physical
      dimension; the table lives in the module, is tested, and starts with a handful of entries, not an open vocabulary),
      then at most a fixed copula or separator (`is`, `=`, `:`, `of`, `was`, `were`), then one number, then one unit token,
-     with only whitespace between them. The label must be in the table, the unit's dimension must equal the label's
-     dimension, and the number must be the single numeric token directly after the separator.
-   - **Condition clause:** at least one condition, located by explicit syntax after the value: `at <number> <unit>`,
+     with only whitespace between them. The label must be in the table, the unit's dimensionality must equal that of the
+     label's reference unit, and the number must be the single numeric token directly after the separator.
+   - **Condition clause:** required only when the matched label's table row says `requires_conditions` (for example
+     solubility, density or viscosity, which depend on temperature; not a pipe diameter or a molar mass). When required,
+     at least one condition, located by explicit syntax after the value: `at <number> <unit>`,
      `under <number> <unit>`, `@ <number> <unit>`, or a parenthesised `(<name> = <number> <unit>)`, where the condition
      name is also in a small fixed table with a dimension and the unit's dimension matches. Each stated condition's
      literal and unit must occur in the clause in that position, not merely elsewhere in the sentence.
    Everything else is flagged, never passed: free-form sentences, a label not in the table, a unit whose dimension does not
-   match the label, more than one candidate number after the separator, no condition clause (`conditions_missing`), a
+   match the label, more than one candidate number after the separator, no condition clause where the label requires one
+   (`conditions_missing`), a
    condition outside the located syntax (`condition_not_in_source`), a quote line carrying three or more numbers or lying
    in a table cell or row (`table_meaning_unverified`: a column or row header decides the meaning and is not re-derived
    here), and ranges, ratios, lists and negations. The grammar is not extended inside this spec; widening it is a later
@@ -117,6 +124,12 @@ In scope:
    quote, quantity, number, unit, conditions and each failed check with its reason, a `stale_source` marker where the digest
    no longer matches, and the label "source-checked only, not used in calculations". No per-value save, confirm or approve
    control exists.
+
+10. **The fixed tables.** Each quantity row is `(name, aliases, reference unit, requires_conditions)`; each condition row is
+   `(name, aliases, reference unit)`. They live in core and hold **generic physical quantities only** (for example
+   temperature, pressure, density, dynamic viscosity, solubility, diffusivity, molar mass, diameter, length, specific
+   growth rate). No project, organism, apparatus or customer term enters the core table; a pack-supplied extension is a
+   later spec (PARK), not part of this slice.
 
 Out of scope (binding non-goals):
 
@@ -159,11 +172,12 @@ Verify against actual code before starting; report conflicts instead of guessing
    `eligible_for_later_admission` true; the table row value is `flagged` with `table_meaning_unverified` and eligibility
    false; one notification is pending.
 2. A proposal whose quote is not on the cited page, whose number differs from the page, or whose unit does not parse or
-   mismatches the proposed dimension, is stored flagged with the exact check and reason, never `source_checked` and never
+   mismatches the label's dimension, is stored flagged with the exact check and reason, never `source_checked` and never
    silently dropped.
 3. Ambiguity stays flagged: a label and condition tokens co-occurring in free-form prose, a label absent from the fixed
    table, a unit dimension that does not match the label, two candidate numbers after the separator, a range or ratio, a
-   condition outside the located syntax, and no condition at all each give their distinct reason and never pass.
+   condition outside the located syntax, and no condition for a label whose row requires one each give their distinct
+   reason and never pass. A table label that does not require conditions (for example a diameter) passes without one.
 4. An exact duplicate of an existing same-quantity same-condition value is not stored again and links the existing entry; a
    different number for the same quantity, conditions and unit flags the new value as a contradiction.
 5. A plausible-range bound from an accepted parameter flags an out-of-range value; without a bound the check is
@@ -204,12 +218,17 @@ is the single read-time definition. No calculation consumes any of it. The STATU
 **Contract 248 stays incomplete**: slice D wiring into project-knowledge, requirement checks and Materials, the red dot
 there, one-action resolution, history, table-structure meaning, other source kinds and slice H remain open.
 
-## Open points for the coordinator
+## Acceptance review (coordinator, 2026-11-17, at `28c83e99`)
 
-- Whether migrating `simulation_result_*` to accept literature sources (one shared batch/value store) should replace this
-  spec's literature-side batch table before implementation. It removes the duplicated batch concept but makes this a
-  project-knowledge migration with a larger blast radius; this spec recommends the narrow literature-side form first.
-- The starting contents of the fixed quantity and condition tables, and whether they ship in core or in a pack
-  (`JARVISOS_PACK_PATH`); domain terms may not belong in the public core.
-- `conditions_missing` flags every value whose paper sentence states no condition; confirm that is wanted rather than a
-  softer pass for conditions-free constants.
+The three open points of the planning draft are settled as follows; all are reversible technical choices.
+
+- **Batch store.** The narrow literature-side batch table stays. Migrating `simulation_result_*` to accept literature
+  sources has a larger blast radius, and slice D, which would justify one shared store, has no reader yet. Revisit when
+  slice D is specified.
+- **Fixed tables.** In core, generic physical quantities only (scope item 10); a pack extension is PARK.
+- **`conditions_missing`.** Flagging every value without a condition would bury plain constants in flags and defeat
+  "approval by exception". The flag now applies only where the label's row says `requires_conditions`.
+- **Correction found in review.** `resolve_unit` cannot check temperature or rate units, so acceptance criterion 1 could
+  never pass; dimension checks use Pint dimensionality instead, and the model no longer proposes a dimension.
+- **Risk.** High (migration). It needs a second-session full-diff review and the migration proven on a copy of a real
+  data root before merge.
