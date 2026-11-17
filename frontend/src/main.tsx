@@ -19,6 +19,7 @@ import "./styles/review.css";
 import "./styles/ai-threads.css";
 import "./styles/settings.css";
 import "./styles/activity-panel.css";
+import "./styles/bench-runs.css";
 import "./styles/responsive.css";
 import "./styles/100g-ui-repair.css";
 import "./styles/operator-recovery.css";
