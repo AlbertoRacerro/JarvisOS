@@ -1,6 +1,6 @@
 # 299 — BENCH-RUNS-VIEW-1: Bench results with verdict lights and checks on the Runs screen
 
-Status: draft
+Status: ready
 Depends on: 280, 281, 282, 283
 
 ## Goal
@@ -31,6 +31,7 @@ slice adds starting a run from a form, so the capability stops being reachable b
   `<workspace>/engineering/bench`, next to the studies folder given by
   `backend/app/modules/engineering/operator_service.py::workspace_dir`, and confines every run id to that root.
 - `backend/app/modules/engineering/bench.py::_agent_view` reduces every absolute path to its last component.
+- `backend/app/modules/engineering/operator_routes.py` declares the workspace engineering router.
 - `frontend/src/pages/RunsWorkbench.tsx::RunsWorkbench` is the Runs screen at `/runs` and already receives the
   selected workspace.
 
@@ -54,8 +55,8 @@ Out of scope (binding non-goals):
 
 ## Files likely touched
 
-- `backend/app/modules/engineering/bench_routes.py` (new) or the engineering routes module, `backend/app/main.py` if
-  a router is added
+- `backend/app/modules/engineering/operator_routes.py` (its router already has the prefix
+  `/workspaces/{workspace_id}/engineering`; add `/bench/runs`, `/bench/runs/{run_id}` and `/bench/compare`)
 - `frontend/src/pages/RunsWorkbench.tsx`, `frontend/src/components/BenchRunsPanel.tsx` (new), `frontend/src/api/`
 - `backend/tests/test_bench_runs_view.py`, `frontend/tests/299-bench-runs-view.test.mjs`, `frontend/package.json`
 - `e2e/bench_runs_walk.mjs`
@@ -73,7 +74,8 @@ Out of scope (binding non-goals):
 
 1. With fixture run folders, the list route returns them newest first with verdict, evaluator and status; a folder
    without `result.json` and one with invalid JSON are skipped and counted.
-2. The show route returns checks, outputs and failure with no absolute path in the payload.
+2. The show and compare routes return checks, outputs and failure with no absolute path anywhere in the payload
+   (failure messages and artifact refs included).
 3. A run id containing `..`, a slash or an absolute path is refused.
 4. The compare route returns the `compare_runs` document for two runs of the same workspace and refuses a run of
    another workspace.
