@@ -98,6 +98,9 @@ def test_ac1_unknown_role_is_rejected_and_default_keeps_broker_tools() -> None:
         AIThreadSubmit(request_id="r1", prompt="hello", route_class="hermes:agent", role_id="unknown_role")
     assert get_role(None).role_id == "isaac"
     assert "mcp-jarvis" in get_role(None).toolsets
+    with pytest.raises(ValidationError, match="Sheldon mode is available only"):
+        AIThreadSubmit(request_id="r2", prompt="hello", route_class="hermes:agent",
+                       role_id="gregor", sheldon_mode=True)
 
 
 # ---------------------------------------------------------------------------
@@ -375,11 +378,13 @@ def test_ac3_session_binding_to_role(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert supervisor.session.hermes_session_id != session_1_id
 
 
-def test_ac3_supervisor_resolves_role_route() -> None:
+def test_ac3_supervisor_pins_role_route_for_one_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     resolved_routes: list[str] = []
+    current_route = ["local:general"]
 
     def fake_route_for_role(role_id: str) -> str:
-        route = f"local:model-for-{role_id}"
+        assert role_id == "alfred"
+        route = current_route[0]
         resolved_routes.append(route)
         return route
 
@@ -393,18 +398,18 @@ def test_ac3_supervisor_resolves_role_route() -> None:
         upstream_revision="rev1",
     )
 
-    sent: list[dict[str, Any]] = []
-    supervisor._send = sent.append  # type: ignore[assignment]
+    monkeypatch.setattr(supervisor, "_alive", lambda: True)
+    monkeypatch.setattr(supervisor, "_send", lambda _frame: None)
 
-    frame = {
-        "id": "relay-1",
-        "session_ref": supervisor.session.model_dump(mode="json"),
-        "messages": [{"role": "user", "content": "hello"}],
-    }
-    # Handling relay invokes route_for_role with "alfred"
-    supervisor._handle_relay(frame)
+    def await_turn(_request_id: str, **_kwargs: Any) -> dict[str, Any]:
+        current_route[0] = "local:llamacpp"
+        assert supervisor.active_role_route == "local:general"
+        return {"status": "failed"}
 
-    assert "local:model-for-alfred" in resolved_routes
+    monkeypatch.setattr(supervisor, "_await", await_turn)
+    supervisor.turn("hello")
+    assert resolved_routes == ["local:general"]
+    assert supervisor.active_role_route is None
 
 
 def test_role_and_sheldon_are_bound_to_replay_and_successful_reply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -425,7 +430,7 @@ def test_role_and_sheldon_are_bound_to_replay_and_successful_reply(tmp_path: Pat
     first = submit_interaction(workspace_id="ws1", thread_id=thread.id,
                                payload=AIThreadSubmit(**base, sheldon_mode=True), route_availability=[])
     assert first.interaction.route_class == "hermes:agent"
-    for changed in ({**base, "role_id": "gregor", "sheldon_mode": True},
+    for changed in ({**base, "role_id": "gregor", "sheldon_mode": False},
                     {**base, "sheldon_mode": False}):
         with pytest.raises(AIThreadConflictError, match="different submit semantics"):
             submit_interaction(workspace_id="ws1", thread_id=thread.id,
@@ -446,6 +451,34 @@ def test_role_and_sheldon_are_bound_to_replay_and_successful_reply(tmp_path: Pat
     assert interaction.execution_class == "agent"
     assert interaction.role_id == "isaac"
     assert interaction.sheldon_mode is True
+
+
+def test_failed_role_switch_keeps_requested_role_label(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.modules.ai.thread_models import AIThreadCreate, AIThreadSubmit
+    from app.modules.events.service import log_event
+
+    monkeypatch.setenv("JARVISOS_DATA_ROOT", str(tmp_path / "data"))
+    initialize_database()
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            "INSERT INTO workspaces (id, name, slug, description, created_at, updated_at) "
+            "VALUES ('ws1', 'Workspace', 'ws1', '', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+        connection.commit()
+    thread = create_thread(AIThreadCreate(workspace_id="ws1"))
+    with open_sqlite_connection() as connection:
+        log_event(connection, event_type="hermes.session_bound", actor="jarvis",
+                  target_type="ai_thread", target_id=thread.id, workspace_id="ws1",
+                  payload={"session_ref": {"profile_id": "isaac"}})
+        connection.commit()
+    result = submit_interaction(
+        workspace_id="ws1", thread_id=thread.id,
+        payload=AIThreadSubmit(request_id="gregor-failed", prompt="Hello",
+                               route_class="hermes:agent", role_id="gregor"),
+        route_availability=[],
+    )
+    assert result.interaction.role_id == "gregor"
+    assert get_thread(workspace_id="ws1", thread_id=thread.id).interactions[0].role_id == "gregor"
 
 
 # ---------------------------------------------------------------------------

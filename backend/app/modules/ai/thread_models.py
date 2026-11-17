@@ -79,6 +79,12 @@ class AIThreadSubmit(BaseModel):
                 raise ValueError(f"unknown Hermes role: {value}")
         return value
 
+    @model_validator(mode="after")
+    def validate_sheldon_mode(self) -> "AIThreadSubmit":
+        if self.sheldon_mode and (self.route_class != "hermes:agent" or self.role_id not in {None, "isaac"}):
+            raise ValueError("Sheldon mode is available only for the Isaac Hermes role")
+        return self
+
     @field_validator("images")
     @classmethod
     def validate_image_data_urls(cls, value: list[str] | None) -> list[str] | None:

@@ -214,7 +214,7 @@ def resolve_role_route(role_id: str) -> str:
         if "no such table: ai_settings" not in str(exc):
             raise
         return (hermes_role_pack_defaults().get(role.role_id)
-                or os.getenv("JARVIS_HERMES_INFERENCE_ROUTE", "local:llamacpp"))
+                or os.getenv("JARVIS_HERMES_INFERENCE_ROUTE") or "local:llamacpp")
 
 
 def record_scaleway_token_usage(*, input_tokens: int, output_tokens: int) -> AISettingsRead:

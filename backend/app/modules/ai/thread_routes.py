@@ -182,7 +182,8 @@ def _hermes_agent_availability(
     first_error = next((role for role in roles if not role.available), None)
     reason = None if ready else (first_error.reason_code if first_error else "HERMES_RUNTIME_UNCONFIGURED")
     message = ("Hermes agent is ready; its worker starts on the first turn." if ready
-               else first_error.unavailable_reason if first_error else "No Hermes role model is ready.")
+               else first_error.unavailable_reason or "No Hermes role model is ready."
+               if first_error else "No Hermes role model is ready.")
     supervisor = request.app.state._state.get("hermes_supervisor") if request is not None else None
     status = supervisor.status() if supervisor is not None else {}
     state = status.get("state")

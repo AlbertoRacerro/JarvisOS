@@ -1084,6 +1084,17 @@ def _reserve_interaction(
                     now,
                 ),
             )
+            if payload.route_class == "hermes:agent":
+                from app.modules.agents.hermes.roles import get_role
+                from app.modules.events.service import log_event
+
+                log_event(
+                    connection, event_type="hermes.interaction_requested", actor="user",
+                    target_type="ai_thread_interaction", target_id=interaction_id,
+                    workspace_id=workspace_id,
+                    payload={"role_id": get_role(payload.role_id).role_id,
+                             "sheldon_mode": payload.sheldon_mode},
+                )
             connection.commit()
             return None
         except sqlite3.IntegrityError as exc:
@@ -1293,6 +1304,16 @@ def _interaction_from_row(
     if connection is not None:
         try:
             import json
+            requested = connection.execute(
+                "SELECT payload FROM events WHERE event_type = 'hermes.interaction_requested' "
+                "AND target_id = ? ORDER BY rowid DESC LIMIT 1",
+                (str(row["id"]),)
+            ).fetchone()
+            if requested:
+                requested_payload = json.loads(requested["payload"])
+                role_id = requested_payload.get("role_id")
+                sheldon_mode = requested_payload.get("sheldon_mode") is True
+                is_hermes = True
             evt = connection.execute(
                 "SELECT payload FROM events WHERE event_type = 'hermes.interaction_flows' "
                 "AND target_id = ? ORDER BY rowid DESC LIMIT 1",
@@ -1300,7 +1321,7 @@ def _interaction_from_row(
             ).fetchone()
             if evt:
                 event_payload = json.loads(evt["payload"])
-                if event_payload.get("final_flow_id") == str(row["flow_id"]):
+                if not requested and event_payload.get("final_flow_id") == str(row["flow_id"]):
                     is_hermes = True
                     role_id = event_payload.get("role_id")
                     sheldon_mode = event_payload.get("sheldon_mode") is True

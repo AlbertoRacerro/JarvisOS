@@ -18,6 +18,7 @@ optional pack, not by this repository.
 
 | Walk | What it covers | Run |
 |---|---|---|
+| `named_roles_walk.mjs` | Spec 260 named role chooser, unavailable models, Sheldon mode and Settings routes (fresh temporary data root; no provider calls) | `node e2e/named_roles_walk.mjs <evidence-dir>` |
 | `design_discovery_walk.mjs` | A fresh profile reaches every Design capability through visible controls only (role + accessible name) | `node e2e/design_discovery_walk.mjs <evidence-dir> <source-data-root>` |
 | `design_visual_walk.mjs` | Visual proof: Workshop, code and math rendering, CFD field inspection, charts, status language, Light/Dark at two viewports | `node e2e/design_visual_walk.mjs <evidence-dir> <source-data-root>` |
 | `cfd_pipe_walk.mjs` | Smooth-tube CFD path with a real OpenFOAM toolchain (`cfd_operator_registry.py` builds the operator registry) | `node e2e/cfd_pipe_walk.mjs [evidence-dir]` |
