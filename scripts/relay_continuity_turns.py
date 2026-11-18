@@ -902,14 +902,14 @@ def _extract_claude_usage(events: list[dict[str, Any]], terminal: dict[str, Any]
     top_assistants = [e for e in events if e.get("type") == "assistant" and not e.get("parent_tool_use_id")]
     assistants = top_assistants if top_assistants else [e for e in events if e.get("type") == "assistant"]
 
-    tot_in = 0
-    tot_out = 0
-    tot_cache = 0
-    has_valid = False
+    ordered_ids: list[str] = []
+    by_msg_id: dict[str, tuple[int, int, int]] = {}
+    anon_usages: list[tuple[int, int, int]] = []
     for e in assistants:
+        msg = e.get("message")
+        msg_id = msg.get("id") if isinstance(msg, dict) and isinstance(msg.get("id"), str) and msg.get("id") else None
         u = e.get("usage")
         if not isinstance(u, dict):
-            msg = e.get("message")
             if isinstance(msg, dict) and isinstance(msg.get("usage"), dict):
                 u = msg["usage"]
             else:
@@ -923,12 +923,19 @@ def _extract_claude_usage(events: list[dict[str, Any]], terminal: dict[str, Any]
                     and isinstance(out, int) and not isinstance(out, bool) and out >= 0
                     and isinstance(cr, int) and not isinstance(cr, bool) and cr >= 0
                     and isinstance(cc, int) and not isinstance(cc, bool) and cc >= 0):
-                tot_in += inp
-                tot_out += out
-                tot_cache += cr + cc
-                has_valid = True
+                triple = (inp, out, cr + cc)
+                if msg_id is not None:
+                    if msg_id not in by_msg_id:
+                        ordered_ids.append(msg_id)
+                    by_msg_id[msg_id] = triple
+                else:
+                    anon_usages.append(triple)
 
-    if has_valid:
+    collected = [by_msg_id[mid] for mid in ordered_ids] + anon_usages
+    if collected:
+        tot_in = sum(t[0] for t in collected)
+        tot_out = sum(t[1] for t in collected)
+        tot_cache = sum(t[2] for t in collected)
         return {
             "input_tokens": tot_in,
             "output_tokens": tot_out,

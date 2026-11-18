@@ -737,15 +737,21 @@ def _get_classify_turn() -> Any:
             if spec and spec.loader:
                 mod = importlib.util.module_from_spec(spec)
                 sys.modules["relay_continuity_turns"] = mod
-                spec.loader.exec_module(mod)
+                try:
+                    spec.loader.exec_module(mod)
+                except Exception:
+                    sys.modules.pop("relay_continuity_turns", None)
+                    raise
                 _classify_turn_fn = getattr(mod, "classify_turn", None)
                 return _classify_turn_fn
-        except (ImportError, OSError, AttributeError):
+        except Exception:  # noqa: BLE001 - report must never raise on import failure
             pass
     return None
 
 
 def _resolve_session_turns_dir(repo: Path, session: str) -> Path | None:
+    if not session or "/" in session or "\\" in session or session in (".", ".."):
+        return None
     candidate = repo / ".agent-relay" / "sessions" / session / "turns"
     if candidate.is_dir():
         return candidate
@@ -765,8 +771,11 @@ def _resolve_session_turns_dir(repo: Path, session: str) -> Path | None:
 
 def load_coordinator_turns(control_dir: Path | None = None, repo: Path | None = None, *,
                            days: int = 7, now: datetime | None = None) -> list[dict[str, Any]]:
-    c_dir = default_control_dir() if control_dir is None else Path(control_dir).expanduser()
-    r_dir = _repo_root() if repo is None else Path(repo).expanduser()
+    try:
+        c_dir = default_control_dir() if control_dir is None else Path(control_dir).expanduser()
+        r_dir = _repo_root() if repo is None else Path(repo).expanduser()
+    except OSError:
+        return []
     moment = now or datetime.now(UTC)
     cutoff = moment - timedelta(days=days)
 
@@ -781,14 +790,18 @@ def load_coordinator_turns(control_dir: Path | None = None, repo: Path | None = 
         except OSError:
             pass
 
-    seen: set[tuple[Any, Any]] = set()
+    seen: set[tuple[str | None, str | None]] = set()
     turns: list[dict[str, Any]] = []
 
     for af in attempt_files:
         try:
-            with open(af, encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.strip()
+            fh = open(af, encoding="utf-8", errors="replace")  # noqa: SIM115
+        except OSError:
+            continue
+        with fh:
+            for raw_line in fh:
+                try:
+                    line = raw_line.strip()
                     if not line:
                         continue
                     try:
@@ -798,29 +811,33 @@ def load_coordinator_turns(control_dir: Path | None = None, repo: Path | None = 
                     if not isinstance(rec, dict) or rec.get("event") != "settle":
                         continue
 
-                    agent = rec.get("agent")
-                    session = rec.get("session")
-                    if not (isinstance(agent, str) and agent) and not (isinstance(session, str) and session):
+                    raw_agent = rec.get("agent")
+                    agent = raw_agent if isinstance(raw_agent, str) and raw_agent else None
+                    raw_session = rec.get("session")
+                    session = raw_session if isinstance(raw_session, str) and raw_session else None
+                    if agent is None and session is None:
                         continue
 
+                    raw_nonce = rec.get("nonce")
+                    nonce = raw_nonce if isinstance(raw_nonce, str) and raw_nonce else None
+
                     at_val = rec.get("at")
-                    ts = _parse_instant(at_val) or _parse_ts(at_val) if at_val else None
-                    if ts is None:
-                        nonce = rec.get("nonce")
-                        if isinstance(nonce, str):
-                            m = re.search(r"rc-(\d{8}T\d{6}Z)-", nonce)
-                            if m:
-                                try:
-                                    ts = datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
-                                except ValueError:
-                                    ts = None
+                    ts = (_parse_instant(at_val) or _parse_ts(at_val)) if isinstance(at_val, str) and at_val else None
+                    if ts is None and nonce is not None:
+                        m = re.search(r"rc-(\d{8}T\d{6}Z)-", nonce)
+                        if m:
+                            try:
+                                ts = datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+                            except ValueError:
+                                ts = None
                     if ts is None or ts < cutoff:
                         continue
 
-                    key = (rec.get("nonce"), session)
-                    if key in seen:
-                        continue
-                    seen.add(key)
+                    if nonce is not None or session is not None:
+                        key = (nonce, session)
+                        if key in seen:
+                            continue
+                        seen.add(key)
 
                     usage: dict[str, int] | None = None
                     total_tokens = 0
@@ -843,57 +860,56 @@ def load_coordinator_turns(control_dir: Path | None = None, repo: Path | None = 
                             "cache_tokens": 0,
                             "total_tokens": rec_coord,
                         }
-                    elif r_dir is not None and isinstance(session, str) and session:
+                    elif r_dir is not None and session is not None:
                         sess_turns = _resolve_session_turns_dir(r_dir, session)
                         if sess_turns is not None and sess_turns.is_dir():
-                            t_dirs = sorted([p for p in sess_turns.iterdir() if p.is_dir() and p.name.startswith("turn-")])
+                            try:
+                                t_dirs = sorted(
+                                    p for p in sess_turns.iterdir() if p.is_dir() and p.name.startswith("turn-")
+                                )
+                            except OSError:
+                                t_dirs = []
                             if t_dirs:
+                                last_td = t_dirs[-1]
                                 fn = _get_classify_turn()
                                 if fn is not None:
-                                    tot_in = 0
-                                    tot_out = 0
-                                    tot_cache = 0
-                                    tot_total = 0
-                                    has_valid = False
-                                    for td in t_dirs:
-                                        try:
-                                            rep = fn(td)
-                                            if (rep and isinstance(rep.usage, dict)
-                                                    and isinstance(rep.usage.get("total_tokens"), int)
-                                                    and not isinstance(rep.usage["total_tokens"], bool)
-                                                    and rep.usage["total_tokens"] >= 0):
-                                                tot_in += rep.usage.get("input_tokens", 0)
-                                                tot_out += rep.usage.get("output_tokens", 0)
-                                                tot_cache += rep.usage.get("cache_tokens", 0)
-                                                tot_total += rep.usage.get("total_tokens", 0)
-                                                has_valid = True
-                                            if agent is None and rep and rep.agent:
-                                                agent = rep.agent
-                                        except (OSError, json.JSONDecodeError, ValueError, KeyError, AttributeError):
-                                            pass
-                                    if has_valid:
-                                        usage = {
-                                            "input_tokens": tot_in,
-                                            "output_tokens": tot_out,
-                                            "cache_tokens": tot_cache,
-                                            "total_tokens": tot_total,
-                                        }
-                                        total_tokens = tot_total
+                                    try:
+                                        rep = fn(last_td)
+                                        if (rep and isinstance(rep.usage, dict)
+                                                and isinstance(rep.usage.get("total_tokens"), int)
+                                                and not isinstance(rep.usage["total_tokens"], bool)
+                                                and rep.usage["total_tokens"] >= 0):
+                                            usage = {
+                                                "input_tokens": rep.usage.get("input_tokens", 0),
+                                                "output_tokens": rep.usage.get("output_tokens", 0),
+                                                "cache_tokens": rep.usage.get("cache_tokens", 0),
+                                                "total_tokens": rep.usage.get("total_tokens", 0),
+                                            }
+                                            total_tokens = usage["total_tokens"]
+                                        if agent is None and rep and isinstance(rep.agent, str) and rep.agent:
+                                            agent = rep.agent
+                                    except Exception:  # noqa: BLE001 - report must never raise on malformed turn dir
+                                        pass
 
-                    if agent is None and r_dir is not None and isinstance(session, str) and session:
+                    if agent is None and r_dir is not None and session is not None:
                         sess_turns = _resolve_session_turns_dir(r_dir, session)
                         if sess_turns is not None and sess_turns.is_dir():
-                            t_dirs = sorted([p for p in sess_turns.iterdir() if p.is_dir() and p.name.startswith("turn-")])
+                            try:
+                                t_dirs = sorted(
+                                    p for p in sess_turns.iterdir() if p.is_dir() and p.name.startswith("turn-")
+                                )
+                            except OSError:
+                                t_dirs = []
                             if t_dirs:
                                 try:
                                     st = json.loads((t_dirs[-1] / "state.json").read_text(encoding="utf-8"))
-                                    if isinstance(st, dict) and isinstance(st.get("agent_key"), str):
+                                    if isinstance(st, dict) and isinstance(st.get("agent_key"), str) and st["agent_key"]:
                                         agent = st["agent_key"]
                                 except (OSError, json.JSONDecodeError):
                                     pass
 
-                    pool = COORDINATOR_AGENT_POOLS.get(agent, agent or "sconosciuto")
-                    at_iso = at_val if isinstance(at_val, str) else _iso(ts)
+                    pool = COORDINATOR_AGENT_POOLS.get(agent or "", agent or "sconosciuto")
+                    at_iso = at_val if isinstance(at_val, str) and at_val else _iso(ts)
                     turns.append({
                         "at": at_iso,
                         "agent": agent,
@@ -902,8 +918,8 @@ def load_coordinator_turns(control_dir: Path | None = None, repo: Path | None = 
                         "tokens": total_tokens,
                         "usage": usage,
                     })
-        except OSError:
-            continue
+                except Exception:  # noqa: BLE001 - malformed journal record must never abort report
+                    continue
 
     return turns
 
@@ -1629,7 +1645,7 @@ def report(days: int = 7, record_file: Path | None = None, records: list[dict[st
         for r in gemini_avoided
         if isinstance(r.get("coordinator_tokens"), int) and not isinstance(r["coordinator_tokens"], bool)
     )
-    total_coord_tokens = sum(t["tokens"] for t in coord_turns) + record_coord_tokens
+    total_coord_tokens = sum(t["tokens"] for t in coord_turns) if coord_turns else record_coord_tokens
 
     lines.append(
         f"Risparmio netto: {avoided_count} compiti Claude e GPT evitati ({avoided_count} compiti Gemini non escalati), "

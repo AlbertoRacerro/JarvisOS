@@ -1656,3 +1656,78 @@ def test_spec_306_report_empty_workers_with_coordinator_turns(tmp_path: Path) ->
     assert "Nessun esito registrato" not in text
     assert "- Pool claude: coordinatore 1 turni (1200 token, 100%), worker 0 compiti (0 token)" in text
     assert "Risparmio netto: 0 compiti Claude e GPT evitati (0 compiti Gemini non escalati), meno 1200 token coordinatore registrati." in text
+
+
+def test_spec_306_malformed_journal_records_and_no_double_counting(tmp_path: Path) -> None:
+    now = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)
+    rf = tmp_path / "worker-outcomes.jsonl"
+    cd = tmp_path / "continuity"
+    cd.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    # Worker outcome has legacy coordinator_tokens=999
+    rf.write_text(
+        json.dumps({
+            "at": "2026-11-18T10:00:00Z",
+            "task": "w1",
+            "kind": "feature",
+            "worker": "flash-high",
+            "model": "gemini-3.8-flash-high",
+            "ci_first_pass": "pass",
+            "findings": {"P0": 0, "P1": 0, "P2": 0, "P3": 0},
+            "rework_rounds": 0,
+            "escalated": False,
+            "coordinator_tokens": 999,
+            "spend": {"runs": 1, "tokens": 1000},
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    # Journal with unhashable list types, path traversal session, and multi-turn session directory
+    (cd / "attempts.jsonl").write_text("\n".join([
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:00:00Z",
+            "agent": ["bad", "list"],
+            "session": ["also", "list"],
+            "nonce": ["nonce", "list"],
+        }),
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:01:00Z",
+            "agent": "claude",
+            "session": "../escape",
+            "nonce": "rc-20261118T100100Z-esc1",
+        }),
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:02:00Z",
+            "agent": "codex",
+            "session": "sess-multi",
+            "nonce": "rc-20261118T100200Z-mul1",
+        }),
+    ]) + "\n", encoding="utf-8")
+
+    # sess-multi has turn-001 (100 tokens) and turn-002 (250 tokens); backfill must use only last turn (turn-002)
+    for t_name, tok in (("turn-001", 100), ("turn-002", 250)):
+        td = repo / ".agent-relay" / "sessions" / "sess-multi" / "turns" / t_name
+        td.mkdir(parents=True)
+        (td / "state.json").write_text(json.dumps({"agent_key": "codex", "status": "propose_done"}), encoding="utf-8")
+        (td / "output.jsonl").write_text(
+            json.dumps({
+                "type": "turn.completed",
+                "usage": {"input_tokens": tok, "cached_input_tokens": 0, "output_tokens": 0},
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+    turns = wr.load_coordinator_turns(control_dir=cd, repo=repo, days=7, now=now)
+    by_sess = {t["session"]: t for t in turns}
+    assert by_sess["sess-multi"]["tokens"] == 250
+    assert by_sess["../escape"]["tokens"] == 0
+
+    # Because coord_turns is non-empty (250 tokens), legacy record coordinator_tokens (999) is NOT added
+    text = wr.report(days=7, record_file=rf, control_dir=cd, repo=repo, now=now)
+    assert "meno 250 token coordinatore registrati." in text
+

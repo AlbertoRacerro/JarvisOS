@@ -7527,6 +7527,20 @@ def test_spec_306_classify_turn_claude_assistant_fallback(tmp_path: Path) -> Non
             "type": "assistant",
             "parent_tool_use_id": None,
             "message": {
+                "id": "msg_01_stream",
+                "usage": {
+                    "input_tokens": 200,
+                    "output_tokens": 10,
+                    "cache_read_input_tokens": 600,
+                    "cache_creation_input_tokens": 0,
+                },
+            },
+        },
+        {
+            "type": "assistant",
+            "parent_tool_use_id": None,
+            "message": {
+                "id": "msg_01_stream",  # repeated stream event for same message id, latest wins
                 "usage": {
                     "input_tokens": 200,
                     "output_tokens": 50,
@@ -7538,7 +7552,7 @@ def test_spec_306_classify_turn_claude_assistant_fallback(tmp_path: Path) -> Non
     ]
     turn = write_turn(tmp_path / "claude_ast", events, agent="claude")
     report = rc.classify_turn(turn)
-    # top-level sum: input = 100 + 200 = 300, output = 25 + 50 = 75, cache = (500+100) + 600 = 1200
+    # top-level sum (deduplicated by message.id): input = 100 + 200 = 300, output = 25 + 50 = 75, cache = (500+100) + 600 = 1200
     assert report.usage == {
         "input_tokens": 300,
         "output_tokens": 75,
