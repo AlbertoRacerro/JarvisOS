@@ -1,6 +1,6 @@
 # 302 — SAGE-DEFAULT-1: Strata-served model as the standard local model, with one click back
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal
