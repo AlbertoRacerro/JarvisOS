@@ -31,7 +31,7 @@ from app.modules.engineering.operator_routes import router as engineering_operat
 from app.modules.environment.routes import router as environment_router
 from app.modules.flowsheet.routes import router as flowsheet_router
 from app.modules.local_ai.runtime.lifecycle import create_local_ai_runtime_lifecycle_from_env
-from app.modules.local_ai.runtime.llama_cpp import get_llama_cpp_runtime_owner, llama_cpp_runtime_config
+from app.modules.local_ai.runtime.llama_cpp import get_llama_cpp_runtime_owner
 from app.modules.local_ai.runtime.routes import models_router as local_ai_models_router
 from app.modules.local_ai.runtime.routes import router as local_ai_runtime_router
 from app.modules.memory.literature_routes import router as literature_router
@@ -133,9 +133,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(recover_process_solves)
         await asyncio.to_thread(recover_cfd_runs)
         await asyncio.to_thread(_warm_pbr_imports)
-        llama_owner = get_llama_cpp_runtime_owner()
-        if llama_cpp_runtime_config().manage:
-            await asyncio.to_thread(llama_owner.start)
+        from app.modules.local_ai.runtime.model_registry import start_configured_model
+
+        await asyncio.to_thread(start_configured_model)
         live_working_dirs = live_stranded_runner_working_dirs()
         reconcile_stranded_runner_jobs()
         if live_working_dirs:

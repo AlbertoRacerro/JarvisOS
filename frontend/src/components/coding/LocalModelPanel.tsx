@@ -12,6 +12,14 @@ export function buttons(s: LlamaStatus | null, busy: boolean) {
 const show = (value: string | number | null) => value ?? "Not reported";
 const yes = (value: boolean) => value ? "Yes" : "No";
 
+const stateLabels: Record<string, string> = {
+  loading: "in caricamento",
+  ready: "pronto",
+  stopped: "fermo",
+  failed: "errore",
+  "requires host start": "richiede avvio host",
+};
+
 export default function LocalModelPanel() {
   const [status, setStatus] = useState<LlamaStatus | null>(null);
   const [models, setModels] = useState<LocalModels | null>(null);
@@ -52,9 +60,11 @@ export default function LocalModelPanel() {
   const switchModel = async (id: string | null) => {
     if (actionLock.current || loading || pending || !models?.registry_present) return;
     const entry = id ? models.models.find(row => row.id === id) : models.models.find(row => row.qualification === "default");
-    if (!entry || entry.runtime !== "llama_cpp" || !entry.installed || entry.digest_state === "mismatch") return;
-    if (!window.confirm(id ? `Activate ${entry.label}?` : "Restore the default local model?")) return;
-    actionLock.current = true; setPending(id ? "activate" : "restore default"); setError(null); ++generation.current;
+    if (!entry) return;
+    if (entry.runtime === "llama_cpp" && (!entry.installed || entry.digest_state === "mismatch")) return;
+    if (entry.runtime === "strata" && entry.state === "requires host start") return;
+    if (!window.confirm(id ? `Usare ${entry.label}?` : "Tornare al modello standard?")) return;
+    actionLock.current = true; setPending(id ? "switch" : "restore"); setError(null); ++generation.current;
     try {
       const next = id ? await activateLocalModel(id) : await restoreDefaultLocalModel();
       ++generation.current; setStatus(next);
@@ -82,12 +92,14 @@ export default function LocalModelPanel() {
     <div className="final-fusion__toolbar-line">{(["start", "stop", "restart"] as const).map(action => <button key={action} type="button" disabled={!enabled[action]} onClick={() => void act(action)}>{action[0].toUpperCase() + action.slice(1)}</button>)}</div>
     {models?.registry_present ? <div aria-label="Registered local models">
       <h4>Registered models</h4>
-      <ul>{models.models.map(entry => <li key={entry.id}>
-        <strong>{entry.label}</strong> · <span className="coding-control-runtime__badge">{entry.qualification.replace(/_/g, " ")}</span> · {entry.model_file.split(/[\\/]/).pop()} · {entry.installed ? entry.digest_state.replace(/_/g, " ") : "Not installed"}
-        {models.active_id === entry.id ? <span> · Active</span> : null}
-        {entry.runtime === "strata" ? <span> · requires host start</span> : models.active_id !== entry.id ? <button type="button" disabled={loading || !!pending || !!error || !entry.installed || entry.digest_state === "mismatch"} onClick={() => void switchModel(entry.id)}>Activate</button> : null}
-      </li>)}</ul>
-      {models.active_id !== models.models.find(entry => entry.qualification === "default")?.id ? <button type="button" disabled={loading || !!pending || !!error} onClick={() => void switchModel(null)}>Restore default</button> : null}
+      <ul>{models.models.map(entry => {
+        const stateLabel = entry.state ? (stateLabels[entry.state] ?? entry.state) : "fermo";
+        return <li key={entry.id}>
+          <strong>{entry.label}</strong> · <span>{stateLabel}</span>
+          {models.active_id !== entry.id ? <button type="button" disabled={loading || !!pending || !!error || (entry.runtime === "llama_cpp" && (!entry.installed || entry.digest_state === "mismatch")) || entry.state === "requires host start"} onClick={() => void switchModel(entry.id)}>Usa questo modello</button> : null}
+        </li>;
+      })}</ul>
+      {models.active_id !== models.models.find(entry => entry.qualification === "default")?.id ? <button type="button" disabled={loading || !!pending || !!error} onClick={() => void switchModel(null)}>Torna al modello standard</button> : null}
     </div> : null}
   </section>;
 }

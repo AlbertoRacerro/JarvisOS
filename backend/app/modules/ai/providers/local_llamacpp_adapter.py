@@ -40,14 +40,38 @@ class LocalLlamaCppAdapter:
         self._client_factory = client_factory
 
     def _base_url(self) -> str:
+        from app.modules.local_ai.runtime.model_registry import get_active_model_entry
+
+        active = get_active_model_entry()
+        if active and active.runtime == "strata":
+            host = active.host or "127.0.0.1"
+            port = active.port or 8080
+            url = f"http://{host}:{port}/v1"
+            if not _loopback_url(url):
+                raise ValueError("Strata endpoint must use HTTP loopback")
+            return url.rstrip("/")
         url = llama_cpp_runtime_config().base_url
         if not _loopback_url(url):
             raise ValueError("llama-server endpoint must use HTTP loopback")
         return url.rstrip("/")
 
     def health(self) -> AIProviderHealth:
-        if getattr(get_llama_cpp_runtime_owner(), "non_default_active", False):
+        from app.modules.local_ai.runtime.model_registry import get_active_model_entry
+
+        active = get_active_model_entry()
+        if active:
+            if active.qualification == "under_qualification":
+                return AIProviderHealth.unavailable
+            if active.runtime == "strata":
+                from app.modules.local_ai.runtime.host_start import get_strata_controller
+
+                st = get_strata_controller().get_state(
+                    active.id, active.host, active.port or 8080, active.served_model or ""
+                )
+                return AIProviderHealth.healthy if st.state == "ready" else AIProviderHealth.unavailable
+        elif getattr(get_llama_cpp_runtime_owner(), "non_default_active", False):
             return AIProviderHealth.unavailable
+
         try:
             response = self._client_factory().get(f"{self._base_url().removesuffix('/v1')}/health", timeout=1.5)
             return AIProviderHealth.healthy if response.is_success else AIProviderHealth.unavailable
@@ -55,18 +79,40 @@ class LocalLlamaCppAdapter:
             return AIProviderHealth.unavailable
 
     def list_models(self) -> list[ModelRegistryEntry]:
-        model_id = llama_cpp_runtime_config().model_id
+        from app.modules.local_ai.runtime.model_registry import get_active_model_entry
+
+        active = get_active_model_entry()
+        if active and active.runtime == "strata":
+            model_id = active.served_model or active.id
+            display_name = f"Strata {active.label}"
+        else:
+            model_id = (
+                active.id
+                if (active and active.qualification != "default")
+                else llama_cpp_runtime_config().model_id
+            )
+            display_name = f"llama.cpp {model_id}"
         return [ModelRegistryEntry(
             model_id=model_id, provider_id=self.provider_id, provider_model_name=model_id,
-            display_name=f"llama.cpp {model_id}", enabled=True,
+            display_name=display_name, enabled=True,
             capabilities={AIModelCapability.chat_text, AIModelCapability.long_context},
             allowed_privacy_classes={AIPrivacyClass.public, AIPrivacyClass.internal},
-            notes="Local llama-server over its loopback OpenAI-compatible API.",
+            notes="Local model over its loopback OpenAI-compatible API.",
         )]
 
     def complete(self, request: AIRequest) -> AIResponse:
-        if getattr(get_llama_cpp_runtime_owner(), "non_default_active", False):
-            model_id = llama_cpp_runtime_config().model_id
+        from app.modules.local_ai.runtime.model_registry import get_active_model_entry
+
+        active_entry = get_active_model_entry()
+
+        if (active_entry and active_entry.qualification == "under_qualification") or (
+            not active_entry and getattr(get_llama_cpp_runtime_owner(), "non_default_active", False)
+        ):
+            model_id = (
+                (active_entry.served_model or active_entry.id)
+                if active_entry
+                else llama_cpp_runtime_config().model_id
+            )
             return AIResponse(
                 provider_id=self.provider_id, model_id=model_id, request_id=request.request_id,
                 correlation_id=request.correlation_id, finish_reason="error", safety_status="allowed",
@@ -74,8 +120,44 @@ class LocalLlamaCppAdapter:
                 error=AIProviderError(code=AIProviderErrorCode.provider_unavailable,
                                       message="Default local model is not loaded.", retryable=True),
             )
+
+        is_loading = False
+        if active_entry and active_entry.runtime == "strata":
+            from app.modules.local_ai.runtime.host_start import get_strata_controller
+
+            st = get_strata_controller().get_state(
+                active_entry.id, active_entry.host, active_entry.port or 8080, active_entry.served_model or ""
+            )
+            is_loading = st.state == "loading"
+        else:
+            owner_status = get_llama_cpp_runtime_owner().status()
+            is_loading = owner_status.get("reason_code") in ("LLAMACPP_LOADING", "LLAMACPP_RECOVERING")
+
+        if is_loading:
+            model_id = (
+                active_entry.served_model
+                if (active_entry and active_entry.runtime == "strata" and active_entry.served_model)
+                else llama_cpp_runtime_config().model_id
+            )
+            return AIResponse(
+                provider_id=self.provider_id, model_id=model_id, request_id=request.request_id,
+                correlation_id=request.correlation_id, finish_reason="error", safety_status="allowed",
+                usage=AIUsage(provider_id=self.provider_id, model_id=model_id),
+                error=AIProviderError(code=AIProviderErrorCode.provider_unavailable,
+                                      message="Local model is still loading.", retryable=True),
+            )
+
         base_url = self._base_url()
-        model_id = request.model_preference or llama_cpp_runtime_config().model_id
+        if active_entry and active_entry.runtime == "strata":
+            model_id = active_entry.served_model or active_entry.id
+            headers: dict[str, str] = {}
+        else:
+            model_id = request.model_preference or (
+                active_entry.id
+                if (active_entry and active_entry.qualification != "default")
+                else llama_cpp_runtime_config().model_id
+            )
+            headers = get_llama_cpp_runtime_owner().auth_headers()
         # Same precedence as the Ollama route: the assembled prompt carries the Jarvis envelope.
         if request.prompt is not None:
             content: Any = request.prompt
@@ -106,7 +188,6 @@ class LocalLlamaCppAdapter:
         schema_fallback = False
         try:
             request_url = f"{base_url}/chat/completions"
-            headers = get_llama_cpp_runtime_owner().auth_headers()
             timeout = llama_cpp_runtime_config().request_timeout_s
             response = client.post(request_url, json=payload, headers=headers, timeout=timeout)
             try:

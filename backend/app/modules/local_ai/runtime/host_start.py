@@ -6,10 +6,11 @@ import logging
 import os
 import secrets
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 
@@ -40,7 +41,7 @@ def write_service_control_request(
     if action not in ("start", "stop", "restart"):
         raise ValueError(f"Invalid service.control action: {action}")
     request_id = secrets.token_hex(16)
-    timestamp = now or datetime.now(timezone.utc)
+    timestamp = now or datetime.now(UTC)
     ts_str = timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
     request = {
         "schema": REQUEST_SCHEMA,
@@ -127,16 +128,16 @@ class StrataRuntimeController:
         self._states: dict[str, StrataModelState] = {}
 
     def get_state(self, model_id: str, host: str, port: int, served_model: str) -> StrataModelState:
-        spool = get_spool_path()
         st = self._states.setdefault(model_id, StrataModelState(state="stopped"))
-        if spool is None:
-            return StrataModelState(state="requires host start", reason="This model requires host start.")
-
         ready = self._probe_fn(host, port, served_model)
         if ready:
             st.state = "ready"
             st.reason = None
             return st
+
+        spool = get_spool_path()
+        if spool is None:
+            return StrataModelState(state="requires host start", reason="This model requires host start.")
 
         if st.last_action == "start" and st.last_request_time is not None:
             elapsed = int(self._clock_fn() - st.last_request_time)

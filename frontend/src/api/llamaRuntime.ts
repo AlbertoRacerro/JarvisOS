@@ -29,6 +29,9 @@ export type LocalModelEntry = {
   qualification: "default" | "qualified" | "under_qualification";
   model_file: string; installed: boolean;
   digest_state: "missing" | "hashing" | "not_verified" | "verified" | "mismatch";
+  state?: "loading" | "ready" | "stopped" | "failed" | "requires host start" | string;
+  state_reason?: string | null;
+  elapsed_seconds?: number | null;
 };
 export type LocalModels = { registry_present: boolean; models: LocalModelEntry[]; active_id: string | null };
 async function modelRequest(path: string, method?: "POST"): Promise<LocalModels | LlamaStatus> {

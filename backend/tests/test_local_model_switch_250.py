@@ -18,7 +18,7 @@ def _entries(tmp_path: Path) -> list[dict[str, object]]:
     return [
         {"id": "default", "label": "Default", "runtime": "llama_cpp", "qualification": "default", "model_path": str(tmp_path / "default.gguf"), "model_sha256": "a" * 64},
         {"id": "candidate", "label": "Candidate", "runtime": "llama_cpp", "qualification": "qualified", "model_path": str(tmp_path / "candidate.gguf"), "model_sha256": "b" * 64, "ctx_size": 2048, "n_gpu_layers": 3, "extra_args": ["--foo"], "thinking": "off"},
-        {"id": "strata", "label": "Strata", "runtime": "strata", "qualification": "under_qualification", "model_path": str(tmp_path / "strata.gguf"), "model_sha256": "c" * 64},
+        {"id": "strata", "label": "Strata", "runtime": "strata", "qualification": "under_qualification", "model_path": str(tmp_path / "strata.gguf"), "model_sha256": "c" * 64, "unit": "strata.service", "port": 8080, "served_model": "strata-model"},
     ]
 
 
