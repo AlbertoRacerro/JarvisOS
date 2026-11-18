@@ -22,24 +22,7 @@ if (!process.argv[2]) {
   throw new Error("usage: node e2e/guided_flow_walk.mjs <evidence-dir> [<data-root-copy>]");
 }
 
-let pw;
-const defaultCandidates = [
-  process.env.PLAYWRIGHT_MODULE,
-  "playwright",
-  "/home/thera/jarvis-control/work/tools/pw/node_modules/playwright/index.mjs",
-  "/home/thera/.npm/_npx/fd3bca3c548369c0/node_modules/playwright/index.js",
-].filter(Boolean);
-
-for (const candidate of defaultCandidates) {
-  try {
-    pw = await import(candidate);
-    break;
-  } catch {
-    // try next candidate
-  }
-}
-
-if (!pw) throw new Error("playwright could not be loaded");
+const pw = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
 const chromium = pw.chromium ?? pw.default?.chromium;
 
 const root = resolve(new URL("../", import.meta.url).pathname);
