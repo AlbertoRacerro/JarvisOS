@@ -25,6 +25,9 @@ point 3): Literature and Biology already show check states on datums and library
 - `frontend/src/components/process/QuantityInput.tsx` renders numeric inputs for `ProcessDraftEditor.tsx`,
   `PbrInspector.tsx` and `ReactorKinetics.tsx`.
 - `frontend/src/components/process/pbrLogic.ts` already defines `verificationChip` for biology model cards.
+- `frontend/src/stages/ProcessDraftEditor.tsx` builds submitted quantities as `{value, unit}` from form text, and
+  `backend/app/modules/workspace_actions/service.py` rebuilds untouched culture quantities as
+  `DraftQuantity(value=..., unit=...)`: both would silently drop a stored `source` when a sibling field is edited.
 
 ## Scope
 
@@ -43,16 +46,24 @@ In scope:
     and `data-check-state` attributes and an optional plain title from `label`.
   - Render `SourceChip` inside `QuantityInput` whenever a stored value exists or the user has typed a value (defaulting
     an unsourced stored/typed value to `Digitato · Non verificato`).
+  - A value the user changes is submitted without `source` (it becomes typed); an entry whose text and unit still equal
+    the stored quantity is submitted with the stored `source`, so editing one field does not strip its siblings.
+- Backend (`backend/app/modules/workspace_actions/service.py`): untouched culture quantities copied from the stored
+  draft keep their `source`.
 
 Out of scope (binding non-goals):
 - No SQLite schema migration.
 - No automatic ingestion or admission of literature candidates into process parameters (owned by later 248 slices).
 - No changes to `LiteratureKnowledge.tsx` or `BiologyModelLibrary.tsx` existing badges.
+- `source` is a displayed claim, not evidence: no calculation, gate, verdict or readiness cell reads `check_state`, and
+  no agent tool or workspace action gains a way to set it. Until later slices write sources, most inputs show
+  `Digitato · Non verificato`, which is the honest state.
 
 ## Acceptance criteria
 
 1. `DraftQuantity` accepts optional `source` metadata and `_si` preserves it on stored stream/unit quantities; existing
-   drafts without `source` continue to validate and convert identically.
+   drafts without `source` continue to validate and convert identically; editing one quantity (in the editor or by a
+   workspace action) keeps the stored `source` of the untouched quantities of the same object.
 2. `QuantityInput` renders `SourceChip` with the Italian source kind and check state for `typed`, `literature`,
    `ingested` and `result`, and defaults unsourced/edited inputs to `Digitato · Non verificato`.
 3. `frontend/tests/` has a `.mjs` test added to `frontend/package.json` `build` covering all four source kinds and five
