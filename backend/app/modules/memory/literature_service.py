@@ -309,7 +309,6 @@ def _entry_read(connection, row, backing: _BackingText | None = None) -> Literat
             backing = _BackingText(connection, str(row["workspace_id"]), source_row)
         eligible, stale, reasons = ingestion_eligibility(row, backing.current_sha256(), verdict)
         ingestion = {
-            "quantity": row["quantity"],
             "conditions": json.loads(row["conditions_json"] or "[]"),
             "ingestion_status": row["ingestion_status"],
             "ingestion_checks": [LiteratureIngestionCheckRead(**item)
@@ -337,6 +336,7 @@ def _entry_read(connection, row, backing: _BackingText | None = None) -> Literat
         used_by=_used_by(connection, str(row["workspace_id"]), entry_id),
         checks=checks,
         verdict=verdict,
+        quantity=row["quantity"],
         **ingestion,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
@@ -619,12 +619,12 @@ def create_literature_entry(
                     existing["entry_kind"], existing["statement"], existing["value_text"],
                     existing["value_number"], existing["unit"], existing["status"],
                     existing["locator_kind"], existing["locator_start"], existing["locator_end"],
-                    existing["context_text"],
+                    existing["context_text"], existing["quantity"],
                 )
                 requested = (
                     payload.entry_kind, payload.statement, payload.value_text, payload.value_number,
                     payload.unit, payload.status, payload.locator_kind, payload.locator_start,
-                    payload.locator_end, payload.context_text,
+                    payload.locator_end, payload.context_text, payload.quantity,
                 )
                 if comparable != requested:
                     raise LiteratureError(
@@ -639,14 +639,14 @@ def create_literature_entry(
             INSERT INTO literature_entries (
                 id, workspace_id, source_id, entry_kind, statement, value_text,
                 value_number, unit, status, locator_kind, locator_start, locator_end,
-                context_text, request_key, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                context_text, quantity, request_key, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entry_id, workspace_id, source_id, payload.entry_kind, payload.statement,
                 payload.value_text, payload.value_number, payload.unit, payload.status,
                 payload.locator_kind, payload.locator_start, payload.locator_end,
-                payload.context_text, payload.request_key, now, now,
+                payload.context_text, payload.quantity, payload.request_key, now, now,
             ),
         )
         connection.commit()
@@ -655,6 +655,74 @@ def create_literature_entry(
             (entry_id, workspace_id),
         ).fetchone()
         return _entry_read(connection, row)
+
+
+def accept_literature_entry(
+    workspace_id: str,
+    source_id: str,
+    entry_id: str,
+    quantity: str | None = None,
+) -> LiteratureEntryRead:
+    now = utc_now()
+    with open_sqlite_connection() as connection:
+        _require_workspace(connection, workspace_id)
+        _source_row(connection, workspace_id, source_id)
+        row = connection.execute(
+            "SELECT * FROM literature_entries WHERE workspace_id = ? AND source_id = ? AND id = ?",
+            (workspace_id, source_id, entry_id),
+        ).fetchone()
+        if row is None:
+            raise LiteratureError("literature_entry_not_found", "Literature entry not found.", status_code=404)
+        if row["entry_kind"] != "datum":
+            raise LiteratureError("literature_entry_not_datum", "Only datum entries can be accepted as facts.", status_code=422)
+
+        if quantity is not None:
+            target_quantity = quantity.strip()
+            if not (1 <= len(target_quantity) <= 128):
+                raise LiteratureError("literature_quantity_invalid", "Quantity must be 1 to 128 characters.", status_code=422)
+        else:
+            target_quantity = row["quantity"]
+
+        if not target_quantity:
+            raise LiteratureError("literature_quantity_required", "Accepting as fact requires a quantity name.", status_code=422)
+
+        if row["status"] == "accepted":
+            if row["quantity"] == target_quantity:
+                return _entry_read(connection, row)
+            raise LiteratureError(
+                "literature_entry_already_accepted",
+                "Accepted literature fact cannot be renamed.",
+                status_code=409,
+            )
+
+        entry_read = _entry_read(connection, row)
+        if entry_read.verdict not in ("usable", "usable_with_warnings"):
+            raise LiteratureError(
+                "literature_entry_not_usable",
+                "Literature datum cannot be accepted because its source check did not pass.",
+                status_code=409,
+            )
+        if row["ingestion_status"] is not None and not entry_read.eligible_for_later_admission:
+            raise LiteratureError(
+                "literature_entry_not_usable",
+                "Ingested literature datum is not eligible for admission.",
+                status_code=409,
+            )
+
+        connection.execute(
+            """
+            UPDATE literature_entries
+            SET status = 'accepted', quantity = ?, updated_at = ?
+            WHERE workspace_id = ? AND source_id = ? AND id = ?
+            """,
+            (target_quantity, now, workspace_id, source_id, entry_id),
+        )
+        connection.commit()
+        updated_row = connection.execute(
+            "SELECT * FROM literature_entries WHERE workspace_id = ? AND source_id = ? AND id = ?",
+            (workspace_id, source_id, entry_id),
+        ).fetchone()
+        return _entry_read(connection, updated_row)
 
 
 def resolve_literature_content(workspace_id: str, source_id: str) -> LiteratureContent:

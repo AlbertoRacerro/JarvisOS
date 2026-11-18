@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 
 from app.modules.memory.literature_models import (
     LiteratureBackingAttach,
+    LiteratureEntryAccept,
     LiteratureEntryCreate,
     LiteratureEntryRead,
     LiteratureSourceCreate,
@@ -17,6 +18,7 @@ from app.modules.memory.literature_models import (
 from app.modules.memory.literature_service import (
     MAX_LITERATURE_UPLOAD_BYTES,
     LiteratureError,
+    accept_literature_entry,
     attach_literature_backing,
     create_literature_entry,
     create_literature_source,
@@ -89,6 +91,24 @@ def create_literature_entry_endpoint(
 ) -> LiteratureEntryRead:
     try:
         return create_literature_entry(workspace_id, source_id, payload)
+    except LiteratureError as exc:
+        raise _literature_error(exc) from exc
+
+
+@router.post("/sources/{source_id}/entries/{entry_id}/accept", response_model=LiteratureEntryRead)
+def accept_literature_entry_endpoint(
+    workspace_id: str,
+    source_id: str,
+    entry_id: str,
+    payload: LiteratureEntryAccept,
+) -> LiteratureEntryRead:
+    try:
+        return accept_literature_entry(
+            workspace_id,
+            source_id,
+            entry_id,
+            quantity=payload.quantity,
+        )
     except LiteratureError as exc:
         raise _literature_error(exc) from exc
 

@@ -1,6 +1,6 @@
 # 311 — LITERATURE-FACT-TO-INPUT-1: Accept a checked datum as a named fact and use it as a parameter, from the Literature page
 
-Status: ready
+Status: merged
 Depends on: 293, 297, 303
 
 ## Goal
