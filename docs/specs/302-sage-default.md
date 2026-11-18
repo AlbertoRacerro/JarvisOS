@@ -107,7 +107,9 @@ Out of scope (binding non-goals):
 ## Acceptance criteria
 
 1. A registry with a `strata` default and a `llama_cpp` qualified entry is accepted; two defaults, a `strata` entry
-   without `unit`/`port`/`served_model`, a non-loopback port or a bad unit name are refused with 503 as today.
+   with only some of `unit`/`port`/`served_model`, a `strata` default without them, a non-loopback port or a bad unit
+   name are refused with 503 as today. A non-default `strata` entry listed by file only (the shape accepted before this
+   spec) stays valid and "requires host start", so a registry is not broken by the upgrade before the host steps.
 2. With the spool configured, backend start with a `strata` default writes exactly one `service.control` `start`
    request for its unit, spawns no llama-server, and reports `loading` until the probe sees the served model, then
    `ready`.

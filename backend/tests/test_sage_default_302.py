@@ -893,3 +893,50 @@ def test_llamacpp_loading_503_reads_as_still_loading(monkeypatch: pytest.MonkeyP
     assert result.error is not None
     assert result.error.message.endswith("Local model is still loading.")
     assert result.error.retryable is True
+
+
+def test_registry_written_before_host_start_keeps_working(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The shape master accepted: a Strata model listed by file only. After upgrading, before the host steps,
+    # the registry stays valid, the Strata entry "requires host start", and llama-server still starts.
+    (tmp_path / "llama-server").write_bytes(b"fake-binary")
+    (tmp_path / "gemma.gguf").write_bytes(b"fixture")
+    legacy = {"id": "sage", "label": "Sage", "runtime": "strata", "qualification": "qualified",
+              "model_path": str(tmp_path / "sage.gguf"), "model_sha256": "c" * 64}
+    gemma = {"id": "gemma", "label": "Gemma", "runtime": "llama_cpp", "qualification": "default",
+             "model_path": str(tmp_path / "gemma.gguf"), "model_sha256": "a" * 64}
+    _setup_registry(tmp_path, monkeypatch, [gemma, legacy])
+    monkeypatch.setenv("JARVISOS_HOSTOPS_SPOOL", str(tmp_path / "spool"))
+    (tmp_path / "spool" / "requests").mkdir(parents=True)
+    probes: list[Any] = []
+    monkeypatch.setattr(host_start, "get_strata_controller",
+                        lambda: StrataRuntimeController(probe_fn=lambda *a: probes.append(a) or False))
+    model_registry.save_model_choice("sage")  # a stale choice naming the old-shape entry is ignored
+    popen_calls: list[Any] = []
+    owner = llama_cpp.LlamaCppRuntimeOwner(
+        llama_cpp.LlamaCppRuntimeConfig(
+            binary_path=str(tmp_path / "llama-server"), model_path=str(tmp_path / "gemma.gguf"), manage=True,
+        ),
+        popen=lambda *a, **k: popen_calls.append(a) or SimpleNamespace(pid=1, poll=lambda: None),
+    )
+    monkeypatch.setattr(model_registry, "get_llama_cpp_runtime_owner", lambda: owner)
+    monkeypatch.setattr(llama_cpp, "get_llama_cpp_runtime_owner", lambda: owner)
+
+    entries, present = read_registry()
+    assert present and [e.id for e in entries] == ["gemma", "sage"]
+    assert model_registry.determine_initial_model(entries).id == "gemma"
+    rows = {row["id"]: row for row in list_models()["models"]}
+    assert rows["sage"]["state"] == "requires host start"
+    with pytest.raises(HTTPException) as exc:
+        activate_model("sage")
+    assert exc.value.status_code == 409
+    assert list((tmp_path / "spool" / "requests").iterdir()) == []
+    assert not owner._any_strata_answering() and probes == []
+    owner.start()
+    assert len(popen_calls) == 1
+
+    # A Strata entry with only some host-start fields, or an old-shape default, is still refused.
+    for bad in ({**legacy, "unit": "sage.service"}, {**legacy, "qualification": "default"}):
+        rows_bad = [bad] if bad["qualification"] == "default" else [gemma, bad]
+        _setup_registry(tmp_path, monkeypatch, rows_bad)
+        with pytest.raises(HTTPException):
+            read_registry()

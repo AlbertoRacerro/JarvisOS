@@ -83,7 +83,9 @@ def determine_initial_model(entries: list[ModelEntry]) -> ModelEntry | None:
     stored_id = read_stored_model_choice()
     stored_entry = next((e for e in entries if e.id == stored_id), None) if stored_id else None
     target = (
-        stored_entry if stored_entry and stored_entry.qualification in ("default", "qualified") else default_entry
+        stored_entry
+        if stored_entry and stored_entry.qualification in ("default", "qualified") and _host_startable(stored_entry)
+        else default_entry
     )
 
     if target is None:
@@ -101,6 +103,10 @@ def determine_initial_model(entries: list[ModelEntry]) -> ModelEntry | None:
         if llama_entry is not None:
             return llama_entry
     return target
+
+
+def _host_startable(entry: ModelEntry) -> bool:
+    return entry.runtime != "strata" or entry.unit is not None or entry.port is not None or entry.served_model is not None
 
 
 def read_registry() -> tuple[list[ModelEntry], bool]:
@@ -161,6 +167,20 @@ def read_registry() -> tuple[list[ModelEntry], bool]:
                     or (entry.thinking is not None and entry.thinking not in {"default", "on", "off"})
                 ):
                     raise ValueError("invalid llama_cpp entry fields")
+            elif entry.runtime == "strata" and not _host_startable(entry):
+                # Registries written before host start (spec 302) list a Strata model by file only; it stays
+                # visible and "requires host start", and cannot be the default.
+                if (
+                    entry.unit is not None
+                    or entry.port is not None
+                    or entry.served_model is not None
+                    or entry.qualification == "default"
+                    or not isinstance(entry.model_path, str)
+                    or not Path(entry.model_path).is_absolute()
+                    or not isinstance(entry.model_sha256, str)
+                    or not _SHA.fullmatch(entry.model_sha256)
+                ):
+                    raise ValueError("invalid strata entry fields")
             elif entry.runtime == "strata":
                 if (
                     not isinstance(entry.unit, str)
@@ -212,12 +232,16 @@ def list_models() -> dict[str, Any]:
     initial = determine_initial_model(entries)
     active_id = owner.active_model_id or (initial.id if initial else None)
     models = []
-    from app.modules.local_ai.runtime.host_start import get_strata_controller
+    from app.modules.local_ai.runtime.host_start import StrataModelState, get_strata_controller
 
     strata_ctrl = get_strata_controller()
     for entry in entries:
         if entry.runtime == "strata":
-            st = strata_ctrl.get_state(entry.id, entry.host, entry.port or 8080, entry.served_model or "")
+            st = (
+                strata_ctrl.get_state(entry.id, entry.host, entry.port or 8080, entry.served_model or "")
+                if _host_startable(entry)
+                else StrataModelState(state="requires host start", reason="This model requires host start.")
+            )
             state = st.state
             installed = Path(entry.model_path).is_file() if entry.model_path else True
             digest, pending = peek_model_sha256(entry.model_path) if (entry.model_path and installed) else (None, False)
@@ -305,7 +329,7 @@ def activate_model(model_id: str) -> dict[str, Any]:
 
         if entry.runtime == "strata":
             spool = get_spool_path()
-            if spool is None:
+            if spool is None or not _host_startable(entry):
                 raise HTTPException(status_code=409, detail="This model requires host start.")
             current = owner.status()
             if current.get("runtime_reachable") and not current.get("spawned_by_jarvis") and (
