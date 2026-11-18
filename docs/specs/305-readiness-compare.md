@@ -19,7 +19,7 @@ least built). Today step 5 is red with `capability_missing` for every case, so n
 This is the smallest deterministic comparison that turns the cell into a real check; a stored case verdict as its own
 record is left for when the guided path needs one (directive L20261116201429-63ee, compare step).
 
-## Code facts checked at `1e3cc217`
+## Code facts checked at `e610621a`
 
 - `backend/app/modules/engineering/readiness_board.py::_compute_case` sets step `compare` red with
   `REASON_CAPABILITY_MISSING`; `CaseDefinition.compare` (`CaseCompare`: `quantity`, `value`, `unit`, `rel_tol`) is
