@@ -21,8 +21,10 @@ assert.ok(!panel.includes('{entry.port}'), 'Port must not be exposed in visible 
 assert.match(panel, /<strong>\{entry\.label\}<\/strong>/, 'Only label should be visibly shown for entry');
 assert.ok(!panel.includes('<span>{entry.id}</span>'), 'ID must not be exposed in visible text');
 
-// Criterion 6: a failed model must still offer the way back, so an error never disables the switch buttons.
-assert.match(panel, /disabled=\{loading \|\| !!pending\} onClick=\{\(\) => void switchModel\(null\)\}/, 'Way back must stay enabled after an error');
+// Criterion 6: a failed model must still offer the way back, so an error never disables the switch buttons;
+// "Torna al modello standard" is disabled (with a plain Italian title) when the default entry requires host start.
+assert.match(panel, /disabled=\{loading \|\| !!pending \|\| defaultHostUnavailable\} title=\{defaultHostUnavailable \? "Avvio host non disponibile" : undefined\} onClick=\{\(\) => void switchModel\(null\)\}/, 'Way back must stay enabled after an error and disable when host start is unavailable');
+assert.ok(panel.includes('Avvio host non disponibile'), 'Panel must include plain Italian title when host start is unavailable');
 assert.match(panel, /<button type="button" disabled=\{loading \|\| !!pending \|\| \(entry\.runtime/, 'Switch must stay enabled after an error');
 
 console.log('302 sage default panel labels test passed');

@@ -240,10 +240,6 @@ class LlamaCppRuntimeOwner:
         self.active_model_id: str | None = None
         self.default_model_id: str | None = None
 
-    @property
-    def non_default_active(self) -> bool:
-        return self.active_model_id is not None and self.active_model_id != self.default_model_id
-
     def switch_model(self, config: LlamaCppRuntimeConfig, model_id: str, default_id: str) -> dict[str, Any]:
         with self._lock:
             # Keep product requests blocked throughout a switch away from the default.
@@ -427,11 +423,35 @@ class LlamaCppRuntimeOwner:
             row["message"] = "llama-server is not reachable at the configured loopback address."
         return row
 
+    def _any_strata_answering(self) -> bool:
+        try:
+            from app.modules.local_ai.runtime.host_start import get_strata_controller
+            from app.modules.local_ai.runtime.model_registry import read_registry
+
+            entries, present = read_registry()
+            if not present:
+                return False
+            strata_ctrl = get_strata_controller()
+            for entry in entries:
+                if entry.runtime == "strata" and entry.port and entry.served_model:
+                    host = entry.host or "127.0.0.1"
+                    probe_fn = getattr(strata_ctrl, "probe", getattr(strata_ctrl, "_probe_fn", None))
+                    if probe_fn and probe_fn(host, entry.port, entry.served_model):
+                        return True
+            return False
+        except Exception:
+            return False
+
     def start(self) -> dict[str, Any]:
         with self._lock:
             existing = self._snapshot(include_recovery=False)
-            # One hot model on the card: never spawn llama-server while a Strata model is the active one.
+            # One hot model on the card: never spawn llama-server while a Strata model is the active one
+            # or while any registered Strata entry's loopback port answers.
             if existing["runtime_reachable"] or existing.get("backend") == "strata":
+                return existing
+            if self._any_strata_answering():
+                existing["reason_code"] = "STRATA_ACTIVE"
+                existing["message"] = "A registered Strata model is currently running on the host."
                 return existing
             reason = validate_loopback_host(self.config.host)
             if reason:
@@ -515,6 +535,10 @@ class LlamaCppRuntimeOwner:
                 self._crashed = False
                 return row
             if not self._crashed or not self.config.manage or self._process is not None:
+                return row
+            if self._any_strata_answering():
+                row["reason_code"] = "STRATA_ACTIVE"
+                row["message"] = "A registered Strata model is currently running on the host."
                 return row
             if len(self._automatic_restart_times) >= 3:
                 row = self._snapshot()

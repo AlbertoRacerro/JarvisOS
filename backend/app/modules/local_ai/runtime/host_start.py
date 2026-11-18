@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from collections.abc import Callable
@@ -19,6 +20,8 @@ logger = logging.getLogger(__name__)
 REQUEST_SCHEMA = "jarvisos.hostops.request.v1"
 RECEIPT_SCHEMA = "jarvisos.hostops.receipt.v1"
 DEFAULT_STARTUP_TIMEOUT_S = 600.0
+SYSTEMD_UNIT_RE = re.compile(r"^[a-zA-Z0-9@._-]+\.service$")
+REQUEST_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 def get_spool_path() -> Path | None:
@@ -38,6 +41,8 @@ def write_service_control_request(
     now: datetime | None = None,
 ) -> str:
     """Write exactly one jarvisos.hostops.request.v1 file into spool/requests."""
+    if not isinstance(unit, str) or not SYSTEMD_UNIT_RE.fullmatch(unit):
+        raise ValueError(f"Invalid unit name: {unit}")
     if action not in ("start", "stop", "restart"):
         raise ValueError(f"Invalid service.control action: {action}")
     request_id = secrets.token_hex(16)
@@ -63,12 +68,18 @@ def write_service_control_request(
 
 def check_receipt(spool: Path, request_id: str) -> tuple[str, str | None] | None:
     """Return (outcome, error) if a receipt exists for request_id, else None."""
+    if not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id):
+        return None
     receipt_path = spool / "receipts" / f"{request_id}.json"
     if not receipt_path.is_file():
         return None
     try:
         data = json.loads(receipt_path.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and data.get("schema") == RECEIPT_SCHEMA:
+        if (
+            isinstance(data, dict)
+            and data.get("schema") == RECEIPT_SCHEMA
+            and data.get("request_id") == request_id
+        ):
             outcome = data.get("outcome", "unknown")
             error = data.get("error")
             return outcome, error
@@ -127,12 +138,19 @@ class StrataRuntimeController:
         self._timeout_s = timeout_s
         self._states: dict[str, StrataModelState] = {}
 
+    def probe(self, host: str, port: int, served_model: str) -> bool:
+        return self._probe_fn(host, port, served_model)
+
     def get_state(self, model_id: str, host: str, port: int, served_model: str) -> StrataModelState:
         st = self._states.setdefault(model_id, StrataModelState(state="stopped"))
         ready = self._probe_fn(host, port, served_model)
         if ready:
             st.state = "ready"
             st.reason = None
+            st.last_action = None
+            st.last_request_time = None
+            st.last_request_id = None
+            st.elapsed_seconds = 0
             return st
 
         spool = get_spool_path()

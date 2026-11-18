@@ -205,18 +205,25 @@ def test_strata_readiness_states_driven_by_fake_probe_and_receipt(tmp_path: Path
     assert st_loading.state == "loading"
     assert st_loading.elapsed_seconds == 100
 
-    # Probe succeeds -> ready
+    # Past timeout without probe succeeding -> failed
+    clock_time = 1700.0  # elapsed 700s > 600s timeout
+    st_timeout = ctrl.get_state("sage", "127.0.0.1", 8080, "sage-model")
+    assert st_timeout.state == "failed"
+    assert "timed out" in (st_timeout.reason or "").lower()
+
+    # Restart and probe succeeds -> ready
+    clock_time = 1800.0
+    st_start_again = ctrl.start("sage", "sage.service", "127.0.0.1", 8080, "sage-model")
+    assert st_start_again.state == "loading"
     probe_result = True
     st_ready = ctrl.get_state("sage", "127.0.0.1", 8080, "sage-model")
     assert st_ready.state == "ready"
     assert st_ready.reason is None
 
-    # Probe turns off, past timeout -> failed
+    # Probe turns off after ready -> stopped (not loading)
     probe_result = False
-    clock_time = 1700.0  # elapsed 700s > 600s timeout
-    st_timeout = ctrl.get_state("sage", "127.0.0.1", 8080, "sage-model")
-    assert st_timeout.state == "failed"
-    assert "timed out" in (st_timeout.reason or "").lower()
+    st_after_ready = ctrl.get_state("sage", "127.0.0.1", 8080, "sage-model")
+    assert st_after_ready.state == "stopped"
 
     # Failed receipt outcome
     clock_time = 2000.0
@@ -416,7 +423,7 @@ def _write_receipt(spool: Path, action: str, outcome: str) -> None:
         request = json.loads(path.read_text())
         if request["args"]["action"] == action:
             (spool / "receipts").mkdir(exist_ok=True)
-            receipt = {"schema": host_start.RECEIPT_SCHEMA, "id": request["id"], "outcome": outcome, "error": None}
+            receipt = {"schema": host_start.RECEIPT_SCHEMA, "request_id": request["id"], "outcome": outcome, "error": None}
             (spool / "receipts" / f"{request['id']}.json").write_text(json.dumps(receipt))
 
 
@@ -676,3 +683,181 @@ def test_ai_job_records_served_model_beside_binding_identity(tmp_path: Path, mon
         row = connection.execute("SELECT model_id, route_reason_json FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()
     assert row["model_id"] == "qwen3.8-27b-q4kxl"
     assert json.loads(row["route_reason_json"])["served_model_id"] == "sage-model-27b"
+
+
+def test_regression_finding_1_qualified_active_leaves_local_routes_and_hermes_agent_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.modules.ai import thread_routes
+    from app.modules.ai.thread_models import HermesRoleOption
+
+    entries = _valid_strata_default_entries(tmp_path)
+    _setup_registry(tmp_path, monkeypatch, entries)
+
+    # When Gemma (qualified) is active while Sage (strata) is default:
+    owner = SimpleNamespace(
+        active_model_id="gemma",
+        default_model_id="sage",
+        status=lambda: {
+            "configured": True,
+            "runtime_reachable": True,
+            "model_installed": True,
+            "model_loaded": True,
+            "reason_code": None,
+            "message": "llama-server is reachable and serving its configured model.",
+        },
+    )
+    monkeypatch.setattr(llama_cpp, "get_llama_cpp_runtime_owner", lambda: owner)
+    monkeypatch.setattr(model_registry, "get_llama_cpp_runtime_owner", lambda: owner)
+
+    avail = thread_routes._llamacpp_route_availability("local:llamacpp", "gemma")
+    assert avail.model_loaded is True
+    assert avail.reason_code is None
+    assert avail.runtime_reachable is True
+
+    # Hermes agent availability with this route availability must be ready
+    roles = [
+        HermesRoleOption(
+            role_id="coder",
+            display_name="Coder",
+            purpose="Code writing",
+            route="local:llamacpp",
+            model_id="gemma",
+            available=True,
+        )
+    ]
+    agent_avail = thread_routes._hermes_agent_availability(None, roles=roles)
+    assert agent_avail.runtime_reachable is True
+    assert agent_avail.model_installed is True
+    assert agent_avail.reason_code is None
+
+    # When an under_qualification entry is active, local routes and Hermes agent are blocked:
+    uq_entries = [
+        *entries,
+        {
+            "id": "unqualified",
+            "label": "Unqualified",
+            "runtime": "llama_cpp",
+            "qualification": "under_qualification",
+            "model_path": str(tmp_path / "uq.gguf"),
+            "model_sha256": "d" * 64,
+        },
+    ]
+    _setup_registry(tmp_path, monkeypatch, uq_entries)
+    owner.active_model_id = "unqualified"
+    uq_avail = thread_routes._llamacpp_route_availability("local:llamacpp", "unqualified")
+    assert uq_avail.model_loaded is False
+    assert uq_avail.reason_code == "LLAMACPP_DEFAULT_NOT_LOADED"
+    assert uq_avail.message == "Default local model is not loaded."
+
+
+def test_regression_finding_2_owner_refuses_spawn_while_registered_strata_port_answers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.modules.local_ai.runtime.routes import control_llama_cpp
+
+    entries = _valid_strata_default_entries(tmp_path)
+    (tmp_path / "gemma.gguf").write_bytes(b"fixture")
+    _setup_registry(tmp_path, monkeypatch, entries)
+
+    # Registered Strata entry (Sage) answers its loopback probe
+    ctrl = StrataRuntimeController(probe_fn=lambda *_: True)
+    monkeypatch.setattr(host_start, "get_strata_controller", lambda: ctrl)
+
+    popen_calls: list[Any] = []
+    config = llama_cpp.LlamaCppRuntimeConfig(
+        binary_path=str(tmp_path / "llama-server"),
+        model_path=str(tmp_path / "gemma.gguf"),
+        manage=True,
+    )
+    (tmp_path / "llama-server").write_bytes(b"fake-binary")
+    owner = llama_cpp.LlamaCppRuntimeOwner(
+        config,
+        popen=lambda *a, **k: popen_calls.append(a),
+    )
+    owner.active_model_id = "gemma"
+    monkeypatch.setattr(llama_cpp, "get_llama_cpp_runtime_owner", lambda: owner)
+    monkeypatch.setattr(model_registry, "get_llama_cpp_runtime_owner", lambda: owner)
+
+    # 1. start() must not spawn
+    res = owner.start()
+    assert popen_calls == []
+    assert res["reason_code"] == "STRATA_ACTIVE"
+
+    # 2. recover_if_crashed() must not spawn
+    owner._crashed = True
+    rec_res = owner.recover_if_crashed()
+    assert popen_calls == []
+    assert rec_res["reason_code"] == "STRATA_ACTIVE"
+
+    # 3. Explicit start route must not spawn
+    route_res = control_llama_cpp("start")
+    assert popen_calls == []
+    assert route_res["reason_code"] == "STRATA_ACTIVE"
+
+
+def test_regression_finding_3_host_start_validations_and_post_ready_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spool = tmp_path / "spool"
+    spool.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("JARVISOS_HOSTOPS_SPOOL", str(spool))
+
+    # 1. write_service_control_request validates unit name against SYSTEMD_UNIT_RE shared constant
+    from app.modules.local_ai.runtime.host_start import (
+        SYSTEMD_UNIT_RE,
+        check_receipt,
+        write_service_control_request,
+    )
+    from app.modules.local_ai.runtime.model_registry import _UNIT
+
+    assert _UNIT is SYSTEMD_UNIT_RE
+
+    valid_req_id = write_service_control_request(spool, "sage.service", "start")
+    assert len(valid_req_id) == 32
+
+    for bad_unit in ("bad;rm -rf /", "sage", "../sage.service", "service", "", "sage@.service.bak"):
+        with pytest.raises(ValueError, match="Invalid unit name"):
+            write_service_control_request(spool, bad_unit, "start")
+
+    # 2. check_receipt validates request_id format and matching receipt request_id
+    assert check_receipt(spool, "short_id") is None
+    assert check_receipt(spool, "not_hex_0123456789abcdef012345678!") is None
+
+    # Receipt with mismatched request_id or legacy 'id' field only
+    receipts_dir = spool / "receipts"
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+    mismatched_file = receipts_dir / f"{valid_req_id}.json"
+    mismatched_file.write_text(json.dumps({
+        "schema": host_start.RECEIPT_SCHEMA,
+        "request_id": "0" * 32,
+        "outcome": "ok",
+        "error": None,
+    }))
+    assert check_receipt(spool, valid_req_id) is None
+
+    # Matching receipt
+    mismatched_file.write_text(json.dumps({
+        "schema": host_start.RECEIPT_SCHEMA,
+        "request_id": valid_req_id,
+        "outcome": "ok",
+        "error": None,
+    }))
+    assert check_receipt(spool, valid_req_id) == ("ok", None)
+
+    # 3. StrataRuntimeController.get_state: after ready is seen, pending start is cleared so subsequent stop/crash reports stopped
+    probe_ready = False
+    ctrl = StrataRuntimeController(probe_fn=lambda *_: probe_ready)
+    st = ctrl.start("sage", "sage.service", "127.0.0.1", 8080, "sage-model")
+    assert st.state == "loading"
+
+    # Now probe sees model is ready
+    probe_ready = True
+    st_ready = ctrl.get_state("sage", "127.0.0.1", 8080, "sage-model")
+    assert st_ready.state == "ready"
+    assert st_ready.last_action is None
+
+    # Model stops / crashes later (within timeout)
+    probe_ready = False
+    st_stopped = ctrl.get_state("sage", "127.0.0.1", 8080, "sage-model")
+    assert st_stopped.state == "stopped"

@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.core.paths import build_paths
+from app.modules.local_ai.runtime.host_start import SYSTEMD_UNIT_RE
 from app.modules.local_ai.runtime.llama_cpp import (
     LlamaCppRuntimeConfig,
     get_llama_cpp_runtime_owner,
@@ -20,7 +21,7 @@ from app.modules.local_ai.runtime.llama_cpp import (
 
 _ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$")
 _SHA = re.compile(r"^[a-fA-F0-9]{64}$")
-_UNIT = re.compile(r"^[a-zA-Z0-9@._-]+\.service$")
+_UNIT = SYSTEMD_UNIT_RE
 
 
 @dataclass(frozen=True)

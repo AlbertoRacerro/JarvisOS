@@ -69,8 +69,6 @@ class LocalLlamaCppAdapter:
                     active.id, active.host, active.port or 8080, active.served_model or ""
                 )
                 return AIProviderHealth.healthy if st.state == "ready" else AIProviderHealth.unavailable
-        elif getattr(get_llama_cpp_runtime_owner(), "non_default_active", False):
-            return AIProviderHealth.unavailable
 
         try:
             response = self._client_factory().get(f"{self._base_url().removesuffix('/v1')}/health", timeout=1.5)
@@ -105,14 +103,8 @@ class LocalLlamaCppAdapter:
 
         active_entry = get_active_model_entry()
 
-        if (active_entry and active_entry.qualification == "under_qualification") or (
-            not active_entry and getattr(get_llama_cpp_runtime_owner(), "non_default_active", False)
-        ):
-            model_id = (
-                (active_entry.served_model or active_entry.id)
-                if active_entry
-                else llama_cpp_runtime_config().model_id
-            )
+        if active_entry and active_entry.qualification == "under_qualification":
+            model_id = active_entry.served_model or active_entry.id
             return AIResponse(
                 provider_id=self.provider_id, model_id=model_id, request_id=request.request_id,
                 correlation_id=request.correlation_id, finish_reason="error", safety_status="allowed",

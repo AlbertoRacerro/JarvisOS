@@ -74,6 +74,8 @@ export default function LocalModelPanel() {
     finally { actionLock.current = false; setPending(null); setLoading(false); }
   };
   const enabled = buttons(status, loading || !!pending || !!error);
+  const defaultEntry = models?.models.find(entry => entry.qualification === "default");
+  const defaultHostUnavailable = defaultEntry?.state === "requires host start";
   return <section className="coding-control-runtime" aria-label="Local model">
     <div className="coding-control-runtime__head"><h3>Local model</h3><button type="button" onClick={() => { polls.current = 0; void refresh(); }} disabled={loading || !!pending}>Refresh</button></div>
     {loading ? <p role="status">Loading local model status…</p> : null}
@@ -101,7 +103,7 @@ export default function LocalModelPanel() {
           {models.active_id !== entry.id ? <button type="button" disabled={loading || !!pending || (entry.runtime === "llama_cpp" && (!entry.installed || entry.digest_state === "mismatch")) || entry.state === "requires host start"} onClick={() => void switchModel(entry.id)}>Usa questo modello</button> : null}
         </li>;
       })}</ul>
-      {models.active_id !== models.models.find(entry => entry.qualification === "default")?.id ? <button type="button" disabled={loading || !!pending} onClick={() => void switchModel(null)}>Torna al modello standard</button> : null}
+      {defaultEntry && models.active_id !== defaultEntry.id ? <button type="button" disabled={loading || !!pending || defaultHostUnavailable} title={defaultHostUnavailable ? "Avvio host non disponibile" : undefined} onClick={() => void switchModel(null)}>Torna al modello standard</button> : null}
     </div> : null}
   </section>;
 }
