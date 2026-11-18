@@ -29,21 +29,23 @@ export const STEP_LABELS: Record<StepId, string> = {
 };
 
 export const REASON_WORKSPACE_MISSING = "Il workspace del caso non esiste";
-export const REASON_CAPABILITY_MISSING = "Funzione non ancora disponibile nel prodotto";
+export const REASON_NOT_DECLARED = "Il caso non dichiara un valore pubblicato da confrontare";
+export const REASON_UNIT_MISMATCH = "Le unità del risultato e del valore pubblicato non sono confrontabili";
+export const REASON_OUT_OF_TOLERANCE = "Il risultato è fuori dalla tolleranza del caso";
 
 export const MISSING_RECORD_SENTENCES: Record<StepId, string> = {
   paper: "Manca la fonte di letteratura o il file allegato:",
   facts: "Mancano dati accettati e verificati per:",
   bound: "Mancano parametri legati ai dati accettati della fonte:",
   run: "Manca un risultato del banco di prova con esito utilizzabile nel workspace del caso.",
-  compare: "Funzione non ancora disponibile nel prodotto",
+  compare: "Nessun risultato utilizzabile riporta la grandezza confrontata:",
   decide: "Manca una decisione accettata collegata a un calcolo.",
   answer: "Manca una misura della qualità della ricerca con esito utilizzabile nel workspace del caso."
 };
 
 // Missing items are shown only where they are the engineer's own names (source title, quantities, parameters, the
-// workspace); for the other steps the board names a record kind, which the sentence already says in words.
-const STEPS_WITH_NAMED_ITEMS: ReadonlySet<StepId> = new Set(["paper", "facts", "bound"]);
+// workspace, and the compared quantity); for the other steps the board names a record kind, which the sentence already says in words.
+const STEPS_WITH_NAMED_ITEMS: ReadonlySet<StepId> = new Set(["paper", "facts", "bound", "compare"]);
 
 export function firstRedCell(cases: readonly CaseResult[]): { caseItem: CaseResult; stepId: StepId } | null {
   for (const caseItem of cases) {
@@ -59,17 +61,29 @@ export const STEP_LINKS: Partial<Record<StepId, { path: string; label: string }>
   facts: { path: "/memory/literature", label: "Apri Letteratura" },
   bound: { path: "/memory/literature", label: "Apri Letteratura" },
   run: { path: "/runs", label: "Apri Runs" },
+  compare: { path: "/runs", label: "Apri Runs" },
   decide: { path: "/memory/project-basis", label: "Apri Project Basis" },
   answer: { path: "/memory/search", label: "Apri Ricerca" }
 };
 
 export function getReasonText(step: StepId, reason: string | null): string {
   if (reason === "workspace_missing") return REASON_WORKSPACE_MISSING;
-  if (reason === "capability_missing") return REASON_CAPABILITY_MISSING;
+  if (reason === "not_declared") return REASON_NOT_DECLARED;
+  if (reason === "unit_mismatch") return REASON_UNIT_MISMATCH;
+  if (reason === "out_of_tolerance") return REASON_OUT_OF_TOLERANCE;
   if (reason === "missing_record") {
     return MISSING_RECORD_SENTENCES[step] ?? "Elemento mancante per questo passaggio:";
   }
   return "";
+}
+
+// Deviations below one part in a million are floating-point noise from the unit conversion, shown as zero.
+export function formatPercentSigFigs(value: number, sigFigs: number = 2): string {
+  const pct = value * 100;
+  if (!Number.isFinite(pct)) return "—";
+  if (Math.abs(value) < 1e-6) return "0%";
+  const text = pct.toPrecision(sigFigs);
+  return `${text.includes("e") ? Number(text) : text}%`;
 }
 
 type Props = Readonly<{
@@ -150,12 +164,19 @@ export default function ReadinessBoard({ navigate, onWorkspaceChange }: Props) {
   const selectedStepId = selectedCell?.stepId ?? "paper";
   const stepResult = selectedCase ? selectedCase.steps[selectedStepId] : null;
 
-  const targetLink =
+  const isCompareLinked =
+    selectedStepId === "compare" &&
     stepResult?.status === "red" &&
-    stepResult.reason !== "workspace_missing" &&
-    selectedStepId !== "compare"
-      ? STEP_LINKS[selectedStepId]
-      : null;
+    (stepResult.reason === "missing_record" ||
+      stepResult.reason === "out_of_tolerance" ||
+      stepResult.reason === "unit_mismatch");
+
+  const isOtherLinked =
+    selectedStepId !== "compare" &&
+    stepResult?.status === "red" &&
+    stepResult.reason !== "workspace_missing";
+
+  const targetLink = isCompareLinked || isOtherLinked ? STEP_LINKS[selectedStepId] : null;
 
   return (
     <div className="readiness-board">
@@ -235,6 +256,43 @@ export default function ReadinessBoard({ navigate, onWorkspaceChange }: Props) {
                 <li key={item}>{item}</li>
               ))}
             </ul>
+          )}
+          {stepResult.comparison && (
+            <div className="readiness-board__comparison">
+              <table className="readiness-board__comparison-table">
+                <tbody>
+                  <tr>
+                    <th>Calcolato</th>
+                    <td>
+                      {stepResult.comparison.computed_in_published_unit !== null &&
+                      stepResult.comparison.computed.unit !== stepResult.comparison.published.unit
+                        ? `${stepResult.comparison.computed.value} ${stepResult.comparison.computed.unit} (${Number(stepResult.comparison.computed_in_published_unit.toPrecision(6))} ${stepResult.comparison.published.unit})`
+                        : `${stepResult.comparison.computed.value} ${stepResult.comparison.computed.unit}`}
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>Pubblicato</th>
+                    <td>{`${stepResult.comparison.published.value} ${stepResult.comparison.published.unit}`}</td>
+                  </tr>
+                  <tr>
+                    <th>Scarto</th>
+                    <td>
+                      {stepResult.comparison.deviation !== null
+                        ? formatPercentSigFigs(stepResult.comparison.deviation, 2)
+                        : "—"}
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>Tolleranza</th>
+                    <td>{`${Number((stepResult.comparison.rel_tol * 100).toPrecision(4))}%`}</td>
+                  </tr>
+                  <tr>
+                    <th>Run</th>
+                    <td>{stepResult.comparison.run_id}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           )}
           {targetLink && (
             <AppLink

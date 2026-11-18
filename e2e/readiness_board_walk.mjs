@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Spec 304: Browser walk of the "Prontezza" readiness board under Development.
+// Spec 305: Browser walk of the "Prontezza" readiness board under Development.
 // Criteria 2-6:
 // 2. From `/` in a clean browser profile, Development -> Prontezza opens the board using visible controls only.
 // 3. With fake pack and fresh data root, the case row shows seven red cells, summary reads 0/7, leftmost red cell names case and Articolo.
 // 4. After creating zephyr workspace and literature source with readable paper file, reload shows Articolo green and Dati red listing missing quantity names.
 // 5. Red Dati cell link opens Literature with case workspace selected.
-// 6. Confronto shows "Funzione non ancora disponibile nel prodotto" and no link.
+// 6. Confronto shows green when a usable fixture run has output density = 1.0 g/cm3, and displays Calcolato, Pubblicato, Scarto.
 
 import { createHash } from "node:crypto";
 import { openSync } from "node:fs";
@@ -87,7 +87,7 @@ const server = spawn(python, ["-m", "uvicorn", "app.main:app", "--host", "127.0.
 });
 
 const summary = {
-  spec: "304",
+  spec: "305",
   head,
   browser: null,
   started_at: new Date().toISOString(),
@@ -211,19 +211,44 @@ try {
   await shot("opened-literature-from-red-dati-cell");
   summary.steps.push({ step: "red_dati_cell_link_opens_literature_with_case_workspace", status: "pass" });
 
-  // 5. Criterion 6: Confronto shows "Funzione non ancora disponibile nel prodotto" and no link.
+  // 5. Criterion 6: Place usable fixture run with density = 1.0 g/cm3 in the case workspace bench root.
+  // Re-opening Prontezza shows Confronto green with Calcolato, Pubblicato, Scarto.
+  const benchRunDir = join(dataRoot, "workspaces", ws.id, "engineering", "bench", "run_compare_1");
+  await mkdir(benchRunDir, { recursive: true });
+  const runResult = {
+    run_id: "run_compare_1",
+    evaluator_id: "evaluator.thermal",
+    status: "complete",
+    verdict: "usable",
+    completed_at: new Date().toISOString(),
+    outputs: [
+      {
+        name: "density",
+        value: {
+          value: 1.0,
+          unit: "g/cm3"
+        }
+      }
+    ]
+  };
+  await writeFile(join(benchRunDir, "result.json"), JSON.stringify(runResult, null, 2));
+
   await page.getByRole("link", { name: "Development", exact: true }).click();
   await page.getByRole("link", { name: "Prontezza", exact: true }).click();
   await page.locator(".readiness-board").waitFor();
 
   const compareCell = page.locator('.readiness-board__cell-button[aria-label*="Confronto"]').first();
+  await compareCell.waitFor();
+  assert((await compareCell.getAttribute("data-status")) === "green", "Confronto cell is green");
+
   await compareCell.click();
   const compareDetail = page.locator(".readiness-board__detail");
-  await compareDetail.getByText("Funzione non ancora disponibile nel prodotto").waitFor();
-  const linksInCompare = compareDetail.getByRole("link");
-  assert((await linksInCompare.count()) === 0, "Confronto detail must have no link");
-  await shot("compare-capability-missing-no-link");
-  summary.steps.push({ step: "compare_shows_capability_missing_and_no_link", status: "pass" });
+  await compareDetail.waitFor();
+  await compareDetail.getByText("Calcolato").waitFor();
+  await compareDetail.getByText("Pubblicato").waitFor();
+  await compareDetail.getByText("Scarto").waitFor();
+  await shot("compare-green-shows-comparison-details");
+  summary.steps.push({ step: "compare_cell_is_green_and_shows_calculated_published_deviation", status: "pass" });
 
   assert(summary.console_errors.length === 0, `console errors: ${JSON.stringify(summary.console_errors)}`);
   assert(summary.page_errors.length === 0, `page errors: ${JSON.stringify(summary.page_errors)}`);

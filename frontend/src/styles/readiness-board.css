@@ -124,6 +124,29 @@
   font-size: 13px;
 }
 
+.readiness-board__comparison {
+  margin: 12px 0 16px;
+}
+
+.readiness-board__comparison-table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.readiness-board__comparison-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  padding: 3px 16px 3px 0;
+  vertical-align: baseline;
+}
+
+.readiness-board__comparison-table td {
+  padding: 3px 0;
+  font-family: var(--font-mono, monospace);
+  vertical-align: baseline;
+}
+
 .readiness-board__link {
   display: inline-block;
   margin-top: 8px;

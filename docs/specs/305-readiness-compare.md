@@ -1,6 +1,6 @@
 # 305 — READINESS-COMPARE-1: The comparison step of the readiness board, computed from a usable run and the published value
 
-Status: ready
+Status: merged
 Depends on: 303, 304
 
 ## Goal

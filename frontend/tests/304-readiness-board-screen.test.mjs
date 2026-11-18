@@ -29,10 +29,13 @@ const {
   STEP_ORDER,
   STEP_LABELS,
   REASON_WORKSPACE_MISSING,
-  REASON_CAPABILITY_MISSING,
+  REASON_NOT_DECLARED,
+  REASON_UNIT_MISMATCH,
+  REASON_OUT_OF_TOLERANCE,
   MISSING_RECORD_SENTENCES,
   STEP_LINKS,
-  getReasonText
+  getReasonText,
+  formatPercentSigFigs
 } = module.exports;
 
 // 1. Page title and empty state text
@@ -61,18 +64,28 @@ assert.equal(new Set(Object.values(STEP_LABELS)).size, 7, "seven distinct step l
 
 // 3. Reason sentences in Italian
 assert.equal(REASON_WORKSPACE_MISSING, "Il workspace del caso non esiste");
-assert.equal(REASON_CAPABILITY_MISSING, "Funzione non ancora disponibile nel prodotto");
+assert.equal(REASON_NOT_DECLARED, "Il caso non dichiara un valore pubblicato da confrontare");
+assert.equal(REASON_UNIT_MISMATCH, "Le unità del risultato e del valore pubblicato non sono confrontabili");
+assert.equal(REASON_OUT_OF_TOLERANCE, "Il risultato è fuori dalla tolleranza del caso");
 assert.equal(
   MISSING_RECORD_SENTENCES.facts,
   "Mancano dati accettati e verificati per:",
   "facts missing_record verbatim example from spec"
+);
+assert.equal(
+  MISSING_RECORD_SENTENCES.compare,
+  "Nessun risultato utilizzabile riporta la grandezza confrontata:",
+  "compare missing_record verbatim from spec 305"
 );
 for (const step of STEP_ORDER) {
   assert.ok(MISSING_RECORD_SENTENCES[step]?.length > 0, `missing_record sentence for ${step}`);
 }
 
 assert.equal(getReasonText("paper", "workspace_missing"), "Il workspace del caso non esiste");
-assert.equal(getReasonText("compare", "capability_missing"), "Funzione non ancora disponibile nel prodotto");
+assert.equal(getReasonText("compare", "not_declared"), "Il caso non dichiara un valore pubblicato da confrontare");
+assert.equal(getReasonText("compare", "unit_mismatch"), "Le unità del risultato e del valore pubblicato non sono confrontabili");
+assert.equal(getReasonText("compare", "out_of_tolerance"), "Il risultato è fuori dalla tolleranza del caso");
+assert.equal(getReasonText("compare", "missing_record"), "Nessun risultato utilizzabile riporta la grandezza confrontata:");
 assert.equal(getReasonText("facts", "missing_record"), "Mancano dati accettati e verificati per:");
 for (const sentence of Object.values(MISSING_RECORD_SENTENCES)) {
   assert.ok(!/[a-z]+[._][a-z]+/.test(sentence), `no record-kind code in visible sentence: ${sentence}`);
@@ -84,9 +97,19 @@ assert.equal(STEP_LINKS.paper.path, "/memory/literature");
 assert.equal(STEP_LINKS.facts.path, "/memory/literature");
 assert.equal(STEP_LINKS.bound.path, "/memory/literature");
 assert.equal(STEP_LINKS.run.path, "/runs");
+assert.equal(STEP_LINKS.compare.path, "/runs");
 assert.equal(STEP_LINKS.decide.path, "/memory/project-basis");
 assert.equal(STEP_LINKS.answer.path, "/memory/search");
-assert.equal(STEP_LINKS.compare, undefined, "compare has no link");
+
+// 5. Comparison formatting
+assert.equal(formatPercentSigFigs(0), "0%");
+assert.equal(formatPercentSigFigs(1.1e-16), "0%");
+assert.equal(formatPercentSigFigs(0.00012), "0.012%");
+assert.equal(formatPercentSigFigs(0.00342), "0.34%");
+assert.equal(formatPercentSigFigs(0.0215), "2.1%");
+assert.equal(formatPercentSigFigs(0.05), "5.0%");
+assert.equal(formatPercentSigFigs(0.154), "15%");
+assert.equal(formatPercentSigFigs(1.2), "120%");
 
 // 5. Source code constraints
 const pageSource = read("src/pages/ReadinessBoard.tsx");
@@ -94,6 +117,11 @@ assert.ok(!pageSource.includes("stepResult.detail"), "never render detail from S
 assert.ok(!pageSource.includes(".detail}"), "never render detail property in JSX");
 assert.ok(pageSource.includes("onWorkspaceChange?.(selectedCase.workspace_id)"), "link calls onWorkspaceChange with workspace_id");
 assert.ok(pageSource.includes('Primo passo mancante:'), "leftmost red cell Italian label in summary");
+assert.ok(pageSource.includes("<th>Calcolato</th>"), "comparison table has Calcolato header");
+assert.ok(pageSource.includes("<th>Pubblicato</th>"), "comparison table has Pubblicato header");
+assert.ok(pageSource.includes("<th>Scarto</th>"), "comparison table has Scarto header");
+assert.ok(pageSource.includes("<th>Tolleranza</th>"), "comparison table has Tolleranza header");
+assert.ok(pageSource.includes("<th>Run</th>"), "comparison table has Run header");
 
 // 6. Route wiring in routes.ts and App.tsx
 const routes = read("src/app/routes.ts");
