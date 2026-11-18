@@ -42,7 +42,7 @@ DEFAULT_WORKSPACE_DESCRIPTION = "Default workspace."
 
 _ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
-_KNOWN_KEYS = {"id", "workspace", "sensitivity", "ui_labels", "studio", "hermes_roles"}
+_KNOWN_KEYS = {"id", "workspace", "sensitivity", "ui_labels", "studio", "hermes_roles", "readiness"}
 
 
 class PackError(RuntimeError):
@@ -59,6 +59,7 @@ class Pack:
     ui_labels: dict[str, str] = field(default_factory=dict)
     studio_examples_dir: Path | None = None
     hermes_roles: dict[str, str] = field(default_factory=dict)
+    readiness_cases_file: Path | None = None
 
 
 def _table(data: dict, key: str, manifest: Path) -> dict:
@@ -116,6 +117,13 @@ def read_pack(directory: Path) -> Pack:
             raise PackError(f"{manifest}: unknown Hermes role {role_name!r}")
         if not route.startswith("local:"):
             raise PackError(f"{manifest}: hermes_roles.{role_name} route must start with 'local:'")
+    readiness = _table(data, "readiness", manifest)
+    cases = _text(readiness, "cases", manifest)
+    cases_file = None
+    if cases is not None:
+        cases_file = (root / cases).resolve()
+        if not cases_file.is_file() or root not in cases_file.parents:
+            raise PackError(f"{manifest}: readiness.cases {cases!r} must be a file inside the pack")
     return Pack(
         id=pack_id,
         root=root,
@@ -125,6 +133,7 @@ def read_pack(directory: Path) -> Pack:
         ui_labels=dict(labels),
         studio_examples_dir=examples_dir,
         hermes_roles=dict(roles),
+        readiness_cases_file=cases_file,
     )
 
 
@@ -194,3 +203,8 @@ def hermes_role_pack_defaults() -> dict[str, str]:
     for pack in load_packs():
         defaults.update(pack.hermes_roles)
     return defaults
+
+
+def readiness_case_files() -> tuple[Path, ...]:
+    return tuple(pack.readiness_cases_file for pack in load_packs() if pack.readiness_cases_file)
+

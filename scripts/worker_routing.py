@@ -27,6 +27,7 @@ import json
 import math
 import os
 import queue
+import re
 import shlex
 import shutil
 import statistics
@@ -80,6 +81,13 @@ CODEX_WINDOWS = {"primary": "5h", "secondary": "weekly"}
 CLAUDE_FIVE_HOUR = {"session", "five_hour", "5h"}
 CLAUDE_WEEKLY = {"weekly", "seven_day", "week", "7d"}
 UNREADABLE = "worker quota: unreadable"
+COORDINATOR_AGENT_POOLS: dict[str, str] = {
+    "claude": "claude",
+    "codex": "codex",
+    "argon": "argon",
+    "hydrogen": "gemini",
+    "agy_opus": "agy3p",
+}
 # The supervisor persists its last good reading here so a coordinator whose sandbox cannot read the quotas live
 # still routes on a recent value. Per-pool entries, each aged on its own `as_of`.
 SNAPSHOT_SCHEMA = "worker-quota.v1"
@@ -670,6 +678,20 @@ def family_of_record(r: dict[str, Any], by_key: dict[str, Model]) -> str:
     return str(r.get("pool", ""))
 
 
+def pool_of_record(r: dict[str, Any], by_key: dict[str, Model]) -> str:
+    worker = str(r.get("worker", ""))
+    if worker in by_key:
+        return by_key[worker].pool
+    model_name = str(r.get("model", ""))
+    for m in MODELS:
+        if m.model == model_name:
+            return m.pool
+    fam = family_of_record(r, by_key)
+    if fam:
+        return fam
+    return str(r.get("pool") or "sconosciuto")
+
+
 def load_records(path: Path | None = None) -> list[dict[str, Any]]:
     """Valid outcome records from the record file; malformed or unreadable lines are skipped."""
     target = resolve_record_path(path)
@@ -693,6 +715,215 @@ def load_records(path: Path | None = None) -> list[dict[str, Any]]:
     return records
 
 
+def default_control_dir() -> Path:
+    return Path(os.environ.get("RELAY_CONTINUITY_DIR", Path.home() / "jarvis-control" / "work" / "continuity")).expanduser()
+
+
+_classify_turn_fn: Any = None
+
+
+def _get_classify_turn() -> Any:
+    global _classify_turn_fn
+    if _classify_turn_fn is not None:
+        return _classify_turn_fn
+    if "relay_continuity_turns" in sys.modules:
+        _classify_turn_fn = getattr(sys.modules["relay_continuity_turns"], "classify_turn", None)
+        if _classify_turn_fn is not None:
+            return _classify_turn_fn
+    turns_path = Path(__file__).resolve().parent / "relay_continuity_turns.py"
+    if turns_path.is_file():
+        try:
+            spec = importlib.util.spec_from_file_location("relay_continuity_turns", turns_path)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                sys.modules["relay_continuity_turns"] = mod
+                try:
+                    spec.loader.exec_module(mod)
+                except Exception:
+                    sys.modules.pop("relay_continuity_turns", None)
+                    raise
+                _classify_turn_fn = getattr(mod, "classify_turn", None)
+                return _classify_turn_fn
+        except Exception:  # noqa: BLE001 - report must never raise on import failure
+            pass
+    return None
+
+
+def _resolve_session_turns_dir(repo: Path, session: str) -> Path | None:
+    if not session or "/" in session or "\\" in session or session in (".", ".."):
+        return None
+    candidate = repo / ".agent-relay" / "sessions" / session / "turns"
+    if candidate.is_dir():
+        return candidate
+    marker = repo / ".git"
+    if marker.is_file():
+        try:
+            text = marker.read_text(encoding="utf-8").strip()
+            if text.startswith("gitdir:"):
+                main_git = Path(text.split(":", 1)[1].strip()).resolve().parent.parent
+                main_cand = main_git.parent / ".agent-relay" / "sessions" / session / "turns"
+                if main_cand.is_dir():
+                    return main_cand
+        except OSError:
+            pass
+    return None
+
+
+def load_coordinator_turns(control_dir: Path | None = None, repo: Path | None = None, *,
+                           days: int = 7, now: datetime | None = None) -> list[dict[str, Any]]:
+    try:
+        c_dir = default_control_dir() if control_dir is None else Path(control_dir).expanduser()
+        r_dir = _repo_root() if repo is None else Path(repo).expanduser()
+    except OSError:
+        return []
+    moment = now or datetime.now(UTC)
+    cutoff = moment - timedelta(days=days)
+
+    attempt_files: list[Path] = []
+    root_attempts = c_dir / "attempts.jsonl"
+    if root_attempts.is_file():
+        attempt_files.append(root_attempts)
+    missions_dir = c_dir / "missions"
+    if missions_dir.is_dir():
+        try:
+            attempt_files.extend(sorted(missions_dir.glob("m-*/attempts.jsonl")))
+        except OSError:
+            pass
+
+    seen: set[tuple[str | None, str | None]] = set()
+    turns: list[dict[str, Any]] = []
+
+    for af in attempt_files:
+        try:
+            fh = open(af, encoding="utf-8", errors="replace")  # noqa: SIM115
+        except OSError:
+            continue
+        with fh:
+            for raw_line in fh:
+                try:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if not isinstance(rec, dict) or rec.get("event") != "settle":
+                        continue
+
+                    raw_agent = rec.get("agent")
+                    agent = raw_agent if isinstance(raw_agent, str) and raw_agent else None
+                    raw_session = rec.get("session")
+                    session = raw_session if isinstance(raw_session, str) and raw_session else None
+                    if agent is None and session is None:
+                        continue
+
+                    raw_nonce = rec.get("nonce")
+                    nonce = raw_nonce if isinstance(raw_nonce, str) and raw_nonce else None
+
+                    at_val = rec.get("at")
+                    ts = (_parse_instant(at_val) or _parse_ts(at_val)) if isinstance(at_val, str) and at_val else None
+                    if ts is None and nonce is not None:
+                        m = re.search(r"rc-(\d{8}T\d{6}Z)-", nonce)
+                        if m:
+                            try:
+                                ts = datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+                            except ValueError:
+                                ts = None
+                    if ts is None or ts < cutoff:
+                        continue
+
+                    if nonce is not None or session is not None:
+                        key = (nonce, session)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+
+                    usage: dict[str, int] | None = None
+                    total_tokens = 0
+                    rec_usage = rec.get("usage")
+                    rec_coord = rec.get("coordinator_tokens")
+
+                    if (isinstance(rec_usage, dict)
+                            and isinstance(rec_usage.get("total_tokens"), int)
+                            and not isinstance(rec_usage["total_tokens"], bool)
+                            and rec_usage["total_tokens"] >= 0):
+                        usage = rec_usage
+                        total_tokens = rec_usage["total_tokens"]
+                    elif (isinstance(rec_coord, int)
+                          and not isinstance(rec_coord, bool)
+                          and rec_coord >= 0):
+                        total_tokens = rec_coord
+                        usage = {
+                            "input_tokens": rec_coord,
+                            "output_tokens": 0,
+                            "cache_tokens": 0,
+                            "total_tokens": rec_coord,
+                        }
+                    elif r_dir is not None and session is not None:
+                        sess_turns = _resolve_session_turns_dir(r_dir, session)
+                        if sess_turns is not None and sess_turns.is_dir():
+                            try:
+                                t_dirs = sorted(
+                                    p for p in sess_turns.iterdir() if p.is_dir() and p.name.startswith("turn-")
+                                )
+                            except OSError:
+                                t_dirs = []
+                            if t_dirs:
+                                last_td = t_dirs[-1]
+                                fn = _get_classify_turn()
+                                if fn is not None:
+                                    try:
+                                        rep = fn(last_td)
+                                        if (rep and isinstance(rep.usage, dict)
+                                                and isinstance(rep.usage.get("total_tokens"), int)
+                                                and not isinstance(rep.usage["total_tokens"], bool)
+                                                and rep.usage["total_tokens"] >= 0):
+                                            usage = {
+                                                "input_tokens": rep.usage.get("input_tokens", 0),
+                                                "output_tokens": rep.usage.get("output_tokens", 0),
+                                                "cache_tokens": rep.usage.get("cache_tokens", 0),
+                                                "total_tokens": rep.usage.get("total_tokens", 0),
+                                            }
+                                            total_tokens = usage["total_tokens"]
+                                        if agent is None and rep and isinstance(rep.agent, str) and rep.agent:
+                                            agent = rep.agent
+                                    except Exception:  # noqa: BLE001 - report must never raise on malformed turn dir
+                                        pass
+
+                    if agent is None and r_dir is not None and session is not None:
+                        sess_turns = _resolve_session_turns_dir(r_dir, session)
+                        if sess_turns is not None and sess_turns.is_dir():
+                            try:
+                                t_dirs = sorted(
+                                    p for p in sess_turns.iterdir() if p.is_dir() and p.name.startswith("turn-")
+                                )
+                            except OSError:
+                                t_dirs = []
+                            if t_dirs:
+                                try:
+                                    st = json.loads((t_dirs[-1] / "state.json").read_text(encoding="utf-8"))
+                                    if isinstance(st, dict) and isinstance(st.get("agent_key"), str) and st["agent_key"]:
+                                        agent = st["agent_key"]
+                                except (OSError, json.JSONDecodeError):
+                                    pass
+
+                    pool = COORDINATOR_AGENT_POOLS.get(agent or "", agent or "sconosciuto")
+                    at_iso = at_val if isinstance(at_val, str) and at_val else _iso(ts)
+                    turns.append({
+                        "at": at_iso,
+                        "agent": agent,
+                        "pool": pool,
+                        "session": session,
+                        "tokens": total_tokens,
+                        "usage": usage,
+                    })
+                except Exception:  # noqa: BLE001 - malformed journal record must never abort report
+                    continue
+
+    return turns
+
+
 def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_first_pass: str = "n/a",
            findings: Any = "0,0,0,0", rework_rounds: int = 0, escalated: bool = False,
            salvage: str = "n/a", reason: str | None = None, failure: str = "none",
@@ -706,7 +937,10 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
     model = model_obj.model
 
     if tier is None:
-        tier_val = model_obj.capability
+        if worker == "copilot-auto":
+            tier_val = copilot_effective_capability(load_records(record_file))
+        else:
+            tier_val = model_obj.capability
     else:
         try:
             tier_val = int(tier)
@@ -743,6 +977,7 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
             raise ValueError(f"invalid coordinator_tokens: {coordinator_tokens}") from exc
 
     spend_data: dict[str, Any] | None = None
+    actual_models: list[str] = []
     if evidence is not None:
         raw_list = [evidence] if isinstance(evidence, (str, Path)) else list(evidence)
         if raw_list:
@@ -767,6 +1002,11 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
                     raise ValueError(f"evidence result missing or unreadable: {item}") from exc
                 if not isinstance(res_dict, dict):
                     raise ValueError(f"evidence result missing or unreadable: {item}")
+                act = res_dict.get("actual_model")
+                if isinstance(act, str) and act.strip():
+                    cleaned = act.strip()
+                    if cleaned not in actual_models:
+                        actual_models.append(cleaned)
                 usage = res_dict.get("usage")
                 run_tokens = 0
                 if isinstance(usage, dict):
@@ -825,6 +1065,8 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
         entry["coordinator_tokens"] = tokens_val
     if spend_data is not None:
         entry["spend"] = spend_data
+    if actual_models:
+        entry["actual_model"] = ",".join(actual_models)
 
     target = resolve_record_path(record_file)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1053,6 +1295,65 @@ def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[d
     return float(statistics.median(costs)), count
 
 
+def copilot_effective_capability(outcomes: list[dict[str, Any]] | None, base_capability: int = 1) -> int:
+    if not outcomes:
+        return base_capability
+    copilot_records = [
+        r for r in outcomes
+        if (r.get("worker") == "copilot-auto" or r.get("model") == "auto") and r.get("failure") != "harness"
+    ]
+    if not copilot_records:
+        return base_capability
+
+    def _rework_val(r: dict[str, Any]) -> int:
+        val = r.get("rework_rounds", 0) or 0
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return 0
+
+    def is_clean(r: dict[str, Any]) -> bool:
+        return (
+            r.get("failure", "none") == "none"
+            and not bool(r.get("escalated"))
+            and r.get("ci_first_pass") != "fail"
+            and (r.get("ci_first_pass") == "pass" or _rework_val(r) == 0)
+        )
+
+    tier2_records = [
+        r for r in copilot_records
+        if isinstance(r.get("tier"), int) and not isinstance(r.get("tier"), bool) and r["tier"] >= 2
+    ]
+    if len(tier2_records) < 2:
+        return 2 if (any(is_clean(r) for r in copilot_records) or len(tier2_records) == 1) else 1
+
+    clean_count = sum(1 for r in tier2_records if is_clean(r))
+    zero_rework_records = [r for r in tier2_records if is_clean(r) and _rework_val(r) == 0]
+    zero_rework_count = len(zero_rework_records)
+    if clean_count / len(tier2_records) < 0.50 or zero_rework_count == 0:
+        return 1
+
+    def _is_strong_actual_model(r: dict[str, Any]) -> bool:
+        act = r.get("actual_model")
+        if not isinstance(act, str) or not act.strip():
+            return False
+        for model_name in act.split(","):
+            tokens = {t for t in re.split(r"[^a-z0-9]+", model_name.strip().lower()) if t}
+            if tokens and not (tokens & {"flash", "mini", "haiku", "nano", "lite"}):
+                return True
+        return False
+
+    if (
+        len(tier2_records) >= 3
+        and zero_rework_count >= 3
+        and all(not bool(r.get("escalated")) and r.get("failure", "none") == "none" for r in tier2_records)
+        and any(_is_strong_actual_model(r) for r in zero_rework_records)
+    ):
+        return 3
+
+    return 2
+
+
 def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODELS, review_of: str | None = None,
          now: datetime | None = None, task: str | None = None, kind: str | None = None,
          outcomes: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1092,7 +1393,8 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
         c_fam = family(candidate)
         next_family: str | None = None
         for m in models:
-            if m.capability < required:
+            m_cap = copilot_effective_capability(outcomes, m.capability) if m.key == "copilot-auto" else m.capability
+            if m_cap < required:
                 continue
             p = pools.get(m.pool) or unreadable(m.pool, "no_reading")
             if p.free is None or below_reserve(p, now):
@@ -1117,12 +1419,13 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
         return c_mean > next_mean
 
     for index, model in enumerate(models):
-        if model.capability < required:
+        eff_cap = copilot_effective_capability(outcomes, model.capability) if model.key == "copilot-auto" else model.capability
+        if eff_cap < required:
             continue
         pool = pools.get(model.pool) or unreadable(model.pool, "no_reading")
         cost, count = candidate_measured_cost(model, kind, outcomes)
         entry: dict[str, Any] = {"worker": model.key, "kind": model.kind, "model": model.model, "pool": model.pool,
-                                 "family": family(model), "capability": model.capability,
+                                 "family": family(model), "capability": eff_cap,
                                  "free": None if pool.free is None else round(pool.free, 4), "source": pool.source,
                                  "measured_cost": cost, "record_count": count}
         if pool.free is None:
@@ -1138,7 +1441,7 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
             entry["same"] = same
             first = 0 if model.pool in FIRST_POOLS else 1
             paced = 0 if behind_pace(pool, now) else 1
-            eligible.append(((same, model.capability - required, paced, first, -expiry_score(pool, now), -pool.free,
+            eligible.append(((same, eff_cap - required, paced, first, -expiry_score(pool, now), -pool.free,
                               index), entry))
 
     ordered = sorted(eligible, key=lambda item: item[0])
@@ -1214,7 +1517,7 @@ def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | 
             "alternatives": eligible[1:], "skipped": skipped}
 
 
-def summary_line(pools: dict[str, Pool]) -> str:
+def summary_line(pools: dict[str, Pool], outcomes: list[dict[str, Any]] | None = None) -> str:
     parts = []
     for name in dict.fromkeys(m.pool for m in MODELS):
         pool = pools.get(name) or unreadable(name, "no_reading")
@@ -1225,7 +1528,10 @@ def summary_line(pools: dict[str, Pool]) -> str:
         low = " [below reserve]" if below_reserve(pool) else ""
         stale = " [snapshot]" if pool.source == "snapshot" else ""
         parts.append(f"{name} {pct(pool.free)} free{short}{low}{stale}")
-    tiers = ", ".join(f"{m.key} t{m.capability}" for m in MODELS)
+    tiers = ", ".join(
+        f"{m.key} t{copilot_effective_capability(outcomes, m.capability) if m.key == 'copilot-auto' else m.capability}"
+        for m in MODELS
+    )
     return ("worker quota: " + " · ".join(parts) + " — effort by task tier, gemini first, then quota expiring "
             "unused; tiers: " + tiers)
 
@@ -1315,7 +1621,8 @@ def cmd_pick(args: argparse.Namespace) -> int:
 
 
 def report(days: int = 7, record_file: Path | None = None, records: list[dict[str, Any]] | None = None,
-           now: datetime | None = None) -> str:
+           now: datetime | None = None, *, control_dir: Path | None = None, repo: Path | None = None,
+           coordinator_turns: list[dict[str, Any]] | None = None) -> str:
     """A short summary in plain Italian of worker outcomes and net savings over the last N days."""
     moment = now or datetime.now(UTC)
     all_records = records if records is not None else load_records(record_file)
@@ -1327,7 +1634,16 @@ def report(days: int = 7, record_file: Path | None = None, records: list[dict[st
         if at is not None and at >= cutoff:
             filtered.append(r)
 
-    if not filtered:
+    if coordinator_turns is not None:
+        coord_turns = coordinator_turns
+    elif control_dir is not None:
+        coord_turns = load_coordinator_turns(control_dir, repo, days=days, now=moment)
+    elif records is None and record_file is None:
+        coord_turns = load_coordinator_turns(None, repo, days=days, now=moment)
+    else:
+        coord_turns = []
+
+    if not filtered and not coord_turns:
         return f"Nessun esito registrato negli ultimi {days} giorni."
 
     by_key = {m.key: m for m in MODELS}
@@ -1350,29 +1666,87 @@ def report(days: int = 7, record_file: Path | None = None, records: list[dict[st
         rework = round(sum(_rework_score(r) - sum(_record_findings_all(r)[:2]) for r in group))
         escalations = sum(1 for r in group if r.get("escalated"))
         w_key = group[0].get("worker")
-        w_tag = f" ({w_key})" if w_key and w_key != m_name else ""
+        actual_counts: dict[str, int] = {}
+        for r in group:
+            act = r.get("actual_model")
+            if isinstance(act, str) and act.strip():
+                for tok in act.split(","):
+                    tok = tok.strip()
+                    if tok:
+                        actual_counts[tok] = actual_counts.get(tok, 0) + 1
+
+        if actual_counts:
+            mod_str = ", ".join(f"{m}×{c}" if c > 1 else m for m, c in actual_counts.items())
+            if w_key and w_key != m_name:
+                w_tag = f" ({w_key}, modelli: {mod_str})"
+            else:
+                w_tag = f" (modelli: {mod_str})"
+        else:
+            w_tag = f" ({w_key})" if w_key and w_key != m_name else ""
         lines.append(
             f"- {m_name}{w_tag}: {total} compiti, prima prova {pass_rate}, "
             f"rilievi (P0: {p0}, P1: {p1}, P2: {p2}, P3: {p3}), rilavorazioni {rework}, escalation {escalations}"
         )
+
+    if coord_turns:
+        coord_by_pool: dict[str, list[dict[str, Any]]] = {}
+        for t in coord_turns:
+            coord_by_pool.setdefault(t["pool"], []).append(t)
+
+        workers_by_pool: dict[str, list[dict[str, Any]]] = {}
+        for r in filtered:
+            p = pool_of_record(r, by_key)
+            workers_by_pool.setdefault(p, []).append(r)
+
+        all_pools = set(coord_by_pool.keys()) | set(workers_by_pool.keys())
+        pool_order = [p for p in dict.fromkeys(COORDINATOR_AGENT_POOLS.values()) if p in all_pools]
+        pool_order.extend(sorted(p for p in all_pools if p not in pool_order))
+
+        for pool in pool_order:
+            c_turns = len(coord_by_pool.get(pool, []))
+            c_tokens = sum(t["tokens"] for t in coord_by_pool.get(pool, []))
+            p_workers = workers_by_pool.get(pool, [])
+            w_tasks = len(p_workers)
+            w_tokens = sum(
+                r["spend"]["tokens"]
+                for r in p_workers
+                if isinstance(r.get("spend"), dict)
+                and isinstance(r["spend"].get("tokens"), int)
+                and not isinstance(r["spend"].get("tokens"), bool)
+            )
+            if c_tokens + w_tokens > 0:
+                coord_share = pct(c_tokens / (c_tokens + w_tokens))
+                lines.append(
+                    f"- Pool {pool}: coordinatore {c_turns} turni ({c_tokens} token, {coord_share}), "
+                    f"worker {w_tasks} compiti ({w_tokens} token)"
+                )
+            else:
+                lines.append(
+                    f"- Pool {pool}: coordinatore {c_turns} turni ({c_tokens} token), "
+                    f"worker {w_tasks} compiti (0 token)"
+                )
 
     gemini_avoided = [
         r for r in filtered
         if family_of_record(r, by_key) == "gemini" and not r.get("escalated")
     ]
     avoided_count = len(gemini_avoided)
-    tokens = sum(r["coordinator_tokens"] for r in gemini_avoided
-                 if isinstance(r.get("coordinator_tokens"), int) and not isinstance(r["coordinator_tokens"], bool))
+    record_coord_tokens = sum(
+        r["coordinator_tokens"]
+        for r in gemini_avoided
+        if isinstance(r.get("coordinator_tokens"), int) and not isinstance(r["coordinator_tokens"], bool)
+    )
+    total_coord_tokens = sum(t["tokens"] for t in coord_turns) if coord_turns else record_coord_tokens
 
     lines.append(
         f"Risparmio netto: {avoided_count} compiti Claude e GPT evitati ({avoided_count} compiti Gemini non escalati), "
-        f"meno {tokens} token coordinatore registrati."
+        f"meno {total_coord_tokens} token coordinatore registrati."
     )
     return "\n".join(lines)
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    print(report(days=args.days, record_file=args.record_file))
+    print(report(days=args.days, record_file=args.record_file, control_dir=args.control_dir))
     return 0
 
 
@@ -1423,6 +1797,8 @@ def build_parser() -> argparse.ArgumentParser:
     rep.add_argument("--days", type=int, default=7, help="number of days to report (default: 7)")
     rep.add_argument("--record-file", type=Path, default=None,
                      help="record file of worker outcomes (default: main checkout .agent-relay/worker-outcomes.jsonl)")
+    rep.add_argument("--control-dir", type=Path, default=None,
+                     help="control directory of continuity missions (default: ~/jarvis-control/work/continuity or RELAY_CONTINUITY_DIR)")
     rep.set_defaults(func=cmd_report)
     summary = sub.add_parser("summary", help="one compact line of pool headroom")
     summary.add_argument("--quota-file", **quota_file)

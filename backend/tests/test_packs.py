@@ -15,6 +15,7 @@ from app.core.packs import (
     load_packs,
     mentions_pack_term,
     read_pack,
+    readiness_case_files,
     sensitivity_terms,
     studio_example_dirs,
     ui_labels,
@@ -98,6 +99,8 @@ def test_several_packs_are_combined(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         ('id = "ok"\n[ui_labels]\nhome = 3', "ui_labels values"),
         ('id = "ok"\n[studio]\nexamples_dir = "missing"', "inside the pack"),
         ('id = "ok"\n[studio]\nexamples_dir = ".."', "inside the pack"),
+        ('id = "ok"\n[readiness]\ncases = "missing.toml"', "must be a file inside the pack"),
+        ('id = "ok"\n[readiness]\ncases = ".."', "must be a file inside the pack"),
         ("id = ", "cannot be read"),
     ],
 )
@@ -172,6 +175,17 @@ def test_sensitivity_terms_feed_the_egress_guard(no_pack: None, tmp_path: Path, 
 def test_fixture_pack_is_active_for_the_suite() -> None:
     assert [pack.id for pack in load_packs()] == ["zephyr"]
     assert deterministic_floor("Zephyr geometry decision") == "S3"
+    assert len(readiness_case_files()) == 1
+    assert readiness_case_files()[0].name == "readiness_cases.toml"
+
+
+def test_readiness_cases_files_discovered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cases_file = tmp_path / "acme" / "cases.toml"
+    cases_file.parent.mkdir(parents=True, exist_ok=True)
+    cases_file.write_text("[[cases]]\nid = 'c1'\n", encoding="utf-8")
+    root = make_pack(tmp_path / "acme", 'id = "acme"\n[readiness]\ncases = "cases.toml"\n')
+    monkeypatch.setenv(PACK_PATH_ENV, str(root))
+    assert readiness_case_files() == (cases_file.resolve(),)
 
 
 def test_system_status_reports_default_workspace_and_packs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

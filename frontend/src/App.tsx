@@ -33,6 +33,7 @@ import EngineeringData from "./pages/EngineeringData";
 import LiteratureKnowledge from "./pages/LiteratureKnowledge";
 import MemorySearch from "./pages/MemorySearch";
 import ModelDossier from "./pages/ModelDossier";
+import ReadinessBoard from "./pages/ReadinessBoard";
 import RunsWorkbench from "./pages/RunsWorkbench";
 import Studio from "./pages/Studio";
 import { PRIMARY_STAGES, type ShellRegion, type ShellRegionContributions } from "./stages/registry";
@@ -42,7 +43,7 @@ const PROJECT_BASIS_RECORD_KINDS = new Set(["requirement", "parameter", "assumpt
 const KNOWLEDGE_ROUTES = new Set(["memory-project-basis", "memory-models", "memory-literature"]);
 // 161: these routes render the Jarvis conversation in-page; the shell Sidecar must not offer a second copy.
 const IN_PAGE_JARVIS_ROUTES = new Set(["memory-project-basis", "memory-models", "memory-literature", "development-roadmap-timeline", "development-roadmap-calendar"]);
-const WORKSPACE_OPTIONAL_ROUTES = new Set(["settings-appearance", "settings-ai", "settings-system", "coding-runtime"]);
+const WORKSPACE_OPTIONAL_ROUTES = new Set(["settings-appearance", "settings-ai", "settings-system", "coding-runtime", "development-readiness"]);
 type WorkspaceLoadState = "loading" | "ready" | "empty" | "error";
 
 function boundedSearchParam(params: URLSearchParams, name: string): string | null {
@@ -201,6 +202,9 @@ function App() {
         break;
       case "development-roadmap-calendar":
         content = <><FinalWorkspaceHeader group="development" active="roadmap" navigate={navigate} /><DevelopmentRoadmap mode="calendar" workspaceId={workspaceId} onWorkspaceChange={setWorkspaceId} jarvis={jarvisSidecar} /></>;
+        break;
+      case "development-readiness":
+        content = <><FinalWorkspaceHeader group="development" active="readiness" navigate={navigate} /><ReadinessBoard navigate={navigate} onWorkspaceChange={setWorkspaceId} /></>;
         break;
       case "coding-repository":
         content = <><FinalWorkspaceHeader group="coding" active="repository" navigate={navigate} /><CodingWorkbench mode="repository" workspaceId={workspaceId} jarvis={jarvisSidecar} /></>;

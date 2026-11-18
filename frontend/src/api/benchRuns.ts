@@ -9,10 +9,14 @@ export type BenchCheck = {
   unit: string | null; hint: string; source: string;
 };
 export type BenchOutput = { name: string; value: { value: number; unit: string } };
+export type BenchPort = {
+  name: string; interface: string; origin: number[]; direction: number[];
+  outer_d?: number; wall_t?: number; pad_d?: number;
+};
 export type BenchRunDetail = {
   run_id: string; evaluator_id: string; status: string; verdict: BenchVerdict;
   failure: { code?: string; message?: string } | null; checks: BenchCheck[]; outputs: BenchOutput[];
-  outputs_withheld: boolean; artifacts: unknown[]; truncated: boolean;
+  outputs_withheld: boolean; artifacts: unknown[]; truncated: boolean; ports?: BenchPort[];
 };
 type Side = { value: number | null; unit: string | null } | null;
 export type BenchCompare = {

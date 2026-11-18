@@ -25,6 +25,7 @@ assert.equal(new Set(Object.values(VERDICT_LABELS)).size, 4, "four distinct verd
 assert.equal(CHECK_STATUS_LABELS.not_evaluated, "Non valutato");
 assert.equal(verdictOf("great"), "unchecked", "an unknown stored verdict reads as unchecked");
 assert.equal(evaluatorName("bluecad.fem"), "Struttura statica (FEM)");
+assert.equal(evaluatorName("bluecad.solid_code"), "Solido da codice (BlueCAD)");
 assert.equal(evaluatorName("vendor.custom"), "vendor.custom", "unknown evaluator ids are shown as is");
 
 const empty = renderToStaticMarkup(React.createElement(BenchRunsList, { data: { runs: [], skipped: 0 }, selected: null, marked: [] }));
@@ -47,6 +48,14 @@ const detail = renderToStaticMarkup(React.createElement(BenchRunDetailView, { ru
 assert.ok(detail.includes("Non valutato") && detail.includes("vol_ratio"), "not_evaluated shown as such");
 assert.ok(detail.includes("SOLVER") && detail.includes("non converge") && detail.includes("1.5") && detail.includes("manca la misura"));
 assert.ok(detail.includes("Risultati non mostrati"), "withheld outputs said plainly");
+
+const portsDetail = renderToStaticMarkup(React.createElement(BenchRunDetailView, { run: {
+  run_id: "solid-code", evaluator_id: "bluecad.solid_code", status: "succeeded", verdict: "usable",
+  failure: null, outputs: [], outputs_withheld: false, artifacts: [], truncated: false, checks: [],
+  ports: [{ name: "inlet", interface: "tube", origin: [0, 0, 0], direction: [-1, 0, 0], outer_d: 12 }]
+} }));
+assert.ok(portsDetail.includes("Porte"), "ports heading shown");
+assert.ok(portsDetail.includes("inlet (tube, Ø 12 mm)"), "tube port and diameter shown");
 
 const cmp = renderToStaticMarkup(React.createElement(BenchCompareView, { doc: {
   run_id_a: "a", run_id_b: "b", evaluator_a: "bluecad.solid", evaluator_b: "bluecad.solid", status_a: "succeeded", status_b: "succeeded",

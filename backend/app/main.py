@@ -28,6 +28,7 @@ from app.modules.coding.runtime_truth import (
 )
 from app.modules.development.routes import router as development_router
 from app.modules.engineering.operator_routes import router as engineering_operator_router
+from app.modules.engineering.readiness_board import router as readiness_router
 from app.modules.environment.routes import router as environment_router
 from app.modules.flowsheet.routes import router as flowsheet_router
 from app.modules.local_ai.runtime.lifecycle import create_local_ai_runtime_lifecycle_from_env
@@ -68,6 +69,7 @@ _SPA_RESERVED_ROOT_CLIENT_ROUTES = frozenset(
         "/coding/runtime",
         "/development/roadmap/timeline",
         "/development/roadmap/calendar",
+        "/development/readiness",
     }
 )
 
@@ -200,6 +202,7 @@ def create_app() -> FastAPI:
     app.include_router(studio_router)
     app.include_router(flowsheet_router)
     app.include_router(engineering_operator_router)
+    app.include_router(readiness_router)
     app.include_router(dwsim_editor_router)
     app.include_router(process_draft_router)
     app.include_router(process_dynamic_router)

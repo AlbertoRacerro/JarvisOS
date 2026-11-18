@@ -1390,3 +1390,527 @@ def test_record_ignores_non_finite_or_out_of_range_quota_fractions(tmp_path: Pat
     assert entry["spend"] == {"runs": 1, "tokens": 500, "quota": 0.0, "quota_runs": 0, "overlap_runs": 0}
     raw_line = rf.read_text(encoding="utf-8").strip()
     json.loads(raw_line, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f"non-standard constant: {c}")))
+
+
+# --- Spec 306 (COORDINATOR-TOKENS-1): coordinator tokens reported per pool ---
+
+
+def test_spec_306_load_coordinator_turns(tmp_path: Path) -> None:
+    now = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)
+    cd = tmp_path / "continuity"
+    cd.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    # 1. Root attempts.jsonl with inline usage (Claude turn)
+    root_attempts = cd / "attempts.jsonl"
+    root_lines = [
+        # Settle with full inline usage
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:00:00Z",
+            "agent": "claude",
+            "session": "sess-claude-1",
+            "nonce": "rc-20261118T100000Z-c111",
+            "outcome": "success",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_tokens": 850,
+                "total_tokens": 1000,
+            },
+            "coordinator_tokens": 1000,
+        }),
+        # Unrelated event (not settle) -> ignored
+        json.dumps({"event": "hold", "at": "2026-11-18T10:05:00Z"}),
+        # Duplicate settle with same (nonce, session) -> deduplicated
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:00:00Z",
+            "agent": "claude",
+            "session": "sess-claude-1",
+            "nonce": "rc-20261118T100000Z-c111",
+            "usage": {"total_tokens": 1000},
+        }),
+        # Old turn (> 7 days) -> skipped
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-01T10:00:00Z",
+            "agent": "claude",
+            "session": "sess-old",
+            "nonce": "rc-20261101T100000Z-old1",
+            "usage": {"total_tokens": 500},
+        }),
+    ]
+    root_attempts.write_text("\n".join(root_lines) + "\n", encoding="utf-8")
+
+    # 2. Mission 1 with inline coordinator_tokens (Codex turn)
+    m1 = cd / "missions" / "m-20261118-001"
+    m1.mkdir(parents=True)
+    m1_attempts = m1 / "attempts.jsonl"
+    m1_lines = [
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T09:00:00Z",
+            "agent": "codex",
+            "session": "sess-codex-1",
+            "nonce": "rc-20261118T090000Z-cd11",
+            "outcome": "success",
+            "coordinator_tokens": 1500,
+        }),
+    ]
+    m1_attempts.write_text("\n".join(m1_lines) + "\n", encoding="utf-8")
+
+    # 3. Mission 2 without inline usage, no coordinator_tokens, timestamp encoded in nonce,
+    # fallback to repo's session turn output.jsonl (Argon turn)
+    m2 = cd / "missions" / "m-20261118-002"
+    m2.mkdir(parents=True)
+    m2_attempts = m2 / "attempts.jsonl"
+    m2_lines = [
+        json.dumps({
+            "event": "settle",
+            "agent": "argon",
+            "session": "sess-argon-1",
+            "nonce": "rc-20261118T080000Z-ar11",
+            "outcome": "success",
+        }),
+        # Broken JSON line that should not raise
+        "not valid json at all",
+    ]
+    m2_attempts.write_text("\n".join(m2_lines) + "\n", encoding="utf-8")
+
+    # Create the session turn in repo
+    turn_dir = repo / ".agent-relay" / "sessions" / "sess-argon-1" / "turns" / "turn-001"
+    turn_dir.mkdir(parents=True)
+    (turn_dir / "state.json").write_text(json.dumps({"agent_key": "argon", "status": "propose_done"}), encoding="utf-8")
+    argon_ev = [
+        {"event": "init", "conversation_id": "c1", "init": {"model": "gemini-2.5-pro"}},
+        {
+            "event": "result",
+            "result": {
+                "conversation_id": "c1",
+                "status": "SUCCESS",
+                "response": "ok",
+                "usage": {
+                    "input_tokens": 400,
+                    "output_tokens": 100,
+                    "cache_read_tokens": 1500,
+                    "total_tokens": 500,
+                },
+            },
+        },
+    ]
+    (turn_dir / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in argon_ev), encoding="utf-8")
+    (turn_dir / "native-result.json").write_text(
+        json.dumps({"schema": "argon-coordinator.v1", "agent": "argon", "launched": True, "exit_code": 0, "quota": [], "reason": None, "model": "gemini-2.5-pro"}),
+        encoding="utf-8",
+    )
+
+    turns = wr.load_coordinator_turns(control_dir=cd, repo=repo, days=7, now=now)
+    assert len(turns) == 3
+
+    by_session = {t["session"]: t for t in turns}
+
+    # Claude turn
+    t_claude = by_session["sess-claude-1"]
+    assert t_claude["agent"] == "claude"
+    assert t_claude["pool"] == "claude"
+    assert t_claude["tokens"] == 1000
+    assert t_claude["usage"] == {"input_tokens": 100, "output_tokens": 50, "cache_tokens": 850, "total_tokens": 1000}
+
+    # Codex turn
+    t_codex = by_session["sess-codex-1"]
+    assert t_codex["agent"] == "codex"
+    assert t_codex["pool"] == "codex"
+    assert t_codex["tokens"] == 1500
+    assert t_codex["usage"]["total_tokens"] == 1500
+
+    # Argon turn (backfilled from turn-001 output)
+    t_argon = by_session["sess-argon-1"]
+    assert t_argon["agent"] == "argon"
+    assert t_argon["pool"] == "argon"
+    assert t_argon["tokens"] == 500
+    assert t_argon["usage"] == {"input_tokens": 400, "output_tokens": 100, "cache_tokens": 1500, "total_tokens": 500}
+
+
+def test_spec_306_report_with_coordinator_turns_and_worker_outcomes(tmp_path: Path) -> None:
+    now = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)
+    rf = tmp_path / "worker-outcomes.jsonl"
+    cd = tmp_path / "continuity"
+    cd.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    # Worker outcome records:
+    # - flash-high (gemini): 1 task, 1000 tokens spend, not escalated
+    # - haiku (claude): 1 task, 500 tokens spend
+    # - terra (codex): 1 task, 800 tokens spend
+    rf.write_text("\n".join([
+        json.dumps({
+            "at": "2026-11-18T10:00:00Z",
+            "task": "w1",
+            "kind": "feature",
+            "worker": "flash-high",
+            "model": "gemini-3.8-flash-high",
+            "ci_first_pass": "pass",
+            "findings": {"P0": 0, "P1": 0, "P2": 0, "P3": 0},
+            "rework_rounds": 0,
+            "escalated": False,
+            "spend": {"runs": 1, "tokens": 1000},
+        }),
+        json.dumps({
+            "at": "2026-11-18T10:05:00Z",
+            "task": "w2",
+            "kind": "docs",
+            "worker": "haiku",
+            "model": "claude-haiku-5-5",
+            "ci_first_pass": "pass",
+            "findings": {"P0": 0, "P1": 0, "P2": 0, "P3": 0},
+            "rework_rounds": 0,
+            "escalated": False,
+            "spend": {"runs": 1, "tokens": 500},
+        }),
+        json.dumps({
+            "at": "2026-11-18T10:10:00Z",
+            "task": "w3",
+            "kind": "tests",
+            "worker": "terra",
+            "model": "gpt-6.1-terra",
+            "ci_first_pass": "pass",
+            "findings": {"P0": 0, "P1": 0, "P2": 0, "P3": 0},
+            "rework_rounds": 0,
+            "escalated": False,
+            "spend": {"runs": 1, "tokens": 800},
+        }),
+    ]) + "\n", encoding="utf-8")
+
+    # Coordinator turns:
+    # - claude: 1 turn, 2000 tokens (worker: 500 tokens -> total: 2500 -> 2000/2500 = 80%)
+    # - gemini (hydrogen coordinator): 1 turn, 500 tokens (worker: 1000 tokens -> total: 1500 -> 500/1500 = 33%)
+    # - argon: 1 turn, 300 tokens (worker: 0 -> 100%)
+    # - codex: 0 coordinator turns (worker: 800 tokens -> 0%)
+    root_attempts = cd / "attempts.jsonl"
+    root_lines = [
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:00:00Z",
+            "agent": "claude",
+            "session": "s-c",
+            "nonce": "rc-20261118T100000Z-c1",
+            "coordinator_tokens": 2000,
+        }),
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:05:00Z",
+            "agent": "hydrogen",
+            "session": "s-h",
+            "nonce": "rc-20261118T100500Z-h1",
+            "coordinator_tokens": 500,
+        }),
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:10:00Z",
+            "agent": "argon",
+            "session": "s-a",
+            "nonce": "rc-20261118T101000Z-a1",
+            "coordinator_tokens": 300,
+        }),
+    ]
+    root_attempts.write_text("\n".join(root_lines) + "\n", encoding="utf-8")
+
+    text = wr.report(days=7, record_file=rf, control_dir=cd, repo=repo, now=now)
+
+    # Worker lines present
+    assert "gemini-3.8-flash-high" in text
+    assert "claude-haiku-5-5" in text
+    assert "gpt-6.1-terra" in text
+
+    # Pool lines present before Risparmio netto
+    assert "- Pool claude: coordinatore 1 turni (2000 token, 80%), worker 1 compiti (500 token)" in text
+    assert "- Pool codex: coordinatore 0 turni (0 token, 0%), worker 1 compiti (800 token)" in text
+    assert "- Pool argon: coordinatore 1 turni (300 token, 100%), worker 0 compiti (0 token)" in text
+    assert "- Pool gemini: coordinatore 1 turni (500 token, 33%), worker 1 compiti (1000 token)" in text
+
+    # Net savings: total coord tokens = 2000 + 500 + 300 = 2800
+    assert "Risparmio netto: 1 compiti Claude e GPT evitati (1 compiti Gemini non escalati), meno 2800 token coordinatore registrati." in text
+
+
+def test_spec_306_report_empty_workers_with_coordinator_turns(tmp_path: Path) -> None:
+    now = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)
+    rf = tmp_path / "worker-outcomes.jsonl"  # empty
+    cd = tmp_path / "continuity"
+    cd.mkdir()
+    (cd / "attempts.jsonl").write_text(
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:00:00Z",
+            "agent": "claude",
+            "session": "s-c",
+            "nonce": "rc-20261118T100000Z-c1",
+            "coordinator_tokens": 1200,
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    text = wr.report(days=7, record_file=rf, control_dir=cd, now=now)
+    assert "Nessun esito registrato" not in text
+    assert "- Pool claude: coordinatore 1 turni (1200 token, 100%), worker 0 compiti (0 token)" in text
+    assert "Risparmio netto: 0 compiti Claude e GPT evitati (0 compiti Gemini non escalati), meno 1200 token coordinatore registrati." in text
+
+
+def test_spec_306_malformed_journal_records_and_no_double_counting(tmp_path: Path) -> None:
+    now = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)
+    rf = tmp_path / "worker-outcomes.jsonl"
+    cd = tmp_path / "continuity"
+    cd.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    # Worker outcome has legacy coordinator_tokens=999
+    rf.write_text(
+        json.dumps({
+            "at": "2026-11-18T10:00:00Z",
+            "task": "w1",
+            "kind": "feature",
+            "worker": "flash-high",
+            "model": "gemini-3.8-flash-high",
+            "ci_first_pass": "pass",
+            "findings": {"P0": 0, "P1": 0, "P2": 0, "P3": 0},
+            "rework_rounds": 0,
+            "escalated": False,
+            "coordinator_tokens": 999,
+            "spend": {"runs": 1, "tokens": 1000},
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    # Journal with unhashable list types, path traversal session, and multi-turn session directory
+    (cd / "attempts.jsonl").write_text("\n".join([
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:00:00Z",
+            "agent": ["bad", "list"],
+            "session": ["also", "list"],
+            "nonce": ["nonce", "list"],
+        }),
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:01:00Z",
+            "agent": "claude",
+            "session": "../escape",
+            "nonce": "rc-20261118T100100Z-esc1",
+        }),
+        json.dumps({
+            "event": "settle",
+            "at": "2026-11-18T10:02:00Z",
+            "agent": "codex",
+            "session": "sess-multi",
+            "nonce": "rc-20261118T100200Z-mul1",
+        }),
+    ]) + "\n", encoding="utf-8")
+
+    # sess-multi has turn-001 (100 tokens) and turn-002 (250 tokens); backfill must use only last turn (turn-002)
+    for t_name, tok in (("turn-001", 100), ("turn-002", 250)):
+        td = repo / ".agent-relay" / "sessions" / "sess-multi" / "turns" / t_name
+        td.mkdir(parents=True)
+        (td / "state.json").write_text(json.dumps({"agent_key": "codex", "status": "propose_done"}), encoding="utf-8")
+        (td / "output.jsonl").write_text(
+            json.dumps({
+                "type": "turn.completed",
+                "usage": {"input_tokens": tok, "cached_input_tokens": 0, "output_tokens": 0},
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+    turns = wr.load_coordinator_turns(control_dir=cd, repo=repo, days=7, now=now)
+    by_sess = {t["session"]: t for t in turns}
+    assert by_sess["sess-multi"]["tokens"] == 250
+    assert by_sess["../escape"]["tokens"] == 0
+
+    # Because coord_turns is non-empty (250 tokens), legacy record coordinator_tokens (999) is NOT added
+    text = wr.report(days=7, record_file=rf, control_dir=cd, repo=repo, now=now)
+    assert "meno 250 token coordinatore registrati." in text
+
+
+def test_spec_307_copilot_effective_capability() -> None:
+    # Baseline
+    assert wr.copilot_effective_capability(None) == 1
+    assert wr.copilot_effective_capability([]) == 1
+
+    # Only harness failure
+    assert wr.copilot_effective_capability([
+        {"worker": "copilot-auto", "tier": 1, "failure": "harness", "ci_first_pass": "pass"}
+    ]) == 1
+
+    # Non-copilot worker records
+    assert wr.copilot_effective_capability([
+        {"worker": "flash", "tier": 2, "failure": "none", "ci_first_pass": "pass"}
+    ]) == 1
+
+    # 1 clean tier-1 record -> trial tier 2
+    clean_t1 = {"worker": "copilot-auto", "model": "auto", "tier": 1, "failure": "none",
+                "escalated": False, "ci_first_pass": "pass", "rework_rounds": 0}
+    assert wr.copilot_effective_capability([clean_t1]) == 2
+
+    # 1 clean tier-1 record with n/a first pass and 0 rework -> trial tier 2
+    clean_t1_na = {"worker": "copilot-auto", "model": "auto", "tier": 1, "failure": "none",
+                   "escalated": False, "ci_first_pass": "n/a", "rework_rounds": 0}
+    assert wr.copilot_effective_capability([clean_t1_na]) == 2
+
+    # 1 unclean tier-1 record -> tier 1
+    fail_t1 = {"worker": "copilot-auto", "model": "auto", "tier": 1, "failure": "model",
+               "escalated": False, "ci_first_pass": "fail", "rework_rounds": 0}
+    assert wr.copilot_effective_capability([fail_t1]) == 1
+
+    # 1 tier-2 trial record (even if failed) -> tier 2 allowed for trial
+    trial_t2 = {"worker": "copilot-auto", "model": "auto", "tier": 2, "failure": "model",
+                "escalated": False, "ci_first_pass": "fail", "rework_rounds": 1}
+    assert wr.copilot_effective_capability([trial_t2]) == 2
+
+    # 2 tier-2 records: both failed -> demoted to 1
+    assert wr.copilot_effective_capability([trial_t2, trial_t2]) == 1
+
+    # 2 tier-2 records: 1 clean with rework 0, 1 failed -> clean rate 50%, zero rework >= 1 -> tier 2
+    clean_t2 = {"worker": "copilot-auto", "model": "auto", "tier": 2, "failure": "none",
+                "escalated": False, "ci_first_pass": "pass", "rework_rounds": 0}
+    assert wr.copilot_effective_capability([clean_t2, trial_t2]) == 2
+
+    # 2 tier-2 records: 2 clean but both had rework=1 -> zero_rework is 0 -> demoted to 1
+    clean_t2_rework = {"worker": "copilot-auto", "model": "auto", "tier": 2, "failure": "none",
+                       "escalated": False, "ci_first_pass": "pass", "rework_rounds": 1}
+    assert wr.copilot_effective_capability([clean_t2_rework, clean_t2_rework]) == 1
+
+    # 3 tier-2 records, clean with rework 0, but actual_model is flash -> tier 2
+    flash_t2 = {**clean_t2, "actual_model": "mai-code-2-flash"}
+    assert wr.copilot_effective_capability([flash_t2, flash_t2, flash_t2]) == 2
+
+    # 3 tier-2 records, clean with rework 0, actual_model is non-flash/mini/haiku -> promoted to 3
+    sonnet_t2 = {**clean_t2, "actual_model": "claude-3.5-sonnet"}
+    assert wr.copilot_effective_capability([flash_t2, flash_t2, sonnet_t2]) == 3
+
+    # Gemini pro model ('gemini' contains substring 'mini' as part of 'gemini', must NOT be misclassified as 'mini')
+    gemini_pro_t2 = {**clean_t2, "actual_model": "gemini-2.5-pro"}
+    assert wr.copilot_effective_capability([flash_t2, flash_t2, gemini_pro_t2]) == 3
+
+    # P2-3: 3 clean flash records + 1 non-clean strong-model record (rework=1) -> must NOT promote to 3
+    sonnet_t2_rework = {**sonnet_t2, "rework_rounds": 1}
+    assert wr.copilot_effective_capability([flash_t2, flash_t2, flash_t2, sonnet_t2_rework]) == 2
+
+    # 3 tier-2 records, clean with rework 0, but one escalated -> not promoted to 3
+    esc_t2 = {**sonnet_t2, "escalated": True}
+    assert wr.copilot_effective_capability([sonnet_t2, sonnet_t2, esc_t2]) == 2
+
+
+def test_spec_307_rank_dynamic_copilot_capability() -> None:
+    ps = pools(copilot=pool("copilot", 0.99))
+    now = wr.datetime.now(wr.UTC)
+
+    # Without outcomes: required tier 2 excludes copilot-auto
+    el_base, sk_base = wr.rank(2, ps, now=now, outcomes=None)
+    assert not any(e["worker"] == "copilot-auto" for e in el_base)
+
+    # With outcomes promoting to tier 2: required tier 2 includes copilot-auto
+    outcomes_t2 = [{"worker": "copilot-auto", "model": "auto", "tier": 1, "failure": "none",
+                    "escalated": False, "ci_first_pass": "pass", "rework_rounds": 0}]
+    el_t2, sk_t2 = wr.rank(2, ps, now=now, outcomes=outcomes_t2)
+    cop_entry = next(e for e in el_t2 if e["worker"] == "copilot-auto")
+    assert cop_entry["capability"] == 2
+
+    # Required tier 3 excludes copilot-auto at tier 2
+    el_t3, sk_t3 = wr.rank(3, ps, now=now, outcomes=outcomes_t2)
+    assert not any(e["worker"] == "copilot-auto" for e in el_t3)
+
+    # With outcomes promoting to tier 3: required tier 3 includes copilot-auto
+    sonnet_t2 = {"worker": "copilot-auto", "model": "auto", "tier": 2, "failure": "none",
+                 "escalated": False, "ci_first_pass": "pass", "rework_rounds": 0, "actual_model": "claude-3.5-sonnet"}
+    outcomes_t3 = [sonnet_t2, sonnet_t2, sonnet_t2]
+    el_t3_promoted, _ = wr.rank(3, ps, now=now, outcomes=outcomes_t3)
+    cop_entry_t3 = next(e for e in el_t3_promoted if e["worker"] == "copilot-auto")
+    assert cop_entry_t3["capability"] == 3
+
+
+def test_spec_307_record_actual_model_from_evidence(tmp_path: Path) -> None:
+    rf = tmp_path / "records.jsonl"
+    ev1 = tmp_path / "ev1"
+    ev1.mkdir()
+    (ev1 / "result.json").write_text(json.dumps({
+        "actual_model": "mai-code-2-flash",
+        "usage": {"total_tokens": 120},
+    }), encoding="utf-8")
+
+    ev2 = tmp_path / "ev2"
+    ev2.mkdir()
+    (ev2 / "result.json").write_text(json.dumps({
+        "actual_model": "claude-sonnet-3.5",
+        "usage": {"total_tokens": 200},
+    }), encoding="utf-8")
+
+    ev3 = tmp_path / "ev3"
+    ev3.mkdir()
+    (ev3 / "result.json").write_text(json.dumps({
+        "actual_model": "mai-code-2-flash",
+        "usage": {"total_tokens": 150},
+    }), encoding="utf-8")
+
+    # Record single evidence (tier omitted -> defaults to baseline 1 on empty record file)
+    entry1 = wr.record("task-1", "feature", "copilot-auto", ci_first_pass="pass", evidence=ev1, record_file=rf)
+    assert entry1.get("actual_model") == "mai-code-2-flash"
+    assert entry1["tier"] == 1
+
+    # Record multiple evidence with distinct actual models (tier omitted -> defaults to effective capability 2!)
+    entry2 = wr.record("task-2", "feature", "copilot-auto", ci_first_pass="pass", evidence=[ev1, ev2, ev3], record_file=rf)
+    assert entry2.get("actual_model") == "mai-code-2-flash,claude-sonnet-3.5"
+    assert entry2["tier"] == 2
+
+    lines = [json.loads(line) for line in rf.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 2
+    assert lines[0]["actual_model"] == "mai-code-2-flash"
+    assert lines[1]["actual_model"] == "mai-code-2-flash,claude-sonnet-3.5"
+
+
+def test_spec_307_report_modelli_display_and_copilot_spend(tmp_path: Path) -> None:
+    now = wr.datetime(2026, 11, 18, 12, 0, 0, tzinfo=wr.UTC)
+    rf = tmp_path / "records.jsonl"
+
+    records = [
+        {
+            "at": "2026-11-18T10:00:00Z",
+            "task": "task-1",
+            "kind": "feature",
+            "worker": "copilot-auto",
+            "model": "auto",
+            "tier": 2,
+            "ci_first_pass": "pass",
+            "rework_rounds": 0,
+            "escalated": False,
+            "actual_model": "mai-code-2-flash",
+            "spend": {"runs": 1, "tokens": 500},
+        },
+        {
+            "at": "2026-11-18T11:00:00Z",
+            "task": "task-2",
+            "kind": "feature",
+            "worker": "copilot-auto",
+            "model": "auto",
+            "tier": 2,
+            "ci_first_pass": "pass",
+            "rework_rounds": 0,
+            "escalated": False,
+            "actual_model": "mai-code-2-flash",
+            "spend": {"runs": 1, "tokens": 700},
+        },
+    ]
+    rf.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+
+    coord_turns = [{"pool": "copilot", "session": "s1", "tokens": 0}]
+    rep = wr.report(days=7, record_file=rf, now=now, coordinator_turns=coord_turns)
+    assert "- auto (copilot-auto, modelli: mai-code-2-flash×2): 2 compiti" in rep
+    assert "- Pool copilot: coordinatore 1 turni (0 token, 0%), worker 2 compiti (1200 token)" in rep
+
+    # Test with distinct models
+    records[1]["actual_model"] = "claude-3.5-sonnet"
+    rf.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    rep2 = wr.report(days=7, record_file=rf, now=now, coordinator_turns=coord_turns)
+    assert "- auto (copilot-auto, modelli: mai-code-2-flash, claude-3.5-sonnet): 2 compiti" in rep2
+
+

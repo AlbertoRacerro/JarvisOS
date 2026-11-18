@@ -123,6 +123,56 @@ def test_show_withholds_outputs_of_a_not_usable_run(client: TestClient) -> None:
     assert body["outputs"] == [] and body["outputs_withheld"] is True
 
 
+def test_show_returns_named_ports_from_manifest(client: TestClient) -> None:
+    ws = _workspace()
+    folder = _write(ws, "run_ports", _result("usable", evaluator="bluecad.solid_code"))
+    assert client.get(_url(ws, "runs/run_ports")).json()["ports"] == []
+
+    artifacts = folder / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "manifest.json").write_text(json.dumps({
+        "resolved_ports": {
+            "body": {
+                "outlet": {
+                    "interface": "pad",
+                    "origin": [10, 0, 0],
+                    "direction": [1, 0, 0],
+                    "pad_d": 20,
+                },
+                "inlet": {
+                    "interface": "tube",
+                    "origin": [0, 0, 0],
+                    "direction": [-1, 0, 0],
+                    "outer_d": 12,
+                    "wall_t": 1.5,
+                },
+                "malformed": {"interface": "tube", "origin": "not-a-list", "direction": [1, 0, 0]},
+                "not_finite": {"interface": "pad", "origin": [float("nan"), 0, 0], "direction": [1, 0, 0], "pad_d": 5},
+                "boolean": {"interface": "pad", "origin": [True, 0, 0], "direction": [1, 0, 0], "pad_d": 5},
+            }
+        }
+    }), encoding="utf-8")
+
+    body = client.get(_url(ws, "runs/run_ports")).json()
+    assert body["ports"] == [
+        {
+            "name": "inlet",
+            "interface": "tube",
+            "origin": [0, 0, 0],
+            "direction": [-1, 0, 0],
+            "outer_d": 12.0,
+            "wall_t": 1.5,
+        },
+        {
+            "name": "outlet",
+            "interface": "pad",
+            "origin": [10, 0, 0],
+            "direction": [1, 0, 0],
+            "pad_d": 20.0,
+        },
+    ]
+
+
 def test_show_unknown_verdict_reads_as_unchecked(client: TestClient) -> None:
     ws = _workspace()
     _write(ws, "run_odd", _result("great"))

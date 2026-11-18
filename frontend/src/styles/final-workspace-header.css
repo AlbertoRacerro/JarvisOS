@@ -16,6 +16,7 @@
  * navigation metadata, not a work region, so override that rule explicitly. */
 .application-shell--final .shell-main > .final-fusion__workspace-head {
   flex: 0 0 auto;
+  padding-inline-end: var(--activity-control-reserve, 8rem);
 }
 
 .final-fusion__workspace-head .eyebrow {
