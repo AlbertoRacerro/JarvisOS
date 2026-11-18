@@ -103,6 +103,7 @@ assert.equal(STEP_LINKS.answer.path, "/memory/search");
 
 // 5. Comparison formatting
 assert.equal(formatPercentSigFigs(0), "0%");
+assert.equal(formatPercentSigFigs(1.1e-16), "0%");
 assert.equal(formatPercentSigFigs(0.00012), "0.012%");
 assert.equal(formatPercentSigFigs(0.00342), "0.34%");
 assert.equal(formatPercentSigFigs(0.0215), "2.1%");

@@ -77,13 +77,13 @@ export function getReasonText(step: StepId, reason: string | null): string {
   return "";
 }
 
+// Deviations below one part in a million are floating-point noise from the unit conversion, shown as zero.
 export function formatPercentSigFigs(value: number, sigFigs: number = 2): string {
   const pct = value * 100;
   if (!Number.isFinite(pct)) return "—";
-  if (pct === 0) return "0%";
-  const str = pct.toPrecision(sigFigs);
-  const num = Number(str);
-  return (str.includes("e") && Math.abs(num) < 1e6 && Math.abs(num) >= 1e-3 ? num.toString() : str) + "%";
+  if (Math.abs(value) < 1e-6) return "0%";
+  const text = pct.toPrecision(sigFigs);
+  return `${text.includes("e") ? Number(text) : text}%`;
 }
 
 type Props = Readonly<{
