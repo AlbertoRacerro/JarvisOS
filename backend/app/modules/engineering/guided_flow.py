@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from app.modules.engineering import bench_runs_view
 from app.modules.engineering.readiness_board import compute_readiness_board
 from app.modules.events.service import utc_now
+from app.modules.memory import literature_ingest
 
 StepState = Literal["done", "blocked", "in_progress", "not_started"]
 QuestionStatus = Literal["open", "closed"]
@@ -163,21 +164,9 @@ def evaluate_step(
         return "in_progress", []
 
     elif step_name == "sources":
-        flagged_rows = connection.execute(
-            """
-            SELECT id, statement, value_text, quantity
-            FROM literature_entries
-            WHERE workspace_id = ? AND ingestion_status = 'flagged'
-            ORDER BY id
-            """,
-            (workspace_id,),
-        ).fetchall()
-        if flagged_rows:
-            items = [
-                row["statement"] or row["value_text"] or row["quantity"] or row["id"]
-                for row in flagged_rows
-            ]
-            return "blocked", items
+        flagged = literature_ingest.flagged_entry_labels(connection, workspace_id)
+        if flagged:
+            return "blocked", flagged
 
         sources_row = connection.execute(
             "SELECT COUNT(*) AS c FROM literature_sources WHERE workspace_id = ?",

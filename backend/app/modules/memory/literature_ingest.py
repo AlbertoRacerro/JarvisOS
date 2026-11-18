@@ -599,3 +599,16 @@ def ingestion_eligibility(row, current_sha256: str | None, verdict: str | None) 
     if verdict not in {"usable", "usable_with_warnings"}:
         reasons.append("datum_check_not_usable" if verdict == "not_usable" else "datum_check_unchecked")
     return not reasons, stale, reasons
+
+
+def flagged_entry_labels(connection, workspace_id: str) -> list[str]:
+    """Readable labels of the workspace's ingested entries that still need review (flagged).
+
+    Ingestion fields stay owned by the memory module; other modules ask through this read.
+    """
+    rows = connection.execute(
+        "SELECT id, statement, value_text, quantity FROM literature_entries "
+        "WHERE workspace_id = ? AND ingestion_status = 'flagged' ORDER BY id",
+        (workspace_id,),
+    ).fetchall()
+    return [row["statement"] or row["value_text"] or row["quantity"] or row["id"] for row in rows]
