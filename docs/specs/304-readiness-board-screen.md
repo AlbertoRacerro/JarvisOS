@@ -1,6 +1,6 @@
 # 304 — READINESS-BOARD-SCREEN-1: The readiness board as a screen under Development
 
-Status: ready
+Status: merged
 Depends on: 303
 
 ## Goal

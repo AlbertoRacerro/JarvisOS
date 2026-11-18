@@ -24,7 +24,8 @@ const groups = {
     eyebrow: null,
     title: "Development",
     tabs: [
-      ["Roadmap", "/development/roadmap/timeline", "roadmap"]
+      ["Roadmap", "/development/roadmap/timeline", "roadmap"],
+      ["Prontezza", "/development/readiness", "readiness"]
     ]
   },
   coding: {

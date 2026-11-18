@@ -183,6 +183,10 @@ def test_criterion_1_seven_steps_transition_and_missing_names(client: TestClient
     board = compute_readiness_board()
     assert len(board.cases) == 1
     c0 = board.cases[0]
+    assert c0.workspace_id is None
+    res0 = client.get("/readiness")
+    assert res0.status_code == 200
+    assert res0.json()["cases"][0]["workspace_id"] is None
     for step_name in STEPS:
         assert c0.steps[step_name].status == "red"
         assert c0.steps[step_name].reason == REASON_WORKSPACE_MISSING
@@ -192,6 +196,10 @@ def test_criterion_1_seven_steps_transition_and_missing_names(client: TestClient
     ws_id = _seed_workspace("zephyr")
     board = compute_readiness_board()
     c1 = board.cases[0]
+    assert c1.workspace_id == ws_id
+    res1 = client.get("/readiness")
+    assert res1.status_code == 200
+    assert res1.json()["cases"][0]["workspace_id"] == ws_id
     assert c1.steps["paper"].status == "red"
     assert c1.steps["paper"].reason == REASON_MISSING_RECORD
     assert c1.steps["paper"].missing == ["Benchmark Validation Study"]

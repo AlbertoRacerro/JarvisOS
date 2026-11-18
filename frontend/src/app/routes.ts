@@ -16,6 +16,7 @@ export type RouteId =
   | "memory-search"
   | "development-roadmap-timeline"
   | "development-roadmap-calendar"
+  | "development-readiness"
   | "coding-repository"
   | "coding-runtime"
   | "settings-appearance"
@@ -50,6 +51,7 @@ export const PRODUCTION_ROUTES: readonly AppRouteDefinition[] = [
   { id: "memory-search", path: "/memory/search", title: "Ricerca", primaryNav: "memory" },
   { id: "development-roadmap-timeline", path: "/development/roadmap/timeline", title: "Roadmap · Timeline", primaryNav: "development" },
   { id: "development-roadmap-calendar", path: "/development/roadmap/calendar", title: "Roadmap · Calendar", primaryNav: "development" },
+  { id: "development-readiness", path: "/development/readiness", title: "Prontezza", primaryNav: "development" },
   { id: "coding-repository", path: "/coding/repository", title: "Repository", primaryNav: "coding" },
   { id: "coding-runtime", path: "/coding/runtime", title: "Runtime", primaryNav: "coding" },
   { id: "settings-appearance", path: "/settings/appearance", title: "Settings · Appearance", primaryNav: "settings" },
@@ -84,7 +86,8 @@ export const PEER_NAV_ITEMS: Readonly<Record<PrimaryNavId, readonly PeerNavItem[
     { label: "Ricerca", href: "/memory/search" }
   ],
   development: [
-    { label: "Roadmap", href: "/development/roadmap/timeline" }
+    { label: "Roadmap", href: "/development/roadmap/timeline" },
+    { label: "Prontezza", href: "/development/readiness" }
   ],
   coding: [
     { label: "Repository", href: "/coding/repository" },
