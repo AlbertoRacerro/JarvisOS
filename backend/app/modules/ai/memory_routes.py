@@ -159,8 +159,11 @@ def search_memory(
             if heading is not None:
                 item_dict["heading"] = heading
 
-        # Do not return digests, object ids for other owners, or anything containing an absolute path
-        item_dict = _strip_paths(item_dict)
+        # Record excerpts may carry server paths. A document's path fields are relative labels and stay intact.
+        if authority_owner == "workspace_documents":
+            item_dict["excerpt"] = _strip_paths(item_dict["excerpt"])
+        else:
+            item_dict = _strip_paths(item_dict)
         items.append(item_dict)
 
     return items
@@ -182,7 +185,7 @@ async def put_documents_folder(workspace_id: str, request: Request) -> dict[str,
     # The body is read by hand: a framework validation error would echo the submitted path.
     try:
         body = json.loads(await request.body())
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, RecursionError):
         raise _folder_invalid() from None
     folder = body.get("folder") if isinstance(body, dict) else None
 
@@ -202,7 +205,8 @@ def refresh_documents_folder(workspace_id: str) -> dict[str, Any]:
     if document_intake.registered_folder(workspace_id) is None:
         raise HTTPException(status_code=409, detail={"code": "folder_not_registered"})
     report = document_intake.refresh_folder(workspace_id)
-    return _strip_paths(report)
+    # Skip reasons carry folder-relative labels only.
+    return report
 
 
 @router.delete("/documents")

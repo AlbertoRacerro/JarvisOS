@@ -29,7 +29,10 @@ const {
   FOLDER_UNREGISTERED,
   FOLDER_INVALID_MESSAGE,
   OWNER_NAMES,
-  ownerLabel
+  ownerLabel,
+  FOLDER_LOAD_ERROR,
+  skipReasonLabel,
+  skipPathLabel
 } = module.exports;
 
 // 1. Page title "Ricerca"
@@ -68,7 +71,7 @@ assert.equal(FOLDER_BOX_TITLE, "Cartella documenti");
 assert.equal(FOLDER_UNREGISTERED, "Nessuna cartella registrata.");
 assert.equal(
   FOLDER_INVALID_MESSAGE,
-  "Cartella non valida: serve una cartella esistente, non un collegamento, fuori dai dati di Jarvis e dal codice."
+  "Cartella non valida: serve una cartella esistente, non un collegamento, fuori dai dati di Jarvis e dal codice e che non li contenga."
 );
 
 // 5. Rendered markup assertions
@@ -95,5 +98,16 @@ assert.ok(app.includes("<MemorySearch"), "App.tsx renders MemorySearch");
 
 const header = read("src/components/fusion/FinalWorkspaceHeader.tsx");
 assert.ok(header.includes('["Ricerca", "/memory/search", "search"]'), "FinalWorkspaceHeader includes Ricerca tab");
+
+// 7. Skip reasons in Italian, load failure not shown as an empty folder, excerpt as text
+assert.equal(skipReasonLabel("file_too_large"), "file troppo grande");
+assert.equal(skipReasonLabel("symlink_or_special"), "collegamento o file speciale, ignorato");
+assert.equal(skipReasonLabel("file_limit:3"), "troppi file: 3 esclusi");
+assert.equal(skipPathLabel("."), "cartella");
+assert.equal(FOLDER_LOAD_ERROR, "Impossibile leggere lo stato della cartella.");
+const pageSource = read("src/pages/MemorySearch.tsx");
+assert.ok(!pageSource.includes("dangerouslySetInnerHTML"), "excerpt is rendered as text");
+assert.ok(pageSource.includes('err.code === "folder_invalid"'), "only a folder_invalid refusal shows the invalid-folder text");
+assert.ok(pageSource.includes("stillCurrent(requested)"), "responses for another workspace are dropped");
 
 console.log("300 memory search frontend test: OK");

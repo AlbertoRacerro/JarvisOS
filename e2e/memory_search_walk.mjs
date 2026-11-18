@@ -106,9 +106,19 @@ try {
   await shot("ricerca-initial");
   summary.steps.push({ step: "open_ricerca_from_root", status: "pass" });
 
-  // 2. Type folder path into "Percorso della cartella" and click "Registra cartella"
+  // 2. A folder that contains the data root is refused; then type the fixture folder and register it
   const folderInput = page.getByLabel("Percorso della cartella");
   await folderInput.waitFor();
+  await folderInput.fill(tmpdir());
+  await page.getByRole("button", { name: "Registra cartella" }).click();
+  await page.getByText("Cartella non valida", { exact: false }).waitFor();
+  await shot("folder-refused");
+  // The browser logs the deliberate 422 of this refusal; only that one entry is expected and set aside.
+  const refusals = summary.console_errors.filter((line) => line.includes("status of 422"));
+  assert(refusals.length === 1, `expected one refused request, got ${refusals.length}`);
+  summary.expected_refusals = refusals;
+  summary.console_errors = summary.console_errors.filter((line) => !line.includes("status of 422"));
+  summary.steps.push({ step: "refuse_folder_containing_data_root", status: "pass" });
   await folderInput.fill(fixtureDocsDir);
   await page.getByRole("button", { name: "Registra cartella" }).click();
   await page.getByText("Cartella registrata:").waitFor();
@@ -133,9 +143,19 @@ try {
   await shot("search-results");
   summary.steps.push({ step: "search_passage_found_with_path_and_heading", status: "pass" });
 
+  // 5. No absolute host path on the page; removing the folder takes its passages out of search
+  const bodyText = await page.locator("body").innerText();
+  assert(!bodyText.includes(fixtureDocsDir) && !bodyText.includes(dataRoot), "absolute path visible on the page");
+  await page.getByRole("button", { name: "Rimuovi cartella" }).click();
+  await page.getByText("Nessuna cartella registrata.").waitFor();
+  await page.getByRole("button", { name: "Cerca" }).click();
+  await page.getByText("Nessun risultato trovato.").waitFor();
+  await shot("folder-removed");
+  summary.steps.push({ step: "remove_folder_and_passages_gone", status: "pass" });
+
   assert(summary.console_errors.length === 0, `console errors: ${JSON.stringify(summary.console_errors)}`);
   assert(summary.page_errors.length === 0, `page errors: ${JSON.stringify(summary.page_errors)}`);
-  summary.passed = summary.steps.length === 4 && summary.steps.every((s) => s.status === "pass");
+  summary.passed = summary.steps.length === 6 && summary.steps.every((s) => s.status === "pass");
   await context.close();
 } finally {
   await browser?.close();

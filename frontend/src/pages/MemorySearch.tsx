@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listWorkspaces, type Workspace } from "../api/client";
 import {
   getRegisteredFolder,
@@ -6,6 +6,7 @@ import {
   registerFolder,
   removeFolder,
   searchMemory,
+  MemorySearchError,
   type DocumentFolderInfo,
   type FolderRefreshResult,
   type MemorySearchItem
@@ -16,7 +17,7 @@ export const MEMORY_SEARCH_EMPTY = "Nessun risultato trovato.";
 export const MEMORY_SEARCH_HINT = "Scrivi una o più parole e premi Cerca: Jarvis cerca nella memoria di questo workspace.";
 export const FOLDER_BOX_TITLE = "Cartella documenti";
 export const FOLDER_UNREGISTERED = "Nessuna cartella registrata.";
-export const FOLDER_INVALID_MESSAGE = "Cartella non valida: serve una cartella esistente, non un collegamento, fuori dai dati di Jarvis e dal codice.";
+export const FOLDER_INVALID_MESSAGE = "Cartella non valida: serve una cartella esistente, non un collegamento, fuori dai dati di Jarvis e dal codice e che non li contenga.";
 
 export const OWNER_NAMES: Record<string, string> = {
   project_knowledge: "Base di progetto",
@@ -31,6 +32,32 @@ export const OWNER_NAMES: Record<string, string> = {
 };
 
 export const ownerLabel = (owner: string): string => OWNER_NAMES[owner] ?? owner;
+
+export const FOLDER_LOAD_ERROR = "Impossibile leggere lo stato della cartella.";
+
+const SKIP_REASONS: Record<string, string> = {
+  binary: "file binario",
+  directory_limit: "troppe sottocartelle",
+  file_too_large: "file troppo grande",
+  invalid_utf8: "testo non leggibile (codifica)",
+  missing_or_symlink_root: "cartella mancante o collegamento",
+  passage_limit: "troppi passaggi",
+  passage_too_large: "passaggio troppo lungo",
+  path_too_long: "percorso troppo lungo",
+  symlink_directory: "sottocartella collegamento, ignorata",
+  symlink_or_special: "collegamento o file speciale, ignorato",
+  unreadable: "file non leggibile",
+  unreadable_or_changed: "file non leggibile o cambiato durante la lettura",
+  unreadable_root: "cartella non leggibile"
+};
+
+export const skipReasonLabel = (reason: string): string => {
+  const limit = /^file_limit:(\d+)$/.exec(reason);
+  if (limit) return `troppi file: ${limit[1]} esclusi`;
+  return SKIP_REASONS[reason] ?? reason;
+};
+
+export const skipPathLabel = (path: string): string => (path === "." ? "cartella" : path);
 
 type Props = Readonly<{
   workspaceId: string | null;
@@ -72,28 +99,36 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
     () => workspaceId ?? workspaces[0]?.id ?? null,
     [workspaceId, workspaces]
   );
+  // A response for a workspace that is no longer selected is dropped.
+  const currentWorkspace = useRef(activeWorkspaceId);
+  currentWorkspace.current = activeWorkspaceId;
+  const stillCurrent = (requested: string) => currentWorkspace.current === requested;
 
   const loadFolder = useCallback(() => {
     if (!activeWorkspaceId) {
       setFolderInfo(null);
       return;
     }
+    const requested = activeWorkspaceId;
     setFolderLoading(true);
     setFolderError(null);
-    getRegisteredFolder(activeWorkspaceId)
+    getRegisteredFolder(requested)
       .then((info) => {
-        setFolderInfo(info);
+        if (currentWorkspace.current === requested) setFolderInfo(info);
       })
       .catch(() => {
+        if (currentWorkspace.current !== requested) return;
         setFolderInfo(null);
+        setFolderError(FOLDER_LOAD_ERROR);
       })
       .finally(() => {
-        setFolderLoading(false);
+        if (currentWorkspace.current === requested) setFolderLoading(false);
       });
   }, [activeWorkspaceId]);
 
   useEffect(() => {
     setResults([]);
+    setSearching(false);
     setSearched(false);
     setSearchError(null);
     setRefreshReport(null);
@@ -104,19 +139,21 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
   const handleSearch = () => {
     const q = searchQuery.trim();
     if (!activeWorkspaceId || !q) return;
+    const requested = activeWorkspaceId;
     setSearching(true);
     setSearched(true);
     setSearchError(null);
-    searchMemory(activeWorkspaceId, q)
+    searchMemory(requested, q)
       .then((items) => {
-        setResults(items);
+        if (stillCurrent(requested)) setResults(items);
       })
       .catch(() => {
+        if (!stillCurrent(requested)) return;
         setResults([]);
         setSearchError("Ricerca non riuscita.");
       })
       .finally(() => {
-        setSearching(false);
+        if (stillCurrent(requested)) setSearching(false);
       });
   };
 
@@ -131,8 +168,9 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
         setFolderInfo(info);
         setFolderPathInput("");
       })
-      .catch(() => {
-        setFolderError(FOLDER_INVALID_MESSAGE);
+      .catch((err: unknown) => {
+        const refused = err instanceof MemorySearchError && err.code === "folder_invalid";
+        setFolderError(refused ? FOLDER_INVALID_MESSAGE : "Registrazione cartella non riuscita.");
       })
       .finally(() => {
         setFolderActionInProgress(false);
@@ -183,7 +221,7 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
         <h2 id="folder-box-title">{FOLDER_BOX_TITLE}</h2>
         {folderLoading ? (
           <p>Caricamento cartella…</p>
-        ) : folderInfo?.registered ? (
+        ) : folderInfo === null && folderError === FOLDER_LOAD_ERROR ? null : folderInfo?.registered ? (
           <div className="memory-search__folder-registered">
             <p>
               Cartella registrata: <strong>{folderInfo.folder_name}</strong>
@@ -213,7 +251,7 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
                   <ul className="memory-search__refresh-reasons">
                     {refreshReport.reasons.map((r, i) => (
                       <li key={i}>
-                        {r.path}: {r.reason}
+                        {skipPathLabel(r.path)}: {skipReasonLabel(r.reason)}
                       </li>
                     ))}
                   </ul>

@@ -199,6 +199,8 @@ def test_refusals_of_containing_folders_and_odd_bodies(client: TestClient, tmp_p
         assert res.json() == {"detail": {"code": "folder_invalid"}}
     res = client.put(url, content=f'{{"folder": "{secret}"', headers={"Content-Type": "application/json"})
     assert res.json() == {"detail": {"code": "folder_invalid"}}
+    res = client.put(url, content="[" * 200_000, headers={"Content-Type": "application/json"})
+    assert res.json() == {"detail": {"code": "folder_invalid"}}
     assert client.get(url).json() == {"registered": False, "folder_name": None}
 
 
@@ -262,3 +264,19 @@ def test_no_agent_tool_references_registration_route_or_register_folder() -> Non
     reaching = {file for file in files
                 if "register_folder" in (text := file.read_text(encoding="utf-8")) or "/memory/documents" in text}
     assert reaching == allowed
+
+
+def test_search_reads_a_registered_folder_before_refresh_with_paths_intact(client: TestClient, tmp_path: Path) -> None:
+    ws = _workspace("ws-before-refresh")
+    folder = tmp_path / "docs"
+    (folder / "100%").mkdir(parents=True)
+    (folder / "100%" / "n.md").write_text("# TCP /IP stack\n\nQuokkaword ratio 3 /4 here.\n", encoding="utf-8")
+    assert client.put(f"/workspaces/{ws}/memory/documents", json={"folder": str(folder)}).status_code == 200
+
+    # Search keeps the derived index current like every retrieval: no refresh click is needed (spec 300).
+    items = client.get(f"/workspaces/{ws}/memory/search?q=Quokkaword").json()
+    match = next(item for item in items if item["owner"] == "workspace_documents")
+    assert match["relative_path"] == "100%/n.md"
+    assert match["heading"] == match["title"] == "TCP /IP stack"
+    assert match["location"] == "100%/n.md#TCP /IP stack"
+    assert str(folder) not in str(items)
