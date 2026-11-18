@@ -396,6 +396,12 @@
   display: grid;
   gap: 2px;
 }
+.draft-quantity__label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
 .draft-quantity__row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 74px;
@@ -404,6 +410,34 @@
 .draft-quantity small {
   color: var(--color-text-muted, var(--color-text-muted));
   font-size: 10px;
+}
+/* Spec 309: source and check-state chip on numeric inputs */
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.2;
+  background: var(--color-bg-subtle, rgba(255, 255, 255, 0.05));
+  color: var(--color-text-muted, #8b949e);
+  border: 1px solid var(--color-border-default, rgba(255, 255, 255, 0.1));
+  font-weight: 500;
+  white-space: nowrap;
+}
+.source-chip[data-check-state="verified"] {
+  color: var(--color-status-success-text, #3fb950);
+  border-color: var(--color-status-success-border, rgba(63, 185, 80, 0.4));
+}
+.source-chip[data-check-state="flagged"] {
+  color: var(--color-status-danger-text, #f85149);
+  border-color: var(--color-status-danger-border, rgba(248, 81, 73, 0.4));
+}
+.source-chip[data-check-state="source_checked"] {
+  color: var(--color-status-info-text, #58a6ff);
+}
+.source-chip[data-check-state="stale"] {
+  color: var(--color-status-warning-text, #d29922);
 }
 .draft-composition input {
   width: 100%;

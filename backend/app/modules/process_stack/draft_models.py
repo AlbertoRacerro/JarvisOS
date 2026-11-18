@@ -415,9 +415,19 @@ FEED_ALTERNATIVES: dict[str, tuple[str, ...]] = {
 COMPOSITION_BASES: tuple[str, ...] = ("mass", "mole")
 
 
+class QuantitySource(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    kind: Literal["typed", "literature", "ingested", "result"]
+    check_state: Literal["unchecked", "source_checked", "verified", "flagged", "stale"] | None = None
+    ref_id: str | None = Field(default=None, max_length=128)
+    label: str | None = Field(default=None, max_length=160)
+
+
 class DraftQuantity(BaseModel):
     value: float = Field(allow_inf_nan=False)
     unit: str = Field(min_length=1, max_length=16)
+    source: QuantitySource | None = None
 
 
 class Endpoint(BaseModel):
