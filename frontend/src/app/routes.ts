@@ -13,6 +13,7 @@ export type RouteId =
   | "memory-project-basis"
   | "memory-models"
   | "memory-literature"
+  | "memory-search"
   | "development-roadmap-timeline"
   | "development-roadmap-calendar"
   | "coding-repository"
@@ -46,6 +47,7 @@ export const PRODUCTION_ROUTES: readonly AppRouteDefinition[] = [
   { id: "memory-project-basis", path: "/memory/project-basis", title: "Project Basis", primaryNav: "memory" },
   { id: "memory-models", path: "/memory/models", title: "Models", primaryNav: "memory" },
   { id: "memory-literature", path: "/memory/literature", title: "Literature", primaryNav: "memory" },
+  { id: "memory-search", path: "/memory/search", title: "Ricerca", primaryNav: "memory" },
   { id: "development-roadmap-timeline", path: "/development/roadmap/timeline", title: "Roadmap · Timeline", primaryNav: "development" },
   { id: "development-roadmap-calendar", path: "/development/roadmap/calendar", title: "Roadmap · Calendar", primaryNav: "development" },
   { id: "coding-repository", path: "/coding/repository", title: "Repository", primaryNav: "coding" },
@@ -78,7 +80,8 @@ export const PEER_NAV_ITEMS: Readonly<Record<PrimaryNavId, readonly PeerNavItem[
     { label: "Project Basis", href: "/memory/project-basis" },
     { label: "Models", href: "/memory/models" },
     { label: "Literature", href: "/memory/literature" },
-    { label: "Review", href: "/review" }
+    { label: "Review", href: "/review" },
+    { label: "Ricerca", href: "/memory/search" }
   ],
   development: [
     { label: "Roadmap", href: "/development/roadmap/timeline" }

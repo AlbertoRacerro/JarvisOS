@@ -16,7 +16,8 @@ const groups = {
       ["Project Basis", "/memory/project-basis", "project-basis"],
       ["Models", "/memory/models", "models"],
       ["Literature", "/memory/literature", "literature"],
-      ["Review", "/review", "review"]
+      ["Review", "/review", "review"],
+      ["Ricerca", "/memory/search", "search"]
     ]
   },
   development: {
