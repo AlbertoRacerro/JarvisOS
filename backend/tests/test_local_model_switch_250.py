@@ -18,7 +18,7 @@ def _entries(tmp_path: Path) -> list[dict[str, object]]:
     return [
         {"id": "default", "label": "Default", "runtime": "llama_cpp", "qualification": "default", "model_path": str(tmp_path / "default.gguf"), "model_sha256": "a" * 64},
         {"id": "candidate", "label": "Candidate", "runtime": "llama_cpp", "qualification": "qualified", "model_path": str(tmp_path / "candidate.gguf"), "model_sha256": "b" * 64, "ctx_size": 2048, "n_gpu_layers": 3, "extra_args": ["--foo"], "thinking": "off"},
-        {"id": "strata", "label": "Strata", "runtime": "strata", "qualification": "under_qualification", "model_path": str(tmp_path / "strata.gguf"), "model_sha256": "c" * 64},
+        {"id": "strata", "label": "Strata", "runtime": "strata", "qualification": "under_qualification", "model_path": str(tmp_path / "strata.gguf"), "model_sha256": "c" * 64, "unit": "strata.service", "port": 8080, "served_model": "strata-model"},
     ]
 
 
@@ -100,16 +100,18 @@ def test_switch_stops_before_start_and_restores_default(tmp_path: Path, monkeypa
     assert owner.config.model_id == "candidate"
     assert owner.config.ctx_size == 2048 and owner.config.n_gpu_layers == 3
     assert owner.config.extra_args == ("--foo",) and owner.config.thinking == "off"
-    assert owner.non_default_active
+    assert owner.active_model_id == "candidate"
     assert owner.status()["model_id"] == "candidate"
     model_registry.restore_default()
     assert [event[0] for event in events] == ["start", "stop", "start", "stop", "start"]
-    assert owner.active_model_id == "default" and not owner.non_default_active
+    assert owner.active_model_id == "default"
     assert LlamaCppRuntimeOwner(owner.config).active_model_id is None
 
 
 def test_product_adapter_refuses_without_http(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(local_llamacpp_adapter, "get_llama_cpp_runtime_owner", lambda: SimpleNamespace(non_default_active=True))
+    entry = model_registry.ModelEntry(id="candidate", label="Candidate", runtime="llama_cpp", qualification="under_qualification")
+    monkeypatch.setattr(model_registry, "get_active_model_entry", lambda: entry)
+    monkeypatch.setattr("app.modules.local_ai.runtime.model_registry.get_active_model_entry", lambda: entry)
     monkeypatch.setattr(local_llamacpp_adapter, "llama_cpp_runtime_config", lambda: LlamaCppRuntimeConfig(model_id="default"))
     adapter = local_llamacpp_adapter.LocalLlamaCppAdapter(client_factory=lambda: pytest.fail("HTTP client created"))
     assert adapter.health() == AIProviderHealth.unavailable
@@ -119,7 +121,9 @@ def test_product_adapter_refuses_without_http(monkeypatch: pytest.MonkeyPatch) -
 
 def test_availability_hides_non_default(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.modules.ai import thread_routes
-    owner = SimpleNamespace(non_default_active=True, status=lambda: {
+    entry = model_registry.ModelEntry(id="candidate", label="Candidate", runtime="llama_cpp", qualification="under_qualification")
+    monkeypatch.setattr("app.modules.local_ai.runtime.model_registry.get_active_model_entry", lambda: entry)
+    owner = SimpleNamespace(status=lambda: {
         "configured": True, "runtime_reachable": True, "model_installed": True,
         "model_loaded": True, "reason_code": None, "message": "ready",
     })

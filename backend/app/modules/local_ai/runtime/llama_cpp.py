@@ -240,10 +240,6 @@ class LlamaCppRuntimeOwner:
         self.active_model_id: str | None = None
         self.default_model_id: str | None = None
 
-    @property
-    def non_default_active(self) -> bool:
-        return self.active_model_id is not None and self.active_model_id != self.default_model_id
-
     def switch_model(self, config: LlamaCppRuntimeConfig, model_id: str, default_id: str) -> dict[str, Any]:
         with self._lock:
             # Keep product requests blocked throughout a switch away from the default.
@@ -261,6 +257,11 @@ class LlamaCppRuntimeOwner:
         return self._api_key or os.getenv(_API_KEY_ENV) or None
 
     def auth_headers(self) -> dict[str, str]:
+        from app.modules.local_ai.runtime.model_registry import get_active_model_entry
+
+        active = get_active_model_entry()
+        if active and active.runtime == "strata":
+            return {}
         key = self.api_key
         return {"Authorization": f"Bearer {key}"} if key else {}
 
@@ -293,6 +294,63 @@ class LlamaCppRuntimeOwner:
     def _snapshot(self, *, include_recovery: bool = True) -> dict[str, Any]:
         config = self.config
         self._reap()
+
+        from app.modules.local_ai.runtime.model_registry import get_active_model_entry
+
+        active_entry = get_active_model_entry()
+        if active_entry and active_entry.runtime == "strata":
+            from app.modules.local_ai.runtime.host_start import get_strata_controller
+
+            strata_ctrl = get_strata_controller()
+            st = strata_ctrl.get_state(
+                active_entry.id,
+                active_entry.host,
+                active_entry.port or 8080,
+                active_entry.served_model or "",
+            )
+            is_ready = st.state == "ready"
+            is_loading = st.state == "loading"
+            return {
+                "backend": "strata",
+                "configured": True,
+                "runtime_reachable": is_ready,
+                "model_installed": True,
+                "model_loaded": is_ready,
+                "reason_code": (
+                    None
+                    if is_ready
+                    else "LLAMACPP_LOADING"
+                    if is_loading
+                    else "STRATA_HOST_START_REQUIRED"
+                    if st.state == "requires host start"
+                    else "STRATA_FAILED"
+                    if st.state == "failed"
+                    else "STRATA_STOPPED"
+                ),
+                "message": (
+                    "Strata is reachable and serving its configured model."
+                    if is_ready
+                    else st.reason
+                    or ("Strata is loading the configured model." if is_loading else "Strata model is stopped.")
+                ),
+                "build_id": None,
+                "model_file": active_entry.served_model,
+                "configured_sha256": None,
+                "model_sha256": None,
+                "pid": None,
+                "ctx_size": None,
+                "n_gpu_layers": None,
+                "vram_bytes": None,
+                "ram_bytes": None,
+                "request_slots": None,
+                "spawned_by_jarvis": False,
+                "digest_state": "verified",
+                "last_exit_code": None,
+                "thinking": "default",
+                "crash_count": 0,
+                "model_id": active_entry.id,
+                "last_crash_at": None,
+            }
         reason = validate_loopback_host(config.host)
         row: dict[str, Any] = {
             "backend": "llama.cpp", "configured": bool(config.binary_path and config.model_path),
@@ -365,10 +423,36 @@ class LlamaCppRuntimeOwner:
             row["message"] = "llama-server is not reachable at the configured loopback address."
         return row
 
+    def _any_strata_answering(self) -> bool:
+        # Fails closed: an unreadable registry or a probe error counts as "a Strata model may be running".
+        try:
+            from app.modules.local_ai.runtime.host_start import get_strata_controller
+            from app.modules.local_ai.runtime.model_registry import read_registry
+
+            entries, present = read_registry()
+            if not present:
+                return False
+            strata_ctrl = get_strata_controller()
+            for entry in entries:
+                if entry.runtime == "strata" and entry.port and entry.served_model:
+                    host = entry.host or "127.0.0.1"
+                    if strata_ctrl.probe(host, entry.port, entry.served_model):
+                        return True
+            return False
+        except Exception:
+            _LOGGER.warning("Strata state unknown; refusing to start llama-server")
+            return True
+
     def start(self) -> dict[str, Any]:
         with self._lock:
             existing = self._snapshot(include_recovery=False)
-            if existing["runtime_reachable"]:
+            # One hot model on the card: never spawn llama-server while a Strata model is the active one
+            # or while any registered Strata entry's loopback port answers.
+            if existing["runtime_reachable"] or existing.get("backend") == "strata":
+                return existing
+            if self._any_strata_answering():
+                existing["reason_code"] = "STRATA_ACTIVE"
+                existing["message"] = "A registered Strata model is currently running on the host."
                 return existing
             reason = validate_loopback_host(self.config.host)
             if reason:
@@ -431,6 +515,8 @@ class LlamaCppRuntimeOwner:
                 except (OSError, subprocess.TimeoutExpired):
                     process.kill()
                 self._api_key = None
+            # An explicit stop ends any pending automatic recovery of an earlier crash.
+            self._crashed = False
             return self.status()
 
     def recover_if_crashed(self) -> dict[str, Any]:
@@ -445,8 +531,16 @@ class LlamaCppRuntimeOwner:
                 row["reason_code"] = "LLAMACPP_RECOVERING"
                 row["message"] = "Local llama-server crashed; automatic recovery is loading the configured model."
                 return row
+            row = self._snapshot()
+            if row.get("backend") == "strata":
+                self._crashed = False
+                return row
             if not self._crashed or not self.config.manage or self._process is not None:
-                return self._snapshot()
+                return row
+            if self._any_strata_answering():
+                row["reason_code"] = "STRATA_ACTIVE"
+                row["message"] = "A registered Strata model is currently running on the host."
+                return row
             if len(self._automatic_restart_times) >= 3:
                 row = self._snapshot()
                 row["reason_code"] = "LLAMACPP_CRASH_LOOP"
@@ -490,15 +584,28 @@ def get_llama_cpp_runtime_owner() -> LlamaCppRuntimeOwner:
         if _OWNER is None:
             from fastapi import HTTPException
 
-            from app.modules.local_ai.runtime.model_registry import config_for_entry, read_registry
+            from app.modules.local_ai.runtime.model_registry import (
+                config_for_entry,
+                determine_initial_model,
+                read_registry,
+            )
 
             try:
                 entries, present = read_registry()
-                default = next(entry for entry in entries if entry.qualification == "default") if present else None
+                default = next((entry for entry in entries if entry.qualification == "default"), None) if present else None
+                initial = determine_initial_model(entries) if present else None
             except HTTPException:
-                default = None
-            _OWNER = LlamaCppRuntimeOwner(config_for_entry(default) if default else None)
+                entries, present, default, initial = [], False, None, None
+
+            active = initial or default
+            llama_cfg = (
+                config_for_entry(active)
+                if (active and active.runtime == "llama_cpp")
+                else (config_for_entry(default) if (default and default.runtime == "llama_cpp") else None)
+            )
+            _OWNER = LlamaCppRuntimeOwner(llama_cfg)
             if default:
                 _OWNER.default_model_id = default.id
-                _OWNER.active_model_id = default.id
+            if active:
+                _OWNER.active_model_id = active.id
         return _OWNER

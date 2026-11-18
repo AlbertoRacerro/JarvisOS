@@ -17,6 +17,10 @@ class JarvisPaths:
     def local_models_file(self) -> Path:
         return self.data_root / "settings" / "local_models.json"
 
+    @property
+    def local_model_choice_file(self) -> Path:
+        return self.data_root / "settings" / "local_model_choice.json"
+
     def environment_workspace_dir(self, workspace_id: str) -> Path:
         return self.data_root / "workspaces" / workspace_id / "environment"
 

@@ -252,6 +252,9 @@ def _write_ai_job(
     }
     if route_metadata:
         route_reason.update(route_metadata)
+    # model_id stays the binding identity (token-flow evidence checks it); the model that answered is kept beside it.
+    if response is not None and response.model_id and response.model_id != model_id:
+        route_reason["served_model_id"] = response.model_id
     route_reason_json = json.dumps(route_reason, sort_keys=True)
     context_sources_json = json.dumps(context_sources) if context_sources else None
     if (flow_id is None) != (evidence is None):

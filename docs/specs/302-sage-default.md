@@ -65,7 +65,7 @@ In scope:
   serialized under the existing owner lock.
 - Product calls: the llama.cpp adapter sends to the active entry's endpoint and served name. The refusal "default
   local model is not loaded" applies only while an `under_qualification` entry is active; a `default` or `qualified`
-  entry serves product calls. The model id recorded on `ai_jobs` is the served model's, not the old alias. While the
+  entry serves product calls. The `ai_jobs` row keeps its binding `model_id` (token-flow evidence checks it) and records the served model's name as `served_model_id` in its route reason. While the
   active model is `loading`, a product call fails retryable with the message that the local model is still loading.
 - Interface: `LocalModelPanel` shows each entry's state in plain Italian (in caricamento, pronto, fermo, errore) and
   offers "Usa questo modello" on the inactive one and "Torna al modello standard"; no unit names, ports or ids in
@@ -107,7 +107,9 @@ Out of scope (binding non-goals):
 ## Acceptance criteria
 
 1. A registry with a `strata` default and a `llama_cpp` qualified entry is accepted; two defaults, a `strata` entry
-   without `unit`/`port`/`served_model`, a non-loopback port or a bad unit name are refused with 503 as today.
+   with only some of `unit`/`port`/`served_model`, a `strata` default without them, a non-loopback port or a bad unit
+   name are refused with 503 as today. A non-default `strata` entry listed by file only (the shape accepted before this
+   spec) stays valid and "requires host start", so a registry is not broken by the upgrade before the host steps.
 2. With the spool configured, backend start with a `strata` default writes exactly one `service.control` `start`
    request for its unit, spawns no llama-server, and reports `loading` until the probe sees the served model, then
    `ready`.
@@ -117,7 +119,7 @@ Out of scope (binding non-goals):
    llama-server, and stores the choice; activating Sage while Gemma runs stops llama-server before writing `start`.
    Restarting the backend restores the stored choice.
 5. A product call while Sage is ready reaches the Sage endpoint with the served name and no auth header, and the
-   `ai_jobs` row records that model; while `loading` it fails retryable with the loading message; while an
+   `ai_jobs` row records that model as `served_model_id`; while `loading` it fails retryable with the loading message; while an
    `under_qualification` entry is active it is refused as today.
 6. A failed receipt or no readiness within the bound gives `failed` with a plain reason, and the panel offers the way
    back.

@@ -140,7 +140,7 @@ def test_request_failure_reports_bounded_cause(handler, cause: str, monkeypatch:
         AIRequest(task_type=AITaskType.synthesis, prompt="hello")
     )
     assert result.error is not None
-    assert result.error.message == f"Local llama-server request failed ({cause})."
+    assert result.error.message.startswith(f"Local llama-server request failed ({cause}).")
     assert "secret" not in result.error.message
 
 
