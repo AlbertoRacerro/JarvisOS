@@ -71,6 +71,13 @@ const EMPTY_INSPECTION: GeometryInspectionSnapshot = {
   selected: null
 };
 
+const SHARED_VERDICT_LABELS: Record<string, string> = {
+  usable: "utilizzabile",
+  usable_with_warnings: "utilizzabile con avvisi",
+  unchecked: "non verificato",
+  not_usable: "non utilizzabile"
+};
+
 function BluecadWorkbench({ appWorkspaceId, onSelectionChange, onShellRegionsChange, requestShellRegionOpen }: Props) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState("");
@@ -783,7 +790,52 @@ function BluecadWorkbench({ appWorkspaceId, onSelectionChange, onShellRegionsCha
     const attempts = activeAggregate?.candidate.attempts ?? [];
     const evidence = activeAggregate?.evidence ?? [];
     const runs = activeAggregate?.runs ?? [];
-    return <div className="bluecad-workbench__dock"><h3>Attempt history</h3>{attempts.length === 0 ? <p>No attempts recorded yet.</p> : <div className="table-wrap"><table className="smoke-table bluecad-table"><thead><tr><th>#</th><th>Route</th><th>Proposal</th><th>Build</th><th>Validation</th><th>Started</th><th>Finished</th><th>Error detail</th></tr></thead><tbody>{attempts.map((attempt) => <tr key={attempt.id}><td>{attempt.attempt_no}</td><td>{attempt.route_class}</td><td>{attempt.proposal_outcome}</td><td>{attempt.build_outcome ?? "—"}</td><td>{attempt.validation_verdict ?? "—"}</td><td>{attempt.started_at}</td><td>{attempt.finished_at ?? "—"}</td><td>{formatAttemptDetail(attempt.error_detail_json)}</td></tr>)}</tbody></table></div>}<h3>Evidence references</h3>{evidence.length === 0 ? <p>No aggregate-linked evidence.</p> : <ul>{evidence.map((item) => <li key={`${item.subject_ref}-${item.ref}`}><strong>{item.kind}</strong> · {item.ref} · subject {item.subject_ref} · {item.status}{item.summary ? ` · ${item.summary}` : ""}</li>)}</ul>}<h3>Run references</h3>{runs.length === 0 ? <p>No aggregate-linked runs.</p> : <ul>{runs.map((run) => <li key={`${run.source_ref ?? "direct"}-${run.ref}`}><strong>{run.kind}</strong> · {run.ref}{run.source_ref ? ` · source ${run.source_ref}` : ""}{run.status ? ` · ${run.status}` : ""}{run.stale === true ? " · stale" : ""}</li>)}</ul>}</div>;
+    return <div className="bluecad-workbench__dock"><h3>Attempt history</h3>{attempts.length === 0 ? <p>No attempts recorded yet.</p> : <div className="table-wrap"><table className="smoke-table bluecad-table"><thead><tr><th>#</th><th>Route</th><th>Proposal</th><th>Build</th><th>Validation</th><th>Started</th><th>Finished</th><th>Error detail</th></tr></thead><tbody>{attempts.map((attempt) => <tr key={attempt.id}><td>{attempt.attempt_no}</td><td>{attempt.route_class}</td><td>{attempt.proposal_outcome}</td><td>{attempt.build_outcome ?? "—"}</td><td>{attempt.validation_verdict ?? "—"}</td><td>{attempt.started_at}</td><td>{attempt.finished_at ?? "—"}</td><td>{formatAttemptDetail(attempt.error_detail_json)}</td></tr>)}</tbody></table></div>}<h3>Evidence references</h3>{evidence.length === 0 ? <p>No aggregate-linked evidence.</p> : <ul>{evidence.map((item) => {
+      const verdict = item.shared_verdict ?? "unchecked";
+      const verdictLabel = SHARED_VERDICT_LABELS[verdict] ?? verdict;
+      const checks = item.checks ?? [];
+      return (
+        <li key={`${item.subject_ref}-${item.ref}`}>
+          <div>
+            <strong>{item.kind}</strong> · {item.ref} · subject {item.subject_ref} · {item.status} ·{" "}
+            <span className="bench-verdict" data-verdict={verdict}>
+              <span className="bench-light" aria-hidden="true" />{verdictLabel}
+            </span>
+            {item.verdict_reason ? ` (${item.verdict_reason})` : ""}
+            {item.summary ? ` · ${item.summary}` : ""}
+          </div>
+          <details>
+            <summary>Checks ({checks.length})</summary>
+            {checks.length === 0 ? <p>No checks recorded.</p> : (
+              <div className="table-wrap">
+                <table className="smoke-table bluecad-table">
+                  <thead>
+                    <tr>
+                      <th>Check</th>
+                      <th>Family</th>
+                      <th>Status</th>
+                      <th>Required</th>
+                      <th>Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {checks.map((check, index) => (
+                      <tr key={`${check.name}-${index}`} data-status={check.status}>
+                        <td>{check.name}</td>
+                        <td>{check.family}</td>
+                        <td><span className="bench-light" aria-hidden="true" />{check.status}</td>
+                        <td>{check.required ? "yes" : "no"}</td>
+                        <td>{check.detail}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </details>
+        </li>
+      );
+    })}</ul>}<h3>Run references</h3>{runs.length === 0 ? <p>No aggregate-linked runs.</p> : <ul>{runs.map((run) => <li key={`${run.source_ref ?? "direct"}-${run.ref}`}><strong>{run.kind}</strong> · {run.ref}{run.source_ref ? ` · source ${run.source_ref}` : ""}{run.status ? ` · ${run.status}` : ""}{run.stale === true ? " · stale" : ""}</li>)}</ul>}</div>;
   }, [aggregate, selectedId]);
 
   useEffect(() => { onShellRegionsChange({ navigator, sidecar, dock }); }, [dock, navigator, onShellRegionsChange, sidecar]);
@@ -825,7 +877,7 @@ function BluecadWorkbench({ appWorkspaceId, onSelectionChange, onShellRegionsCha
             ? <div className="bluecad-workbench__empty-viewer"><h2>Geometry unavailable</h2><p>{candidate.parked_reason ? `Generation was parked: ${candidate.parked_reason}` : "No GLB artifact is available for this candidate yet."}</p><p><button type="button" className="secondary-button" onClick={() => setShowCreate(true)}>Create geometry</button></p></div>
             : <div className="bluecad-workbench__empty-viewer"><p>{selectedId && aggregateState === "error" ? "Candidate detail unavailable. Use Refresh to retry." : aggregateState === "loading" || candidateState === "loading" ? "Loading candidate geometry…" : "Select a candidate from the navigator."}</p>{candidateState === "ready" && aggregateState !== "loading" && <p className="button-row"><button type="button" className="secondary-button" onClick={() => requestShellRegionOpen("navigator")}>Open candidate list</button><button type="button" className="secondary-button" onClick={() => setShowCreate(true)}>Create geometry</button></p>}</div>;
 
-  return <section className="bluecad-workbench" aria-labelledby="bluecad-workbench-title"><header className="bluecad-workbench__chrome"><div style={{ minWidth: 0, flex: "1 1 18rem" }}><p className="eyebrow">BlueCad</p><h1 id="bluecad-workbench-title" ref={workbenchTitleRef} tabIndex={-1}>Model workbench</h1>{candidate && !showCreate && <div style={{ minWidth: 0, overflowWrap: "anywhere" }}><p className="panel-subtitle">{candidate.brief_text.slice(0, 180)}{candidate.brief_text.length > 180 ? "…" : ""}</p><details><summary>Candidate details</summary><dl><dt>Candidate ID</dt><dd>{candidate.id}</dd></dl><p style={{ maxHeight: "10rem", overflow: "auto", whiteSpace: "pre-wrap" }}>{candidate.brief_text}</p></details></div>}</div><div className="button-row">{candidate && !showCreate && <><span className={`status-pill status-${candidate.status}`}>{candidate.status}</span>{exports.length > 0 && <ExportMenu exports={exports} workspaceId={candidate.workspace_id} />}<button type="button" className="secondary-button" onClick={() => requestShellRegionOpen("sidecar")}>Inspect candidate</button><button type="button" className="secondary-button" onClick={duplicateSelectedBrief}>Duplicate brief</button>{candidate.status !== "archived" && <button type="button" className="secondary-button" onClick={() => void onArchive()} disabled={busy}>Archive</button>}{canPromote && <button type="button" className="primary-button" onClick={() => void onPromote()} disabled={busy}>Promote to Decision</button>}</>}{workspaceId && !noCandidates && !showCreate && <button type="button" className="secondary-button" onClick={() => setShowCreate(true)} disabled={busy}>New geometry</button>}</div></header>{message && <div className="panel-subtitle" role="status">{message}</div>}{sceneBindingNotice && <div className={sceneBindingPresentation === "resolving" ? "panel-subtitle" : "warning-banner"} role="status">{sceneBindingNotice}</div>}<div className="bluecad-workbench__viewport">{viewportContent}</div></section>;
+  return <section className="bluecad-workbench" aria-labelledby="bluecad-workbench-title"><header className="bluecad-workbench__chrome"><div style={{ minWidth: 0, flex: "1 1 18rem" }}><p className="eyebrow">BlueCad</p><h1 id="bluecad-workbench-title" ref={workbenchTitleRef} tabIndex={-1}>Model workbench</h1>{candidate && !showCreate && <div style={{ minWidth: 0, overflowWrap: "anywhere" }}><p className="panel-subtitle">{candidate.brief_text.slice(0, 180)}{candidate.brief_text.length > 180 ? "…" : ""}</p><details><summary>Candidate details</summary><dl><dt>Candidate ID</dt><dd>{candidate.id}</dd></dl><p style={{ maxHeight: "10rem", overflow: "auto", whiteSpace: "pre-wrap" }}>{candidate.brief_text}</p></details></div>}</div><div className="button-row">{candidate && !showCreate && <><span className={`status-pill status-${candidate.status}`}>{candidate.status}</span>{exports.length > 0 && <ExportMenu exports={exports} workspaceId={candidate.workspace_id} />}<button type="button" className="secondary-button" onClick={() => requestShellRegionOpen("dock")}>Evidence references</button><button type="button" className="secondary-button" onClick={() => requestShellRegionOpen("sidecar")}>Inspect candidate</button><button type="button" className="secondary-button" onClick={duplicateSelectedBrief}>Duplicate brief</button>{candidate.status !== "archived" && <button type="button" className="secondary-button" onClick={() => void onArchive()} disabled={busy}>Archive</button>}{canPromote && <button type="button" className="primary-button" onClick={() => void onPromote()} disabled={busy}>Promote to Decision</button>}</>}{workspaceId && !noCandidates && !showCreate && <button type="button" className="secondary-button" onClick={() => setShowCreate(true)} disabled={busy}>New geometry</button>}</div></header>{message && <div className="panel-subtitle" role="status">{message}</div>}{sceneBindingNotice && <div className={sceneBindingPresentation === "resolving" ? "panel-subtitle" : "warning-banner"} role="status">{sceneBindingNotice}</div>}<div className="bluecad-workbench__viewport">{viewportContent}</div></section>;
 }
 
 const EXPORT_LABELS: Record<string, [string, string]> = {

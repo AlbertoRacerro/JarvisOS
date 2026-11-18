@@ -1,6 +1,6 @@
 # 301 — CAD-VERDICT-LIGHTS-1: Shared verdict lights on solid, mesh and static FEM evidence in the CAD screen
 
-Status: ready
+Status: merged
 Depends on: 280, 281, 284
 
 ## Goal

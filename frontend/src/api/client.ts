@@ -553,6 +553,14 @@ export type BluecadArtifactRefRead = {
   content_url: string;
 };
 
+export type BluecadEvidenceCheckRead = {
+  name: string;
+  family: string;
+  status: string;
+  required: boolean;
+  detail: string;
+};
+
 export type BluecadEvidenceRefRead = {
   ref: string;
   kind: string;
@@ -561,6 +569,9 @@ export type BluecadEvidenceRefRead = {
   stale?: boolean | null;
   created_at?: string | null;
   summary?: string | null;
+  shared_verdict?: "usable" | "usable_with_warnings" | "unchecked" | "not_usable" | null;
+  verdict_reason?: string | null;
+  checks?: BluecadEvidenceCheckRead[];
 };
 
 export type BluecadRunRefRead = {
