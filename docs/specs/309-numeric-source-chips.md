@@ -1,6 +1,6 @@
 # 309 — NUMERIC-SOURCE-CHIPS-1: Source and check-state chip on every numeric input
 
-Status: ready
+Status: merged
 Depends on: 293, 297, 298
 
 ## Goal
