@@ -30,8 +30,10 @@ SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_ID = "0029_geometry_feature_history"
 SCHEMA_GEOMETRY_FEATURE_HISTORY_MIGRATION_NAME = "Design component parametric geometry feature history"
 SCHEMA_HERMES_ROLE_MODELS_MIGRATION_ID = "0032_hermes_role_models"
 SCHEMA_HERMES_ROLE_MODELS_MIGRATION_NAME = "Hermes per-role local inference routes"
-CURRENT_SCHEMA_MIGRATION_ID = "0033_literature_ingestion"
-CURRENT_SCHEMA_MIGRATION_NAME = "Literature value ingestion batches and source-checked entry columns"
+SCHEMA_DESIGN_QUESTIONS_MIGRATION_ID = "0034_design_questions"
+SCHEMA_DESIGN_QUESTIONS_MIGRATION_NAME = "Design questions for guided engineering flow"
+CURRENT_SCHEMA_MIGRATION_ID = "0034_design_questions"
+CURRENT_SCHEMA_MIGRATION_NAME = "Design questions for guided engineering flow"
 
 SCHEMA_MIGRATION_RECORDS = [
     {
@@ -102,6 +104,11 @@ SCHEMA_MIGRATION_RECORDS = [
     {
         "migration_id": SCHEMA_HERMES_ROLE_MODELS_MIGRATION_ID,
         "name": SCHEMA_HERMES_ROLE_MODELS_MIGRATION_NAME,
+        "checksum": None,
+    },
+    {
+        "migration_id": SCHEMA_DESIGN_QUESTIONS_MIGRATION_ID,
+        "name": SCHEMA_DESIGN_QUESTIONS_MIGRATION_NAME,
         "checksum": None,
     },
 ]
@@ -648,6 +655,21 @@ SCHEMA_STATEMENTS = [
         updated_at TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS design_questions (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+        what_changes TEXT,
+        sensitivity TEXT,
+        explore_skip_reason TEXT,
+        linked_decision_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
+    )
+    """,
 ]
 
 SCHEMA_MIGRATION_STATEMENTS = [
@@ -761,4 +783,5 @@ SCHEMA_INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_freshness_marks_workspace_ref ON freshness_marks(workspace_id, record_ref)",
     "CREATE INDEX IF NOT EXISTS idx_freshness_marks_invalidation_ref ON freshness_marks(invalidation_id, record_ref)",
     "CREATE INDEX IF NOT EXISTS idx_freshness_invalidations_workspace_created ON freshness_invalidations(workspace_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_design_questions_workspace ON design_questions(workspace_id)",
 ]
