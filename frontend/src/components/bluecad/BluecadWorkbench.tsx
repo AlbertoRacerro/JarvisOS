@@ -71,6 +71,13 @@ const EMPTY_INSPECTION: GeometryInspectionSnapshot = {
   selected: null
 };
 
+const SHARED_VERDICT_LABELS: Record<string, string> = {
+  usable: "utilizzabile",
+  usable_with_warnings: "utilizzabile con avvisi",
+  unchecked: "non verificato",
+  not_usable: "non utilizzabile"
+};
+
 function BluecadWorkbench({ appWorkspaceId, onSelectionChange, onShellRegionsChange, requestShellRegionOpen }: Props) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState("");
@@ -783,7 +790,52 @@ function BluecadWorkbench({ appWorkspaceId, onSelectionChange, onShellRegionsCha
     const attempts = activeAggregate?.candidate.attempts ?? [];
     const evidence = activeAggregate?.evidence ?? [];
     const runs = activeAggregate?.runs ?? [];
-    return <div className="bluecad-workbench__dock"><h3>Attempt history</h3>{attempts.length === 0 ? <p>No attempts recorded yet.</p> : <div className="table-wrap"><table className="smoke-table bluecad-table"><thead><tr><th>#</th><th>Route</th><th>Proposal</th><th>Build</th><th>Validation</th><th>Started</th><th>Finished</th><th>Error detail</th></tr></thead><tbody>{attempts.map((attempt) => <tr key={attempt.id}><td>{attempt.attempt_no}</td><td>{attempt.route_class}</td><td>{attempt.proposal_outcome}</td><td>{attempt.build_outcome ?? "—"}</td><td>{attempt.validation_verdict ?? "—"}</td><td>{attempt.started_at}</td><td>{attempt.finished_at ?? "—"}</td><td>{formatAttemptDetail(attempt.error_detail_json)}</td></tr>)}</tbody></table></div>}<h3>Evidence references</h3>{evidence.length === 0 ? <p>No aggregate-linked evidence.</p> : <ul>{evidence.map((item) => <li key={`${item.subject_ref}-${item.ref}`}><strong>{item.kind}</strong> · {item.ref} · subject {item.subject_ref} · {item.status}{item.summary ? ` · ${item.summary}` : ""}</li>)}</ul>}<h3>Run references</h3>{runs.length === 0 ? <p>No aggregate-linked runs.</p> : <ul>{runs.map((run) => <li key={`${run.source_ref ?? "direct"}-${run.ref}`}><strong>{run.kind}</strong> · {run.ref}{run.source_ref ? ` · source ${run.source_ref}` : ""}{run.status ? ` · ${run.status}` : ""}{run.stale === true ? " · stale" : ""}</li>)}</ul>}</div>;
+    return <div className="bluecad-workbench__dock"><h3>Attempt history</h3>{attempts.length === 0 ? <p>No attempts recorded yet.</p> : <div className="table-wrap"><table className="smoke-table bluecad-table"><thead><tr><th>#</th><th>Route</th><th>Proposal</th><th>Build</th><th>Validation</th><th>Started</th><th>Finished</th><th>Error detail</th></tr></thead><tbody>{attempts.map((attempt) => <tr key={attempt.id}><td>{attempt.attempt_no}</td><td>{attempt.route_class}</td><td>{attempt.proposal_outcome}</td><td>{attempt.build_outcome ?? "—"}</td><td>{attempt.validation_verdict ?? "—"}</td><td>{attempt.started_at}</td><td>{attempt.finished_at ?? "—"}</td><td>{formatAttemptDetail(attempt.error_detail_json)}</td></tr>)}</tbody></table></div>}<h3>Evidence references</h3>{evidence.length === 0 ? <p>No aggregate-linked evidence.</p> : <ul>{evidence.map((item) => {
+      const verdict = item.shared_verdict ?? "unchecked";
+      const verdictLabel = SHARED_VERDICT_LABELS[verdict] ?? verdict;
+      const checks = item.checks ?? [];
+      return (
+        <li key={`${item.subject_ref}-${item.ref}`}>
+          <div>
+            <strong>{item.kind}</strong> · {item.ref} · subject {item.subject_ref} · {item.status} ·{" "}
+            <span className="bench-verdict" data-verdict={verdict}>
+              <span className="bench-light" aria-hidden="true" />{verdictLabel}
+            </span>
+            {item.verdict_reason ? ` (${item.verdict_reason})` : ""}
+            {item.summary ? ` · ${item.summary}` : ""}
+          </div>
+          <details>
+            <summary>Checks ({checks.length})</summary>
+            {checks.length === 0 ? <p>No checks recorded.</p> : (
+              <div className="table-wrap">
+                <table className="smoke-table bluecad-table">
+                  <thead>
+                    <tr>
+                      <th>Check</th>
+                      <th>Family</th>
+                      <th>Status</th>
+                      <th>Required</th>
+                      <th>Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {checks.map((check, index) => (
+                      <tr key={`${check.name}-${index}`} data-status={check.status}>
+                        <td>{check.name}</td>
+                        <td>{check.family}</td>
+                        <td><span className="bench-light" aria-hidden="true" />{check.status}</td>
+                        <td>{check.required ? "yes" : "no"}</td>
+                        <td>{check.detail}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </details>
+        </li>
+      );
+    })}</ul>}<h3>Run references</h3>{runs.length === 0 ? <p>No aggregate-linked runs.</p> : <ul>{runs.map((run) => <li key={`${run.source_ref ?? "direct"}-${run.ref}`}><strong>{run.kind}</strong> · {run.ref}{run.source_ref ? ` · source ${run.source_ref}` : ""}{run.status ? ` · ${run.status}` : ""}{run.stale === true ? " · stale" : ""}</li>)}</ul>}</div>;
   }, [aggregate, selectedId]);
 
   useEffect(() => { onShellRegionsChange({ navigator, sidecar, dock }); }, [dock, navigator, onShellRegionsChange, sidecar]);

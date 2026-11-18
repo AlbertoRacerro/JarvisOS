@@ -41,6 +41,14 @@ class BluecadArtifactRefRead(BaseModel):
     content_url: str
 
 
+class BluecadEvidenceCheckRead(BaseModel):
+    name: str
+    family: str
+    status: str
+    required: bool
+    detail: str
+
+
 class BluecadEvidenceRefRead(BaseModel):
     ref: str
     kind: str
@@ -49,6 +57,9 @@ class BluecadEvidenceRefRead(BaseModel):
     stale: bool | None = None
     created_at: str | None = None
     summary: str | None = None
+    shared_verdict: typing.Literal["usable", "usable_with_warnings", "unchecked", "not_usable"] | None = None
+    verdict_reason: str | None = None
+    checks: list[BluecadEvidenceCheckRead] = Field(default_factory=list, max_length=30)
 
 
 class BluecadRunRefRead(BaseModel):
@@ -129,7 +140,7 @@ def _aggregate_from_connection(
         candidate_id=candidate.id,
         attempt_ids=[attempt.id for attempt in candidate.attempts],
     )
-    evidence = _build_evidence(candidate, evidence_records)
+    evidence = _build_evidence(candidate, evidence_records, connection=connection)
 
     graph: FlowsheetGraphRead | None
     try:
@@ -305,11 +316,26 @@ def _load_artifacts(
 def _build_evidence(
     candidate: BluecadCandidateRead,
     records: list[EvidenceRecord],
+    *,
+    connection: sqlite3.Connection | None = None,
 ) -> list[BluecadEvidenceRefRead]:
+    from app.modules.bluecad.evidence_verdict import compute_evidence_verdicts
+
+    if connection is None:
+        with open_sqlite_connection() as conn:
+            conn.execute("PRAGMA query_only = ON")
+            verdicts = compute_evidence_verdicts(conn, candidate.workspace_id, candidate, records)
+    else:
+        verdicts = compute_evidence_verdicts(connection, candidate.workspace_id, candidate, records)
+
     attempt_refs = {attempt.id: f"bluecad_attempt:{attempt.id}" for attempt in candidate.attempts}
     candidate_ref = f"bluecad_candidate:{candidate.id}"
     result: list[BluecadEvidenceRefRead] = []
     for record in records:
+        shared_verdict, verdict_reason, checks = verdicts.get(
+            record.id,
+            ("unchecked", "Evidence verdict could not be computed", []),
+        )
         subject_refs: set[str] = set()
         if record.candidate_id == candidate.id:
             subject_refs.add(candidate_ref)
@@ -324,6 +350,9 @@ def _build_evidence(
                     status=record.verdict,
                     created_at=record.created_at,
                     summary=None,
+                    shared_verdict=shared_verdict,
+                    verdict_reason=verdict_reason,
+                    checks=checks,
                 )
             )
     return sorted(result, key=lambda item: (item.ref, item.subject_ref))
