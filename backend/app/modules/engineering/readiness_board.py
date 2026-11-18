@@ -60,6 +60,7 @@ class CaseResult(BaseModel):
     id: str
     title: str
     workspace: str
+    workspace_id: str | None = None
     source_title: str
     steps: dict[str, StepResult]
 
@@ -182,7 +183,14 @@ def _workspace_missing(case: CaseDefinition) -> CaseResult:
         )
         for step in STEPS
     }
-    return CaseResult(id=case.id, title=case.title, workspace=case.workspace, source_title=case.source_title, steps=steps)
+    return CaseResult(
+        id=case.id,
+        title=case.title,
+        workspace=case.workspace,
+        workspace_id=None,
+        source_title=case.source_title,
+        steps=steps,
+    )
 
 
 def _compute_case(connection, case: CaseDefinition) -> CaseResult:
@@ -408,6 +416,7 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
         id=case.id,
         title=case.title,
         workspace=case.workspace,
+        workspace_id=workspace_id,
         source_title=case.source_title,
         steps=steps,
     )

@@ -28,7 +28,7 @@ const Header = component("src/components/fusion/FinalWorkspaceHeader.tsx", {
 });
 for (const [group, active, title, hrefs] of [
   ["memory", "models", "Project knowledge", ["/memory/project-basis", "/memory/models", "/memory/literature", "/review", "/memory/search"]],
-  ["development", "roadmap", "Development", ["/development/roadmap/timeline"]],
+  ["development", "roadmap", "Development", ["/development/roadmap/timeline", "/development/readiness"]],
   ["coding", "runtime", "Coding", ["/coding/repository", "/coding/runtime"]]
 ]) {
   const html = renderToStaticMarkup(React.createElement(Header, { group, active, navigate() {} }));
