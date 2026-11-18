@@ -1,6 +1,7 @@
 # 313 — REACTOR-GROWTH-FORMS-1: Photobioreactor unit accepts all registered light growth forms
 
-Status: ready
+Status: merged
+PR: #180
 Depends on: none
 
 ## Goal
