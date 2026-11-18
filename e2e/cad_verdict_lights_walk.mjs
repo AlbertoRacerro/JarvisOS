@@ -18,16 +18,7 @@ if (process.argv.includes("--help")) {
   console.log("node e2e/cad_verdict_lights_walk.mjs <evidence-dir>  (needs built frontend, Playwright)");
   process.exit(0);
 }
-let pwModule = process.env.PLAYWRIGHT_MODULE ?? "playwright";
-let chromium;
-try {
-  const pw = await import(pwModule);
-  chromium = pw.chromium ?? pw.default?.chromium;
-} catch {
-  const fallback = "/home/thera/jarvis-control/work/tools/pw/node_modules/playwright/index.js";
-  const pw = await import(fallback);
-  chromium = pw.chromium ?? pw.default?.chromium;
-}
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
 const root = resolve(new URL("../", import.meta.url).pathname);
 const backend = join(root, "backend");
 const python = resolve(root, process.env.JARVISOS_PROOF_PYTHON ?? join(backend, ".venv/bin/python"));
