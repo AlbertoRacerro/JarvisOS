@@ -580,7 +580,7 @@ def test_adapter_routing_when_strata_ready(tmp_path: Path, monkeypatch: pytest.M
 
     resp = adapter.complete(AIRequest(task_type=AITaskType.synthesis, prompt="test prompt"))
     assert resp.error is None
-    assert resp.model_id == "sage-model-27b"  # Served model id recorded for ai_jobs!
+    assert resp.model_id == "sage-model-27b"  # stored as served_model_id on the ai_jobs row
     assert resp.text == "Hello from Sage"
 
     assert len(captured_requests) == 1
@@ -649,3 +649,30 @@ def test_adapter_refusal_when_under_qualification(tmp_path: Path, monkeypatch: p
     resp = adapter.complete(AIRequest(task_type=AITaskType.synthesis, prompt="test prompt"))
     assert resp.error is not None
     assert resp.error.message == "Default local model is not loaded."
+
+
+def test_ai_job_records_served_model_beside_binding_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JARVISOS_DATA_ROOT", str(tmp_path / "root"))
+    from app.core.bootstrap import initialize_storage
+    from app.core.config import get_settings
+    from app.core.database import open_sqlite_connection
+    from app.modules.ai.contracts import AIResponse, AIUsage, RoutingDecision
+    from app.modules.ai.execution import _write_ai_job
+
+    get_settings.cache_clear()
+    initialize_storage(seed_default=True)
+    decision = RoutingDecision(provider_id="local_llamacpp", model_id="qwen3.8-27b-q4kxl", decision_reason="bound")
+    response = AIResponse(
+        provider_id="local_llamacpp", model_id="sage-model-27b", request_id="r1", text="ok",
+        finish_reason="stop", safety_status="allowed",
+        usage=AIUsage(provider_id="local_llamacpp", model_id="sage-model-27b"),
+    )
+    job_id = _write_ai_job(
+        status="succeeded", task_kind="synthesis", requested_route_class="local:llamacpp",
+        selected_route_class="local:llamacpp", decision=decision, prompt_digest=None, context_digest=None,
+        context_sources=None, response=response, latency_ms=1, error_type=None,
+    )
+    with open_sqlite_connection() as connection:
+        row = connection.execute("SELECT model_id, route_reason_json FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()
+    assert row["model_id"] == "qwen3.8-27b-q4kxl"
+    assert json.loads(row["route_reason_json"])["served_model_id"] == "sage-model-27b"
