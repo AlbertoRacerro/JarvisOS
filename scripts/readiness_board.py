@@ -41,6 +41,10 @@ def format_table(cases: list) -> str:
         col_widths[0] = max(col_widths[0], len(c.id))
         for idx, step_name in enumerate(STEPS, start=1):
             st = c.steps[step_name].status
+            if step_name == "compare":
+                cmp = c.steps["compare"].comparison
+                if cmp is not None and cmp.deviation is not None:
+                    st = f"{st} ({cmp.deviation * 100:.1f}%)"
             col_widths[idx] = max(col_widths[idx], len(st))
 
     header_line = "  ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers))
@@ -51,6 +55,10 @@ def format_table(cases: list) -> str:
         row_vals = [c.id.ljust(col_widths[0])]
         for idx, step_name in enumerate(STEPS, start=1):
             st = c.steps[step_name].status
+            if step_name == "compare":
+                cmp = c.steps["compare"].comparison
+                if cmp is not None and cmp.deviation is not None:
+                    st = f"{st} ({cmp.deviation * 100:.1f}%)"
             row_vals.append(st.ljust(col_widths[idx]))
         rows.append("  ".join(row_vals))
 

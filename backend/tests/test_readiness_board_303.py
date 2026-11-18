@@ -4,7 +4,7 @@ Tests criteria 1 through 7 offline against the fake pack and isolated data root:
 1. Each cell turns green exactly when its condition holds and red otherwise.
 2. An accepted datum that fails check_datum keeps facts red and names it.
 3. A parameter bound to a raw datum or another source's datum keeps bound red.
-4. compare is red with capability_missing for every case.
+4. compare is red with missing_record for cases without matching bench runs.
 5. Invalid case entries appear as board errors; valid cases are still computed.
 6. No pack or no readiness key: empty board, route 200, command exit 0 with plain message.
 7. Route and command change nothing in data root (digests and row counts unchanged).
@@ -28,7 +28,6 @@ from app.core.database import open_sqlite_connection
 from app.core.paths import build_paths
 from app.main import create_app
 from app.modules.engineering.readiness_board import (
-    REASON_CAPABILITY_MISSING,
     REASON_MISSING_RECORD,
     REASON_WORKSPACE_MISSING,
     STEPS,
@@ -210,7 +209,8 @@ def test_criterion_1_seven_steps_transition_and_missing_names(client: TestClient
     assert c1.steps["run"].status == "red"
     assert c1.steps["run"].missing == ["bench_run"]
     assert c1.steps["compare"].status == "red"
-    assert c1.steps["compare"].reason == REASON_CAPABILITY_MISSING
+    assert c1.steps["compare"].reason == REASON_MISSING_RECORD
+    assert c1.steps["compare"].missing == ["density"]
     assert c1.steps["decide"].status == "red"
     assert c1.steps["decide"].missing == ["decision"]
     assert c1.steps["answer"].status == "red"
@@ -245,9 +245,10 @@ def test_criterion_1_seven_steps_transition_and_missing_names(client: TestClient
     assert board.cases[0].steps["compare"].status == "red"
     assert board.cases[0].steps["decide"].status == "red"
 
-    # 6. 'compare' stays red with capability_missing
+    # 6. 'compare' stays red with missing_record (density output not present in run_001)
     assert board.cases[0].steps["compare"].status == "red"
-    assert board.cases[0].steps["compare"].reason == REASON_CAPABILITY_MISSING
+    assert board.cases[0].steps["compare"].reason == REASON_MISSING_RECORD
+    assert board.cases[0].steps["compare"].missing == ["density"]
 
     # 7. Add an accepted decision linked to a run: 'decide' turns green
     _create_decision(ws_id, status="accepted", linked_run_id="run_001")
@@ -319,17 +320,17 @@ def test_criterion_3_raw_datum_or_other_source_keeps_bound_red(client: TestClien
 
 
 # ------------------------------------------------------------------------------------------------
-# Criterion 4: compare is red with capability_missing for every case
+# Criterion 4: compare is red with missing_record when no bench run has the quantity
 # ------------------------------------------------------------------------------------------------
 
-def test_criterion_4_compare_is_always_red_with_capability_missing(client: TestClient) -> None:
+def test_criterion_4_compare_is_red_without_matching_run(client: TestClient) -> None:
     _seed_workspace("zephyr")
     board = compute_readiness_board()
     for case in board.cases:
         cmp_step = case.steps["compare"]
         assert cmp_step.status == "red"
-        assert cmp_step.reason == REASON_CAPABILITY_MISSING
-        assert cmp_step.missing == ["compare"]
+        assert cmp_step.reason == REASON_MISSING_RECORD
+        assert cmp_step.missing == ["density"]
 
 
 # ------------------------------------------------------------------------------------------------

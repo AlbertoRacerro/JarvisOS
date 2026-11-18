@@ -6,18 +6,23 @@ green or red, naming what is missing for red cells.
 
 from __future__ import annotations
 
+import json
+import math
 import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter
+from pint import PintError
 from pydantic import BaseModel, Field
 
 from app.core.database import get_database_path, open_sqlite_connection
 from app.core.packs import readiness_case_files
-from app.modules.engineering.bench_runs_view import list_runs
+from app.modules.engineering.bench_runs_view import bench_root, list_runs
 from app.modules.memory.literature_checks import check_datum
 from app.modules.memory.literature_service import BackingText
+from app.modules.process_kernel.errors import ProcessKernelError
+from app.modules.process_kernel.units import parse_unit_token, unit_registry
 
 router = APIRouter(tags=["readiness"])
 
@@ -27,8 +32,24 @@ MAX_NAMES_PER_CASE = 50
 
 # Reason codes per spec
 REASON_WORKSPACE_MISSING = "workspace_missing"
-REASON_CAPABILITY_MISSING = "capability_missing"
 REASON_MISSING_RECORD = "missing_record"
+REASON_NOT_DECLARED = "not_declared"
+REASON_UNIT_MISMATCH = "unit_mismatch"
+REASON_OUT_OF_TOLERANCE = "out_of_tolerance"
+
+
+class ComparisonValue(BaseModel):
+    value: float
+    unit: str
+
+
+class Comparison(BaseModel):
+    run_id: str
+    computed: ComparisonValue
+    computed_in_published_unit: float | None = None
+    published: ComparisonValue
+    deviation: float | None = None
+    rel_tol: float
 
 
 class StepResult(BaseModel):
@@ -37,6 +58,7 @@ class StepResult(BaseModel):
     reason: str | None = None
     missing: list[str] = Field(default_factory=list)
     detail: str | None = None
+    comparison: Comparison | None = None
 
 
 class CaseCompare(BaseModel):
@@ -111,6 +133,7 @@ def _validate_case_entry(raw: Any) -> tuple[CaseDefinition | None, str | None]:
         return None, f"case '{case_id}': inputs exceeds maximum of {MAX_NAMES_PER_CASE} items"
     raw_compare = raw.get("compare")
     compare: CaseCompare | None = None
+    compare_err: str | None = None
     if raw_compare is not None:
         if not isinstance(raw_compare, dict):
             return None, f"case '{case_id}': compare must be a table"
@@ -126,7 +149,16 @@ def _validate_case_entry(raw: Any) -> tuple[CaseDefinition | None, str | None]:
         rel_tol = raw_compare.get("rel_tol")
         if isinstance(rel_tol, bool) or not isinstance(rel_tol, (int, float)):
             return None, f"case '{case_id}': compare.rel_tol must be a number"
-        compare = CaseCompare(quantity=qty.strip(), value=float(val), unit=unit.strip(), rel_tol=float(rel_tol))
+
+        fval = float(val)
+        ftol = float(rel_tol)
+        if fval == 0.0 or not math.isfinite(fval):
+            compare_err = f"case '{case_id}': compare.value must be non-zero and finite"
+        elif not (0.0 < ftol <= 1.0) or not math.isfinite(ftol):
+            compare_err = f"case '{case_id}': compare.rel_tol must be in (0, 1]"
+        else:
+            compare = CaseCompare(quantity=qty.strip(), value=fval, unit=unit.strip(), rel_tol=ftol)
+
     return CaseDefinition(
         id=case_id.strip(),
         title=title.strip(),
@@ -135,7 +167,7 @@ def _validate_case_entry(raw: Any) -> tuple[CaseDefinition | None, str | None]:
         facts=[f.strip() for f in facts],
         inputs=[inp.strip() for inp in inputs],
         compare=compare,
-    ), None
+    ), compare_err
 
 
 def load_case_definitions(case_files: tuple[Path, ...] | None = None) -> tuple[list[CaseDefinition], list[BoardError]]:
@@ -163,8 +195,7 @@ def load_case_definitions(case_files: tuple[Path, ...] | None = None) -> tuple[l
             if err:
                 cid = raw.get("id") if isinstance(raw, dict) else None
                 errors.append(BoardError(case_id=str(cid) if cid is not None else None, message=err))
-            else:
-                assert case_def is not None
+            if case_def is not None:
                 definitions.append(case_def)
     if len(definitions) > MAX_CASES:
         errors.append(BoardError(message=f"Total cases ({len(definitions)}) exceeds maximum of {MAX_CASES}"))
@@ -359,14 +390,138 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
             detail="No bench run with usable verdict in workspace",
         )
 
-    # 5. compare (always red with capability_missing until later spec)
-    step_compare = StepResult(
-        step="compare",
-        status="red",
-        reason=REASON_CAPABILITY_MISSING,
-        missing=["compare"],
-        detail="Comparison capability is not yet implemented",
-    )
+    # 5. compare
+    if case.compare is None:
+        step_compare = StepResult(
+            step="compare",
+            status="red",
+            reason=REASON_NOT_DECLARED,
+            missing=[],
+            detail="Case does not declare a published comparison value",
+        )
+    else:
+        matched_run_id: str | None = None
+        matched_computed_val: float | None = None
+        matched_computed_unit: str | None = None
+
+        root = bench_root(workspace_id)
+        for r in runs:
+            if r.get("verdict") not in ("usable", "usable_with_warnings"):
+                continue
+            run_id = r.get("run_id")
+            if not isinstance(run_id, str):
+                continue
+            run_dir = (root / run_id).resolve()
+            if not run_dir.is_relative_to(root) or not run_dir.is_dir():
+                continue
+            result_file = run_dir / "result.json"
+            if not result_file.is_file():
+                continue
+            try:
+                data = json.loads(result_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError, UnicodeDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            outputs = data.get("outputs")
+            if not isinstance(outputs, list):
+                continue
+
+            found_output = False
+            for out in outputs:
+                if not isinstance(out, dict):
+                    continue
+                if out.get("name") != case.compare.quantity:
+                    continue
+                val_obj = out.get("value")
+                if not isinstance(val_obj, dict):
+                    continue
+                out_val = val_obj.get("value")
+                out_unit = val_obj.get("unit")
+                if isinstance(out_val, bool) or not isinstance(out_val, (int, float)):
+                    continue
+                if not math.isfinite(float(out_val)):
+                    continue
+                if not isinstance(out_unit, str) or not out_unit.strip():
+                    continue
+
+                matched_run_id = run_id
+                matched_computed_val = float(out_val)
+                matched_computed_unit = out_unit.strip()
+                found_output = True
+                break
+
+            if found_output:
+                break
+
+        if matched_run_id is None or matched_computed_val is None or matched_computed_unit is None:
+            step_compare = StepResult(
+                step="compare",
+                status="red",
+                reason=REASON_MISSING_RECORD,
+                missing=[case.compare.quantity],
+                detail=f"No usable bench run with output '{case.compare.quantity}'",
+            )
+        else:
+            published_val = ComparisonValue(value=case.compare.value, unit=case.compare.unit)
+            computed_val = ComparisonValue(value=matched_computed_val, unit=matched_computed_unit)
+            converted_val: float | None = None
+            try:
+                src_pint = parse_unit_token(computed_val.unit)
+                tgt_pint = parse_unit_token(published_val.unit)
+                reg = unit_registry()
+                converted_qty = reg.Quantity(computed_val.value, src_pint).to(tgt_pint)
+                mag = float(converted_qty.magnitude)
+                if not math.isfinite(mag):
+                    raise ProcessKernelError("quantity_value_invalid", "Converted quantity must be finite")
+                converted_val = mag
+            except (ProcessKernelError, PintError, Exception):
+                converted_val = None
+
+            if converted_val is None:
+                step_compare = StepResult(
+                    step="compare",
+                    status="red",
+                    reason=REASON_UNIT_MISMATCH,
+                    missing=[],
+                    detail=f"Unit '{computed_val.unit}' cannot be converted to '{published_val.unit}'",
+                    comparison=Comparison(
+                        run_id=matched_run_id,
+                        computed=computed_val,
+                        computed_in_published_unit=None,
+                        published=published_val,
+                        deviation=None,
+                        rel_tol=case.compare.rel_tol,
+                    ),
+                )
+            else:
+                deviation = abs(converted_val - published_val.value) / abs(published_val.value)
+                comparison = Comparison(
+                    run_id=matched_run_id,
+                    computed=computed_val,
+                    computed_in_published_unit=converted_val,
+                    published=published_val,
+                    deviation=deviation,
+                    rel_tol=case.compare.rel_tol,
+                )
+                if deviation <= case.compare.rel_tol:
+                    step_compare = StepResult(
+                        step="compare",
+                        status="green",
+                        reason=None,
+                        missing=[],
+                        detail=None,
+                        comparison=comparison,
+                    )
+                else:
+                    step_compare = StepResult(
+                        step="compare",
+                        status="red",
+                        reason=REASON_OUT_OF_TOLERANCE,
+                        missing=[],
+                        detail=f"Deviation {deviation:.4f} exceeds relative tolerance {case.compare.rel_tol}",
+                        comparison=comparison,
+                    )
 
     # 6. decide
     dec_row = connection.execute(

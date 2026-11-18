@@ -2,12 +2,27 @@ import { API_BASE_URL } from "./client";
 
 export type StepStatus = "green" | "red";
 
+export type ComparisonValue = {
+  value: number;
+  unit: string;
+};
+
+export type Comparison = {
+  run_id: string;
+  computed: ComparisonValue;
+  computed_in_published_unit: number | null;
+  published: ComparisonValue;
+  deviation: number | null;
+  rel_tol: number;
+};
+
 export type StepResult = {
   step: string;
   status: StepStatus;
   reason: string | null;
   missing: string[];
   detail: string | null;
+  comparison?: Comparison | null;
 };
 
 export type CaseResult = {
