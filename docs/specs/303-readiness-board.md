@@ -1,6 +1,6 @@
 # 303 — READINESS-BOARD-1: A read-only readiness board of literature cases, first reading as the map of what is missing
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal
