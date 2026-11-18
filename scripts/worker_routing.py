@@ -937,7 +937,10 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
     model = model_obj.model
 
     if tier is None:
-        tier_val = model_obj.capability
+        if worker == "copilot-auto":
+            tier_val = copilot_effective_capability(load_records(record_file))
+        else:
+            tier_val = model_obj.capability
     else:
         try:
             tier_val = int(tier)
@@ -1292,15 +1295,15 @@ def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[d
     return float(statistics.median(costs)), count
 
 
-def copilot_effective_capability(outcomes: list[dict[str, Any]] | None) -> int:
+def copilot_effective_capability(outcomes: list[dict[str, Any]] | None, base_capability: int = 1) -> int:
     if not outcomes:
-        return 1
+        return base_capability
     copilot_records = [
         r for r in outcomes
         if (r.get("worker") == "copilot-auto" or r.get("model") == "auto") and r.get("failure") != "harness"
     ]
     if not copilot_records:
-        return 1
+        return base_capability
 
     def _rework_val(r: dict[str, Any]) -> int:
         val = r.get("rework_rounds", 0) or 0
@@ -1325,22 +1328,26 @@ def copilot_effective_capability(outcomes: list[dict[str, Any]] | None) -> int:
         return 2 if (any(is_clean(r) for r in copilot_records) or len(tier2_records) == 1) else 1
 
     clean_count = sum(1 for r in tier2_records if is_clean(r))
-    zero_rework_count = sum(1 for r in tier2_records if is_clean(r) and _rework_val(r) == 0)
+    zero_rework_records = [r for r in tier2_records if is_clean(r) and _rework_val(r) == 0]
+    zero_rework_count = len(zero_rework_records)
     if clean_count / len(tier2_records) < 0.50 or zero_rework_count == 0:
         return 1
+
+    def _is_strong_actual_model(r: dict[str, Any]) -> bool:
+        act = r.get("actual_model")
+        if not isinstance(act, str) or not act.strip():
+            return False
+        for model_name in act.split(","):
+            tokens = {t for t in re.split(r"[^a-z0-9]+", model_name.strip().lower()) if t}
+            if tokens and not (tokens & {"flash", "mini", "haiku", "nano", "lite"}):
+                return True
+        return False
 
     if (
         len(tier2_records) >= 3
         and zero_rework_count >= 3
         and all(not bool(r.get("escalated")) and r.get("failure", "none") == "none" for r in tier2_records)
-        and any(
-            isinstance(r.get("actual_model"), str)
-            and r["actual_model"].strip()
-            and "flash" not in r["actual_model"].lower()
-            and "mini" not in r["actual_model"].lower()
-            and "haiku" not in r["actual_model"].lower()
-            for r in tier2_records
-        )
+        and any(_is_strong_actual_model(r) for r in zero_rework_records)
     ):
         return 3
 
@@ -1386,7 +1393,7 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
         c_fam = family(candidate)
         next_family: str | None = None
         for m in models:
-            m_cap = copilot_effective_capability(outcomes) if m.key == "copilot-auto" else m.capability
+            m_cap = copilot_effective_capability(outcomes, m.capability) if m.key == "copilot-auto" else m.capability
             if m_cap < required:
                 continue
             p = pools.get(m.pool) or unreadable(m.pool, "no_reading")
@@ -1412,7 +1419,7 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
         return c_mean > next_mean
 
     for index, model in enumerate(models):
-        eff_cap = copilot_effective_capability(outcomes) if model.key == "copilot-auto" else model.capability
+        eff_cap = copilot_effective_capability(outcomes, model.capability) if model.key == "copilot-auto" else model.capability
         if eff_cap < required:
             continue
         pool = pools.get(model.pool) or unreadable(model.pool, "no_reading")
@@ -1510,7 +1517,7 @@ def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | 
             "alternatives": eligible[1:], "skipped": skipped}
 
 
-def summary_line(pools: dict[str, Pool]) -> str:
+def summary_line(pools: dict[str, Pool], outcomes: list[dict[str, Any]] | None = None) -> str:
     parts = []
     for name in dict.fromkeys(m.pool for m in MODELS):
         pool = pools.get(name) or unreadable(name, "no_reading")
@@ -1521,7 +1528,10 @@ def summary_line(pools: dict[str, Pool]) -> str:
         low = " [below reserve]" if below_reserve(pool) else ""
         stale = " [snapshot]" if pool.source == "snapshot" else ""
         parts.append(f"{name} {pct(pool.free)} free{short}{low}{stale}")
-    tiers = ", ".join(f"{m.key} t{m.capability}" for m in MODELS)
+    tiers = ", ".join(
+        f"{m.key} t{copilot_effective_capability(outcomes, m.capability) if m.key == 'copilot-auto' else m.capability}"
+        for m in MODELS
+    )
     return ("worker quota: " + " · ".join(parts) + " — effort by task tier, gemini first, then quota expiring "
             "unused; tiers: " + tiers)
 

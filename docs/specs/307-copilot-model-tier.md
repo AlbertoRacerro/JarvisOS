@@ -70,7 +70,7 @@ Out of scope (binding non-goals):
 
 1. `copilot_worker.py` sets `COPILOT_HOME` to `<evidence>/copilot-home`, parses `events.jsonl` after the run, and populates `actual_model`, `auto_routing`, and `usage` (`input_tokens`, `output_tokens`, `cache_tokens`, `total_tokens`, `premium_requests`) in `result.json`.
 2. `worker_routing.py record` extracts `actual_model` from evidence `result.json` into the `worker-outcomes.jsonl` record, and `worker_routing.py report` displays the observed `actual_model` breakdown and includes `spend.tokens` from Copilot `usage.total_tokens` in the `Pool copilot:` line.
-3. `copilot_effective_capability(outcomes)` sets `copilot-auto`'s effective routing tier from measured outcomes (starting at tier 2 so medium tasks can be routed to it, and demoting to tier 1 or promoting to tier 3 based on measured tier-2+ outcomes).
+3. `copilot_effective_capability(outcomes)` sets `copilot-auto`'s effective routing tier from measured outcomes (promoting to tier 2 for trials once outcomes are provided and a clean or trial record exists, and demoting to tier 1 or promoting to tier 3 based on measured tier-2+ outcomes).
 4. Existing `test_copilot_worker_238.py` and `test_worker_routing.py` tests pass alongside new unit tests covering session event extraction, `actual_model` recording, and dynamic Copilot tier calculation.
 
 ## Required tests

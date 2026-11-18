@@ -1788,6 +1788,14 @@ def test_spec_307_copilot_effective_capability() -> None:
     sonnet_t2 = {**clean_t2, "actual_model": "claude-3.5-sonnet"}
     assert wr.copilot_effective_capability([flash_t2, flash_t2, sonnet_t2]) == 3
 
+    # Gemini pro model ('gemini' contains substring 'mini' as part of 'gemini', must NOT be misclassified as 'mini')
+    gemini_pro_t2 = {**clean_t2, "actual_model": "gemini-2.5-pro"}
+    assert wr.copilot_effective_capability([flash_t2, flash_t2, gemini_pro_t2]) == 3
+
+    # P2-3: 3 clean flash records + 1 non-clean strong-model record (rework=1) -> must NOT promote to 3
+    sonnet_t2_rework = {**sonnet_t2, "rework_rounds": 1}
+    assert wr.copilot_effective_capability([flash_t2, flash_t2, flash_t2, sonnet_t2_rework]) == 2
+
     # 3 tier-2 records, clean with rework 0, but one escalated -> not promoted to 3
     esc_t2 = {**sonnet_t2, "escalated": True}
     assert wr.copilot_effective_capability([sonnet_t2, sonnet_t2, esc_t2]) == 2
@@ -1844,13 +1852,15 @@ def test_spec_307_record_actual_model_from_evidence(tmp_path: Path) -> None:
         "usage": {"total_tokens": 150},
     }), encoding="utf-8")
 
-    # Record single evidence
-    entry1 = wr.record("task-1", "feature", "copilot-auto", evidence=ev1, record_file=rf)
+    # Record single evidence (tier omitted -> defaults to baseline 1 on empty record file)
+    entry1 = wr.record("task-1", "feature", "copilot-auto", ci_first_pass="pass", evidence=ev1, record_file=rf)
     assert entry1.get("actual_model") == "mai-code-2-flash"
+    assert entry1["tier"] == 1
 
-    # Record multiple evidence with distinct actual models
-    entry2 = wr.record("task-2", "feature", "copilot-auto", evidence=[ev1, ev2, ev3], record_file=rf)
+    # Record multiple evidence with distinct actual models (tier omitted -> defaults to effective capability 2!)
+    entry2 = wr.record("task-2", "feature", "copilot-auto", ci_first_pass="pass", evidence=[ev1, ev2, ev3], record_file=rf)
     assert entry2.get("actual_model") == "mai-code-2-flash,claude-sonnet-3.5"
+    assert entry2["tier"] == 2
 
     lines = [json.loads(line) for line in rf.read_text(encoding="utf-8").splitlines()]
     assert len(lines) == 2

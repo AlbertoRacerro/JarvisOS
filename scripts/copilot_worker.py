@@ -115,6 +115,10 @@ def child_env(base: dict[str, str] | None = None, gh_config: Path | None = None,
 def prepare_copilot_home(evidence: Path, home: Path | None = None) -> Path:
     copilot_home = evidence / "copilot-home"
     copilot_home.mkdir(parents=True, exist_ok=True)
+    try:
+        copilot_home.chmod(0o700)
+    except OSError:
+        pass
     base_home = home or Path.home()
     candidates = [
         base_home / ".copilot" / "config.json",
@@ -123,9 +127,15 @@ def prepare_copilot_home(evidence: Path, home: Path | None = None) -> Path:
     for src in candidates:
         if src.is_file():
             try:
-                shutil.copy2(src, copilot_home / "config.json")
+                raw_cfg = json.loads(src.read_text(encoding="utf-8"))
+                if isinstance(raw_cfg, dict):
+                    safe_cfg = {
+                        k: v for k, v in raw_cfg.items()
+                        if not any(s in k.lower() for s in ("token", "secret", "password", "key", "credential"))
+                    }
+                    (copilot_home / "config.json").write_text(json.dumps(safe_cfg, indent=2) + "\n", encoding="utf-8")
                 break
-            except OSError:
+            except (OSError, json.JSONDecodeError):
                 pass
     return copilot_home
 
@@ -348,16 +358,22 @@ def extract_copilot_session(copilot_home: Path, fallback_home: Path | None = Non
             usage_checkpoint_events.append(event)
 
     auto_routing: dict[str, Any] | None = None
+    resolved_models: list[str] = []
     if auto_mode_resolved_events:
+        for ev in auto_mode_resolved_events:
+            c_m = ev["data"].get("chosenModel")
+            if isinstance(c_m, str) and c_m.strip():
+                cleaned_m = c_m.strip()
+                if cleaned_m not in resolved_models:
+                    resolved_models.append(cleaned_m)
         data = auto_mode_resolved_events[-1]["data"]
-        chosen = data.get("chosenModel")
-        if isinstance(chosen, str) and chosen.strip():
+        if resolved_models:
             c_raw = data.get("candidateModels")
             candidates = [c for c in c_raw if isinstance(c, str) and c] if isinstance(c_raw, list) else []
             r_raw = data.get("selectionReason")
             reason = r_raw if isinstance(r_raw, str) else None
             auto_routing = {
-                "chosen_model": chosen.strip(),
+                "chosen_model": ",".join(resolved_models),
                 "candidate_models": candidates,
                 "selection_reason": reason,
             }
@@ -571,10 +587,17 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     (evidence / "stderr.txt").write_text(stderr, encoding="utf-8")
     if reason != "git_metadata_modified":  # never run git over planted config or hooks
         (evidence / "diff.patch").write_text(collect_diff(worktree, result["start_head"]), encoding="utf-8")
-    session_info = extract_copilot_session(copilot_home, started_at=started)
-    result["actual_model"] = session_info["actual_model"]
-    result["auto_routing"] = session_info["auto_routing"]
-    result["usage"] = session_info["usage"]
+    try:
+        (copilot_home / "config.json").unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        session_info = extract_copilot_session(copilot_home, started_at=started)
+        result["actual_model"] = session_info["actual_model"]
+        result["auto_routing"] = session_info["auto_routing"]
+        result["usage"] = session_info["usage"]
+    except Exception:  # noqa: BLE001 - session extraction must never fail a worker run
+        pass
     result.update(status=status, reason=reason)
 
 

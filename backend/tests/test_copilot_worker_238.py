@@ -204,11 +204,14 @@ def test_all_allowlisted_model_ids_and_overrides(monkeypatch: pytest.MonkeyPatch
         assert caught.value.reason == "model_not_allowed"
 
 
-def test_prepare_copilot_home_copies_config_only(tmp_path: Path) -> None:
+def test_prepare_copilot_home_copies_config_only_and_strips_secret_keys(tmp_path: Path) -> None:
     home = tmp_path / "user_home"
     copilot_dir = home / ".copilot"
     copilot_dir.mkdir(parents=True)
-    (copilot_dir / "config.json").write_text(json.dumps({"auth": "ok"}), encoding="utf-8")
+    (copilot_dir / "config.json").write_text(
+        json.dumps({"auth": "ok", "oauth_token": "secret-val", "api_key": "k"}),
+        encoding="utf-8",
+    )
     (copilot_dir / "logs.txt").write_text("historical logs\n", encoding="utf-8")
     (copilot_dir / "session-state").mkdir()
     (copilot_dir / "session-state" / "old.jsonl").write_text("old\n", encoding="utf-8")
@@ -217,9 +220,14 @@ def test_prepare_copilot_home_copies_config_only(tmp_path: Path) -> None:
     ch = worker.prepare_copilot_home(evidence, home=home)
     assert ch == evidence / "copilot-home"
     assert ch.is_dir()
+    assert (ch.stat().st_mode & 0o777) == 0o700
     assert json.loads((ch / "config.json").read_text(encoding="utf-8")) == {"auth": "ok"}
     assert not (ch / "logs.txt").exists()
     assert not (ch / "session-state").exists()
+
+    # child_env strips host COPILOT_HOME and overrides when copilot_home is passed
+    assert "COPILOT_HOME" not in worker.child_env(base={"COPILOT_HOME": "/tmp/host-copilot"})
+    assert worker.child_env(base={"COPILOT_HOME": "/tmp/host-copilot"}, copilot_home=ch)["COPILOT_HOME"] == str(ch)
 
 
 def test_prepare_copilot_home_copies_from_sandbox_target_when_no_dot_copilot(tmp_path: Path) -> None:
