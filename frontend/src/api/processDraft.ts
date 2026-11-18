@@ -2,7 +2,13 @@ import { API_BASE_URL } from "./client";
 import type { MathNode } from "./bioModels";
 
 // Spec 155: Jarvis-owned process draft. Quantities travel as value + unit; the server converts.
-export type DraftQuantity = { value: number; unit: string };
+export type QuantitySource = {
+  kind: "typed" | "literature" | "ingested" | "result";
+  check_state?: "unchecked" | "source_checked" | "verified" | "flagged" | "stale" | null;
+  ref_id?: string | null;
+  label?: string | null;
+};
+export type DraftQuantity = { value: number; unit: string; source?: QuantitySource | null };
 export type StoredQuantity = DraftQuantity & { si: number };
 export type Endpoint = { unit: string; port: number };
 export type RoutePoint = { x: number; y: number };

@@ -1294,7 +1294,11 @@ def _process_ops(document: dict, request: ActionRequest, workspace_id: str | Non
                     if stream_id not in culture_updates:
                         original = target.get("spec", {}).get("culture")
                         culture_updates[stream_id] = {
-                            key: DraftQuantity(value=quantity["value"], unit=quantity["unit"])
+                            key: DraftQuantity(
+                                value=quantity["value"],
+                                unit=quantity["unit"],
+                                source=quantity.get("source"),
+                            )
                             for key, quantity in (original or {}).items()
                         }
                     if value is None:
