@@ -1,6 +1,7 @@
 # 312 — GUIDED-FLOW-1: Guided question flow (question list, seven-step path bar, and deterministic "Next" card) in Design
 
-Status: ready
+Status: merged
+PR: #181
 Depends on: none
 
 ## Goal
