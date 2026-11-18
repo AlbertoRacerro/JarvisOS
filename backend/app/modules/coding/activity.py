@@ -6,6 +6,8 @@ fails the panel. Nothing here starts, stops or writes anything.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -31,6 +33,16 @@ SCAN_FILES = 150
 
 Runner = Literal["supervisione", "modello di lavoro", "motore locale", "lavoro notturno"]
 State = Literal["running", "done", "failed", "unknown"]
+ActivityKind = Literal[
+    "supervisor",
+    "worker",
+    "job",
+    "dynamic",
+    "script",
+    "generation",
+    "ai_error",
+    "download",
+]
 
 
 class ActivityProgress(BaseModel):
@@ -47,7 +59,7 @@ class ActivityLink(BaseModel):
 
 class ActivityRow(BaseModel):
     key: str
-    kind: str
+    kind: ActivityKind
     title: str
     runner: Runner
     started_at: str | None
@@ -345,6 +357,129 @@ def _sort_key(row: ActivityRow) -> datetime:
     return _parse(row.started_at) or _parse(row.ended_at) or datetime.min.replace(tzinfo=UTC)
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    try:
+        stat_path = Path(f"/proc/{pid}/stat")
+        if stat_path.is_file():
+            state = stat_path.read_text().rsplit(")", 1)[1].split()[0]
+            if state in ("Z", "X"):
+                return False
+    except (OSError, IndexError, ValueError):
+        pass
+    return True
+
+
+def _download_rows(now: datetime) -> list[ActivityRow]:
+    root = relay_monitor.control_root()
+    d_dir = root / "downloads"
+    if not d_dir.is_dir():
+        return []
+    paths = sorted(d_dir.glob("*.json"), reverse=True)[:SCAN_FILES]
+    rows: list[ActivityRow] = []
+    for path in paths:
+        if len(rows) >= MAX_ROWS:
+            break
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(data, dict):
+            continue
+        state = str(data.get("state") or "")
+        if state not in ("running", "succeeded", "failed"):
+            continue
+        ended = data.get("ended_at") if state in ("succeeded", "failed") else None
+        if state in ("succeeded", "failed") and not _recent(ended or data.get("started_at"), now):
+            continue
+
+        label = str(data.get("label") or data.get("file_name") or "file")
+        title = _visible(f"Download di {label}", "Download di un file")
+
+        if state == "running":
+            is_stale = False
+            pid = data.get("pid")
+            if not isinstance(pid, int) or not _pid_alive(pid):
+                try:
+                    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+                    if now - mtime > timedelta(minutes=2):
+                        is_stale = True
+                except OSError:
+                    is_stale = True
+
+            if is_stale:
+                row_state: State = "unknown"
+                state_word = "da verificare"
+                step = None
+                outcome = None
+            else:
+                row_state = "running"
+                state_word = "in corso"
+                step = "sto scaricando"
+                outcome = None
+        elif state == "succeeded":
+            row_state = "done"
+            state_word = "completato"
+            step = None
+            outcome = "completato"
+        elif state == "failed":
+            row_state = "failed"
+            state_word = "non riuscito"
+            step = None
+            reason = str(data.get("reason") or "").strip()
+            outcome = _visible(f"non riuscito: {reason}", "non riuscito") if reason else "non riuscito"
+        else:
+            continue
+
+        bytes_done = data.get("bytes_done")
+        bytes_total = data.get("bytes_total")
+        progress: ActivityProgress | None = None
+        if (
+            isinstance(bytes_total, (int, float))
+            and not isinstance(bytes_total, bool)
+            and bytes_total > 0
+        ):
+            done_val = (
+                float(bytes_done)
+                if isinstance(bytes_done, (int, float)) and not isinstance(bytes_done, bool)
+                else 0.0
+            )
+            progress = ActivityProgress(
+                done=round(done_val / (1024 * 1024), 1),
+                total=round(float(bytes_total) / (1024 * 1024), 1),
+                unit="MB",
+            )
+
+        row_id = str(data.get("id") or path.stem)
+        rows.append(
+            ActivityRow(
+                key=f"download:{row_id}",
+                kind="download",
+                title=title,
+                runner="motore locale",
+                started_at=data.get("started_at"),
+                ended_at=ended,
+                state=row_state,
+                state_word=state_word,
+                progress=progress,
+                step=step,
+                outcome=outcome,
+                links=[],
+            )
+        )
+    rows.sort(key=_sort_key, reverse=True)
+    return rows[:MAX_ROWS]
+
+
 def read(now: datetime | None = None) -> ActivityRead:
     now = now or datetime.now(UTC)
     registry = _registry()
@@ -359,9 +494,22 @@ def read(now: datetime | None = None) -> ActivityRead:
             groups.append(ActivityGroup(id=source_id, title=title, state=UNAVAILABLE, reason=reason))
     rows.sort(key=_sort_key, reverse=True)
     rows = rows[:MAX_ROWS]
+
+    downloads: list[ActivityRow] = []
+    try:
+        downloads = _download_rows(now)
+    except Exception:  # noqa: BLE001
+        downloads = []
+
     return ActivityRead(
-        generated_at=_iso(now), running=sum(1 for r in rows if r.state == "running"), rows=rows, groups=groups,
-        quota=_quota(), downloads=[], downloads_empty="nessun download registrato")
+        generated_at=_iso(now),
+        running=sum(1 for r in rows if r.state == "running"),
+        rows=rows,
+        groups=groups,
+        quota=_quota(),
+        downloads=downloads,
+        downloads_empty="nessun download registrato",
+    )
 
 
 def _log_path(job: dict[str, Any], root: Path) -> Path | None:

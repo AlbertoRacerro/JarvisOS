@@ -16,7 +16,7 @@ export type ActivityLink = {
 
 export type ActivityRow = {
   key: string;
-  kind: string;
+  kind: "supervisor" | "worker" | "job" | "dynamic" | "script" | "generation" | "ai_error" | "download";
   title: string;
   runner: "supervisione" | "modello di lavoro" | "motore locale" | "lavoro notturno";
   started_at: string | null;
