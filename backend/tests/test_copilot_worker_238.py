@@ -202,3 +202,238 @@ def test_all_allowlisted_model_ids_and_overrides(monkeypatch: pytest.MonkeyPatch
         with pytest.raises(worker.Refused) as caught:
             worker.resolve_model(model)
         assert caught.value.reason == "model_not_allowed"
+
+
+def test_prepare_copilot_home_copies_config_only(tmp_path: Path) -> None:
+    home = tmp_path / "user_home"
+    copilot_dir = home / ".copilot"
+    copilot_dir.mkdir(parents=True)
+    (copilot_dir / "config.json").write_text(json.dumps({"auth": "ok"}), encoding="utf-8")
+    (copilot_dir / "logs.txt").write_text("historical logs\n", encoding="utf-8")
+    (copilot_dir / "session-state").mkdir()
+    (copilot_dir / "session-state" / "old.jsonl").write_text("old\n", encoding="utf-8")
+
+    evidence = tmp_path / "evidence"
+    ch = worker.prepare_copilot_home(evidence, home=home)
+    assert ch == evidence / "copilot-home"
+    assert ch.is_dir()
+    assert json.loads((ch / "config.json").read_text(encoding="utf-8")) == {"auth": "ok"}
+    assert not (ch / "logs.txt").exists()
+    assert not (ch / "session-state").exists()
+
+
+def test_prepare_copilot_home_copies_from_sandbox_target_when_no_dot_copilot(tmp_path: Path) -> None:
+    home = tmp_path / "user_home"
+    state = home / ".local/share/jarvisos-sandbox/state/copilot/copilot-home"
+    state.mkdir(parents=True)
+    (state / "config.json").write_text(json.dumps({"sandbox_config": True}), encoding="utf-8")
+
+    evidence = tmp_path / "evidence"
+    ch = worker.prepare_copilot_home(evidence, home=home)
+    assert json.loads((ch / "config.json").read_text(encoding="utf-8")) == {"sandbox_config": True}
+
+
+def test_extract_copilot_session_auto_resolved_and_shutdown_token_details(tmp_path: Path) -> None:
+    copilot_home = tmp_path / "copilot-home"
+    sess_dir = copilot_home / "session-state" / "sess-123"
+    sess_dir.mkdir(parents=True)
+    events = [
+        {"type": "session.start", "data": {}},
+        {"type": "session.auto_mode_resolved", "data": {
+            "chosenModel": "mai-code-2-flash",
+            "candidateModels": ["mai-code-2-flash", "gpt-4o"],
+            "selectionReason": "heuristic",
+        }},
+        {"type": "session.shutdown", "data": {
+            "currentModel": "mai-code-2-flash",
+            "totalPremiumRequests": 1,
+            "tokenDetails": {
+                "input": {"tokenCount": 100},
+                "output": {"tokenCount": 50},
+                "cache_read": {"tokenCount": 20},
+                "cache_write": {"tokenCount": 10},
+            },
+        }},
+    ]
+    (sess_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events) + "\n",
+        encoding="utf-8",
+    )
+
+    info = worker.extract_copilot_session(copilot_home)
+    assert info["actual_model"] == "mai-code-2-flash"
+    assert info["auto_routing"] == {
+        "chosen_model": "mai-code-2-flash",
+        "candidate_models": ["mai-code-2-flash", "gpt-4o"],
+        "selection_reason": "heuristic",
+    }
+    assert info["usage"] == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_tokens": 30,
+        "total_tokens": 180,
+        "premium_requests": 1,
+    }
+
+
+def test_extract_copilot_session_shutdown_model_metrics(tmp_path: Path) -> None:
+    copilot_home = tmp_path / "copilot-home"
+    sess_dir = copilot_home / "session-state" / "sess-456"
+    sess_dir.mkdir(parents=True)
+    events = [
+        {"type": "session.shutdown", "data": {
+            "currentModel": "claude-sonnet-3.5",
+            "totalPremiumRequests": 2,
+            "modelMetrics": {
+                "claude-sonnet-3.5": {
+                    "tokenDetails": {
+                        "input": {"tokenCount": 200},
+                        "output": {"tokenCount": 80},
+                        "cache_read": {"tokenCount": 40},
+                        "cache_write": {"tokenCount": 10},
+                    },
+                },
+                "gpt-4o": {
+                    "usage": {
+                        "inputTokens": 150,
+                        "outputTokens": 60,
+                        "cacheReadTokens": 50,
+                        "cacheWriteTokens": 20,
+                    },
+                },
+            },
+        }},
+    ]
+    (sess_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events) + "\n",
+        encoding="utf-8",
+    )
+
+    info = worker.extract_copilot_session(copilot_home)
+    assert info["actual_model"] == "claude-sonnet-3.5"
+    assert info["auto_routing"] is None
+    # model 1: in=200, out=80, cache=50
+    # model 2: in=150-50=100, out=60, cache=70
+    assert info["usage"] == {
+        "input_tokens": 300,
+        "output_tokens": 140,
+        "cache_tokens": 120,
+        "total_tokens": 560,
+        "premium_requests": 2,
+    }
+
+
+def test_extract_copilot_session_fallback_to_usage_records(tmp_path: Path) -> None:
+    copilot_home = tmp_path / "copilot-home"
+    sess_dir = copilot_home / "session-state" / "sess-789"
+    sess_dir.mkdir(parents=True)
+    events = [
+        {"type": "session.usage_record", "data": {
+            "usage": {
+                "responseModel": "gpt-4o",
+                "inputTokens": 120,
+                "outputTokens": 30,
+                "cacheReadTokens": 20,
+                "cacheWriteTokens": 10,
+            },
+        }},
+        {"type": "session.usage_checkpoint", "data": {
+            "totalPremiumRequests": 3,
+        }},
+        {"type": "session.usage_record", "data": {
+            "usage": {
+                "model": "gpt-4o",
+                "inputTokens": 150,
+                "outputTokens": 40,
+                "cacheReadTokens": 50,
+                "cacheWriteTokens": 20,
+            },
+        }},
+    ]
+    (sess_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events) + "\n",
+        encoding="utf-8",
+    )
+
+    info = worker.extract_copilot_session(copilot_home)
+    assert info["actual_model"] == "gpt-4o"
+    assert info["auto_routing"] is None
+    # r1: in=100, out=30, cache=30
+    # r2: in=100, out=40, cache=70
+    assert info["usage"] == {
+        "input_tokens": 200,
+        "output_tokens": 70,
+        "cache_tokens": 100,
+        "total_tokens": 370,
+        "premium_requests": 3,
+    }
+
+
+def test_extract_copilot_session_fallback_directory_and_time_filter(tmp_path: Path) -> None:
+    copilot_home = tmp_path / "empty-copilot-home"
+    copilot_home.mkdir()
+    fallback_home = tmp_path / "fallback"
+    sess_old = fallback_home / "session-state" / "sess-old"
+    sess_old.mkdir(parents=True)
+    sess_new = fallback_home / "session-state" / "sess-new"
+    sess_new.mkdir(parents=True)
+
+    (sess_old / "events.jsonl").write_text(
+        json.dumps({"type": "session.shutdown", "data": {"currentModel": "old-model"}}) + "\n",
+        encoding="utf-8",
+    )
+    (sess_new / "events.jsonl").write_text(
+        json.dumps({"type": "session.shutdown", "data": {"currentModel": "new-model"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    # Set mtime
+    now = worker.now_utc()
+    old_time = now.timestamp() - 100.0
+    new_time = now.timestamp()
+    os.utime(sess_old / "events.jsonl", (old_time, old_time))
+    os.utime(sess_new / "events.jsonl", (new_time, new_time))
+
+    info = worker.extract_copilot_session(copilot_home, fallback_home=fallback_home, started_at=now)
+    assert info["actual_model"] == "new-model"
+
+
+def test_extract_copilot_session_missing_or_corrupt(tmp_path: Path) -> None:
+    empty = tmp_path / "empty"
+    assert worker.extract_copilot_session(empty) == {"actual_model": None, "auto_routing": None, "usage": None}
+
+    corrupt = tmp_path / "corrupt"
+    sess_dir = corrupt / "session-state" / "sess-x"
+    sess_dir.mkdir(parents=True)
+    (sess_dir / "events.jsonl").write_text("not json\n{malformed\n", encoding="utf-8")
+    assert worker.extract_copilot_session(corrupt) == {"actual_model": None, "auto_routing": None, "usage": None}
+
+
+def test_copilot_worker_execution_populates_actual_model_and_usage(env: Env) -> None:
+    # Update fake copilot script in env to write real events.jsonl to COPILOT_HOME
+    copilot_bin = Path(env.root / "copilot")
+    copilot_bin.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "ch = Path(os.environ.get('COPILOT_HOME', ''))\n"
+        "if ch.is_dir():\n"
+        "    sdir = ch / 'session-state' / 'sess-live'\n"
+        "    sdir.mkdir(parents=True, exist_ok=True)\n"
+        "    events = [\n"
+        "        {'type': 'session.auto_mode_resolved', 'data': {'chosenModel': 'mai-code-2-flash', 'candidateModels': ['mai-code-2-flash']}},\n"
+        "        {'type': 'session.shutdown', 'data': {'currentModel': 'mai-code-2-flash', 'tokenDetails': {'input': {'tokenCount': 50}, 'output': {'tokenCount': 25}}}},\n"
+        "    ]\n"
+        "    (sdir / 'events.jsonl').write_text('\\n'.join(json.dumps(e) for e in events) + '\\n')\n"
+        "Path('tracked.txt').write_text('after\\n')\n"
+        "print('worker ok')\n"
+    )
+    copilot_bin.chmod(0o755)
+
+    result = env.run()
+    assert result["status"] == "succeeded"
+    assert result["actual_model"] == "mai-code-2-flash"
+    assert result["auto_routing"]["chosen_model"] == "mai-code-2-flash"
+    assert result["usage"]["input_tokens"] == 50
+    assert result["usage"]["output_tokens"] == 25
+    assert result["usage"]["total_tokens"] == 75

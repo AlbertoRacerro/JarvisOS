@@ -34,7 +34,7 @@ KILL_MARGIN = 60
 MAX_TASK_BYTES = 200 * 1024
 STRIPPED_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR", "GIT_CONFIG_GLOBAL", "SSH_AUTH_SOCK",
                 "GH_ENTERPRISE_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "COPILOT_GITHUB_TOKEN",
-                "JARVISOS_COPILOT_GH_TOKEN")
+                "JARVISOS_COPILOT_GH_TOKEN", "COPILOT_HOME")
 STRIPPED_PREFIXES = ("GH_", "GIT_")
 FORBIDDEN_FLAGS = ("--yolo", "--allow-all", "--remote-control")
 
@@ -97,7 +97,7 @@ def prepare_copilot_auth(home: Path | None = None, base_env: Mapping[str, str] |
 
 
 def child_env(base: dict[str, str] | None = None, gh_config: Path | None = None,
-              copilot_token: str | None = None) -> dict[str, str]:
+              copilot_token: str | None = None, copilot_home: Path | None = None) -> dict[str, str]:
     env = {k: v for k, v in (os.environ if base is None else base).items()
            if k not in STRIPPED_ENV and not k.startswith(STRIPPED_PREFIXES)}
     env["GIT_CONFIG_GLOBAL"] = "/dev/null"
@@ -107,7 +107,27 @@ def child_env(base: dict[str, str] | None = None, gh_config: Path | None = None,
         env["GH_CONFIG_DIR"] = str(gh_config)
     if copilot_token is not None:
         env["COPILOT_GITHUB_TOKEN"] = copilot_token
+    if copilot_home is not None:
+        env["COPILOT_HOME"] = str(copilot_home)
     return env
+
+
+def prepare_copilot_home(evidence: Path, home: Path | None = None) -> Path:
+    copilot_home = evidence / "copilot-home"
+    copilot_home.mkdir(parents=True, exist_ok=True)
+    base_home = home or Path.home()
+    candidates = [
+        base_home / ".copilot" / "config.json",
+        base_home / ".local/share/jarvisos-sandbox/state/copilot/copilot-home/config.json",
+    ]
+    for src in candidates:
+        if src.is_file():
+            try:
+                shutil.copy2(src, copilot_home / "config.json")
+                break
+            except OSError:
+                pass
+    return copilot_home
 
 
 def _host_which(command: str) -> str | None:
@@ -262,6 +282,218 @@ def default_evidence_dir() -> Path:
     return Path.home() / "jarvis-control" / "work" / "evidence" / f"copilot-worker-{stamp}"
 
 
+def extract_copilot_session(copilot_home: Path, fallback_home: Path | None = None,
+                            started_at: datetime | None = None) -> dict[str, Any]:
+    candidate_files: list[Path] = []
+    try:
+        candidate_files = [f for f in (copilot_home / "session-state").glob("*/events.jsonl") if f.is_file()]
+    except OSError:
+        candidate_files = []
+
+    if not candidate_files:
+        if fallback_home is not None:
+            try:
+                if fallback_home.is_dir():
+                    fb_files = [f for f in (fallback_home / "session-state").glob("*/events.jsonl") if f.is_file()]
+                    if started_at is not None:
+                        threshold = started_at.timestamp() - 2.0
+                        fb_files = [f for f in fb_files if f.stat().st_mtime >= threshold]
+                    candidate_files = fb_files
+            except OSError:
+                candidate_files = []
+        elif started_at is not None:
+            fb = Path.home() / ".copilot"
+            try:
+                if fb.is_dir():
+                    threshold = started_at.timestamp() - 2.0
+                    candidate_files = [
+                        f for f in (fb / "session-state").glob("*/events.jsonl")
+                        if f.is_file() and f.stat().st_mtime >= threshold
+                    ]
+            except OSError:
+                candidate_files = []
+
+    if not candidate_files:
+        return {"actual_model": None, "auto_routing": None, "usage": None}
+
+    try:
+        newest_file = max(candidate_files, key=lambda f: f.stat().st_mtime)
+        lines = newest_file.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {"actual_model": None, "auto_routing": None, "usage": None}
+
+    auto_mode_resolved_events: list[dict[str, Any]] = []
+    shutdown_events: list[dict[str, Any]] = []
+    usage_record_events: list[dict[str, Any]] = []
+    usage_checkpoint_events: list[dict[str, Any]] = []
+
+    for line in lines:
+        line_str = line.strip()
+        if not line_str:
+            continue
+        try:
+            event = json.loads(line_str)
+        except Exception:
+            continue
+        if not isinstance(event, dict):
+            continue
+        etype = event.get("type")
+        if etype == "session.auto_mode_resolved" and isinstance(event.get("data"), dict):
+            auto_mode_resolved_events.append(event)
+        elif etype == "session.shutdown" and isinstance(event.get("data"), dict):
+            shutdown_events.append(event)
+        elif etype == "session.usage_record" and isinstance(event.get("data"), dict):
+            usage_record_events.append(event)
+        elif etype == "session.usage_checkpoint" and isinstance(event.get("data"), dict):
+            usage_checkpoint_events.append(event)
+
+    auto_routing: dict[str, Any] | None = None
+    if auto_mode_resolved_events:
+        data = auto_mode_resolved_events[-1]["data"]
+        chosen = data.get("chosenModel")
+        if isinstance(chosen, str) and chosen.strip():
+            c_raw = data.get("candidateModels")
+            candidates = [c for c in c_raw if isinstance(c, str) and c] if isinstance(c_raw, list) else []
+            r_raw = data.get("selectionReason")
+            reason = r_raw if isinstance(r_raw, str) else None
+            auto_routing = {
+                "chosen_model": chosen.strip(),
+                "candidate_models": candidates,
+                "selection_reason": reason,
+            }
+
+    actual_model: str | None = None
+    if auto_routing is not None and auto_routing.get("chosen_model"):
+        actual_model = auto_routing["chosen_model"]
+    elif shutdown_events:
+        data = shutdown_events[-1]["data"]
+        cm = data.get("currentModel")
+        if isinstance(cm, str) and cm.strip():
+            actual_model = cm.strip()
+        elif isinstance(data.get("modelMetrics"), dict) and data["modelMetrics"]:
+            keys = [str(k).strip() for k in data["modelMetrics"].keys() if str(k).strip()]
+            if keys:
+                actual_model = ",".join(keys)
+    if actual_model is None and usage_record_events:
+        for ev in reversed(usage_record_events):
+            d = ev.get("data")
+            if isinstance(d, dict):
+                u = d.get("usage")
+                if isinstance(u, dict):
+                    rm = u.get("responseModel") or u.get("model")
+                    if isinstance(rm, str) and rm.strip():
+                        actual_model = rm.strip()
+                        break
+
+    def _non_neg_int(val: Any) -> int | None:
+        if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
+            return val
+        return None
+
+    usage: dict[str, int] | None = None
+    if shutdown_events:
+        data = shutdown_events[-1]["data"]
+        td = data.get("tokenDetails")
+        if isinstance(td, dict):
+            inp = _non_neg_int(td.get("input", {}).get("tokenCount") if isinstance(td.get("input"), dict) else None)
+            out = _non_neg_int(td.get("output", {}).get("tokenCount") if isinstance(td.get("output"), dict) else None)
+            cr_val = td.get("cache_read", {}).get("tokenCount") if isinstance(td.get("cache_read"), dict) else 0
+            cw_val = td.get("cache_write", {}).get("tokenCount") if isinstance(td.get("cache_write"), dict) else 0
+            cr = _non_neg_int(cr_val) if cr_val is not None else 0
+            if cr is None:
+                cr = 0
+            cw = _non_neg_int(cw_val) if cw_val is not None else 0
+            if cw is None:
+                cw = 0
+            prem_raw = data.get("totalPremiumRequests", 0)
+            prem = prem_raw if (isinstance(prem_raw, int) and not isinstance(prem_raw, bool) and prem_raw >= 0) else 0
+            if inp is not None and out is not None and cr is not None and cw is not None:
+                cache_tokens = cr + cw
+                usage = {
+                    "input_tokens": inp,
+                    "output_tokens": out,
+                    "cache_tokens": cache_tokens,
+                    "total_tokens": inp + out + cache_tokens,
+                    "premium_requests": prem,
+                }
+        if usage is None and isinstance(data.get("modelMetrics"), dict) and data["modelMetrics"]:
+            tot_in = 0
+            tot_out = 0
+            tot_cache = 0
+            have_metric = False
+            for metric in data["modelMetrics"].values():
+                if not isinstance(metric, dict):
+                    continue
+                m_td = metric.get("tokenDetails")
+                m_u = metric.get("usage")
+                if isinstance(m_td, dict):
+                    m_inp = _non_neg_int(m_td.get("input", {}).get("tokenCount") if isinstance(m_td.get("input"), dict) else None)
+                    m_out = _non_neg_int(m_td.get("output", {}).get("tokenCount") if isinstance(m_td.get("output"), dict) else None)
+                    m_cr = _non_neg_int(m_td.get("cache_read", {}).get("tokenCount") if isinstance(m_td.get("cache_read"), dict) else 0) or 0
+                    m_cw = _non_neg_int(m_td.get("cache_write", {}).get("tokenCount") if isinstance(m_td.get("cache_write"), dict) else 0) or 0
+                    if m_inp is not None and m_out is not None:
+                        tot_in += m_inp
+                        tot_out += m_out
+                        tot_cache += (m_cr + m_cw)
+                        have_metric = True
+                elif isinstance(m_u, dict):
+                    m_in_tok = _non_neg_int(m_u.get("inputTokens")) or 0
+                    m_out_tok = _non_neg_int(m_u.get("outputTokens")) or 0
+                    m_cr_tok = _non_neg_int(m_u.get("cacheReadTokens")) or 0
+                    m_cw_tok = _non_neg_int(m_u.get("cacheWriteTokens")) or 0
+                    tot_in += max(0, m_in_tok - m_cr_tok)
+                    tot_out += m_out_tok
+                    tot_cache += (m_cr_tok + m_cw_tok)
+                    have_metric = True
+            if have_metric:
+                prem_raw = data.get("totalPremiumRequests", 0)
+                prem = prem_raw if (isinstance(prem_raw, int) and not isinstance(prem_raw, bool) and prem_raw >= 0) else 0
+                usage = {
+                    "input_tokens": tot_in,
+                    "output_tokens": tot_out,
+                    "cache_tokens": tot_cache,
+                    "total_tokens": tot_in + tot_out + tot_cache,
+                    "premium_requests": prem,
+                }
+
+    if usage is None and usage_record_events:
+        tot_in = 0
+        tot_out = 0
+        tot_cache = 0
+        have_record = False
+        for ev in usage_record_events:
+            d = ev.get("data")
+            if not isinstance(d, dict):
+                continue
+            u = d.get("usage")
+            if not isinstance(u, dict):
+                continue
+            in_tok = _non_neg_int(u.get("inputTokens")) or 0
+            out_tok = _non_neg_int(u.get("outputTokens")) or 0
+            cr_tok = _non_neg_int(u.get("cacheReadTokens")) or 0
+            cw_tok = _non_neg_int(u.get("cacheWriteTokens")) or 0
+            tot_in += max(0, in_tok - cr_tok)
+            tot_out += out_tok
+            tot_cache += (cr_tok + cw_tok)
+            have_record = True
+        if have_record:
+            prem = 0
+            if usage_checkpoint_events:
+                last_chk_data = usage_checkpoint_events[-1].get("data")
+                if isinstance(last_chk_data, dict):
+                    prem_raw = last_chk_data.get("totalPremiumRequests", 0)
+                    prem = prem_raw if (isinstance(prem_raw, int) and not isinstance(prem_raw, bool) and prem_raw >= 0) else 0
+            usage = {
+                "input_tokens": tot_in,
+                "output_tokens": tot_out,
+                "cache_tokens": tot_cache,
+                "total_tokens": tot_in + tot_out + tot_cache,
+                "premium_requests": prem,
+            }
+
+    return {"actual_model": actual_model, "auto_routing": auto_routing, "usage": usage}
+
+
 def execute(args: argparse.Namespace, sandbox_check: Callable[[], bool] | None = None) -> tuple[Path | None, dict[str, Any]]:
     """Run the wrapper; returns (result.json path or None, result). Never raises for refusals."""
     started = now_utc()
@@ -269,6 +501,7 @@ def execute(args: argparse.Namespace, sandbox_check: Callable[[], bool] | None =
     evidence = Path(args.evidence_dir).expanduser() if args.evidence_dir else default_evidence_dir()
     result: dict[str, Any] = {
         "schema": SCHEMA, "status": "refused", "reason": None, "model": None, "alias": None,
+        "actual_model": None, "auto_routing": None, "usage": None,
         "worktree": str(worktree), "start_head": None, "exit_code": None, "started_at": iso(started),
         "finished_at": None, "quota": [], "argv": None}
     try:
@@ -301,12 +534,14 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     token = prepare_copilot_auth()
     gh_config = evidence / "gh-config-empty"
     gh_config.mkdir(exist_ok=True)
-    env = child_env(gh_config=gh_config, copilot_token=token)
+    copilot_home = prepare_copilot_home(evidence)
+    env = child_env(gh_config=gh_config, copilot_token=token, copilot_home=copilot_home)
     result["quota"] = quota_preflight(gh, token)
     argv = run_argv(copilot, task, model)
     result["argv"] = [f"<task-file:{args.task_file} {digest}>" if item == task else item for item in argv]
     before = git_fingerprint(git_dir, common)
     status, reason = "succeeded", None
+    started = now_utc()
     try:
         proc = subprocess.Popen(argv, cwd=worktree, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 start_new_session=True)
@@ -336,6 +571,10 @@ def _run(args: argparse.Namespace, result: dict[str, Any], evidence: Path, sandb
     (evidence / "stderr.txt").write_text(stderr, encoding="utf-8")
     if reason != "git_metadata_modified":  # never run git over planted config or hooks
         (evidence / "diff.patch").write_text(collect_diff(worktree, result["start_head"]), encoding="utf-8")
+    session_info = extract_copilot_session(copilot_home, started_at=started)
+    result["actual_model"] = session_info["actual_model"]
+    result["auto_routing"] = session_info["auto_routing"]
+    result["usage"] = session_info["usage"]
     result.update(status=status, reason=reason)
 
 

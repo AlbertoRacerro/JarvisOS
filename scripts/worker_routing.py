@@ -974,6 +974,7 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
             raise ValueError(f"invalid coordinator_tokens: {coordinator_tokens}") from exc
 
     spend_data: dict[str, Any] | None = None
+    actual_models: list[str] = []
     if evidence is not None:
         raw_list = [evidence] if isinstance(evidence, (str, Path)) else list(evidence)
         if raw_list:
@@ -998,6 +999,11 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
                     raise ValueError(f"evidence result missing or unreadable: {item}") from exc
                 if not isinstance(res_dict, dict):
                     raise ValueError(f"evidence result missing or unreadable: {item}")
+                act = res_dict.get("actual_model")
+                if isinstance(act, str) and act.strip():
+                    cleaned = act.strip()
+                    if cleaned not in actual_models:
+                        actual_models.append(cleaned)
                 usage = res_dict.get("usage")
                 run_tokens = 0
                 if isinstance(usage, dict):
@@ -1056,6 +1062,8 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
         entry["coordinator_tokens"] = tokens_val
     if spend_data is not None:
         entry["spend"] = spend_data
+    if actual_models:
+        entry["actual_model"] = ",".join(actual_models)
 
     target = resolve_record_path(record_file)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1284,6 +1292,61 @@ def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[d
     return float(statistics.median(costs)), count
 
 
+def copilot_effective_capability(outcomes: list[dict[str, Any]] | None) -> int:
+    if not outcomes:
+        return 1
+    copilot_records = [
+        r for r in outcomes
+        if (r.get("worker") == "copilot-auto" or r.get("model") == "auto") and r.get("failure") != "harness"
+    ]
+    if not copilot_records:
+        return 1
+
+    def _rework_val(r: dict[str, Any]) -> int:
+        val = r.get("rework_rounds", 0) or 0
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return 0
+
+    def is_clean(r: dict[str, Any]) -> bool:
+        return (
+            r.get("failure", "none") == "none"
+            and not bool(r.get("escalated"))
+            and r.get("ci_first_pass") != "fail"
+            and (r.get("ci_first_pass") == "pass" or _rework_val(r) == 0)
+        )
+
+    tier2_records = [
+        r for r in copilot_records
+        if isinstance(r.get("tier"), int) and not isinstance(r.get("tier"), bool) and r["tier"] >= 2
+    ]
+    if len(tier2_records) < 2:
+        return 2 if (any(is_clean(r) for r in copilot_records) or len(tier2_records) == 1) else 1
+
+    clean_count = sum(1 for r in tier2_records if is_clean(r))
+    zero_rework_count = sum(1 for r in tier2_records if is_clean(r) and _rework_val(r) == 0)
+    if clean_count / len(tier2_records) < 0.50 or zero_rework_count == 0:
+        return 1
+
+    if (
+        len(tier2_records) >= 3
+        and zero_rework_count >= 3
+        and all(not bool(r.get("escalated")) and r.get("failure", "none") == "none" for r in tier2_records)
+        and any(
+            isinstance(r.get("actual_model"), str)
+            and r["actual_model"].strip()
+            and "flash" not in r["actual_model"].lower()
+            and "mini" not in r["actual_model"].lower()
+            and "haiku" not in r["actual_model"].lower()
+            for r in tier2_records
+        )
+    ):
+        return 3
+
+    return 2
+
+
 def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODELS, review_of: str | None = None,
          now: datetime | None = None, task: str | None = None, kind: str | None = None,
          outcomes: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1323,7 +1386,8 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
         c_fam = family(candidate)
         next_family: str | None = None
         for m in models:
-            if m.capability < required:
+            m_cap = copilot_effective_capability(outcomes) if m.key == "copilot-auto" else m.capability
+            if m_cap < required:
                 continue
             p = pools.get(m.pool) or unreadable(m.pool, "no_reading")
             if p.free is None or below_reserve(p, now):
@@ -1348,12 +1412,13 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
         return c_mean > next_mean
 
     for index, model in enumerate(models):
-        if model.capability < required:
+        eff_cap = copilot_effective_capability(outcomes) if model.key == "copilot-auto" else model.capability
+        if eff_cap < required:
             continue
         pool = pools.get(model.pool) or unreadable(model.pool, "no_reading")
         cost, count = candidate_measured_cost(model, kind, outcomes)
         entry: dict[str, Any] = {"worker": model.key, "kind": model.kind, "model": model.model, "pool": model.pool,
-                                 "family": family(model), "capability": model.capability,
+                                 "family": family(model), "capability": eff_cap,
                                  "free": None if pool.free is None else round(pool.free, 4), "source": pool.source,
                                  "measured_cost": cost, "record_count": count}
         if pool.free is None:
@@ -1369,7 +1434,7 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
             entry["same"] = same
             first = 0 if model.pool in FIRST_POOLS else 1
             paced = 0 if behind_pace(pool, now) else 1
-            eligible.append(((same, model.capability - required, paced, first, -expiry_score(pool, now), -pool.free,
+            eligible.append(((same, eff_cap - required, paced, first, -expiry_score(pool, now), -pool.free,
                               index), entry))
 
     ordered = sorted(eligible, key=lambda item: item[0])
@@ -1591,7 +1656,23 @@ def report(days: int = 7, record_file: Path | None = None, records: list[dict[st
         rework = round(sum(_rework_score(r) - sum(_record_findings_all(r)[:2]) for r in group))
         escalations = sum(1 for r in group if r.get("escalated"))
         w_key = group[0].get("worker")
-        w_tag = f" ({w_key})" if w_key and w_key != m_name else ""
+        actual_counts: dict[str, int] = {}
+        for r in group:
+            act = r.get("actual_model")
+            if isinstance(act, str) and act.strip():
+                for tok in act.split(","):
+                    tok = tok.strip()
+                    if tok:
+                        actual_counts[tok] = actual_counts.get(tok, 0) + 1
+
+        if actual_counts:
+            mod_str = ", ".join(f"{m}×{c}" if c > 1 else m for m, c in actual_counts.items())
+            if w_key and w_key != m_name:
+                w_tag = f" ({w_key}, modelli: {mod_str})"
+            else:
+                w_tag = f" (modelli: {mod_str})"
+        else:
+            w_tag = f" ({w_key})" if w_key and w_key != m_name else ""
         lines.append(
             f"- {m_name}{w_tag}: {total} compiti, prima prova {pass_rate}, "
             f"rilievi (P0: {p0}, P1: {p1}, P2: {p2}, P3: {p3}), rilavorazioni {rework}, escalation {escalations}"

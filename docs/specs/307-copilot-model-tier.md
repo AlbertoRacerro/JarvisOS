@@ -1,6 +1,6 @@
 # 307 — COPILOT-MODEL-TIER-1: Record actual model selected by Copilot CLI auto mode and token usage, and set Copilot routing tier from measured outcomes
 
-Status: ready
+Status: merged
 Depends on: 306
 
 ## Goal

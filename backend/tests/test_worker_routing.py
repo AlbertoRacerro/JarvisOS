@@ -1731,3 +1731,176 @@ def test_spec_306_malformed_journal_records_and_no_double_counting(tmp_path: Pat
     text = wr.report(days=7, record_file=rf, control_dir=cd, repo=repo, now=now)
     assert "meno 250 token coordinatore registrati." in text
 
+
+def test_spec_307_copilot_effective_capability() -> None:
+    # Baseline
+    assert wr.copilot_effective_capability(None) == 1
+    assert wr.copilot_effective_capability([]) == 1
+
+    # Only harness failure
+    assert wr.copilot_effective_capability([
+        {"worker": "copilot-auto", "tier": 1, "failure": "harness", "ci_first_pass": "pass"}
+    ]) == 1
+
+    # Non-copilot worker records
+    assert wr.copilot_effective_capability([
+        {"worker": "flash", "tier": 2, "failure": "none", "ci_first_pass": "pass"}
+    ]) == 1
+
+    # 1 clean tier-1 record -> trial tier 2
+    clean_t1 = {"worker": "copilot-auto", "model": "auto", "tier": 1, "failure": "none",
+                "escalated": False, "ci_first_pass": "pass", "rework_rounds": 0}
+    assert wr.copilot_effective_capability([clean_t1]) == 2
+
+    # 1 clean tier-1 record with n/a first pass and 0 rework -> trial tier 2
+    clean_t1_na = {"worker": "copilot-auto", "model": "auto", "tier": 1, "failure": "none",
+                   "escalated": False, "ci_first_pass": "n/a", "rework_rounds": 0}
+    assert wr.copilot_effective_capability([clean_t1_na]) == 2
+
+    # 1 unclean tier-1 record -> tier 1
+    fail_t1 = {"worker": "copilot-auto", "model": "auto", "tier": 1, "failure": "model",
+               "escalated": False, "ci_first_pass": "fail", "rework_rounds": 0}
+    assert wr.copilot_effective_capability([fail_t1]) == 1
+
+    # 1 tier-2 trial record (even if failed) -> tier 2 allowed for trial
+    trial_t2 = {"worker": "copilot-auto", "model": "auto", "tier": 2, "failure": "model",
+                "escalated": False, "ci_first_pass": "fail", "rework_rounds": 1}
+    assert wr.copilot_effective_capability([trial_t2]) == 2
+
+    # 2 tier-2 records: both failed -> demoted to 1
+    assert wr.copilot_effective_capability([trial_t2, trial_t2]) == 1
+
+    # 2 tier-2 records: 1 clean with rework 0, 1 failed -> clean rate 50%, zero rework >= 1 -> tier 2
+    clean_t2 = {"worker": "copilot-auto", "model": "auto", "tier": 2, "failure": "none",
+                "escalated": False, "ci_first_pass": "pass", "rework_rounds": 0}
+    assert wr.copilot_effective_capability([clean_t2, trial_t2]) == 2
+
+    # 2 tier-2 records: 2 clean but both had rework=1 -> zero_rework is 0 -> demoted to 1
+    clean_t2_rework = {"worker": "copilot-auto", "model": "auto", "tier": 2, "failure": "none",
+                       "escalated": False, "ci_first_pass": "pass", "rework_rounds": 1}
+    assert wr.copilot_effective_capability([clean_t2_rework, clean_t2_rework]) == 1
+
+    # 3 tier-2 records, clean with rework 0, but actual_model is flash -> tier 2
+    flash_t2 = {**clean_t2, "actual_model": "mai-code-2-flash"}
+    assert wr.copilot_effective_capability([flash_t2, flash_t2, flash_t2]) == 2
+
+    # 3 tier-2 records, clean with rework 0, actual_model is non-flash/mini/haiku -> promoted to 3
+    sonnet_t2 = {**clean_t2, "actual_model": "claude-3.5-sonnet"}
+    assert wr.copilot_effective_capability([flash_t2, flash_t2, sonnet_t2]) == 3
+
+    # 3 tier-2 records, clean with rework 0, but one escalated -> not promoted to 3
+    esc_t2 = {**sonnet_t2, "escalated": True}
+    assert wr.copilot_effective_capability([sonnet_t2, sonnet_t2, esc_t2]) == 2
+
+
+def test_spec_307_rank_dynamic_copilot_capability() -> None:
+    ps = pools(copilot=pool("copilot", 0.99))
+    now = wr.datetime.now(wr.UTC)
+
+    # Without outcomes: required tier 2 excludes copilot-auto
+    el_base, sk_base = wr.rank(2, ps, now=now, outcomes=None)
+    assert not any(e["worker"] == "copilot-auto" for e in el_base)
+
+    # With outcomes promoting to tier 2: required tier 2 includes copilot-auto
+    outcomes_t2 = [{"worker": "copilot-auto", "model": "auto", "tier": 1, "failure": "none",
+                    "escalated": False, "ci_first_pass": "pass", "rework_rounds": 0}]
+    el_t2, sk_t2 = wr.rank(2, ps, now=now, outcomes=outcomes_t2)
+    cop_entry = next(e for e in el_t2 if e["worker"] == "copilot-auto")
+    assert cop_entry["capability"] == 2
+
+    # Required tier 3 excludes copilot-auto at tier 2
+    el_t3, sk_t3 = wr.rank(3, ps, now=now, outcomes=outcomes_t2)
+    assert not any(e["worker"] == "copilot-auto" for e in el_t3)
+
+    # With outcomes promoting to tier 3: required tier 3 includes copilot-auto
+    sonnet_t2 = {"worker": "copilot-auto", "model": "auto", "tier": 2, "failure": "none",
+                 "escalated": False, "ci_first_pass": "pass", "rework_rounds": 0, "actual_model": "claude-3.5-sonnet"}
+    outcomes_t3 = [sonnet_t2, sonnet_t2, sonnet_t2]
+    el_t3_promoted, _ = wr.rank(3, ps, now=now, outcomes=outcomes_t3)
+    cop_entry_t3 = next(e for e in el_t3_promoted if e["worker"] == "copilot-auto")
+    assert cop_entry_t3["capability"] == 3
+
+
+def test_spec_307_record_actual_model_from_evidence(tmp_path: Path) -> None:
+    rf = tmp_path / "records.jsonl"
+    ev1 = tmp_path / "ev1"
+    ev1.mkdir()
+    (ev1 / "result.json").write_text(json.dumps({
+        "actual_model": "mai-code-2-flash",
+        "usage": {"total_tokens": 120},
+    }), encoding="utf-8")
+
+    ev2 = tmp_path / "ev2"
+    ev2.mkdir()
+    (ev2 / "result.json").write_text(json.dumps({
+        "actual_model": "claude-sonnet-3.5",
+        "usage": {"total_tokens": 200},
+    }), encoding="utf-8")
+
+    ev3 = tmp_path / "ev3"
+    ev3.mkdir()
+    (ev3 / "result.json").write_text(json.dumps({
+        "actual_model": "mai-code-2-flash",
+        "usage": {"total_tokens": 150},
+    }), encoding="utf-8")
+
+    # Record single evidence
+    entry1 = wr.record("task-1", "feature", "copilot-auto", evidence=ev1, record_file=rf)
+    assert entry1.get("actual_model") == "mai-code-2-flash"
+
+    # Record multiple evidence with distinct actual models
+    entry2 = wr.record("task-2", "feature", "copilot-auto", evidence=[ev1, ev2, ev3], record_file=rf)
+    assert entry2.get("actual_model") == "mai-code-2-flash,claude-sonnet-3.5"
+
+    lines = [json.loads(line) for line in rf.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 2
+    assert lines[0]["actual_model"] == "mai-code-2-flash"
+    assert lines[1]["actual_model"] == "mai-code-2-flash,claude-sonnet-3.5"
+
+
+def test_spec_307_report_modelli_display_and_copilot_spend(tmp_path: Path) -> None:
+    now = wr.datetime(2026, 11, 18, 12, 0, 0, tzinfo=wr.UTC)
+    rf = tmp_path / "records.jsonl"
+
+    records = [
+        {
+            "at": "2026-11-18T10:00:00Z",
+            "task": "task-1",
+            "kind": "feature",
+            "worker": "copilot-auto",
+            "model": "auto",
+            "tier": 2,
+            "ci_first_pass": "pass",
+            "rework_rounds": 0,
+            "escalated": False,
+            "actual_model": "mai-code-2-flash",
+            "spend": {"runs": 1, "tokens": 500},
+        },
+        {
+            "at": "2026-11-18T11:00:00Z",
+            "task": "task-2",
+            "kind": "feature",
+            "worker": "copilot-auto",
+            "model": "auto",
+            "tier": 2,
+            "ci_first_pass": "pass",
+            "rework_rounds": 0,
+            "escalated": False,
+            "actual_model": "mai-code-2-flash",
+            "spend": {"runs": 1, "tokens": 700},
+        },
+    ]
+    rf.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+
+    coord_turns = [{"pool": "copilot", "session": "s1", "tokens": 0}]
+    rep = wr.report(days=7, record_file=rf, now=now, coordinator_turns=coord_turns)
+    assert "- auto (copilot-auto, modelli: mai-code-2-flash×2): 2 compiti" in rep
+    assert "- Pool copilot: coordinatore 1 turni (0 token, 0%), worker 2 compiti (1200 token)" in rep
+
+    # Test with distinct models
+    records[1]["actual_model"] = "claude-3.5-sonnet"
+    rf.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    rep2 = wr.report(days=7, record_file=rf, now=now, coordinator_turns=coord_turns)
+    assert "- auto (copilot-auto, modelli: mai-code-2-flash, claude-3.5-sonnet): 2 compiti" in rep2
+
+
