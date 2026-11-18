@@ -96,10 +96,28 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 def _short_reason(exc: BaseException) -> str:
+    """A fixed, path-free phrase: exception text can carry URLs or local paths and is never recorded."""
     if isinstance(exc, KeyboardInterrupt):
         return "interrupted"
-    msg = str(exc).strip()
-    return msg[:80] if msg else exc.__class__.__name__
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    if isinstance(exc, urllib.error.URLError):
+        return "connection failed"
+    if isinstance(exc, ChecksumMismatch):
+        return "checksum mismatch"
+    if isinstance(exc, ClosedEarly):
+        return "server closed early"
+    if isinstance(exc, TimeoutError):
+        return "timed out"
+    return exc.__class__.__name__
+
+
+class ChecksumMismatch(Exception):
+    pass
+
+
+class ClosedEarly(Exception):
+    pass
 
 
 def main() -> int:
@@ -175,6 +193,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, sigterm_handler)
 
     try:
+        write_json_atomic(rec_path, record)
         handlers: list[urllib.request.BaseHandler] = [SafeRedirectHandler()]
         if is_loopback(parsed.hostname):
             handlers.append(urllib.request.ProxyHandler({}))
@@ -209,11 +228,11 @@ def main() -> int:
                         last_record_write = now_m
 
             if bytes_total is not None and bytes_done != bytes_total:
-                raise OSError(f"server closed early: got {bytes_done} of {bytes_total} bytes")
+                raise ClosedEarly
 
             digest = hasher.hexdigest().lower()
             if args.sha256 and digest != args.sha256.lower().strip():
-                raise ValueError("checksum mismatch")
+                raise ChecksumMismatch
 
             os.replace(part_path, dest_path)
 

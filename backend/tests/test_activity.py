@@ -260,6 +260,7 @@ def test_download_rows_running_succeeded_failed(control: Path) -> None:
         bytes_done=524_288_000,
         bytes_total=1_048_576_000,
         pid=os.getpid(),
+        mtime_minutes_ago=0,
     )
     write_download(
         control,
@@ -315,7 +316,7 @@ def test_download_rows_running_succeeded_failed(control: Path) -> None:
 
 
 def test_stale_running_download_shows_da_verificare(control: Path) -> None:
-    # Dead pid (999999), last write older than 2 minutes (5 minutes ago)
+    # Last write older than 2 minutes (5 minutes ago): the pid is never evidence
     write_download(
         control,
         minutes_ago=10,

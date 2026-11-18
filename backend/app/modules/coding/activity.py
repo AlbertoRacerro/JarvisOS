@@ -7,7 +7,6 @@ fails the panel. Nothing here starts, stops or writes anything.
 from __future__ import annotations
 
 import json
-import os
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -357,28 +356,6 @@ def _sort_key(row: ActivityRow) -> datetime:
     return _parse(row.started_at) or _parse(row.ended_at) or datetime.min.replace(tzinfo=UTC)
 
 
-def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    try:
-        stat_path = Path(f"/proc/{pid}/stat")
-        if stat_path.is_file():
-            state = stat_path.read_text().rsplit(")", 1)[1].split()[0]
-            if state in ("Z", "X"):
-                return False
-    except (OSError, IndexError, ValueError):
-        pass
-    return True
-
-
 def _download_rows(now: datetime) -> list[ActivityRow]:
     root = relay_monitor.control_root()
     d_dir = root / "downloads"
@@ -406,16 +383,12 @@ def _download_rows(now: datetime) -> list[ActivityRow]:
         title = _visible(f"Download di {label}", "Download di un file")
 
         if state == "running":
-            is_stale = False
-            pid = data.get("pid")
-            if not isinstance(pid, int) or not _pid_alive(pid):
-                try:
-                    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
-                    if now - mtime > timedelta(minutes=2):
-                        is_stale = True
-                except OSError:
-                    is_stale = True
-
+            # A running download rewrites its record while bytes arrive; the writer's pid may live in another
+            # namespace, so only the age of the last write is evidence, and silence proves nothing either way.
+            try:
+                is_stale = now - datetime.fromtimestamp(path.stat().st_mtime, tz=UTC) > timedelta(minutes=2)
+            except OSError:
+                is_stale = True
             if is_stale:
                 row_state: State = "unknown"
                 state_word = "da verificare"

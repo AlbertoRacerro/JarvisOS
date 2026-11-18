@@ -45,8 +45,8 @@ In scope:
   running ones and finished ones from the same recent window as other rows, and fills `downloads` with rows of kind
   `download`: title `Download di <label>`, runner `motore locale`, progress `ActivityProgress(done=MB, total=MB, unit="MB")`
   when `bytes_total` is known, step `sto scaricando` while running, outcome `completato` or `non riuscito` with the
-  reason. A `running` record whose `pid` is no longer alive on this host and whose last write is older than two minutes
-  shows `da verificare` (never `completato` or `non riuscito`: absence of a process proves nothing).
+  reason. A `running` record whose last write is older than two minutes shows `da verificare` (the writer's `pid`
+  may belong to another process namespace, so it is recorded but not used as evidence) (never `completato` or `non riuscito`: absence of a process proves nothing).
   `downloads_empty` stays the text shown when the list is empty. `ActivityRow.kind` gains `"download"` (regenerate
   `frontend/src/api/generated` with `scripts/generate_frontend_contracts.py`).
 - `frontend/src/components/ActivityPanel.tsx`: render download rows in the `Download` section with the same row
@@ -75,7 +75,7 @@ Out of scope (binding non-goals):
 2. A non-loopback `http://` URL is refused; the record of any transfer contains no URL path, query or destination
    directory.
 3. `activity.read` returns download rows for running, succeeded and failed records with megabyte progress when the
-   total is known, `da verificare` for a stale running record of a dead process, and skips malformed files.
+   total is known, `da verificare` for a running record not written for over two minutes, and skips malformed files.
 4. `ActivityPanel.tsx` shows download rows in the `Download` section and the empty text when there are none.
 5. A browser walk from `/` opens the Activity panel with a seeded running and a seeded finished download record in a
    temporary control root and sees both rows, the progress bar and no console or page errors.
