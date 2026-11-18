@@ -18,6 +18,7 @@ export const CHECK_STATUS_LABELS: Record<string, string> = {
 };
 const EVALUATOR_NAMES: Record<string, string> = {
   "bluecad.solid": "Solido BlueCAD",
+  "bluecad.solid_code": "Solido da codice (BlueCAD)",
   "bluecad.mesh": "Mesh BlueCAD",
   "bluecad.fem": "Struttura statica (FEM)",
   "fluids.pipe_pressure_drop": "Perdita di carico in tubo",
@@ -73,7 +74,7 @@ export function BenchRunDetailView({ run }: Readonly<{ run: BenchRunDetail }>) {
     <h4>Controlli</h4>
     {run.checks.length === 0 ? <p>Nessun controllo registrato.</p> :
       <table className="bench-checks"><thead><tr>
-        <th>Controllo</th><th>Famiglia</th><th>Esito</th><th>Valore</th><th>Limite</th><th>Unità</th><th>Nota</th><th>Fonte</th>
+        <th scope="col">Controllo</th><th scope="col">Famiglia</th><th scope="col">Esito</th><th scope="col">Valore</th><th scope="col">Limite</th><th scope="col">Unità</th><th scope="col">Nota</th><th scope="col">Fonte</th>
       </tr></thead><tbody>{run.checks.map((check) =>
         <tr key={check.id} data-status={check.status}>
           <td>{check.id}</td><td>{check.family}</td>
@@ -81,6 +82,11 @@ export function BenchRunDetailView({ run }: Readonly<{ run: BenchRunDetail }>) {
           <td>{num(check.actual)}</td><td>{num(check.limit)}</td><td>{check.unit ?? "—"}</td><td>{check.hint}</td><td>{check.source}</td>
         </tr>)}</tbody></table>}
     {run.truncated ? <p className="bench-note">Vista abbreviata: i controlli superati o non valutati possono mancare.</p> : null}
+    {run.ports && run.ports.length > 0 ? <>
+      <h4>Porte</h4>
+      <ul className="bench-ports">{run.ports.map((port) =>
+        <li key={port.name}>{port.name} ({port.interface}{port.outer_d !== undefined ? `, Ø ${port.outer_d} mm` : port.pad_d !== undefined ? `, Ø ${port.pad_d} mm` : ""})</li>)}</ul>
+    </> : null}
     <h4>Risultati</h4>
     {run.outputs_withheld ? <p>Risultati non mostrati: il verdetto è «non utilizzabile».</p>
       : run.outputs.length === 0 ? <p>Nessun risultato numerico.</p>
@@ -93,13 +99,13 @@ export function BenchCompareView({ doc }: Readonly<{ doc: BenchCompare }>) {
   return <section className="bench-compare" aria-label="Confronto risultati">
     <h3>Confronto</h3>
     <p>A: {doc.run_id_a} ({evaluatorName(doc.evaluator_a)}, <VerdictLight verdict={doc.verdict_a} />) — B: {doc.run_id_b} ({evaluatorName(doc.evaluator_b)}, <VerdictLight verdict={doc.verdict_b} />)</p>
-    <table><thead><tr><th>Risultato</th><th>A</th><th>B</th><th>Differenza</th></tr></thead><tbody>
+    <table><thead><tr><th scope="col">Risultato</th><th scope="col">A</th><th scope="col">B</th><th scope="col">Differenza</th></tr></thead><tbody>
       {Object.entries(doc.outputs).map(([name, row]) => <tr key={name}>
         <td>{name}</td><td>{side(row.a)}</td><td>{side(row.b)}</td>
         <td>{row.mark === "match" ? `${num(row.absolute_difference)} ${row.unit ?? ""}`.trim()
           : row.mark === "unit_mismatch" ? "unità diverse" : "mancante"}</td>
       </tr>)}</tbody></table>
-    <table className="bench-checks"><thead><tr><th>Controllo</th><th>A</th><th>B</th></tr></thead><tbody>
+    <table className="bench-checks"><thead><tr><th scope="col">Controllo</th><th scope="col">A</th><th scope="col">B</th></tr></thead><tbody>
       {Object.entries(doc.checks).map(([id, row]) => <tr key={id}>
         <td>{id}</td>
         <td>{row.status_a ? `${CHECK_STATUS_LABELS[row.status_a] ?? row.status_a} (${num(row.actual_a)})` : "—"}</td>
