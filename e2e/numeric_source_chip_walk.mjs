@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Spec 309: source and check-state chip on numeric inputs.
 // Clean-profile walk: from `/` opens the Process editor on a seeded draft,
-// inspects a numeric input, types a value, and verifies the `Digitato · Non verificato`
-// source chip is visible with no console or page errors.
+// inspects a numeric input, types a value, and verifies the stored `Letteratura · Da fonte` chip
+// turns into `Digitato · Non verificato` once edited, with no console or page errors.
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { openSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -66,7 +66,7 @@ created = draft.create_draft('main', 'Source chip proof draft')
 ops = [
     AddUnit(op='add_unit', id='h1', type='Heater', tag='H1', x=300, y=150),
     SetUnitParams(op='set_unit_params', unit='h1', values={
-        'outlet_temperature': DraftQuantity(value=350.0, unit='K')
+        'outlet_temperature': DraftQuantity(value=350.0, unit='K', source={'kind': 'literature', 'check_state': 'source_checked', 'label': 'Valore di prova da letteratura'})
     })
 ]
 draft.patch('main', created['draft_id'], created['revision'], ops)
@@ -137,14 +137,14 @@ try {
   await tempInput.waitFor({ state: 'visible' });
   const tempField = page.locator('label.draft-quantity').filter({ has: tempInput });
 
-  // 4. Verify initial stored chip: "Digitato · Non verificato"
-  const initialChip = tempField.locator('.source-chip[data-source-kind="typed"][data-check-state="unchecked"]');
+  // 4. Verify the stored source chip: "Letteratura · Da fonte"
+  const initialChip = tempField.locator('.source-chip[data-source-kind="literature"][data-check-state="source_checked"]');
   await initialChip.waitFor({ state: 'visible' });
   const initialChipText = await initialChip.innerText();
-  if (!initialChipText.includes('Digitato · Non verificato')) {
-    throw new Error(`Expected 'Digitato · Non verificato', got '${initialChipText}'`);
+  if (!initialChipText.includes('Letteratura · Da fonte')) {
+    throw new Error(`Expected 'Letteratura · Da fonte', got '${initialChipText}'`);
   }
-  await shot(page, '02-unit-selected-stored-chip.png', 'Selected Heater H1 and verified stored source chip is Digitato · Non verificato');
+  await shot(page, '02-unit-selected-stored-chip.png', 'Selected Heater H1 and verified stored source chip is Letteratura · Da fonte');
 
   // 5. Type a new value in the numeric input
   await tempInput.fill('375');
