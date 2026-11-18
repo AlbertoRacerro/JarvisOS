@@ -1,5 +1,6 @@
 import { useId } from "react";
 import { formatQuantity, unitLabel, type StoredQuantity } from "../../api/processDraft";
+import SourceChip from "./SourceChip";
 
 /** Unit-bearing input: the operator's value and unit travel to the server, which converts. */
 export default function QuantityInput({
@@ -25,9 +26,22 @@ export default function QuantityInput({
 }) {
   const current = value ?? { text: stored ? String(stored.value) : "", unit: stored?.unit ?? units[0] };
   const errorId = useId();
+
+  const hasStored = stored !== undefined;
+  const hasTyped = current.text.trim().length > 0;
+  const showChip = hasStored || hasTyped;
+
+  const isEdited = !hasStored || current.text !== String(stored.value) || current.unit !== stored.unit;
+  const chipSource = isEdited
+    ? { kind: "typed" as const, check_state: "unchecked" as const }
+    : (stored.source ?? { kind: "typed" as const, check_state: "unchecked" as const });
+
   return (
     <label className="draft-quantity">
-      <span>{label}</span>
+      <span className="draft-quantity__label-row">
+        <span>{label}</span>
+        {showChip && <SourceChip source={chipSource} />}
+      </span>
       <span className="draft-quantity__row">
         <input
           inputMode="decimal"

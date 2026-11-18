@@ -220,13 +220,17 @@ function nextId(objects: DraftObject[], prefix: string) {
 
 type FormState = Record<string, { text: string; unit: string }>;
 
-function quantitiesFrom(form: FormState): Record<string, DraftQuantity> | null {
+function quantitiesFrom(form: FormState, stored?: Record<string, StoredQuantity | undefined>): Record<string, DraftQuantity> | null {
   const result: Record<string, DraftQuantity> = {};
   for (const [key, entry] of Object.entries(form)) {
     if (!entry.text.trim()) continue;
     const value = Number(entry.text);
     if (!Number.isFinite(value)) return null;
-    result[key] = { value, unit: entry.unit };
+    const prev = stored?.[key];
+    const unchanged = prev && (entry.text === String(prev.value) || value === prev.value) && entry.unit === prev.unit;
+    const quantity: DraftQuantity = { value, unit: entry.unit };
+    if (unchanged && prev.source) quantity.source = prev.source;
+    result[key] = quantity;
   }
   return result;
 }
@@ -1059,7 +1063,7 @@ export default function ProcessDraftEditor({ workspaceId, initialDraftId, naviga
                 type="button"
                 disabled={!form.duty}
                 onClick={() => {
-                  const values = quantitiesFrom(form);
+                  const values = quantitiesFrom(form, stream.spec as Record<string, StoredQuantity | undefined>);
                   if (!values) return setNotice({ tone: "danger", text: "Enter numbers only." });
                   void apply([{ op: "set_stream_spec", stream: stream.id, ...values }]);
                 }}
@@ -1095,7 +1099,7 @@ export default function ProcessDraftEditor({ workspaceId, initialDraftId, naviga
               type="button"
               disabled={!Object.keys(form).length}
               onClick={() => {
-                const values = quantitiesFrom(form);
+                const values = quantitiesFrom(form, stream.spec as Record<string, StoredQuantity | undefined>);
                 if (!values) return setNotice({ tone: "danger", text: "Enter numbers only." });
                 delete values[stateBasis === "temperature" ? "vapor_fraction" : "temperature"];
                 delete values[flowBasis === "mass_flow" ? "molar_flow" : "mass_flow"];
@@ -1169,7 +1173,7 @@ export default function ProcessDraftEditor({ workspaceId, initialDraftId, naviga
                   onChange={(next) => setCultureForm((current) => ({ ...current, [key]: next }))} />
               ))}
               <button type="button" onClick={() => {
-                const quantities = quantitiesFrom(cultureForm);
+                const quantities = quantitiesFrom(cultureForm, stream.spec?.culture);
                 if (!quantities) return setNotice({ tone: "danger", text: "Culture values must be numbers." });
                 const culture = Object.fromEntries(Object.entries(quantities).filter(([key]) =>
                   ["biomass", "nitrogen", "phosphorus", "oxygen", "dic", "ph", "salinity"].includes(key)));
@@ -1313,7 +1317,7 @@ export default function ProcessDraftEditor({ workspaceId, initialDraftId, naviga
               type="button"
               disabled={!Object.keys(form).length && activeMode === (unit.mode ?? "") && !optionsChanged}
               onClick={() => {
-                const values = quantitiesFrom(form);
+                const values = quantitiesFrom(form, unit.params);
                 if (!values) return setNotice({ tone: "danger", text: "Enter numbers only." });
                 void apply([
                   {

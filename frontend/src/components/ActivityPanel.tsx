@@ -41,7 +41,11 @@ export function ActivityView({ data, now, onOpen }: Readonly<{ data: ActivityRea
       <p key={group.id} className="activity-group-down">{group.title}: non disponibile ({group.reason})</p>)}
     {data.rows.length === 0 ? <p>Nessuna attività in corso.</p>
       : <ul className="activity-list">{data.rows.map((row) => <ActivityRowView key={row.key} row={row} now={now} onOpen={onOpen} />)}</ul>}
-    <section aria-label="Download"><h3>Download</h3><p>{data.downloads_empty || NO_DOWNLOADS}</p></section>
+    <section aria-label="Download">
+      <h3>Download</h3>
+      {data.downloads.length === 0 ? <p>{data.downloads_empty || NO_DOWNLOADS}</p>
+        : <ul className="activity-list">{data.downloads.map((row) => <ActivityRowView key={row.key} row={row} now={now} />)}</ul>}
+    </section>
   </div>;
 }
 

@@ -178,7 +178,10 @@ def _si(quantity: DraftQuantity, kind: str, field: str) -> dict[str, Any]:
             raise DraftError("quantity_invalid", f"{field}: {quantity.unit} is not a {kind}", field=field) from exc
     if not math.isfinite(value):
         raise DraftError("quantity_invalid", f"{field}: value is not finite", field=field)
-    return {"si": value, "value": quantity.value, "unit": quantity.unit}
+    stored: dict[str, Any] = {"si": value, "value": quantity.value, "unit": quantity.unit}
+    if quantity.source is not None:
+        stored["source"] = quantity.source.model_dump(exclude_none=True)
+    return stored
 
 
 def convert_si(value_si: float, kind: str, unit: str) -> float:
@@ -316,7 +319,10 @@ def _set_studio_params(unit: dict[str, Any], op: SetUnitParams) -> None:
         if not math.isfinite(value) or _outside(value, variable):
             raise DraftError("quantity_out_of_range", f"{variable['label']} is outside its declared bounds", field=key)
         # For a StudioUnit "si" is the magnitude in the declared unit, which is also what the inspector shows.
-        unit["params"][key] = {"si": value, "value": value, "unit": variable["unit"]}
+        stored = {"si": value, "value": value, "unit": variable["unit"]}
+        if quantity.source is not None:
+            stored["source"] = quantity.source.model_dump(exclude_none=True)
+        unit["params"][key] = stored
 
 
 def _occupant(document: dict[str, Any], unit_id: str, end: str, port: int, *, energy: bool = False) -> dict[str, Any] | None:
