@@ -543,13 +543,22 @@ def resolve_growth_model(workspace_id: str, card_id: str, revision: str, digest:
         if forms.form_card(form_id)["version"] != version:
             raise BioModelError("PBR_MODEL_CARD_UNAVAILABLE", f"Pinned form {form_id} version {version} is unavailable; revise the model card.", 409)
     factors = card["factors"]
-    supported = {"light": {"light.monod"}, "temperature": {"temperature.isothermal", "temperature.ctmi", "temperature.arrhenius_ref"},
+    supported = {"light": {"light.monod", "light.haldane", "light.steele", "light.eilers_peeters_steady", "light.hill"},
+                 "temperature": {"temperature.isothermal", "temperature.ctmi", "temperature.arrhenius_ref"},
                  "nutrients": ["nutrient.monod"], "combination": {"combine.multiplicative", "combine.liebig"},
                  "loss": {"loss.first_order", "loss.light_dark"}, "stoichiometry": {"stoich.photoautotrophic"}}
     refused = [name for name, allowed in supported.items() if factors.get(name) not in (allowed if name != "nutrients" else [allowed])]
     if refused:
-        raise BioModelError("PBR_MODEL_CARD_FORM_UNSUPPORTED", f"T1 supports Monod light and nitrogen with photoautotrophic stoichiometry; revise: {', '.join(refused)}.", 422)
-    required = {"K_I", "K_j_0", "k_X", "a", "b", "c", "d", "w_ash"}
+        raise BioModelError("PBR_MODEL_CARD_FORM_UNSUPPORTED", f"T1 supports registered light forms and Monod nitrogen with photoautotrophic stoichiometry; revise: {', '.join(refused)}.", 422)
+    light_symbols = {
+        "light.monod": {"K_I"},
+        "light.haldane": {"K_I", "K_i"},
+        "light.steele": {"I_opt"},
+        "light.eilers_peeters_steady": {"I_opt", "beta"},
+        "light.hill": {"I_k", "n"},
+    }
+    required = {"K_j_0", "k_X", "a", "b", "c", "d", "w_ash"}
+    required |= light_symbols[factors["light"]]
     required |= ({"k_d"} if factors["loss"] == "loss.first_order" else {"I_dark", "m_L", "m_D"})
     required |= ({"T_min", "T_opt", "T_max"} if factors["temperature"] == "temperature.ctmi" else
                  {"T_ref", "E_a"} if factors["temperature"] == "temperature.arrhenius_ref" else set())
