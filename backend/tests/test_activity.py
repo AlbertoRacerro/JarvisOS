@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -211,3 +212,138 @@ def test_routes_are_read_only_gets(control: Path) -> None:
     assert {"rows", "groups", "quota", "downloads_empty"} <= set(body)
     assert client.get("/api/coding/activity/detail", params={"key": f"job:{jid}"}).json()["lines"] == ["hello"]
     assert client.post("/api/coding/activity").status_code == 405
+
+
+def write_download(
+    root: Path,
+    minutes_ago: int,
+    *,
+    did: str = "d1",
+    label: str = "weights.gguf",
+    state: str = "running",
+    bytes_done: int = 524_288_000,
+    bytes_total: int | None = 1_048_576_000,
+    reason: str | None = None,
+    pid: int = 12345,
+    mtime_minutes_ago: int | None = None,
+) -> Path:
+    d_dir = root / "downloads"
+    d_dir.mkdir(parents=True, exist_ok=True)
+    path = d_dir / f"{did}.json"
+    record = {
+        "id": did,
+        "label": label,
+        "host": "huggingface.co",
+        "file_name": label,
+        "bytes_done": bytes_done,
+        "bytes_total": bytes_total,
+        "state": state,
+        "reason": reason,
+        "started_at": stamp(minutes_ago),
+        "ended_at": stamp(minutes_ago - 1) if state in ("succeeded", "failed") else None,
+        "pid": pid,
+        "sha256": "abc123" if state == "succeeded" else None,
+    }
+    path.write_text(json.dumps(record), encoding="utf-8")
+    mtime = (NOW - timedelta(minutes=mtime_minutes_ago if mtime_minutes_ago is not None else minutes_ago)).timestamp()
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def test_download_rows_running_succeeded_failed(control: Path) -> None:
+    write_download(
+        control,
+        minutes_ago=10,
+        did="d-run",
+        label="weights.gguf",
+        state="running",
+        bytes_done=524_288_000,
+        bytes_total=1_048_576_000,
+        pid=os.getpid(),
+        mtime_minutes_ago=0,
+    )
+    write_download(
+        control,
+        minutes_ago=20,
+        did="d-succ",
+        label="dataset.parquet",
+        state="succeeded",
+        bytes_done=209_715_200,
+        bytes_total=209_715_200,
+    )
+    write_download(
+        control,
+        minutes_ago=30,
+        did="d-fail",
+        label="installer.sh",
+        state="failed",
+        bytes_done=10_485_760,
+        bytes_total=52_428_800,
+        reason="checksum mismatch",
+    )
+
+    result = activity.read(NOW)
+    assert len(result.downloads) == 3
+    assert all(r.kind == "download" for r in result.downloads)
+    assert all(r.runner == "motore locale" for r in result.downloads)
+
+    run_row = next(r for r in result.downloads if r.key == "download:d-run")
+    assert run_row.title == "Download di weights.gguf"
+    assert run_row.state == "running"
+    assert run_row.state_word == "in corso"
+    assert run_row.step == "sto scaricando"
+    assert run_row.outcome is None
+    assert run_row.progress is not None
+    assert (run_row.progress.done, run_row.progress.total, run_row.progress.unit) == (500.0, 1000.0, "MB")
+
+    succ_row = next(r for r in result.downloads if r.key == "download:d-succ")
+    assert succ_row.title == "Download di dataset.parquet"
+    assert succ_row.state == "done"
+    assert succ_row.state_word == "completato"
+    assert succ_row.step is None
+    assert succ_row.outcome == "completato"
+    assert succ_row.progress is not None
+    assert (succ_row.progress.done, succ_row.progress.total, succ_row.progress.unit) == (200.0, 200.0, "MB")
+
+    fail_row = next(r for r in result.downloads if r.key == "download:d-fail")
+    assert fail_row.title == "Download di installer.sh"
+    assert fail_row.state == "failed"
+    assert fail_row.state_word == "non riuscito"
+    assert fail_row.step is None
+    assert fail_row.outcome == "non riuscito: checksum mismatch"
+    assert fail_row.progress is not None
+    assert (fail_row.progress.done, fail_row.progress.total, fail_row.progress.unit) == (10.0, 50.0, "MB")
+
+
+def test_stale_running_download_shows_da_verificare(control: Path) -> None:
+    # Last write older than 2 minutes (5 minutes ago): the pid is never evidence
+    write_download(
+        control,
+        minutes_ago=10,
+        did="d-stale",
+        label="stale.gguf",
+        state="running",
+        pid=999999,
+        mtime_minutes_ago=5,
+    )
+
+    result = activity.read(NOW)
+    row = next(r for r in result.downloads if r.key == "download:d-stale")
+    assert row.state == "unknown"
+    assert row.state_word == "da verificare"
+    assert row.step is None
+    assert row.outcome is None
+
+
+def test_malformed_download_record_is_skipped(control: Path) -> None:
+    d_dir = control / "downloads"
+    d_dir.mkdir(parents=True, exist_ok=True)
+    (d_dir / "bad1.json").write_text("not json", encoding="utf-8")
+    (d_dir / "bad2.json").write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
+    (d_dir / "bad3.json").write_text(json.dumps({"state": "invalid_state"}), encoding="utf-8")
+    write_download(control, minutes_ago=5, did="d-good", label="good.bin", state="succeeded")
+
+    result = activity.read(NOW)
+    assert len(result.downloads) == 1
+    assert result.downloads[0].key == "download:d-good"
+
