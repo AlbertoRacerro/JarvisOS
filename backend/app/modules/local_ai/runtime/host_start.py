@@ -193,7 +193,7 @@ class StrataRuntimeController:
         host: str,
         port: int,
         served_model: str,
-        wait_timeout_s: float = 30.0,
+        wait_timeout_s: float = 120.0,
     ) -> StrataModelState:
         spool = get_spool_path()
         st = self._states.setdefault(model_id, StrataModelState(state="stopped"))
@@ -207,8 +207,12 @@ class StrataRuntimeController:
         st.last_request_time = self._clock_fn()
 
         deadline = self._clock_fn() + wait_timeout_s
-        while self._probe_fn(host, port, served_model) and self._clock_fn() < deadline:
-            self._sleep_fn(0.1)
+        while self._probe_fn(host, port, served_model):
+            if self._clock_fn() >= deadline:
+                st.state = "failed"
+                st.reason = "The model did not stop in time."
+                return st
+            self._sleep_fn(0.5)
 
         st.state = "stopped"
         st.reason = None

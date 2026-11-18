@@ -121,24 +121,15 @@ class LocalLlamaCppAdapter:
                                       message="Default local model is not loaded.", retryable=True),
             )
 
-        is_loading = False
+        strata_state: str | None = None
         if active_entry and active_entry.runtime == "strata":
             from app.modules.local_ai.runtime.host_start import get_strata_controller
 
-            st = get_strata_controller().get_state(
+            strata_state = get_strata_controller().get_state(
                 active_entry.id, active_entry.host, active_entry.port or 8080, active_entry.served_model or ""
-            )
-            is_loading = st.state == "loading"
-        else:
-            owner_status = get_llama_cpp_runtime_owner().status()
-            is_loading = owner_status.get("reason_code") in ("LLAMACPP_LOADING", "LLAMACPP_RECOVERING")
-
-        if is_loading:
-            model_id = (
-                active_entry.served_model
-                if (active_entry and active_entry.runtime == "strata" and active_entry.served_model)
-                else llama_cpp_runtime_config().model_id
-            )
+            ).state
+        if active_entry and strata_state == "loading":
+            model_id = active_entry.served_model or active_entry.id
             return AIResponse(
                 provider_id=self.provider_id, model_id=model_id, request_id=request.request_id,
                 correlation_id=request.correlation_id, finish_reason="error", safety_status="allowed",

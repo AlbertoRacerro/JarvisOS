@@ -80,14 +80,10 @@ def determine_initial_model(entries: list[ModelEntry]) -> ModelEntry | None:
         return None
     default_entry = next((e for e in entries if e.qualification == "default"), None)
     stored_id = read_stored_model_choice()
-    if stored_id:
-        stored_entry = next((e for e in entries if e.id == stored_id), None)
-        if stored_entry and stored_entry.qualification in ("default", "qualified"):
-            target = stored_entry
-        else:
-            target = default_entry
-    else:
-        target = default_entry
+    stored_entry = next((e for e in entries if e.id == stored_id), None) if stored_id else None
+    target = (
+        stored_entry if stored_entry and stored_entry.qualification in ("default", "qualified") else default_entry
+    )
 
     if target is None:
         return None
@@ -227,8 +223,8 @@ def list_models() -> dict[str, Any]:
             digest_state = (
                 "missing" if (entry.model_path and not installed)
                 else "hashing" if pending
-                else "not_verified" if (entry.model_path and digest is None)
-                else "verified" if (not entry.model_path or not entry.model_sha256 or digest.lower() == entry.model_sha256.lower())
+                else "not_verified" if digest is None or not entry.model_sha256
+                else "verified" if digest.lower() == entry.model_sha256.lower()
                 else "mismatch"
             )
             model_file = Path(entry.model_path).name if entry.model_path else (entry.served_model or "")
@@ -310,6 +306,11 @@ def activate_model(model_id: str) -> dict[str, Any]:
             spool = get_spool_path()
             if spool is None:
                 raise HTTPException(status_code=409, detail="This model requires host start.")
+            current = owner.status()
+            if current.get("runtime_reachable") and not current.get("spawned_by_jarvis") and (
+                current_entry is None or current_entry.runtime == "llama_cpp"
+            ):
+                raise HTTPException(status_code=409, detail="Externally started llama-server cannot be switched here.")
             owner.stop()
             strata_ctrl = get_strata_controller()
             strata_ctrl.start(entry.id, entry.unit or "", entry.host, entry.port or 8080, entry.served_model or "")
@@ -327,13 +328,16 @@ def activate_model(model_id: str) -> dict[str, Any]:
             spool = get_spool_path()
             if spool is not None:
                 strata_ctrl = get_strata_controller()
-                strata_ctrl.stop(
+                stopped = strata_ctrl.stop(
                     current_entry.id,
                     current_entry.unit or "",
                     current_entry.host,
                     current_entry.port or 8080,
                     current_entry.served_model or "",
                 )
+                # One hot model on the card: never spawn llama-server while the previous model still answers.
+                if stopped.state != "stopped":
+                    raise HTTPException(status_code=409, detail="The previous local model has not stopped yet.")
 
         if current_entry and current_entry.runtime == "llama_cpp":
             current = owner.status()

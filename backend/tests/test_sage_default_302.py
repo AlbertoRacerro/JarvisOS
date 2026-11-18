@@ -361,7 +361,7 @@ def test_switch_order_and_stored_choice(tmp_path: Path, monkeypatch: pytest.Monk
             self._lock = None
 
         def status(self) -> dict[str, Any]:
-            return {"runtime_reachable": True, "model_loaded": True}
+            return {"runtime_reachable": True, "model_loaded": True, "spawned_by_jarvis": True}
 
         def stop(self) -> None:
             events.append("llama_stop")
@@ -408,6 +408,46 @@ def test_switch_order_and_stored_choice(tmp_path: Path, monkeypatch: pytest.Monk
     assert json.loads(choice_file.read_text())["active_model_id"] == "sage"
     start_req = next(r for r in [json.loads(p.read_text()) for p in (spool / "requests").glob("*.json")] if r["args"]["action"] == "start")
     assert start_req["args"]["unit"] == "sage.service"
+
+
+def test_switch_refuses_llama_spawn_while_sage_still_answers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    spool = tmp_path / "spool"
+    spool.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("JARVISOS_HOSTOPS_SPOOL", str(spool))
+    entries = _valid_strata_default_entries(tmp_path)
+    (tmp_path / "gemma.gguf").write_bytes(b"fixture")
+    _setup_registry(tmp_path, monkeypatch, entries)
+
+    clock = [0.0]
+
+    def fake_sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    ctrl = StrataRuntimeController(probe_fn=lambda *_: True, clock_fn=lambda: clock[0], sleep_fn=fake_sleep)
+    monkeypatch.setattr(host_start, "get_strata_controller", lambda: ctrl)
+    spawned: list[str] = []
+
+    class FakeOwner:
+        active_model_id = "sage"
+        default_model_id = "sage"
+        _lock = None
+
+        def status(self) -> dict[str, Any]:
+            return {}
+
+        def switch_model(self, config: Any, model_id: str, default_id: str) -> dict[str, Any]:
+            spawned.append(model_id)
+            return {}
+
+    owner = FakeOwner()
+    monkeypatch.setattr(model_registry, "get_llama_cpp_runtime_owner", lambda: owner)
+    monkeypatch.setattr(model_registry, "peek_model_sha256", lambda _: ("a" * 64, False))
+
+    with pytest.raises(HTTPException) as exc:
+        activate_model("gemma")
+    assert exc.value.status_code == 409
+    assert spawned == []
+    assert not (tmp_path / "settings" / "local_model_choice.json").exists()
 
 
 def test_stored_choice_survives_new_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

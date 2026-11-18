@@ -10,7 +10,7 @@ for (const state of states) {
   assert.ok(panel.includes(state), `Panel must include Italian state "${state}"`);
 }
 
-const actions = ['Usa questo modello', 'Torna al modello standard'];
+const actions = ['Usa questo modello', 'Torna al modello standard', ' · in uso', ' · non installato'];
 for (const action of actions) {
   assert.ok(panel.includes(action), `Panel must include Italian action "${action}"`);
 }

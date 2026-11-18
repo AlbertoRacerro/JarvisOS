@@ -96,6 +96,8 @@ export default function LocalModelPanel() {
         const stateLabel = entry.state ? (stateLabels[entry.state] ?? entry.state) : "fermo";
         return <li key={entry.id}>
           <strong>{entry.label}</strong> · <span>{stateLabel}</span>
+          {entry.runtime === "llama_cpp" && !entry.installed ? <span> · non installato</span> : null}
+          {models.active_id === entry.id ? <span> · in uso</span> : null}
           {models.active_id !== entry.id ? <button type="button" disabled={loading || !!pending || !!error || (entry.runtime === "llama_cpp" && (!entry.installed || entry.digest_state === "mismatch")) || entry.state === "requires host start"} onClick={() => void switchModel(entry.id)}>Usa questo modello</button> : null}
         </li>;
       })}</ul>
