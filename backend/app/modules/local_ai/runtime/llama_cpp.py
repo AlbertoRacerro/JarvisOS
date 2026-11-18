@@ -435,8 +435,7 @@ class LlamaCppRuntimeOwner:
             for entry in entries:
                 if entry.runtime == "strata" and entry.port and entry.served_model:
                     host = entry.host or "127.0.0.1"
-                    probe_fn = getattr(strata_ctrl, "probe", getattr(strata_ctrl, "_probe_fn", None))
-                    if probe_fn and probe_fn(host, entry.port, entry.served_model):
+                    if strata_ctrl.probe(host, entry.port, entry.served_model):
                         return True
             return False
         except Exception:
