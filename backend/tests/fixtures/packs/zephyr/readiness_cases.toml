@@ -1,0 +1,14 @@
+# Generic readiness acceptance cases for the test suite. No real project names.
+[[cases]]
+id = "generic-literature-1"
+title = "Generic Literature Case"
+workspace = "zephyr"
+source_title = "Benchmark Validation Study"
+facts = ["density", "thermal_conductivity"]
+inputs = ["material_density", "inlet_conductivity"]
+
+[cases.compare]
+quantity = "density"
+value = 1000.0
+unit = "kg/m^3"
+rel_tol = 0.05
