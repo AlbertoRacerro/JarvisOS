@@ -299,7 +299,7 @@ try {
   const dockText = await dock.innerText();
   assert(dockText.includes("non verificato"), "dock shows 'non verificato' for mesh");
   assert(dockText.includes("non utilizzabile"), "dock shows 'non utilizzabile' for FEM");
-  assert(dockText.includes("utilizzabile"), "dock shows 'utilizzabile' for solid");
+  assert(await dock.locator('.bench-verdict[data-verdict="usable"]').first().innerText() === "utilizzabile", "dock shows 'utilizzabile' for solid");
 
   const uncheckedVerdict = dock.locator('.bench-verdict[data-verdict="unchecked"]').first();
   await uncheckedVerdict.waitFor();

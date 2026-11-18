@@ -193,6 +193,9 @@ def compute_evidence_verdicts(
                 continue
             report_dict, report_path = report_entry
             manifest_dict, manifest_path = manifest_entry
+            if report_dict is None or manifest_dict is None:
+                verdicts[r.id] = ("unchecked", "Validation report or manifest unreadable", [])
+                continue
 
             try:
                 spec_id = str(report_dict.get("spec_id") or manifest_dict.get("spec_id") or candidate.id)
@@ -223,7 +226,10 @@ def compute_evidence_verdicts(
             if not report_entry or report_entry[0] is None:
                 verdicts[r.id] = ("unchecked", "Mesh report artifact unreadable or missing", [])
                 continue
-            mesh_result, _ = report_entry
+            mesh_result = report_entry[0]
+            if mesh_result is None:
+                verdicts[r.id] = ("unchecked", "Mesh report artifact unreadable or missing", [])
+                continue
             if not r.source_run_id or r.source_run_id not in runs_spec:
                 verdicts[r.id] = ("unchecked", "Source simulation run or analysis spec missing", [])
                 continue
@@ -247,7 +253,10 @@ def compute_evidence_verdicts(
             if not report_entry or report_entry[0] is None:
                 verdicts[r.id] = ("unchecked", "FEM report artifact unreadable or missing", [])
                 continue
-            report_payload, _ = report_entry
+            report_payload = report_entry[0]
+            if report_payload is None:
+                verdicts[r.id] = ("unchecked", "FEM report artifact unreadable or missing", [])
+                continue
             summary = report_payload.get("result_summary")
             if not isinstance(summary, dict):
                 verdicts[r.id] = ("unchecked", "FEM result summary missing in report payload", [])
