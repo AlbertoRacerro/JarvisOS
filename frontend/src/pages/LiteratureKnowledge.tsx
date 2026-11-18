@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listWorkspaces, type Workspace } from "../api/client";
-import { acknowledgeLiteratureIngestion, attachLiteratureBacking, createLiteratureEntry, createLiteratureSource, getLiteratureSource, retryLiteratureIngestion, uploadLiteratureFile, listLiteratureSources, literatureContentUrl, structuredLiteraturePdf, type StructuredPdfView,
+import { createParameter, listWorkspaces, type Workspace } from "../api/client";
+import { acknowledgeLiteratureIngestion, attachLiteratureBacking, acceptLiteratureEntry, createLiteratureEntry, createLiteratureSource, getLiteratureSource, retryLiteratureIngestion, uploadLiteratureFile, listLiteratureSources, literatureContentUrl, structuredLiteraturePdf, type StructuredPdfView,
   type LiteratureEntry, type LiteratureSource, type LiteratureVerdict, type LiteratureEntryInput, type LiteratureSourceInput } from "../api/literature";
 import "./memory-recovery.css";
 
@@ -81,6 +81,128 @@ function awaitingFirstBatch(source: LiteratureSource): boolean {
   return Date.now() - Date.parse(source.updated_at) < 120_000;
 }
 
+function LiteratureEntryItem({
+  entry,
+  source,
+  requestedEntryId,
+  onSelect,
+  onEntrySaved,
+  onSourceUpdated,
+}: Readonly<{
+  entry: LiteratureEntry;
+  source: LiteratureSource;
+  requestedEntryId: string | null;
+  onSelect: (ref: string, label?: string) => void;
+  onEntrySaved: (entry: LiteratureEntry) => void;
+  onSourceUpdated: (source: LiteratureSource) => void;
+}>) {
+  const [quantityName, setQuantityName] = useState(entry.quantity ?? "");
+  const [paramName, setParamName] = useState(entry.quantity ?? "");
+  const [accepting, setAccepting] = useState(false);
+  const [creatingParam, setCreatingParam] = useState(false);
+  const [entryError, setEntryError] = useState<string | null>(null);
+  const [paramStatus, setParamStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    setQuantityName(entry.quantity ?? "");
+    setParamName(entry.quantity ?? "");
+  }, [entry.quantity]);
+
+  const handleAccept = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (accepting) return;
+    setAccepting(true);
+    setEntryError(null);
+    try {
+      const updated = await acceptLiteratureEntry(
+        source.workspace_id,
+        source.id,
+        entry.id,
+        { quantity: quantityName.trim() || null }
+      );
+      onEntrySaved(updated);
+    } catch (cause) {
+      setEntryError(cause instanceof Error ? cause.message : "Could not accept finding.");
+    } finally {
+      setAccepting(false);
+    }
+  };
+
+  const handleUseAsParameter = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (creatingParam || !paramName.trim() || entry.value_number === null || !entry.unit) return;
+    setCreatingParam(true);
+    setEntryError(null);
+    setParamStatus(null);
+    try {
+      const createdName = paramName.trim();
+      await createParameter(source.workspace_id, {
+        name: createdName,
+        value: String(entry.value_number),
+        unit: entry.unit,
+        value_status: "literature",
+        source_ref: `literature_entry:${entry.id}`,
+        status: "draft",
+      });
+      const updatedSource = await getLiteratureSource(source.workspace_id, source.id);
+      onSourceUpdated(updatedSource);
+      setParamStatus(`Parameter ${createdName} created as draft.`);
+    } catch (cause) {
+      setEntryError(cause instanceof Error ? cause.message : "Could not create parameter.");
+    } finally {
+      setCreatingParam(false);
+    }
+  };
+
+  const isUsable = entry.verdict === "usable" || entry.verdict === "usable_with_warnings";
+  const isOpen = entry.id === requestedEntryId || (entry.ingestion_status === "flagged" && source.ingestion_batch?.notification_state === "pending") || undefined;
+
+  return (
+    <details id={`literature-entry-${entry.id}`} className="literature-entry" data-entry-id={entry.id} open={isOpen}>
+      <summary>
+        <strong>{entryValue(entry)}</strong>
+        <span>{entry.entry_kind} · {entry.status}{entry.ingestion_status ? ` · ${entry.ingestion_status === "source_checked" ? "source checked" : "needs attention"}` : ""}{entry.stale_source ? " · stale source" : ""}</span>
+        {entry.verdict && !entry.ingestion_status ? <em data-verdict={entry.verdict}>{VERDICT_WORDS[entry.verdict]}</em> : null}
+      </summary>
+      <p>{locationLabel(entry)}</p>
+      {entry.ingestion_status ? (
+        <div className="literature-ingestion__entry">
+          <p>{entry.quantity ?? "Unknown quantity"}: {entry.value_number ?? entry.value_text} {entry.unit}{entry.conditions.length ? ` · ${entry.conditions.map((condition) => `${condition.name} ${condition.value} ${condition.unit}`).join(", ")}` : ""}</p>
+          <p>Source checked only; not used in calculations.{entry.stale_source ? " The source file has changed." : ""}</p>
+          {entry.ingestion_checks.filter((check) => check.passed === false).map((check) => <p key={check.check} data-ingestion-check={check.check}>{check.reason ?? check.check}</p>)}
+        </div>
+      ) : null}
+      {entry.verdict ? (
+        <div className="literature-verdict">
+          {entry.checks.filter((check) => check.status !== "pass").map((check) => <p key={check.id} data-check={check.id}>{check.hint}</p>)}
+        </div>
+      ) : null}
+      {entry.context_text ? <p>{entry.context_text}</p> : null}
+
+      {entry.entry_kind === "datum" && entry.status !== "accepted" ? (
+        <form className="literature-entry-accept" onSubmit={(event) => void handleAccept(event)}>
+          <label>Quantity name<input value={quantityName} maxLength={128} disabled={accepting} onChange={(event) => setQuantityName(event.target.value)} /></label>
+          <button type="submit" disabled={accepting || !isUsable}>{accepting ? "Accepting…" : "Accept as fact"}</button>
+        </form>
+      ) : null}
+
+      {entry.entry_kind === "datum" && entry.status === "accepted" && entry.value_number !== null && Boolean(entry.unit) ? (
+        <form className="literature-entry-parameter" onSubmit={(event) => void handleUseAsParameter(event)}>
+          <label>Parameter name<input value={paramName} maxLength={128} disabled={creatingParam} onChange={(event) => setParamName(event.target.value)} /></label>
+          <button type="submit" disabled={creatingParam || !paramName.trim()}>{creatingParam ? "Creating parameter…" : "Use as parameter"}</button>
+        </form>
+      ) : null}
+
+      {paramStatus ? <p role="status">{paramStatus}</p> : null}
+      {entryError ? <p role="alert">{entryError}</p> : null}
+
+      <button type="button" onClick={() => onSelect(`literature_entry:${entry.id}`, entryValue(entry))}>Select finding for Jarvis</button>
+      <div><strong>Used by</strong>{!entry.used_by.length ? <p>No canonical records reference this finding.</p> : <ul>{entry.used_by.map((use) => <li key={use.ref}>{use.kind}: {use.title}</li>)}</ul>}</div>
+      <details className="memory-technical"><summary>Finding provenance</summary><small>{entry.provenance_ref}</small></details>
+    </details>
+  );
+}
+
 function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, onEntrySaved, onSourceUpdated }: Readonly<{
   source: LiteratureSource; open: boolean; onToggle: (open: boolean) => void; requestedEntryId: string | null;
   onSelect: (ref: string, label?: string) => void; onEntrySaved: (entry: LiteratureEntry) => void; onSourceUpdated: (source: LiteratureSource) => void;
@@ -92,6 +214,7 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
   const [number, setNumber] = useState("");
   const [lineFrom, setLineFrom] = useState("");
   const [lineTo, setLineTo] = useState("");
+  const [quantity, setQuantity] = useState("");
   const [context, setContext] = useState("");
   const [saving, setSaving] = useState(false);
   const [attaching, setAttaching] = useState(false);
@@ -152,6 +275,7 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
     if (!hasPdfBacking) return;
     setKind("datum"); setValue(token); setNumber(token.includes(",") ? "" : token.replace("−", "-")); // a comma may be decimal or thousands: the operator types the number
     setLineFrom(String(page)); setLineTo(String(page));
+    setQuantity("");
     setContext("Selected from the extracted PDF view; verify against the original page before use.");
     setSelected({ token, page }); setAddOpen(true); setNotice(""); setError(null);
   };
@@ -165,12 +289,24 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
       setError("Enter a valid number and range with the end not before the start."); return;
     }
     const located = from !== undefined ? { locator_kind: hasPdfBacking ? "page" as const : "line" as const, locator_start: from, locator_end: to } : {};
-    const payload: LiteratureEntryInput = { entry_kind: kind, ...(kind === "claim" ? { statement: value.trim() } : { value_text: value.trim(), unit: unit.trim() || undefined, ...(numeric !== undefined ? { value_number: numeric } : {}), ...located }), context_text: context.trim() || undefined };
+    const payload: LiteratureEntryInput = {
+      entry_kind: kind,
+      ...(kind === "claim"
+        ? { statement: value.trim() }
+        : {
+            value_text: value.trim(),
+            unit: unit.trim() || undefined,
+            ...(numeric !== undefined ? { value_number: numeric } : {}),
+            ...(quantity.trim() ? { quantity: quantity.trim() } : {}),
+            ...located,
+          }),
+      context_text: context.trim() || undefined,
+    };
     setSaving(true); setError(null); setNotice("");
     try {
       const entry = await createLiteratureEntry(source.workspace_id, source.id, payload, requestKey(payload));
       if (!alive.current) return;
-      onEntrySaved(entry); setValue(""); setUnit(""); setNumber(""); setLineFrom(""); setLineTo(""); setContext(""); setSelected(null); setNotice("Saved as raw. This finding has not been accepted as engineering evidence.");
+      onEntrySaved(entry); setValue(""); setUnit(""); setNumber(""); setQuantity(""); setLineFrom(""); setLineTo(""); setContext(""); setSelected(null); setNotice("Saved as raw. This finding has not been accepted as engineering evidence.");
     } catch (cause) { if (alive.current) setError(cause instanceof Error ? cause.message : "Finding could not be saved."); }
     finally { if (alive.current) setSaving(false); }
   };
@@ -225,22 +361,11 @@ function SourceDisclosure({ source, open, onToggle, requestedEntryId, onSelect, 
           {selected ? <p role="status" data-extraction-selection>Selected {selected.token} from page {selected.page}. The source check confirms this number appears on that PDF page, not what it means in the table. Review the finding below and save it to run the check.</p> : null}
         </section> : null}
         <h3>Claims & data</h3>
-        {!source.entries.length ? <p>No findings yet. Record a claim or datum below.</p> : source.entries.map((entry) => <details key={entry.id} id={`literature-entry-${entry.id}`} className="literature-entry" data-entry-id={entry.id} open={entry.id === requestedEntryId || (entry.ingestion_status === "flagged" && source.ingestion_batch?.notification_state === "pending") || undefined}>
-          <summary><strong>{entryValue(entry)}</strong><span>{entry.entry_kind} · {entry.status}{entry.ingestion_status ? ` · ${entry.ingestion_status === "source_checked" ? "source checked" : "needs attention"}` : ""}{entry.stale_source ? " · stale source" : ""}</span>{entry.verdict && !entry.ingestion_status ? <em data-verdict={entry.verdict}>{VERDICT_WORDS[entry.verdict]}</em> : null}</summary>
-          <p>{locationLabel(entry)}</p>
-          {entry.ingestion_status ? <div className="literature-ingestion__entry">
-            <p>{entry.quantity ?? "Unknown quantity"}: {entry.value_number ?? entry.value_text} {entry.unit}{entry.conditions.length ? ` · ${entry.conditions.map((condition) => `${condition.name} ${condition.value} ${condition.unit}`).join(", ")}` : ""}</p>
-            <p>Source checked only; not used in calculations.{entry.stale_source ? " The source file has changed." : ""}</p>
-            {entry.ingestion_checks.filter((check) => check.passed === false).map((check) => <p key={check.check} data-ingestion-check={check.check}>{check.reason ?? check.check}</p>)}
-          </div> : null}
-          {entry.verdict ? <div className="literature-verdict">{entry.checks.filter((check) => check.status !== "pass").map((check) => <p key={check.id} data-check={check.id}>{check.hint}</p>)}</div> : null}{entry.context_text ? <p>{entry.context_text}</p> : null}
-          <button type="button" onClick={() => onSelect(`literature_entry:${entry.id}`, entryValue(entry))}>Select finding for Jarvis</button>
-          <div><strong>Used by</strong>{!entry.used_by.length ? <p>No canonical records reference this finding.</p> : <ul>{entry.used_by.map((use) => <li key={use.ref}>{use.kind}: {use.title}</li>)}</ul>}</div>
-          <details className="memory-technical"><summary>Finding provenance</summary><small>{entry.provenance_ref}</small></details>
-        </details>)}
+        {!source.entries.length ? <p>No findings yet. Record a claim or datum below.</p> : source.entries.map((entry) => <LiteratureEntryItem key={entry.id} entry={entry} source={source} requestedEntryId={requestedEntryId} onSelect={onSelect} onEntrySaved={onEntrySaved} onSourceUpdated={onSourceUpdated} />)}
         <details className="literature-add-finding" open={addOpen} onToggle={(event) => setAddOpen(event.currentTarget.open)}><summary>Add a finding</summary>
           <form onSubmit={(event) => void saveEntry(event)}>
             <label>Finding type<select value={kind} disabled={saving} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="claim">Claim</option><option value="datum">Datum</option></select></label>
+            {kind === "datum" ? <label>Quantity name (optional)<input value={quantity} maxLength={128} disabled={saving} onChange={(event) => setQuantity(event.target.value)} /></label> : null}
             <label>{kind === "claim" ? "Claim statement" : "Reported value"}<textarea required maxLength={kind === "claim" ? 8000 : 4000} value={value} disabled={saving} onChange={(event) => setValue(event.target.value)} /></label>
             {kind === "datum" ? <label>Unit (optional)<input value={unit} maxLength={128} disabled={saving} onChange={(event) => setUnit(event.target.value)} /></label> : null}
             {kind === "datum" && hasLocatedBacking ? <>
@@ -362,7 +487,7 @@ export default function LiteratureKnowledge({ jarvis, searchPanel, workspaceId, 
       {requestedSourceId && !loading && !sources.some((source) => source.id === requestedSourceId) ? <p role="status">Requested source is not in the loaded list. {nextOffset !== null ? "Load more sources below." : "It may no longer be available."}</p> : null}
       {!loading && !error && !sources.length ? <div className="final-fusion__source-empty"><strong>No literature sources yet</strong><p>Register a source above, then record the claims and data you want to keep.</p></div> : null}
       {sources.length > 0 && !filtered.length ? <p>No loaded sources match. Try another phrase{nextOffset !== null ? " or load more sources" : ""}.</p> : null}
-      <div className="final-fusion__source-list">{filtered.map((source) => <SourceDisclosure key={`${activeWorkspaceId}:${source.id}`} source={source} open={openIds.has(source.id)} onToggle={(open) => setOpenIds((current) => { if (current.has(source.id) === open) return current; const next = new Set(current); if (open) next.add(source.id); else next.delete(source.id); return next; })} requestedEntryId={source.id === requestedSourceId ? requestedEntryId : null} onSelect={select} onSourceUpdated={(updated) => setSources((current) => current.map((item) => item.id === updated.id ? updated : item))} onEntrySaved={(entry) => setSources((current) => current.map((item) => item.id === source.id ? { ...item, entries: [...item.entries.filter((old) => old.id !== entry.id), entry] } : item))} />)}</div>
+      <div className="final-fusion__source-list">{filtered.map((source) => <SourceDisclosure key={`${activeWorkspaceId}:${source.id}`} source={source} open={openIds.has(source.id)} onToggle={(open) => setOpenIds((current) => { if (current.has(source.id) === open) return current; const next = new Set(current); if (open) next.add(source.id); else next.delete(source.id); return next; })} requestedEntryId={source.id === requestedSourceId ? requestedEntryId : null} onSelect={select} onSourceUpdated={(updated) => setSources((current) => current.map((item) => item.id === updated.id ? updated : item))} onEntrySaved={(entry) => setSources((current) => current.map((item) => item.id === source.id ? { ...item, entries: item.entries.some((old) => old.id === entry.id) ? item.entries.map((old) => old.id === entry.id ? entry : old) : [...item.entries, entry] } : item))} />)}</div>
       {nextOffset !== null ? <button type="button" disabled={loading} onClick={() => void loadMore()}>Load more sources</button> : null}
     </section><section className="final-fusion__panel final-fusion__jarvis" aria-label="Jarvis">{jarvis}</section>
   </div>;

@@ -115,7 +115,11 @@ export function literatureContentUrl(source: LiteratureSource): string | null {
 export type LiteratureSourceInput = Pick<LiteratureSource, "title" | "source_kind" | "citation" | "publisher" | "published_year"> & { artifact_id?: string };
 export type LiteratureEntryInput = {
   entry_kind: LiteratureEntryKind; statement?: string; value_text?: string; value_number?: number; unit?: string; context_text?: string;
-  locator_kind?: "line" | "page"; locator_start?: number; locator_end?: number;
+  locator_kind?: "line" | "page"; locator_start?: number; locator_end?: number; quantity?: string;
+};
+
+export type LiteratureEntryAcceptInput = {
+  quantity?: string | null;
 };
 
 async function createLiteratureRecord<T>(path: string, payload: object, requestKey: string): Promise<T> {
@@ -136,6 +140,26 @@ export function createLiteratureSource(workspaceId: string, payload: LiteratureS
 
 export function createLiteratureEntry(workspaceId: string, sourceId: string, payload: LiteratureEntryInput, requestKey: string): Promise<LiteratureEntry> {
   return createLiteratureRecord(`/workspaces/${encodeURIComponent(workspaceId)}/literature/sources/${encodeURIComponent(sourceId)}/entries`, payload, requestKey);
+}
+
+export async function acceptLiteratureEntry(
+  workspaceId: string,
+  sourceId: string,
+  entryId: string,
+  payload: LiteratureEntryAcceptInput = {}
+): Promise<LiteratureEntry> {
+  const response = await fetch(
+    `${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/literature/sources/${encodeURIComponent(sourceId)}/entries/${encodeURIComponent(entryId)}/accept`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
+  );
+  if (!response.ok) {
+    throw new Error(await literatureErrorMessage(response, `Could not accept finding (${response.status}).`));
+  }
+  return response.json() as Promise<LiteratureEntry>;
 }
 
 async function literatureErrorMessage(response: Response, fallback: string): Promise<string> {
