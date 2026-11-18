@@ -40,7 +40,6 @@ import numpy as np
 from app.modules.bio_models import cylinder, forms
 from app.modules.photobioreactor.pbr_core import (
     cardinal_temperature,
-    light_response,
     nitrogen_factor,
     synthetic_day_inputs,
 )
@@ -144,6 +143,8 @@ class Growth:
     oxygen_saturation: float
     dilution_h: float
     inlet: tuple[float, float, float]  # X_in, N_in, O₂_in in kg m⁻³
+    light_form: str = "light.monod"
+    light_parameters: tuple[float, ...] = ()
 
     @property
     def z_in(self) -> float:
@@ -167,19 +168,50 @@ class Growth:
         dark_threshold, light_loss, dark_loss = self.loss_parameters
         return light_loss if par > dark_threshold else dark_loss
 
-    def _monod(self, irradiance: np.ndarray) -> np.ndarray:
-        return light_response(irradiance, self.light_saturation, 0.0)
+    def _light_response(self, irradiance: np.ndarray) -> np.ndarray:
+        irradiance_array = np.asarray(irradiance, dtype=float)
+        if self.light_form == "light.haldane":
+            K_I, K_i = self.light_parameters
+            return irradiance_array / (
+                K_I + irradiance_array + irradiance_array * irradiance_array / K_i
+            )
+        if self.light_form == "light.steele":
+            I_opt = self.light_parameters[0]
+            x = irradiance_array / I_opt
+            return x * np.exp(1.0 - x)
+        if self.light_form == "light.eilers_peeters_steady":
+            I_opt, beta = self.light_parameters
+            x = irradiance_array / I_opt
+            return (2.0 + beta) * x / (x * x + beta * x + 1.0)
+        if self.light_form == "light.hill":
+            I_k, n = self.light_parameters
+            ratio = np.divide(irradiance_array, I_k)
+            return np.divide(ratio ** n, 1.0 + ratio ** n)
+        parameters = self.light_parameters or (self.light_saturation,)
+        return irradiance_array / (parameters[0] + irradiance_array)
+
+    def _light_scalar(self, irradiance: float) -> float:
+        if self.light_form == "light.monod":
+            parameters = self.light_parameters or (self.light_saturation,)
+            return forms.light_monod(irradiance, *parameters)
+        if self.light_form == "light.haldane":
+            return forms.light_haldane(irradiance, *self.light_parameters)
+        if self.light_form == "light.steele":
+            return forms.light_steele(irradiance, *self.light_parameters)
+        if self.light_form == "light.eilers_peeters_steady":
+            return forms.light_eilers_peeters_steady(irradiance, *self.light_parameters)
+        return forms.light_hill(irradiance, *self.light_parameters)
 
     def light(self, par: float, biomass: float, diffuse_fraction: float | None = None) -> float:
         if par <= 0.0:
             return 0.0
         tau = cylinder.optical_depth(self.extinction, biomass, self.diameter)
         if tau <= 0.0:
-            return light_response(par, self.light_saturation, 0.0)
+            return self._light_scalar(par)
         if tau > cylinder.TAU_MAX:
             raise _optics_failure(self, biomass)
         return cylinder.response_average_tau(
-            self._monod, par, tau, self.diffuse_fraction if diffuse_fraction is None else diffuse_fraction
+            self._light_response, par, tau, self.diffuse_fraction if diffuse_fraction is None else diffuse_fraction
         )
 
     def rates(self, hour: float, biomass: float, nitrogen: float) -> tuple[float, float]:
@@ -201,7 +233,7 @@ class Growth:
         thermal = self.thermal(temperature)
         growth = 0.0
         if par > 0.0 and thermal > 0.0:
-            growth = (self.mu_max_h * light_response(par, self.light_saturation, 0.0) * thermal
+            growth = (self.mu_max_h * self._light_scalar(par) * thermal
                       * nitrogen_factor(self.inlet[1], self.nitrogen_half_saturation))
         return growth - self.loss(par)
 
@@ -648,7 +680,7 @@ def _parameters(unit: dict[str, Any]) -> dict[str, float]:
 def _model_values(model: dict[str, Any]) -> dict[str, Any]:
     card, values = model["card"], model["parameters"]
     factors = card["factors"]
-    temperature_form, loss_form = factors["temperature"], factors["loss"]
+    temperature_form, loss_form, light_form = factors["temperature"], factors["loss"], factors["light"]
     try:
         if temperature_form == "temperature.ctmi":
             temperature_parameters: tuple[float, ...] = (values["T_min"], values["T_opt"], values["T_max"])
@@ -663,27 +695,44 @@ def _model_values(model: dict[str, Any]) -> dict[str, Any]:
         else:
             forms.loss_light_dark(0.0, values["I_dark"], values["m_L"], values["m_D"])
             loss_parameters = (values["I_dark"], values["m_L"], values["m_D"])
-        forms.light_monod(0.0, values["K_I"])
+        if light_form == "light.monod":
+            light_parameters: tuple[float, ...] = (values["K_I"],)
+            forms.light_monod(0.0, *light_parameters)
+        elif light_form == "light.haldane":
+            light_parameters = (values["K_I"], values["K_i"])
+            forms.light_haldane(0.0, *light_parameters)
+        elif light_form == "light.steele":
+            light_parameters = (values["I_opt"],)
+            forms.light_steele(0.0, *light_parameters)
+        elif light_form == "light.eilers_peeters_steady":
+            light_parameters = (values["I_opt"], values["beta"])
+            forms.light_eilers_peeters_steady(0.0, *light_parameters)
+        else:
+            light_parameters = (values["I_k"], values["n"])
+            forms.light_hill(0.0, *light_parameters)
         forms.nutrient_monod(0.0, values["K_j_0"])
         if values["k_X"] < 0.0 or not math.isfinite(values["k_X"]):
             raise forms.FormRefusal("k_X must be >= 0")
     except forms.FormRefusal as exc:
         raise PbrFailure("PBR_MODEL_CARD_UNAVAILABLE", f"The pinned model card's parameter set is invalid for T1: {exc}. "
                          "Correct the set in the Biology model library and pin the new revision.") from exc
-    return {"temperature_parameters": temperature_parameters, "loss_parameters": loss_parameters}
+    return {"temperature_parameters": temperature_parameters, "loss_parameters": loss_parameters,
+            "light_form": light_form, "light_parameters": light_parameters}
 
 
 def build_growth(params: dict[str, float], model: dict[str, Any], inlet: tuple[float, float, float],
                  dilution_h: float) -> Growth:
     values = model["parameters"]
     resolved = _model_values(model)
+    light_saturation = values.get("K_I", values.get("I_opt", values.get("I_k", 100.0)))
     return Growth(
-        mu_max_h=float(model["mu_max_h"]), light_saturation=values["K_I"], extinction=values["k_X"],
+        mu_max_h=float(model["mu_max_h"]), light_saturation=light_saturation, extinction=values["k_X"],
         nitrogen_half_saturation=values["K_j_0"], nitrogen_quota=float(model["nitrogen_quota"]),
         oxygen_yield=float(model["oxygen_yield"]),
         temperature_form=model["card"]["factors"]["temperature"],
         temperature_parameters=resolved["temperature_parameters"],
         loss_form=model["card"]["factors"]["loss"], loss_parameters=resolved["loss_parameters"],
+        light_form=resolved["light_form"], light_parameters=resolved["light_parameters"],
         diameter=params["tube_inner_diameter"], peak_par=params["peak_par"],
         photoperiod_h=params["photoperiod"] / 3600.0, diffuse_fraction=params["diffuse_fraction"],
         temperature_mean=params["temperature_mean"], temperature_amplitude=params["temperature_amplitude"],

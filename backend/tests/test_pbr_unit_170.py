@@ -171,7 +171,8 @@ def test_model_pin_resolves_exact_revision_and_refuses_unsupported_or_missing(tm
     get_settings.cache_clear()
     initialize_database()
     workspace = create_workspace(WorkspaceCreate(name="PBR model pin", slug="pbr-model-pin", status="active"))
-    parameters = {"K_I": (150, "umol/(m**2*s)"), "K_j_0": (.001, "kg/m3"), "k_d": (.004, "1/hour"),
+    parameters = {"K_I": (150, "umol/(m**2*s)"), "K_i": (500, "umol/(m**2*s)"),
+                  "K_j_0": (.001, "kg/m3"), "k_d": (.004, "1/hour"),
                   "a": (1.8, "1"), "b": (.5, "1"), "c": (.1, "1"), "d": (.01, "1"),
                   "w_ash": (.05, "1"), "k_X": (150, "m**2/kg")}
     parameter_set = bio_models.create_set(workspace.id, "Synthetic PBR set")
@@ -198,11 +199,11 @@ def test_model_pin_resolves_exact_revision_and_refuses_unsupported_or_missing(tm
     with pytest.raises(bio_models.BioModelError) as mismatch:
         bio_models.resolve_growth_model(workspace.id, card["id"], card["revision"], "0" * 64)
     assert mismatch.value.code == "PBR_MODEL_CARD_UNAVAILABLE"
-    haldane = bio_models.create_card(workspace.id, "Unsupported T1", parameter_set["id"],
+    haldane = bio_models.create_card(workspace.id, "Haldane T1", parameter_set["id"],
                                      {**factors, "light": "light.haldane"}, {"value": .0625, "unit": "1/hour"})
-    with pytest.raises(bio_models.BioModelError) as unsupported:
-        bio_models.resolve_growth_model(workspace.id, haldane["id"], haldane["revision"], haldane["digest"])
-    assert unsupported.value.code == "PBR_MODEL_CARD_FORM_UNSUPPORTED"
+    resolved_haldane = bio_models.resolve_growth_model(
+        workspace.id, haldane["id"], haldane["revision"], haldane["digest"])
+    assert resolved_haldane["parameters"]["K_i"] == 500
     sparse_set = bio_models.create_set(workspace.id, "Missing PBR symbols")
     sparse_card = bio_models.create_card(workspace.id, "Incomplete", sparse_set["id"],
                                          factors, {"value": .0625, "unit": "1/hour"})
