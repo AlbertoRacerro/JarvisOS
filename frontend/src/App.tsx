@@ -31,6 +31,7 @@ import DesignProject from "./pages/DesignProject";
 import DevelopmentRoadmap from "./pages/DevelopmentRoadmap";
 import EngineeringData from "./pages/EngineeringData";
 import LiteratureKnowledge from "./pages/LiteratureKnowledge";
+import MemorySearch from "./pages/MemorySearch";
 import ModelDossier from "./pages/ModelDossier";
 import RunsWorkbench from "./pages/RunsWorkbench";
 import Studio from "./pages/Studio";
@@ -191,6 +192,9 @@ function App() {
         break;
       case "memory-literature":
         content = <><FinalWorkspaceHeader group="memory" active="literature" navigate={navigate} /><LiteratureKnowledge kind="literature" workspaceId={workspaceId} jarvis={jarvisSidecar} onWorkspaceChange={setWorkspaceId} requestedSourceId={requestedLiteratureSourceId} requestedEntryId={requestedLiteratureEntryId} onKnowledgeSelectionChange={selectKnowledge} searchPanel={<ProjectSearchPanel workspaceId={workspaceId} navigate={navigate} />} /></>;
+        break;
+      case "memory-search":
+        content = <><FinalWorkspaceHeader group="memory" active="search" navigate={navigate} /><MemorySearch workspaceId={workspaceId} onWorkspaceChange={setWorkspaceId} /></>;
         break;
       case "development-roadmap-timeline":
         content = <><FinalWorkspaceHeader group="development" active="roadmap" navigate={navigate} /><DevelopmentRoadmap mode="timeline" workspaceId={workspaceId} onWorkspaceChange={setWorkspaceId} jarvis={jarvisSidecar} /></>;
