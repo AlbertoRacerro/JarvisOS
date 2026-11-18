@@ -18,6 +18,7 @@ export const CHECK_STATUS_LABELS: Record<string, string> = {
 };
 const EVALUATOR_NAMES: Record<string, string> = {
   "bluecad.solid": "Solido BlueCAD",
+  "bluecad.solid_code": "Solido da codice (BlueCAD)",
   "bluecad.mesh": "Mesh BlueCAD",
   "bluecad.fem": "Struttura statica (FEM)",
   "fluids.pipe_pressure_drop": "Perdita di carico in tubo",
@@ -81,6 +82,11 @@ export function BenchRunDetailView({ run }: Readonly<{ run: BenchRunDetail }>) {
           <td>{num(check.actual)}</td><td>{num(check.limit)}</td><td>{check.unit ?? "—"}</td><td>{check.hint}</td><td>{check.source}</td>
         </tr>)}</tbody></table>}
     {run.truncated ? <p className="bench-note">Vista abbreviata: i controlli superati o non valutati possono mancare.</p> : null}
+    {run.ports && run.ports.length > 0 ? <>
+      <h4>Porte</h4>
+      <ul className="bench-ports">{run.ports.map((port) =>
+        <li key={port.name}>{port.name} ({port.interface}{port.outer_d !== undefined ? `, Ø ${port.outer_d} mm` : port.pad_d !== undefined ? `, Ø ${port.pad_d} mm` : ""})</li>)}</ul>
+    </> : null}
     <h4>Risultati</h4>
     {run.outputs_withheld ? <p>Risultati non mostrati: il verdetto è «non utilizzabile».</p>
       : run.outputs.length === 0 ? <p>Nessun risultato numerico.</p>

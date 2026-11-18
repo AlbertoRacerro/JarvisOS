@@ -58,6 +58,64 @@ def _when(data: dict[str, Any], result_file: Path) -> datetime:
     return datetime.fromtimestamp(result_file.stat().st_mtime, UTC)
 
 
+def _read_ports(run_dir: Path) -> list[dict[str, Any]]:
+    manifest_path = run_dir / "artifacts" / "manifest.json"
+    try:
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            return []
+        resolved_run = run_dir.resolve()
+        resolved_manifest = manifest_path.resolve()
+        if not resolved_manifest.is_relative_to(resolved_run):
+            return []
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    resolved_ports = data.get("resolved_ports")
+    if not isinstance(resolved_ports, dict):
+        return []
+
+    body = resolved_ports.get("body")
+    if isinstance(body, dict):
+        port_groups = [body]
+    else:
+        port_groups = [
+            ports
+            for _, ports in sorted(resolved_ports.items(), key=lambda item: str(item[0]))
+            if isinstance(ports, dict)
+        ]
+
+    ports: list[dict[str, Any]] = []
+    for port_group in port_groups:
+        for port_name, port in port_group.items():
+            if not isinstance(port, dict):
+                continue
+            origin = port.get("origin")
+            direction = port.get("direction")
+            if not isinstance(origin, list) or not isinstance(direction, list):
+                continue
+            try:
+                entry: dict[str, Any] = {
+                    "name": str(port_name),
+                    "interface": str(port.get("interface", "")),
+                    "origin": list(origin),
+                    "direction": list(direction),
+                }
+                outer_d = port.get("outer_d")
+                if outer_d is not None:
+                    entry["outer_d"] = float(outer_d)
+                    entry["wall_t"] = float(port.get("wall_t", 0.0))
+                pad_d = port.get("pad_d")
+                if pad_d is not None:
+                    entry["pad_d"] = float(pad_d)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            ports.append(entry)
+    ports.sort(key=lambda port: port["name"])
+    return ports
+
+
 def list_runs(workspace_id: str) -> dict[str, Any]:
     root = bench_root(workspace_id)
     rows: list[tuple[datetime, str, dict[str, Any]]] = []
@@ -112,6 +170,7 @@ def show(workspace_id: str, run_id: str) -> dict[str, Any]:
         "outputs_withheld": isinstance(outputs, str),
         "artifacts": view.get("artifacts", []),
         "truncated": bool(view.get("truncated")),
+        "ports": _read_ports(run_dir),
     }
 
 

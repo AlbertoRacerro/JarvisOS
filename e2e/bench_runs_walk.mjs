@@ -80,6 +80,11 @@ for run_id, (ev, status, verdict, done, failure, checks, outputs) in runs.items(
     folder.mkdir(parents=True)
     (folder / "result.json").write_text(json.dumps({"evaluator_id": ev, "status": status, "verdict": verdict,
         "completed_at": done, "failure": failure, "checks": checks, "outputs": outputs}))
+sc = bench / "run_solid_code"
+(sc / "artifacts").mkdir(parents=True)
+(sc / "result.json").write_text(json.dumps({"evaluator_id": "bluecad.solid_code", "status": "succeeded", "verdict": "usable",
+    "completed_at": "2026-11-17T14:00:00Z", "failure": None, "checks": [check("topology_valid", "pass")], "outputs": [out("volume", 20.0, "mm3")]}))
+(sc / "artifacts" / "manifest.json").write_text(json.dumps({"resolved_ports": {"body": {"inlet": {"interface": "tube", "origin": [0, 0, 0], "direction": [-1, 0, 0], "outer_d": 12.0, "wall_t": 1.5}}}}))
 `;
 const init = spawnSync(python, ["-c", seed], { cwd: backend, env, encoding: "utf8" });
 assert(init.status === 0, `isolated database initialization failed: ${init.stderr}`);
@@ -119,12 +124,12 @@ try {
   await section.waitFor();
   summary.steps.push({ step: "open_runs_from_root", status: "pass" });
 
-  // List: four runs, newest first, four distinct verdict labels.
+  // List: five runs, newest first, four distinct verdict labels plus authored solid code.
   const rows = section.locator("li.bench-row");
-  await rows.nth(3).waitFor();
-  assert(await rows.count() === 4, "four fixture runs listed");
+  await rows.nth(4).waitFor();
+  assert(await rows.count() === 5, "five fixture runs listed");
   const order = await rows.locator(".bench-row__open strong").allInnerTexts();
-  assert(order.join("|") === "Struttura statica (FEM)|Mesh BlueCAD|Solido BlueCAD|Solido BlueCAD", `newest first, got ${order}`);
+  assert(order.join("|") === "Solido da codice (BlueCAD)|Struttura statica (FEM)|Mesh BlueCAD|Solido BlueCAD|Solido BlueCAD", `newest first, got ${order}`);
   const listText = await section.innerText();
   for (const label of ["Utilizzabile con avvertenze", "Non verificato", "Non utilizzabile"]) assert(listText.includes(label), `list shows ${label}`);
   assert(/Utilizzabile(?! con)/.test(listText), "list shows Utilizzabile");
@@ -132,9 +137,15 @@ try {
   await shot("bench-list");
   summary.steps.push({ step: "list_with_four_verdicts_newest_first", status: "pass" });
 
-  // Detail of the failed run: failure and check table.
+  // Detail of the authored solid_code run: named boundary ports.
   await rows.nth(0).locator(".bench-row__open").click();
   const detail = section.getByRole("region", { name: "Dettaglio risultato" });
+  await detail.getByRole("heading", { name: "Porte", level: 4 }).waitFor();
+  await detail.getByText("inlet (tube, Ø 12 mm)").waitFor();
+  await shot("run-detail-solid-code-ports");
+
+  // Detail of the failed run: failure and check table.
+  await rows.nth(1).locator(".bench-row__open").click();
   await detail.getByText("il solutore non converge").waitFor();
   await detail.getByRole("columnheader", { name: "Controllo" }).waitFor();
   await detail.getByRole("cell", { name: "equilibrium", exact: true }).waitFor();
@@ -142,13 +153,13 @@ try {
   summary.steps.push({ step: "open_failed_run_and_see_check_table", status: "pass" });
 
   // The not_evaluated check reads as such.
-  await rows.nth(1).locator(".bench-row__open").click();
+  await rows.nth(2).locator(".bench-row__open").click();
   await detail.getByRole("cell", { name: "Non valutato" }).waitFor();
   summary.steps.push({ step: "not_evaluated_is_shown", status: "pass" });
 
   // Compare the two solid runs.
-  await rows.nth(2).getByRole("checkbox").check();
   await rows.nth(3).getByRole("checkbox").check();
+  await rows.nth(4).getByRole("checkbox").check();
   await section.getByRole("button", { name: "Confronta i due selezionati" }).click();
   const compare = section.getByRole("region", { name: "Confronto risultati" });
   await compare.getByRole("cell", { name: "volume", exact: true }).waitFor();
