@@ -326,7 +326,14 @@ def activate_model(model_id: str) -> dict[str, Any]:
 
         if current_entry and current_entry.runtime == "strata":
             spool = get_spool_path()
-            if spool is not None:
+            if spool is None:
+                # Without the spool the backend cannot stop Strata; refuse while its port still answers.
+                st = get_strata_controller().get_state(
+                    current_entry.id, current_entry.host, current_entry.port or 8080, current_entry.served_model or ""
+                )
+                if st.state == "ready":
+                    raise HTTPException(status_code=409, detail="The previous local model has not stopped yet.")
+            else:
                 strata_ctrl = get_strata_controller()
                 stopped = strata_ctrl.stop(
                     current_entry.id,
@@ -344,6 +351,9 @@ def activate_model(model_id: str) -> dict[str, Any]:
             if current.get("runtime_reachable") and not current.get("spawned_by_jarvis"):
                 raise HTTPException(status_code=409, detail="Externally started llama-server cannot be switched here.")
 
+        if current_entry and current_entry.runtime == "strata":
+            # Strata is stopped; the owner refuses to spawn llama-server while a Strata entry is active.
+            owner.active_model_id = entry.id
         result = owner.switch_model(config_for_entry(entry), entry.id, default.id)
         save_model_choice(entry.id)
         return result

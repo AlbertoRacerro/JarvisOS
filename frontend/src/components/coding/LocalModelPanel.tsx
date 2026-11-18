@@ -98,10 +98,10 @@ export default function LocalModelPanel() {
           <strong>{entry.label}</strong> · <span>{stateLabel}</span>
           {entry.runtime === "llama_cpp" && !entry.installed ? <span> · non installato</span> : null}
           {models.active_id === entry.id ? <span> · in uso</span> : null}
-          {models.active_id !== entry.id ? <button type="button" disabled={loading || !!pending || !!error || (entry.runtime === "llama_cpp" && (!entry.installed || entry.digest_state === "mismatch")) || entry.state === "requires host start"} onClick={() => void switchModel(entry.id)}>Usa questo modello</button> : null}
+          {models.active_id !== entry.id ? <button type="button" disabled={loading || !!pending || (entry.runtime === "llama_cpp" && (!entry.installed || entry.digest_state === "mismatch")) || entry.state === "requires host start"} onClick={() => void switchModel(entry.id)}>Usa questo modello</button> : null}
         </li>;
       })}</ul>
-      {models.active_id !== models.models.find(entry => entry.qualification === "default")?.id ? <button type="button" disabled={loading || !!pending || !!error} onClick={() => void switchModel(null)}>Torna al modello standard</button> : null}
+      {models.active_id !== models.models.find(entry => entry.qualification === "default")?.id ? <button type="button" disabled={loading || !!pending} onClick={() => void switchModel(null)}>Torna al modello standard</button> : null}
     </div> : null}
   </section>;
 }

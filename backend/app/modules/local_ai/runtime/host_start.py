@@ -86,7 +86,7 @@ def probe_strata_readiness(
     timeout_s: float = 2.0,
 ) -> bool:
     """Loopback GET /v1/models probe; True if served_model is present in response data."""
-    origin = f"http://{host}:{port}"
+    origin = f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
     try:
         with client_factory(timeout=timeout_s) as client:
             resp = client.get(f"{origin}/v1/models")
@@ -206,8 +206,17 @@ class StrataRuntimeController:
         st.last_action = "stop"
         st.last_request_time = self._clock_fn()
 
+        # A loading model does not answer the probe yet still holds the card, so "stopped" needs the
+        # host's ok receipt for this stop request as well as a silent port.
         deadline = self._clock_fn() + wait_timeout_s
-        while self._probe_fn(host, port, served_model):
+        while True:
+            receipt = check_receipt(spool, req_id)
+            if receipt is not None and receipt[0] != "ok":
+                st.state = "failed"
+                st.reason = receipt[1] or f"Host operation failed ({receipt[0]})"
+                return st
+            if receipt is not None and not self._probe_fn(host, port, served_model):
+                break
             if self._clock_fn() >= deadline:
                 st.state = "failed"
                 st.reason = "The model did not stop in time."

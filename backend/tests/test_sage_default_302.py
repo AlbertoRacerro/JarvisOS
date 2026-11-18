@@ -382,6 +382,7 @@ def test_switch_order_and_stored_choice(tmp_path: Path, monkeypatch: pytest.Monk
     def fake_sleep_stops_sage(_: float) -> None:
         nonlocal sage_answering
         sage_answering = False
+        _write_receipt(spool, "stop", "ok")
         events.append("sage_port_stopped")
 
     ctrl._sleep_fn = fake_sleep_stops_sage
@@ -408,6 +409,80 @@ def test_switch_order_and_stored_choice(tmp_path: Path, monkeypatch: pytest.Monk
     assert json.loads(choice_file.read_text())["active_model_id"] == "sage"
     start_req = next(r for r in [json.loads(p.read_text()) for p in (spool / "requests").glob("*.json")] if r["args"]["action"] == "start")
     assert start_req["args"]["unit"] == "sage.service"
+
+
+def _write_receipt(spool: Path, action: str, outcome: str) -> None:
+    for path in (spool / "requests").glob("*.json"):
+        request = json.loads(path.read_text())
+        if request["args"]["action"] == action:
+            (spool / "receipts").mkdir(exist_ok=True)
+            receipt = {"schema": host_start.RECEIPT_SCHEMA, "id": request["id"], "outcome": outcome, "error": None}
+            (spool / "receipts" / f"{request['id']}.json").write_text(json.dumps(receipt))
+
+
+def test_stop_waits_for_receipt_while_loading_model_is_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A loading model does not answer the probe; without the host's receipt it is not stopped.
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    monkeypatch.setenv("JARVISOS_HOSTOPS_SPOOL", str(spool))
+    clock = [0.0]
+
+    def fake_sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    ctrl = StrataRuntimeController(probe_fn=lambda *_: False, clock_fn=lambda: clock[0], sleep_fn=fake_sleep)
+    assert ctrl.stop("sage", "sage.service", "127.0.0.1", 8090, "sage-model").state == "failed"
+    assert clock[0] >= 120.0
+
+    clock[0] = 0.0
+    ctrl._sleep_fn = lambda _: _write_receipt(spool, "stop", "ok")
+    assert ctrl.stop("sage", "sage.service", "127.0.0.1", 8090, "sage-model").state == "stopped"
+
+
+def test_stop_fails_at_once_on_refused_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    monkeypatch.setenv("JARVISOS_HOSTOPS_SPOOL", str(spool))
+    slept: list[float] = []
+    ctrl = StrataRuntimeController(probe_fn=lambda *_: True, sleep_fn=slept.append)
+    original_write = host_start.write_service_control_request
+
+    def write_and_refuse(spool_path: Path, unit: str, action: str) -> str:
+        request_id = original_write(spool_path, unit, action)
+        _write_receipt(spool_path, action, "refused")
+        return request_id
+
+    monkeypatch.setattr(host_start, "write_service_control_request", write_and_refuse)
+    assert ctrl.stop("sage", "sage.service", "127.0.0.1", 8090, "sage-model").state == "failed"
+    assert slept == []
+
+
+def test_owner_never_spawns_llama_while_strata_is_active(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # start, restart, crash recovery and the adapter's recovery all go through start()/recover_if_crashed().
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    monkeypatch.setenv("JARVISOS_HOSTOPS_SPOOL", str(spool))
+    entries = _valid_strata_default_entries(tmp_path)
+    _setup_registry(tmp_path, monkeypatch, entries)
+    ctrl = StrataRuntimeController(probe_fn=lambda *_: False)
+    monkeypatch.setattr(host_start, "get_strata_controller", lambda: ctrl)
+    popen_calls: list[Any] = []
+    owner = llama_cpp.LlamaCppRuntimeOwner(
+        llama_cpp.LlamaCppRuntimeConfig(binary_path=str(tmp_path / "llama-server"), model_path=str(tmp_path / "gemma.gguf"), manage=True),
+        popen=lambda *a, **k: popen_calls.append(a),
+    )
+    (tmp_path / "llama-server").write_bytes(b"x")
+    (tmp_path / "gemma.gguf").write_bytes(b"fixture")
+    owner.active_model_id = "sage"
+    monkeypatch.setattr(llama_cpp, "get_llama_cpp_runtime_owner", lambda: owner)
+    monkeypatch.setattr(model_registry, "get_llama_cpp_runtime_owner", lambda: owner)
+
+    assert owner.start()["backend"] == "strata"
+    owner._crashed = True
+    assert owner.status()["backend"] == "strata"
+    assert owner._crashed is False
+    assert owner.restart()["backend"] == "strata"
+    assert popen_calls == []
 
 
 def test_switch_refuses_llama_spawn_while_sage_still_answers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

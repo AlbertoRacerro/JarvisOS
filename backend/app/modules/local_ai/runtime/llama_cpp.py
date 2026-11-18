@@ -430,7 +430,8 @@ class LlamaCppRuntimeOwner:
     def start(self) -> dict[str, Any]:
         with self._lock:
             existing = self._snapshot(include_recovery=False)
-            if existing["runtime_reachable"]:
+            # One hot model on the card: never spawn llama-server while a Strata model is the active one.
+            if existing["runtime_reachable"] or existing.get("backend") == "strata":
                 return existing
             reason = validate_loopback_host(self.config.host)
             if reason:
@@ -493,6 +494,8 @@ class LlamaCppRuntimeOwner:
                 except (OSError, subprocess.TimeoutExpired):
                     process.kill()
                 self._api_key = None
+            # An explicit stop ends any pending automatic recovery of an earlier crash.
+            self._crashed = False
             return self.status()
 
     def recover_if_crashed(self) -> dict[str, Any]:
@@ -507,8 +510,12 @@ class LlamaCppRuntimeOwner:
                 row["reason_code"] = "LLAMACPP_RECOVERING"
                 row["message"] = "Local llama-server crashed; automatic recovery is loading the configured model."
                 return row
+            row = self._snapshot()
+            if row.get("backend") == "strata":
+                self._crashed = False
+                return row
             if not self._crashed or not self.config.manage or self._process is not None:
-                return self._snapshot()
+                return row
             if len(self._automatic_restart_times) >= 3:
                 row = self._snapshot()
                 row["reason_code"] = "LLAMACPP_CRASH_LOOP"

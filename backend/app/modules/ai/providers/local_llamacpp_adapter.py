@@ -46,7 +46,7 @@ class LocalLlamaCppAdapter:
         if active and active.runtime == "strata":
             host = active.host or "127.0.0.1"
             port = active.port or 8080
-            url = f"http://{host}:{port}/v1"
+            url = f"http://[{host}]:{port}/v1" if ":" in host else f"http://{host}:{port}/v1"
             if not _loopback_url(url):
                 raise ValueError("Strata endpoint must use HTTP loopback")
             return url.rstrip("/")
