@@ -861,3 +861,35 @@ def test_regression_finding_3_host_start_validations_and_post_ready_state(
     probe_ready = False
     st_stopped = ctrl.get_state("sage", "127.0.0.1", 8080, "sage-model")
     assert st_stopped.state == "stopped"
+
+
+def test_owner_refuses_spawn_when_strata_state_is_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # An unreadable registry must not let llama-server start beside a Strata model that may be running.
+    _setup_registry(tmp_path, monkeypatch, [])
+    (tmp_path / "settings" / "local_models.json").write_text("{not json", encoding="utf-8")
+    (tmp_path / "llama-server").write_bytes(b"fake-binary")
+    (tmp_path / "gemma.gguf").write_bytes(b"fixture")
+    popen_calls: list[Any] = []
+    owner = llama_cpp.LlamaCppRuntimeOwner(
+        llama_cpp.LlamaCppRuntimeConfig(
+            binary_path=str(tmp_path / "llama-server"), model_path=str(tmp_path / "gemma.gguf"), manage=True,
+        ),
+        popen=lambda *a, **k: popen_calls.append(a),
+    )
+    assert owner.start()["reason_code"] == "STRATA_ACTIVE"
+    owner._crashed = True
+    assert owner.recover_if_crashed()["reason_code"] == "STRATA_ACTIVE"
+    assert popen_calls == []
+
+
+def test_llamacpp_loading_503_reads_as_still_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(model_registry, "get_active_model_entry", lambda: None)
+    adapter = local_llamacpp_adapter.LocalLlamaCppAdapter(
+        client_factory=lambda: httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(503, json={"error": {"message": "Loading model"}})
+        ))
+    )
+    result = adapter.complete(AIRequest(task_type=AITaskType.synthesis, prompt="hello"))
+    assert result.error is not None
+    assert result.error.message.endswith("Local model is still loading.")
+    assert result.error.retryable is True

@@ -424,6 +424,7 @@ class LlamaCppRuntimeOwner:
         return row
 
     def _any_strata_answering(self) -> bool:
+        # Fails closed: an unreadable registry or a probe error counts as "a Strata model may be running".
         try:
             from app.modules.local_ai.runtime.host_start import get_strata_controller
             from app.modules.local_ai.runtime.model_registry import read_registry
@@ -439,7 +440,8 @@ class LlamaCppRuntimeOwner:
                         return True
             return False
         except Exception:
-            return False
+            _LOGGER.warning("Strata state unknown; refusing to start llama-server")
+            return True
 
     def start(self) -> dict[str, Any]:
         with self._lock:

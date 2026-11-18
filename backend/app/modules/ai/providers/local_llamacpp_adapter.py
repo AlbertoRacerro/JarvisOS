@@ -198,6 +198,8 @@ class LocalLlamaCppAdapter:
                 recovery = get_llama_cpp_runtime_owner().recover_if_crashed()
                 recovery_in_progress = recovery.get("reason_code") == "LLAMACPP_RECOVERING"
             failure_message = f"Local llama-server request failed ({cause})."
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 503:
+                failure_message += " Local model is still loading."
             if recovery_in_progress:
                 failure_message += " Automatic recovery is in progress."
             return AIResponse(
