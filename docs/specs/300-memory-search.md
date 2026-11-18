@@ -1,6 +1,6 @@
 # 300 — MEMORY-SEARCH-1: Search the workspace memory and manage its document folder from the Memory screen
 
-Status: merged
+Status: ready
 Depends on: 287, 289, 291
 
 ## Goal
