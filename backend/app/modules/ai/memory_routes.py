@@ -9,12 +9,15 @@ Provides:
 """
 from __future__ import annotations
 
+import json
+import os
 import re
+import stat
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query, Request
+from starlette.concurrency import run_in_threadpool
 
 from app.core.errors import workspace_not_found_http_error
 from app.core.paths import build_paths
@@ -26,72 +29,49 @@ from app.modules.workspaces.service import get_workspace
 router = APIRouter(prefix="/workspaces/{workspace_id}/memory", tags=["ai-memory"])
 
 
-class RegisterFolderPayload(BaseModel):
-    folder: str
+def _folder_invalid() -> HTTPException:
+    return HTTPException(status_code=422, detail={"code": "folder_invalid"})
 
 
 def _repo_root() -> Path:
+    """The checkout the backend runs from: `app` lives in `<root>/backend/app`."""
     import app
 
-    app_file = Path(app.__file__).resolve()
-    for parent in app_file.parents:
-        if (parent / ".git").exists():
-            return parent
-    return app_file.parents[1]
+    return Path(app.__file__).resolve().parents[2]
 
 
-def _validate_and_register_folder(workspace_id: str, folder_str: str) -> str:
-    if not isinstance(folder_str, str) or not folder_str.strip():
-        raise HTTPException(status_code=422, detail={"code": "folder_invalid"})
+def _overlaps(candidate: Path, protected: Path) -> bool:
+    """True when either folder contains the other; compared by device and inode, not by spelling."""
+    try:
+        protected_stat = os.stat(protected)
+    except OSError:
+        return False
+    candidate_stat = os.stat(candidate)
+    for parent in (candidate, *candidate.parents):
+        if os.path.samestat(os.stat(parent), protected_stat):
+            return True
+    resolved = protected.resolve()
+    return any(os.path.samestat(os.stat(parent), candidate_stat) for parent in (resolved, *resolved.parents))
 
-    raw_path = Path(folder_str)
+
+def _validate_and_register_folder(workspace_id: str, folder: object) -> str:
+    if not isinstance(folder, str) or not folder.strip() or "\x00" in folder:
+        raise _folder_invalid()
+    raw_path = Path(folder)
     if not raw_path.is_absolute():
-        raise HTTPException(status_code=422, detail={"code": "folder_invalid"})
-
-    # Check existence
-    if not raw_path.exists():
-        raise HTTPException(status_code=422, detail={"code": "folder_invalid"})
-
-    # Check symlink
-    if raw_path.is_symlink():
-        raise HTTPException(status_code=422, detail={"code": "folder_invalid"})
-
-    # Check file (must be directory)
-    if not raw_path.is_dir():
-        raise HTTPException(status_code=422, detail={"code": "folder_invalid"})
-
+        raise _folder_invalid()
     try:
+        if not stat.S_ISDIR(os.lstat(raw_path).st_mode):
+            raise _folder_invalid()
         resolved_path = raw_path.resolve(strict=True)
-    except (OSError, RuntimeError):
-        raise HTTPException(status_code=422, detail={"code": "folder_invalid"}) from None
-
-    if resolved_path.is_symlink() or not resolved_path.is_dir():
-        raise HTTPException(status_code=422, detail={"code": "folder_invalid"})
-
-    # Check data root
-    try:
-        data_root = build_paths().data_root.resolve(strict=True)
-    except (OSError, RuntimeError):
-        data_root = build_paths().data_root.resolve()
-
-    if resolved_path == data_root or data_root in resolved_path.parents:
-        raise HTTPException(status_code=422, detail={"code": "folder_invalid"})
-
-    # Check repository root
-    try:
-        repo_root = _repo_root().resolve(strict=True)
-    except (OSError, RuntimeError):
-        repo_root = _repo_root().resolve()
-
-    if resolved_path == repo_root or repo_root in resolved_path.parents:
-        raise HTTPException(status_code=422, detail={"code": "folder_invalid"})
-
-    try:
-        document_intake.register_folder(workspace_id, raw_path)
-    except ValueError:
-        raise HTTPException(status_code=422, detail={"code": "folder_invalid"}) from None
-
-    return raw_path.name
+        if resolved_path == Path(resolved_path.anchor) or not resolved_path.name:
+            raise _folder_invalid()
+        if _overlaps(resolved_path, build_paths().data_root) or _overlaps(resolved_path, _repo_root()):
+            raise _folder_invalid()
+        document_intake.register_folder(workspace_id, resolved_path)
+    except (OSError, RuntimeError, ValueError):
+        raise _folder_invalid() from None
+    return resolved_path.name
 
 
 @router.get("/search")
@@ -116,8 +96,8 @@ def search_memory(
             limit=12,
             token_budget=2048,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"code": "query_invalid"}) from None
 
     items: list[dict[str, Any]] = []
     for entry in raw_result.get("evidence", []):
@@ -198,17 +178,21 @@ def get_documents_folder(workspace_id: str) -> dict[str, Any]:
 
 
 @router.put("/documents")
-def put_documents_folder(
-    workspace_id: str,
-    payload: RegisterFolderPayload,
-) -> dict[str, Any]:
-    if get_workspace(workspace_id) is None:
-        raise workspace_not_found_http_error()
-    folder_name = _validate_and_register_folder(workspace_id, payload.folder)
-    return {
-        "registered": True,
-        "folder_name": folder_name,
-    }
+async def put_documents_folder(workspace_id: str, request: Request) -> dict[str, Any]:
+    # The body is read by hand: a framework validation error would echo the submitted path.
+    try:
+        body = json.loads(await request.body())
+    except (ValueError, UnicodeDecodeError):
+        raise _folder_invalid() from None
+    folder = body.get("folder") if isinstance(body, dict) else None
+
+    def register() -> str:
+        if get_workspace(workspace_id) is None:
+            raise workspace_not_found_http_error()
+        return _validate_and_register_folder(workspace_id, folder)
+
+    folder_name = await run_in_threadpool(register)
+    return {"registered": True, "folder_name": folder_name}
 
 
 @router.post("/documents/refresh")

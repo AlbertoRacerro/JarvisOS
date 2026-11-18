@@ -114,6 +114,13 @@ def test_register_refresh_search_and_delete_lifecycle(client: TestClient, tmp_pa
     assert del_res.status_code == 200
     assert del_res.json() == {"registered": False, "folder_name": None}
 
+    # The passages leave the index on DELETE itself, before any search could catch up.
+    from app.core.database import open_retrieval_index_connection
+    with open_retrieval_index_connection() as db:
+        left = db.execute("SELECT COUNT(*) FROM owner_manifest WHERE owner='workspace_documents' AND workspace_id=?",
+                          (ws,)).fetchone()[0]
+    assert left == 0
+
     get_docs_after = client.get(f"/workspaces/{ws}/memory/documents")
     assert get_docs_after.json() == {"registered": False, "folder_name": None}
 
@@ -173,6 +180,28 @@ def test_refusals_criterion_3(client: TestClient, tmp_path: Path) -> None:
     assert str(repo_sub) not in res.text
 
 
+def test_refusals_of_containing_folders_and_odd_bodies(client: TestClient, tmp_path: Path) -> None:
+    import app
+
+    ws = _workspace("ws-ancestors")
+    url = f"/workspaces/{ws}/memory/documents"
+    data_root = build_paths().data_root.resolve()
+    repo_root = Path(app.__file__).resolve().parents[2]
+    for folder in (data_root, data_root.parent, repo_root, repo_root.parent, Path("/"), "/" + "x" * 5000,
+                   str(tmp_path / ("y" * 300))):
+        res = client.put(url, json={"folder": str(folder)})
+        assert res.status_code == 422, folder
+        assert res.json() == {"detail": {"code": "folder_invalid"}}
+    secret = str(tmp_path / "secret")
+    for body in ({"folder": [secret]}, {"folder": {"p": secret}}, [secret], None):
+        res = client.put(url, json=body)
+        assert res.status_code == 422
+        assert res.json() == {"detail": {"code": "folder_invalid"}}
+    res = client.put(url, content=f'{{"folder": "{secret}"', headers={"Content-Type": "application/json"})
+    assert res.json() == {"detail": {"code": "folder_invalid"}}
+    assert client.get(url).json() == {"registered": False, "folder_name": None}
+
+
 def test_refresh_409_without_registration(client: TestClient) -> None:
     ws = _workspace("ws-no-reg")
     res = client.post(f"/workspaces/{ws}/memory/documents/refresh")
@@ -223,39 +252,13 @@ def test_query_validation_422(client: TestClient) -> None:
 
 
 def test_no_agent_tool_references_registration_route_or_register_folder() -> None:
-    """Assert no agent tool, broker method or MCP descriptor mentions /memory/documents or register_folder."""
+    """Only the HTTP route and the operator command reach folder registration; no agent tool, broker or MCP code."""
     import app
-    from app.modules.agents.hermes.broker_mcp import _DECISION_TOOL, _RETRIEVAL_TOOL, _TOOL
-    from app.modules.engineering.bench import list_evaluators
 
-    # Check hermes broker MCP descriptors
-    for descriptor in (_TOOL, _RETRIEVAL_TOOL, _DECISION_TOOL):
-        desc_str = str(descriptor)
-        assert "/memory/documents" not in desc_str
-        assert "register_folder" not in desc_str
-
-    # Check engineering bench evaluator descriptors
-    evaluators = list_evaluators()
-    for ev in evaluators:
-        ev_str = str(ev)
-        assert "/memory/documents" not in ev_str
-        assert "register_folder" not in ev_str
-
-    # Scan python source files under agents, ai, engineering/bench for descriptors
-    repo_root = Path(app.__file__).resolve().parents[2]
-    targets = [
-        repo_root / "backend/app/modules/agents",
-        repo_root / "backend/app/modules/ai",
-        repo_root / "backend/app/modules/engineering/bench.py",
-    ]
-    for target in targets:
-        assert target.exists(), target
-        files = [target] if target.is_file() else list(target.rglob("*.py"))
-        assert files, target
-        for file in files:
-            # Skip the test file itself, memory_routes.py and document_intake.py (which are the intake implementation and HTTP route)
-            if file.name in ("memory_routes.py", "document_intake.py", "test_memory_routes.py", "test_document_intake.py"):
-                continue
-            text = file.read_text(encoding="utf-8")
-            assert "/memory/documents" not in text, f"Found /memory/documents in {file}"
-            assert "register_folder" not in text, f"Found register_folder in {file}"
+    backend_app = Path(app.__file__).resolve().parent
+    allowed = {backend_app / "modules/ai/memory_routes.py", backend_app / "modules/ai/document_intake.py"}
+    files = sorted(backend_app.rglob("*.py"))
+    assert len(files) > 100
+    reaching = {file for file in files
+                if "register_folder" in (text := file.read_text(encoding="utf-8")) or "/memory/documents" in text}
+    assert reaching == allowed

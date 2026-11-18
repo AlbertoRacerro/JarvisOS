@@ -72,7 +72,12 @@ Out of scope (binding non-goals):
   (`folder_invalid`) and never echoes the path; the folder may not be inside the data root (`backend/app/core/paths.py::build_paths`) or the repository checkout
   the backend runs from.
 - Search shows only `validation == "current"` items; the excerpt is shown as text, never as HTML or Markdown.
-- Read routes write nothing; refresh and register run only on an explicit click.
+- Register, refresh and remove run only on an explicit click. Search writes no record; like every retrieval (the
+  agent's included), `query_context` first brings the derived index up to date with the owners, so a registered
+  folder's edits can reach search before "Aggiorna cartella" and the refresh counts are relative to the index's last
+  catch-up. Registration is the owner's consent to that; removal purges the passages at once.
+- The folder may not contain the data root or the checkout either (compared by device and inode), nor be the
+  filesystem root; any filesystem error and any malformed body answer `folder_invalid`.
 - Visible text in Italian; owner ids, object ids and digests are not shown, except the relative document path and
   heading for `workspace_documents`.
 
