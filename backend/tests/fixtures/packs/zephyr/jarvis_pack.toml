@@ -3,3 +3,6 @@ id = "zephyr"
 
 [sensitivity]
 terms = ["zephyr"]
+
+[readiness]
+cases = "readiness_cases.toml"

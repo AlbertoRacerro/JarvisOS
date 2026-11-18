@@ -272,6 +272,9 @@ def _read_backing_lines(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
+BackingText = _BackingText
+
+
 def _entry_read(connection, row, backing: _BackingText | None = None) -> LiteratureEntryRead:
     entry_id = str(row["id"])
     checks: list[ResultCheck] = []
