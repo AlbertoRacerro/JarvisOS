@@ -1,6 +1,6 @@
 # 310 — DOWNLOAD-STATE-1: Recorded download state so the Activity panel's download group fills
 
-Status: ready
+Status: merged
 Depends on: 298
 
 ## Goal
