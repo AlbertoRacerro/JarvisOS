@@ -19,6 +19,13 @@ const { ActivityView, ACTIVITY_LABEL } = module.exports;
 
 assert.equal(ACTIVITY_LABEL, "Attività");
 assert.ok(read("src/components/Layout.tsx").includes("<ActivityControl />"), "the control lives in the shell on every screen");
+const activityCss = read("src/styles/activity-panel.css");
+const finalHeaderCss = read("src/styles/final-workspace-header.css");
+assert.ok(activityCss.includes("--activity-control-reserve: 8rem"), "the activity control reserve is defined");
+assert.ok(finalHeaderCss.includes(".application-shell--final .shell-main > .final-fusion__workspace-head"),
+  "the final workspace header rule is present");
+assert.ok(finalHeaderCss.includes("padding-inline-end: var(--activity-control-reserve, 8rem)"),
+  "the final workspace header reserves space for the activity control");
 
 const row = (extra = {}) => ({ key: "k", kind: "job", title: "Un lavoro di calcolo registrato", runner: "lavoro notturno",
   started_at: "2026-11-17T11:00:00Z", ended_at: null, state: "running", state_word: "in corso", progress: null,
