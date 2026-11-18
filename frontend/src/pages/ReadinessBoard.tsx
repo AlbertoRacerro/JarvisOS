@@ -29,7 +29,6 @@ export const STEP_LABELS: Record<StepId, string> = {
 };
 
 export const REASON_WORKSPACE_MISSING = "Il workspace del caso non esiste";
-export const REASON_CAPABILITY_MISSING = "Funzione non ancora disponibile nel prodotto";
 export const REASON_NOT_DECLARED = "Il caso non dichiara un valore pubblicato da confrontare";
 export const REASON_UNIT_MISMATCH = "Le unità del risultato e del valore pubblicato non sono confrontabili";
 export const REASON_OUT_OF_TOLERANCE = "Il risultato è fuori dalla tolleranza del caso";
@@ -72,7 +71,6 @@ export function getReasonText(step: StepId, reason: string | null): string {
   if (reason === "not_declared") return REASON_NOT_DECLARED;
   if (reason === "unit_mismatch") return REASON_UNIT_MISMATCH;
   if (reason === "out_of_tolerance") return REASON_OUT_OF_TOLERANCE;
-  if (reason === "capability_missing") return REASON_CAPABILITY_MISSING;
   if (reason === "missing_record") {
     return MISSING_RECORD_SENTENCES[step] ?? "Elemento mancante per questo passaggio:";
   }
@@ -268,7 +266,7 @@ export default function ReadinessBoard({ navigate, onWorkspaceChange }: Props) {
                     <td>
                       {stepResult.comparison.computed_in_published_unit !== null &&
                       stepResult.comparison.computed.unit !== stepResult.comparison.published.unit
-                        ? `${stepResult.comparison.computed.value} ${stepResult.comparison.computed.unit} (${stepResult.comparison.computed_in_published_unit} ${stepResult.comparison.published.unit})`
+                        ? `${stepResult.comparison.computed.value} ${stepResult.comparison.computed.unit} (${Number(stepResult.comparison.computed_in_published_unit.toPrecision(6))} ${stepResult.comparison.published.unit})`
                         : `${stepResult.comparison.computed.value} ${stepResult.comparison.computed.unit}`}
                     </td>
                   </tr>

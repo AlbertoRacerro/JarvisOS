@@ -224,6 +224,75 @@ def _workspace_missing(case: CaseDefinition) -> CaseResult:
     )
 
 
+def _run_output(root: Path, run_id: str, quantity: str) -> tuple[float, str] | None:
+    """The named numeric output of one bench run, read inside the bench root; None when absent or unreadable."""
+    result_file = (root / run_id / "result.json").resolve()
+    if not result_file.is_relative_to(root) or not result_file.is_file():
+        return None
+    try:
+        data = json.loads(result_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    outputs = data.get("outputs") if isinstance(data, dict) else None
+    if not isinstance(outputs, list):
+        return None
+    for out in outputs:
+        if not isinstance(out, dict) or out.get("name") != quantity or not isinstance(out.get("value"), dict):
+            continue
+        value, unit = out["value"].get("value"), out["value"].get("unit")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            continue
+        if isinstance(unit, str) and unit.strip():
+            return float(value), unit.strip()
+    return None
+
+
+def _convert(value: float, unit: str, target: str) -> float | None:
+    """Value in the target unit through the single Pint owner; None when the units are not comparable."""
+    try:
+        magnitude = float(unit_registry().Quantity(value, parse_unit_token(unit)).to(parse_unit_token(target)).magnitude)
+    except (ProcessKernelError, PintError, ValueError, TypeError):
+        return None
+    return magnitude if math.isfinite(magnitude) else None
+
+
+def _compare_step(compare: CaseCompare | None, workspace_id: str, runs: list[dict[str, Any]]) -> StepResult:
+    if compare is None:
+        return StepResult(step="compare", status="red", reason=REASON_NOT_DECLARED,
+                          detail="Case does not declare a published comparison value")
+    root = bench_root(workspace_id)
+    found: tuple[str, float, str] | None = None
+    for run in runs:
+        run_id = run.get("run_id")
+        if run.get("verdict") not in ("usable", "usable_with_warnings") or not isinstance(run_id, str):
+            continue
+        output = _run_output(root, run_id, compare.quantity)
+        if output is not None:
+            found = (run_id, *output)
+            break
+    if found is None:
+        return StepResult(step="compare", status="red", reason=REASON_MISSING_RECORD, missing=[compare.quantity],
+                          detail=f"No usable bench run with output '{compare.quantity}'")
+    run_id, value, unit = found
+    converted = _convert(value, unit, compare.unit)
+    deviation = None if converted is None else abs(converted - compare.value) / abs(compare.value)
+    comparison = Comparison(
+        run_id=run_id,
+        computed=ComparisonValue(value=value, unit=unit),
+        computed_in_published_unit=converted,
+        published=ComparisonValue(value=compare.value, unit=compare.unit),
+        deviation=deviation,
+        rel_tol=compare.rel_tol,
+    )
+    if deviation is None:
+        return StepResult(step="compare", status="red", reason=REASON_UNIT_MISMATCH, comparison=comparison,
+                          detail=f"Unit '{unit}' cannot be converted to '{compare.unit}'")
+    if deviation <= compare.rel_tol:
+        return StepResult(step="compare", status="green", comparison=comparison)
+    return StepResult(step="compare", status="red", reason=REASON_OUT_OF_TOLERANCE, comparison=comparison,
+                      detail=f"Deviation {deviation:.4f} exceeds relative tolerance {compare.rel_tol}")
+
+
 def _compute_case(connection, case: CaseDefinition) -> CaseResult:
     ws_row = connection.execute(
         "SELECT id FROM workspaces WHERE slug = ? OR id = ?",
@@ -391,137 +460,7 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
         )
 
     # 5. compare
-    if case.compare is None:
-        step_compare = StepResult(
-            step="compare",
-            status="red",
-            reason=REASON_NOT_DECLARED,
-            missing=[],
-            detail="Case does not declare a published comparison value",
-        )
-    else:
-        matched_run_id: str | None = None
-        matched_computed_val: float | None = None
-        matched_computed_unit: str | None = None
-
-        root = bench_root(workspace_id)
-        for r in runs:
-            if r.get("verdict") not in ("usable", "usable_with_warnings"):
-                continue
-            run_id = r.get("run_id")
-            if not isinstance(run_id, str):
-                continue
-            run_dir = (root / run_id).resolve()
-            if not run_dir.is_relative_to(root) or not run_dir.is_dir():
-                continue
-            result_file = run_dir / "result.json"
-            if not result_file.is_file():
-                continue
-            try:
-                data = json.loads(result_file.read_text(encoding="utf-8"))
-            except (OSError, ValueError, UnicodeDecodeError):
-                continue
-            if not isinstance(data, dict):
-                continue
-            outputs = data.get("outputs")
-            if not isinstance(outputs, list):
-                continue
-
-            found_output = False
-            for out in outputs:
-                if not isinstance(out, dict):
-                    continue
-                if out.get("name") != case.compare.quantity:
-                    continue
-                val_obj = out.get("value")
-                if not isinstance(val_obj, dict):
-                    continue
-                out_val = val_obj.get("value")
-                out_unit = val_obj.get("unit")
-                if isinstance(out_val, bool) or not isinstance(out_val, (int, float)):
-                    continue
-                if not math.isfinite(float(out_val)):
-                    continue
-                if not isinstance(out_unit, str) or not out_unit.strip():
-                    continue
-
-                matched_run_id = run_id
-                matched_computed_val = float(out_val)
-                matched_computed_unit = out_unit.strip()
-                found_output = True
-                break
-
-            if found_output:
-                break
-
-        if matched_run_id is None or matched_computed_val is None or matched_computed_unit is None:
-            step_compare = StepResult(
-                step="compare",
-                status="red",
-                reason=REASON_MISSING_RECORD,
-                missing=[case.compare.quantity],
-                detail=f"No usable bench run with output '{case.compare.quantity}'",
-            )
-        else:
-            published_val = ComparisonValue(value=case.compare.value, unit=case.compare.unit)
-            computed_val = ComparisonValue(value=matched_computed_val, unit=matched_computed_unit)
-            converted_val: float | None = None
-            try:
-                src_pint = parse_unit_token(computed_val.unit)
-                tgt_pint = parse_unit_token(published_val.unit)
-                reg = unit_registry()
-                converted_qty = reg.Quantity(computed_val.value, src_pint).to(tgt_pint)
-                mag = float(converted_qty.magnitude)
-                if not math.isfinite(mag):
-                    raise ProcessKernelError("quantity_value_invalid", "Converted quantity must be finite")
-                converted_val = mag
-            except (ProcessKernelError, PintError, Exception):
-                converted_val = None
-
-            if converted_val is None:
-                step_compare = StepResult(
-                    step="compare",
-                    status="red",
-                    reason=REASON_UNIT_MISMATCH,
-                    missing=[],
-                    detail=f"Unit '{computed_val.unit}' cannot be converted to '{published_val.unit}'",
-                    comparison=Comparison(
-                        run_id=matched_run_id,
-                        computed=computed_val,
-                        computed_in_published_unit=None,
-                        published=published_val,
-                        deviation=None,
-                        rel_tol=case.compare.rel_tol,
-                    ),
-                )
-            else:
-                deviation = abs(converted_val - published_val.value) / abs(published_val.value)
-                comparison = Comparison(
-                    run_id=matched_run_id,
-                    computed=computed_val,
-                    computed_in_published_unit=converted_val,
-                    published=published_val,
-                    deviation=deviation,
-                    rel_tol=case.compare.rel_tol,
-                )
-                if deviation <= case.compare.rel_tol:
-                    step_compare = StepResult(
-                        step="compare",
-                        status="green",
-                        reason=None,
-                        missing=[],
-                        detail=None,
-                        comparison=comparison,
-                    )
-                else:
-                    step_compare = StepResult(
-                        step="compare",
-                        status="red",
-                        reason=REASON_OUT_OF_TOLERANCE,
-                        missing=[],
-                        detail=f"Deviation {deviation:.4f} exceeds relative tolerance {case.compare.rel_tol}",
-                        comparison=comparison,
-                    )
+    step_compare = _compare_step(case.compare, workspace_id, runs)
 
     # 6. decide
     dec_row = connection.execute(

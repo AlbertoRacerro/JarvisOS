@@ -29,7 +29,6 @@ const {
   STEP_ORDER,
   STEP_LABELS,
   REASON_WORKSPACE_MISSING,
-  REASON_CAPABILITY_MISSING,
   REASON_NOT_DECLARED,
   REASON_UNIT_MISMATCH,
   REASON_OUT_OF_TOLERANCE,
@@ -65,7 +64,6 @@ assert.equal(new Set(Object.values(STEP_LABELS)).size, 7, "seven distinct step l
 
 // 3. Reason sentences in Italian
 assert.equal(REASON_WORKSPACE_MISSING, "Il workspace del caso non esiste");
-assert.equal(REASON_CAPABILITY_MISSING, "Funzione non ancora disponibile nel prodotto");
 assert.equal(REASON_NOT_DECLARED, "Il caso non dichiara un valore pubblicato da confrontare");
 assert.equal(REASON_UNIT_MISMATCH, "Le unità del risultato e del valore pubblicato non sono confrontabili");
 assert.equal(REASON_OUT_OF_TOLERANCE, "Il risultato è fuori dalla tolleranza del caso");
@@ -84,7 +82,6 @@ for (const step of STEP_ORDER) {
 }
 
 assert.equal(getReasonText("paper", "workspace_missing"), "Il workspace del caso non esiste");
-assert.equal(getReasonText("compare", "capability_missing"), "Funzione non ancora disponibile nel prodotto");
 assert.equal(getReasonText("compare", "not_declared"), "Il caso non dichiara un valore pubblicato da confrontare");
 assert.equal(getReasonText("compare", "unit_mismatch"), "Le unità del risultato e del valore pubblicato non sono confrontabili");
 assert.equal(getReasonText("compare", "out_of_tolerance"), "Il risultato è fuori dalla tolleranza del caso");
