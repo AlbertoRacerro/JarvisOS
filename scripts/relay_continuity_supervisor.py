@@ -1769,10 +1769,17 @@ class Supervisor:
         # is a real problem), not a capability verdict; `harness_cause` in the journal keeps the two apart.
         counters["consecutive_failures"] = (counters["consecutive_failures"] + 1
                                             if report.outcome in ("crash", "unknown") else 0)
+        coord_tokens = (report.usage["total_tokens"]
+                        if isinstance(report.usage, dict)
+                        and isinstance(report.usage.get("total_tokens"), int)
+                        and not isinstance(report.usage.get("total_tokens"), bool)
+                        else None)
         self.store.journal({"event": "settle", "nonce": pending["nonce"], "session": session_id,
+                            "at": iso(self.host.now()),
                             "outcome": report.outcome, "harness_cause": report.harness_cause,
                             "agent": report.agent, "reaped": report.reaped,
-                            "effects": [c.label for c in report.effects], "in_flight": [c.label for c in report.in_flight]})
+                            "effects": [c.label for c in report.effects], "in_flight": [c.label for c in report.in_flight],
+                            "usage": report.usage, "coordinator_tokens": coord_tokens})
         # Keep the launched intent durable until mission progress is saved. If this process dies while
         # checking a successful task, restart adopts the turn instead of launching that task again.
         if (held := self._advance(pending, report, session_id)) is not None:
