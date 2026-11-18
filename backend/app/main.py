@@ -16,6 +16,7 @@ from app.core.packs import load_packs
 from app.core.spa_static import SpaStaticFiles, derive_reserved_roots
 from app.modules.agents.hermes.routes import router as hermes_router
 from app.modules.agents.hermes.session_pool import HermesSessionPool, configured_supervisor
+from app.modules.ai.memory_routes import router as memory_search_router
 from app.modules.ai.routes import router as ai_router
 from app.modules.ai.sensitivity_routes import router as sensitivity_router
 from app.modules.bio_models.routes import router as bio_models_router
@@ -180,6 +181,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(system_router)
     app.include_router(ai_router)
+    app.include_router(memory_search_router)
     app.include_router(hermes_router)
     app.include_router(sensitivity_router)
     app.include_router(bluecad_router)
