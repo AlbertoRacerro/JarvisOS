@@ -1,0 +1,12 @@
+.memory-search__folder-box { margin: 12px 0 20px; padding: 12px; border: 1px solid var(--color-border-default); border-radius: 8px; }
+.memory-search__folder-actions, .memory-search__register-form, .memory-search__bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.memory-search__register-form input { min-width: 320px; }
+.memory-search__bar input { min-width: 320px; }
+.memory-search__hint, .memory-search__empty { color: var(--color-text-secondary); }
+.memory-search__list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 10px; }
+.memory-search__card { padding: 10px 12px; border: 1px solid var(--color-border-default); border-radius: 8px; }
+.memory-search__item-header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.memory-search__owner { padding: 1px 8px; border-radius: 10px; font-size: 12px; background: var(--color-bg-surface-raised); }
+.memory-search__doc-locator, .memory-search__location { color: var(--color-text-secondary); font-size: 12px; }
+.memory-search__excerpt { margin: 6px 0 0; white-space: pre-wrap; }
+.memory-search__folder-error, .memory-search__error { color: #c33; }

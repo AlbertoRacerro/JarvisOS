@@ -24,6 +24,7 @@ const MemorySearch = module.exports.default;
 const {
   MEMORY_SEARCH_TITLE,
   MEMORY_SEARCH_EMPTY,
+  MEMORY_SEARCH_HINT,
   FOLDER_BOX_TITLE,
   FOLDER_UNREGISTERED,
   FOLDER_INVALID_MESSAGE,
@@ -73,7 +74,9 @@ assert.equal(
 // 5. Rendered markup assertions
 const html = renderToStaticMarkup(React.createElement(MemorySearch, { workspaceId: "ws-test" }));
 assert.ok(html.includes("Ricerca"), "rendered page contains title Ricerca");
-assert.ok(html.includes(MEMORY_SEARCH_EMPTY), "rendered page contains empty-state text");
+assert.ok(html.includes(MEMORY_SEARCH_HINT), "rendered page shows the hint before any search");
+assert.ok(!html.includes(MEMORY_SEARCH_EMPTY), "no empty-result text before any search");
+assert.ok(read("src/pages/MemorySearch.tsx").includes("{MEMORY_SEARCH_EMPTY}</p>"), "empty-result text rendered after a search");
 assert.ok(html.includes("Cartella documenti"), "rendered page contains Cartella documenti header");
 assert.ok(html.includes("Nessuna cartella registrata."), "rendered page contains unregistered message");
 assert.ok(html.includes("Percorso della cartella"), "rendered page contains Percorso della cartella input label");

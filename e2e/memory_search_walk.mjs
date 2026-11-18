@@ -126,9 +126,10 @@ try {
   await searchInput.fill("fermentazione");
   await page.getByRole("button", { name: "Cerca" }).click();
 
-  await page.getByText("guida.md").waitFor();
-  await page.getByText("Fermentazione Biologica").waitFor();
-  await page.getByText("fermentazione aerobica").waitFor();
+  const card = page.locator(".memory-search__card").filter({ hasText: "fermentazione aerobica" }).first();
+  await card.locator(".memory-search__relative-path", { hasText: "guida.md" }).waitFor();
+  await card.locator(".memory-search__title", { hasText: "Fermentazione Biologica" }).waitFor();
+  await card.locator(".memory-search__excerpt", { hasText: "fermentazione aerobica" }).waitFor();
   await shot("search-results");
   summary.steps.push({ step: "search_passage_found_with_path_and_heading", status: "pass" });
 

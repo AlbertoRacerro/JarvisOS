@@ -100,7 +100,7 @@ def test_register_refresh_search_and_delete_lifecycle(client: TestClient, tmp_pa
     assert match is not None
     assert match["relative_path"] == "sub/guide.md"
     assert match["heading"] == "Catalysis"
-    assert match["title"] == "Enzyme catalysis acceleration is measured."
+    assert match["title"] == "Catalysis"
     assert match["location"] == "sub/guide.md#Catalysis"
     assert match["owner"] == "workspace_documents"
     assert "digest" not in match
@@ -242,14 +242,16 @@ def test_no_agent_tool_references_registration_route_or_register_folder() -> Non
         assert "register_folder" not in ev_str
 
     # Scan python source files under agents, ai, engineering/bench for descriptors
-    repo_root = Path(app.__file__).resolve().parents[1]
+    repo_root = Path(app.__file__).resolve().parents[2]
     targets = [
         repo_root / "backend/app/modules/agents",
         repo_root / "backend/app/modules/ai",
         repo_root / "backend/app/modules/engineering/bench.py",
     ]
     for target in targets:
+        assert target.exists(), target
         files = [target] if target.is_file() else list(target.rglob("*.py"))
+        assert files, target
         for file in files:
             # Skip the test file itself, memory_routes.py and document_intake.py (which are the intake implementation and HTTP route)
             if file.name in ("memory_routes.py", "document_intake.py", "test_memory_routes.py", "test_document_intake.py"):

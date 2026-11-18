@@ -13,6 +13,7 @@ import {
 
 export const MEMORY_SEARCH_TITLE = "Ricerca";
 export const MEMORY_SEARCH_EMPTY = "Nessun risultato trovato.";
+export const MEMORY_SEARCH_HINT = "Scrivi una o più parole e premi Cerca: Jarvis cerca nella memoria di questo workspace.";
 export const FOLDER_BOX_TITLE = "Cartella documenti";
 export const FOLDER_UNREGISTERED = "Nessuna cartella registrata.";
 export const FOLDER_INVALID_MESSAGE = "Cartella non valida: serve una cartella esistente, non un collegamento, fuori dai dati di Jarvis e dal codice.";
@@ -110,9 +111,9 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
       .then((items) => {
         setResults(items);
       })
-      .catch((err: Error) => {
+      .catch(() => {
         setResults([]);
-        setSearchError(err.message || "Ricerca non riuscita.");
+        setSearchError("Ricerca non riuscita.");
       })
       .finally(() => {
         setSearching(false);
@@ -146,8 +147,8 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
       .then((report) => {
         setRefreshReport(report);
       })
-      .catch((err: Error) => {
-        setFolderError(err.message || "Aggiornamento cartella non riuscito.");
+      .catch(() => {
+        setFolderError("Aggiornamento cartella non riuscito.");
       })
       .finally(() => {
         setFolderActionInProgress(false);
@@ -163,8 +164,8 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
       .then((info) => {
         setFolderInfo(info);
       })
-      .catch((err: Error) => {
-        setFolderError(err.message || "Rimozione cartella non riuscita.");
+      .catch(() => {
+        setFolderError("Rimozione cartella non riuscita.");
       })
       .finally(() => {
         setFolderActionInProgress(false);
@@ -280,7 +281,8 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
       {/* Results or Empty State */}
       <div className="memory-search__results">
         {results.length === 0 ? (
-          <p className="memory-search__empty">{MEMORY_SEARCH_EMPTY}</p>
+          !searched ? <p className="memory-search__hint">{MEMORY_SEARCH_HINT}</p>
+            : !searching && !searchError && <p className="memory-search__empty">{MEMORY_SEARCH_EMPTY}</p>
         ) : (
           <ul className="memory-search__list">
             {results.map((item, index) => {
@@ -297,9 +299,6 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
                         <span className="memory-search__doc-locator">
                           {item.relative_path && (
                             <span className="memory-search__relative-path">{item.relative_path}</span>
-                          )}
-                          {item.heading && (
-                            <span className="memory-search__heading"> — {item.heading}</span>
                           )}
                         </span>
                       ) : (

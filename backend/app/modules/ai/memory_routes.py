@@ -128,13 +128,14 @@ def search_memory(
         object_type = source_ref.get("object_type", "")
         excerpt = entry.get("excerpt", "")
 
-        # Title: first non-empty line of excerpt, trimmed to 160 chars
+        # Record excerpts open with their readable one-line summary: it becomes the title and leaves the excerpt.
         title = ""
-        for line in excerpt.splitlines():
-            line_clean = line.strip()
-            if line_clean:
-                title = line_clean[:160]
-                break
+        lines = excerpt.strip().splitlines()
+        if lines and authority_owner != "workspace_documents":
+            title = lines[0].strip()[:160]
+            rest = "\n".join(lines[1:]).strip()
+            if rest:
+                excerpt = rest
 
         # Location: line range / fragment
         loc = source_ref.get("location")
@@ -169,16 +170,10 @@ def search_memory(
             match = re.fullmatch(r"(.+)::hsha256:[0-9a-f]{64}::d\d+::c\d+", obj_id)
             if match:
                 relative_path = match.group(1)
-            if isinstance(loc, dict):
-                frag = loc.get("fragment") or ""
-                if "#" in frag:
-                    p_part, h_part = frag.split("#", 1)
-                    if not relative_path and p_part:
-                        relative_path = p_part
-                    if h_part:
-                        heading = h_part
-                elif frag and not heading:
-                    heading = frag
+            frag = (loc.get("fragment") or "") if isinstance(loc, dict) else ""
+            if relative_path and frag.startswith(f"{relative_path}#"):
+                heading = frag[len(relative_path) + 1:] or None
+            item_dict["title"] = (heading or relative_path or "")[:160]
             if relative_path is not None:
                 item_dict["relative_path"] = relative_path
             if heading is not None:
