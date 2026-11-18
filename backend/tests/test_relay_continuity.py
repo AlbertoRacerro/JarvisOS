@@ -7431,5 +7431,240 @@ def test_isolated_entrypoint_from_other_cwd(tmp_path: Path) -> None:
         assert sub.returncode == 0, f"{subcmd}: {sub.stderr}"
 
 
+# ---------------------------------------------------------------------------
+# Spec 306: Coordinator token usage per settled turn
+
+
+def test_spec_306_classify_turn_claude_model_usage(tmp_path: Path) -> None:
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Starting work"}]}},
+        {
+            "type": "result",
+            "is_error": False,
+            "terminal_reason": "completed",
+            "modelUsage": {
+                "claude-opus-5-5": {
+                    "inputTokens": 164,
+                    "outputTokens": 33200,
+                    "thinkingTokens": 5526,
+                    "cacheReadInputTokens": 7811592,
+                    "cacheCreationInputTokens": 130244,
+                },
+                "claude-haiku-5-5": {
+                    "inputTokens": 20,
+                    "outputTokens": 50,
+                    "cacheReadInputTokens": 1000,
+                    "cacheCreationInputTokens": 0,
+                },
+            },
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 10,
+            },
+        },
+    ]
+    turn = write_turn(tmp_path / "claude_mu", events, agent="claude")
+    report = rc.classify_turn(turn)
+    assert report.outcome == "success"
+    # Sum across models: inputTokens: 164 + 20 = 184, outputTokens: 33200 + 50 = 33250
+    # cache: (7811592 + 130244) + 1000 = 7942836
+    # total: 184 + 33250 + 7942836 = 7976270
+    assert report.usage == {
+        "input_tokens": 184,
+        "output_tokens": 33250,
+        "cache_tokens": 7942836,
+        "total_tokens": 7976270,
+    }
+
+
+def test_spec_306_classify_turn_claude_terminal_usage(tmp_path: Path) -> None:
+    events = [
+        {
+            "type": "result",
+            "is_error": False,
+            "terminal_reason": "completed",
+            "modelUsage": {},  # empty modelUsage falls back to terminal usage
+            "usage": {
+                "input_tokens": 150,
+                "output_tokens": 45,
+                "cache_read_input_tokens": 1200,
+                "cache_creation_input_tokens": 300,
+            },
+        },
+    ]
+    turn = write_turn(tmp_path / "claude_tu", events, agent="claude")
+    report = rc.classify_turn(turn)
+    assert report.outcome == "success"
+    assert report.usage == {
+        "input_tokens": 150,
+        "output_tokens": 45,
+        "cache_tokens": 1500,
+        "total_tokens": 1695,
+    }
+
+
+def test_spec_306_classify_turn_claude_assistant_fallback(tmp_path: Path) -> None:
+    events = [
+        {
+            "type": "assistant",
+            "parent_tool_use_id": None,
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 25,
+                "cache_read_input_tokens": 500,
+                "cache_creation_input_tokens": 100,
+            },
+        },
+        {
+            "type": "assistant",
+            "parent_tool_use_id": "p1",  # subagent call, should not be included when top-level exists
+            "usage": {
+                "input_tokens": 9999,
+                "output_tokens": 9999,
+            },
+        },
+        {
+            "type": "assistant",
+            "parent_tool_use_id": None,
+            "message": {
+                "usage": {
+                    "input_tokens": 200,
+                    "output_tokens": 50,
+                    "cache_read_input_tokens": 600,
+                    "cache_creation_input_tokens": 0,
+                },
+            },
+        },
+    ]
+    turn = write_turn(tmp_path / "claude_ast", events, agent="claude")
+    report = rc.classify_turn(turn)
+    # top-level sum: input = 100 + 200 = 300, output = 25 + 50 = 75, cache = (500+100) + 600 = 1200
+    assert report.usage == {
+        "input_tokens": 300,
+        "output_tokens": 75,
+        "cache_tokens": 1200,
+        "total_tokens": 1575,
+    }
+
+
+def test_spec_306_classify_turn_codex_usage(tmp_path: Path) -> None:
+    events = [
+        {"type": "item.completed", "item": {"id": "c1", "type": "command_execution", "command": "ls", "exit_code": 0}},
+        {
+            "type": "turn.completed",
+            "usage": {
+                "input_tokens": 3128471,
+                "cached_input_tokens": 3031936,
+                "cache_write_input_tokens": 100,
+                "output_tokens": 11475,
+            },
+        },
+    ]
+    turn = write_turn(tmp_path / "codex_turn", events, agent="codex")
+    report = rc.classify_turn(turn)
+    assert report.outcome == "success"
+    # Codex: raw_in=3128471, cached=3031936 -> inp_tok = 96535
+    # cache_tok = 3031936 + 100 = 3032036
+    # out_tok = 11475
+    # total = 96535 + 11475 + 3032036 = 3140046
+    assert report.usage == {
+        "input_tokens": 96535,
+        "output_tokens": 11475,
+        "cache_tokens": 3032036,
+        "total_tokens": 3140046,
+    }
+
+
+def test_spec_306_classify_turn_native_usage(tmp_path: Path) -> None:
+    events = [
+        {"event": "init", "conversation_id": "conv-1", "init": {"model": rc.relay_argon.MODEL}},
+        {
+            "event": "result",
+            "result": {
+                "conversation_id": "conv-1",
+                "status": "SUCCESS",
+                "response": "Done with changes",
+                "usage": {
+                    "input_tokens": 51492,
+                    "output_tokens": 4971,
+                    "thinking_tokens": 0,
+                    "cache_read_tokens": 580788,
+                    "total_tokens": 56463,
+                },
+            },
+        },
+    ]
+    meta = {"schema": "argon-coordinator.v1", "agent": "argon", "launched": True, "exit_code": 0,
+            "quota": [], "reason": None, "model": rc.relay_argon.MODEL}
+    turn = write_turn(tmp_path / "argon_turn", events, agent="argon")
+    (turn / "native-result.json").write_text(json.dumps(meta))
+    report = rc.classify_turn(turn)
+    assert report.outcome == "success"
+    # raw_total (56463) >= inp (51492) + out (4971) -> total_tokens = 56463
+    assert report.usage == {
+        "input_tokens": 51492,
+        "output_tokens": 4971,
+        "cache_tokens": 580788,
+        "total_tokens": 56463,
+    }
+
+
+def test_spec_306_classify_turn_fallback_context_used_tokens(tmp_path: Path) -> None:
+    events = [
+        {"type": "result", "is_error": False, "terminal_reason": "completed"},  # no usage
+    ]
+    turn = write_turn(tmp_path / "fallback_turn", events, agent="claude", context_used_tokens=12345)
+    report = rc.classify_turn(turn)
+    assert report.usage == {
+        "input_tokens": 12345,
+        "output_tokens": 0,
+        "cache_tokens": 0,
+        "total_tokens": 12345,
+    }
+
+    # If context_used_tokens is missing / None, usage is None
+    turn2 = write_turn(tmp_path / "no_tokens_turn", events, agent="claude")
+    report2 = rc.classify_turn(turn2)
+    assert report2.usage is None
+
+
+def test_spec_306_supervisor_settle_records_tokens_in_journal(tmp_path: Path) -> None:
+    claude_ev = [
+        {
+            "type": "result",
+            "is_error": False,
+            "terminal_reason": "completed",
+            "usage": {
+                "input_tokens": 200,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 800,
+                "cache_creation_input_tokens": 0,
+            },
+        },
+    ]
+    env = Env(tmp_path, [("claude", claude_ev, "propose_done")])
+    env.head(QUOTA)
+    nonce = "rc-20261018T080000Z-cafef00d"
+    _pending(env, nonce, pid=None)
+    sid = "20261018-080030-settle_tok"
+    write_turn(env.relay.sessions_dir() / sid, claude_ev, agent="claude",
+               prompt=relay_prompt(f"[relay-continuity attempt {nonce}]"))
+    result, sup = env.run()
+    assert result == "idle"
+
+    settle_records = [r for r in journal(env) if r.get("event") == "settle" and r.get("nonce") == nonce]
+    assert len(settle_records) == 1
+    rec = settle_records[0]
+    assert rec["session"] == sid
+    assert isinstance(rec.get("at"), str) and rec["at"]  # ISO timestamp present
+    assert rec["usage"] == {
+        "input_tokens": 200,
+        "output_tokens": 50,
+        "cache_tokens": 800,
+        "total_tokens": 1050,
+    }
+    assert rec["coordinator_tokens"] == 1050
+
+
 
 

@@ -27,6 +27,7 @@ import json
 import math
 import os
 import queue
+import re
 import shlex
 import shutil
 import statistics
@@ -80,6 +81,13 @@ CODEX_WINDOWS = {"primary": "5h", "secondary": "weekly"}
 CLAUDE_FIVE_HOUR = {"session", "five_hour", "5h"}
 CLAUDE_WEEKLY = {"weekly", "seven_day", "week", "7d"}
 UNREADABLE = "worker quota: unreadable"
+COORDINATOR_AGENT_POOLS: dict[str, str] = {
+    "claude": "claude",
+    "codex": "codex",
+    "argon": "argon",
+    "hydrogen": "gemini",
+    "agy_opus": "agy3p",
+}
 # The supervisor persists its last good reading here so a coordinator whose sandbox cannot read the quotas live
 # still routes on a recent value. Per-pool entries, each aged on its own `as_of`.
 SNAPSHOT_SCHEMA = "worker-quota.v1"
@@ -670,6 +678,20 @@ def family_of_record(r: dict[str, Any], by_key: dict[str, Model]) -> str:
     return str(r.get("pool", ""))
 
 
+def pool_of_record(r: dict[str, Any], by_key: dict[str, Model]) -> str:
+    worker = str(r.get("worker", ""))
+    if worker in by_key:
+        return by_key[worker].pool
+    model_name = str(r.get("model", ""))
+    for m in MODELS:
+        if m.model == model_name:
+            return m.pool
+    fam = family_of_record(r, by_key)
+    if fam:
+        return fam
+    return str(r.get("pool") or "sconosciuto")
+
+
 def load_records(path: Path | None = None) -> list[dict[str, Any]]:
     """Valid outcome records from the record file; malformed or unreadable lines are skipped."""
     target = resolve_record_path(path)
@@ -691,6 +713,199 @@ def load_records(path: Path | None = None) -> list[dict[str, Any]]:
     except OSError:
         return []
     return records
+
+
+def default_control_dir() -> Path:
+    return Path(os.environ.get("RELAY_CONTINUITY_DIR", Path.home() / "jarvis-control" / "work" / "continuity")).expanduser()
+
+
+_classify_turn_fn: Any = None
+
+
+def _get_classify_turn() -> Any:
+    global _classify_turn_fn
+    if _classify_turn_fn is not None:
+        return _classify_turn_fn
+    if "relay_continuity_turns" in sys.modules:
+        _classify_turn_fn = getattr(sys.modules["relay_continuity_turns"], "classify_turn", None)
+        if _classify_turn_fn is not None:
+            return _classify_turn_fn
+    turns_path = Path(__file__).resolve().parent / "relay_continuity_turns.py"
+    if turns_path.is_file():
+        try:
+            spec = importlib.util.spec_from_file_location("relay_continuity_turns", turns_path)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                sys.modules["relay_continuity_turns"] = mod
+                spec.loader.exec_module(mod)
+                _classify_turn_fn = getattr(mod, "classify_turn", None)
+                return _classify_turn_fn
+        except (ImportError, OSError, AttributeError):
+            pass
+    return None
+
+
+def _resolve_session_turns_dir(repo: Path, session: str) -> Path | None:
+    candidate = repo / ".agent-relay" / "sessions" / session / "turns"
+    if candidate.is_dir():
+        return candidate
+    marker = repo / ".git"
+    if marker.is_file():
+        try:
+            text = marker.read_text(encoding="utf-8").strip()
+            if text.startswith("gitdir:"):
+                main_git = Path(text.split(":", 1)[1].strip()).resolve().parent.parent
+                main_cand = main_git.parent / ".agent-relay" / "sessions" / session / "turns"
+                if main_cand.is_dir():
+                    return main_cand
+        except OSError:
+            pass
+    return None
+
+
+def load_coordinator_turns(control_dir: Path | None = None, repo: Path | None = None, *,
+                           days: int = 7, now: datetime | None = None) -> list[dict[str, Any]]:
+    c_dir = default_control_dir() if control_dir is None else Path(control_dir).expanduser()
+    r_dir = _repo_root() if repo is None else Path(repo).expanduser()
+    moment = now or datetime.now(UTC)
+    cutoff = moment - timedelta(days=days)
+
+    attempt_files: list[Path] = []
+    root_attempts = c_dir / "attempts.jsonl"
+    if root_attempts.is_file():
+        attempt_files.append(root_attempts)
+    missions_dir = c_dir / "missions"
+    if missions_dir.is_dir():
+        try:
+            attempt_files.extend(sorted(missions_dir.glob("m-*/attempts.jsonl")))
+        except OSError:
+            pass
+
+    seen: set[tuple[Any, Any]] = set()
+    turns: list[dict[str, Any]] = []
+
+    for af in attempt_files:
+        try:
+            with open(af, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if not isinstance(rec, dict) or rec.get("event") != "settle":
+                        continue
+
+                    agent = rec.get("agent")
+                    session = rec.get("session")
+                    if not (isinstance(agent, str) and agent) and not (isinstance(session, str) and session):
+                        continue
+
+                    at_val = rec.get("at")
+                    ts = _parse_instant(at_val) or _parse_ts(at_val) if at_val else None
+                    if ts is None:
+                        nonce = rec.get("nonce")
+                        if isinstance(nonce, str):
+                            m = re.search(r"rc-(\d{8}T\d{6}Z)-", nonce)
+                            if m:
+                                try:
+                                    ts = datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+                                except ValueError:
+                                    ts = None
+                    if ts is None or ts < cutoff:
+                        continue
+
+                    key = (rec.get("nonce"), session)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                    usage: dict[str, int] | None = None
+                    total_tokens = 0
+                    rec_usage = rec.get("usage")
+                    rec_coord = rec.get("coordinator_tokens")
+
+                    if (isinstance(rec_usage, dict)
+                            and isinstance(rec_usage.get("total_tokens"), int)
+                            and not isinstance(rec_usage["total_tokens"], bool)
+                            and rec_usage["total_tokens"] >= 0):
+                        usage = rec_usage
+                        total_tokens = rec_usage["total_tokens"]
+                    elif (isinstance(rec_coord, int)
+                          and not isinstance(rec_coord, bool)
+                          and rec_coord >= 0):
+                        total_tokens = rec_coord
+                        usage = {
+                            "input_tokens": rec_coord,
+                            "output_tokens": 0,
+                            "cache_tokens": 0,
+                            "total_tokens": rec_coord,
+                        }
+                    elif r_dir is not None and isinstance(session, str) and session:
+                        sess_turns = _resolve_session_turns_dir(r_dir, session)
+                        if sess_turns is not None and sess_turns.is_dir():
+                            t_dirs = sorted([p for p in sess_turns.iterdir() if p.is_dir() and p.name.startswith("turn-")])
+                            if t_dirs:
+                                fn = _get_classify_turn()
+                                if fn is not None:
+                                    tot_in = 0
+                                    tot_out = 0
+                                    tot_cache = 0
+                                    tot_total = 0
+                                    has_valid = False
+                                    for td in t_dirs:
+                                        try:
+                                            rep = fn(td)
+                                            if (rep and isinstance(rep.usage, dict)
+                                                    and isinstance(rep.usage.get("total_tokens"), int)
+                                                    and not isinstance(rep.usage["total_tokens"], bool)
+                                                    and rep.usage["total_tokens"] >= 0):
+                                                tot_in += rep.usage.get("input_tokens", 0)
+                                                tot_out += rep.usage.get("output_tokens", 0)
+                                                tot_cache += rep.usage.get("cache_tokens", 0)
+                                                tot_total += rep.usage.get("total_tokens", 0)
+                                                has_valid = True
+                                            if agent is None and rep and rep.agent:
+                                                agent = rep.agent
+                                        except (OSError, json.JSONDecodeError, ValueError, KeyError, AttributeError):
+                                            pass
+                                    if has_valid:
+                                        usage = {
+                                            "input_tokens": tot_in,
+                                            "output_tokens": tot_out,
+                                            "cache_tokens": tot_cache,
+                                            "total_tokens": tot_total,
+                                        }
+                                        total_tokens = tot_total
+
+                    if agent is None and r_dir is not None and isinstance(session, str) and session:
+                        sess_turns = _resolve_session_turns_dir(r_dir, session)
+                        if sess_turns is not None and sess_turns.is_dir():
+                            t_dirs = sorted([p for p in sess_turns.iterdir() if p.is_dir() and p.name.startswith("turn-")])
+                            if t_dirs:
+                                try:
+                                    st = json.loads((t_dirs[-1] / "state.json").read_text(encoding="utf-8"))
+                                    if isinstance(st, dict) and isinstance(st.get("agent_key"), str):
+                                        agent = st["agent_key"]
+                                except (OSError, json.JSONDecodeError):
+                                    pass
+
+                    pool = COORDINATOR_AGENT_POOLS.get(agent, agent or "sconosciuto")
+                    at_iso = at_val if isinstance(at_val, str) else _iso(ts)
+                    turns.append({
+                        "at": at_iso,
+                        "agent": agent,
+                        "pool": pool,
+                        "session": session,
+                        "tokens": total_tokens,
+                        "usage": usage,
+                    })
+        except OSError:
+            continue
+
+    return turns
 
 
 def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_first_pass: str = "n/a",
@@ -1315,7 +1530,8 @@ def cmd_pick(args: argparse.Namespace) -> int:
 
 
 def report(days: int = 7, record_file: Path | None = None, records: list[dict[str, Any]] | None = None,
-           now: datetime | None = None) -> str:
+           now: datetime | None = None, *, control_dir: Path | None = None, repo: Path | None = None,
+           coordinator_turns: list[dict[str, Any]] | None = None) -> str:
     """A short summary in plain Italian of worker outcomes and net savings over the last N days."""
     moment = now or datetime.now(UTC)
     all_records = records if records is not None else load_records(record_file)
@@ -1327,7 +1543,16 @@ def report(days: int = 7, record_file: Path | None = None, records: list[dict[st
         if at is not None and at >= cutoff:
             filtered.append(r)
 
-    if not filtered:
+    if coordinator_turns is not None:
+        coord_turns = coordinator_turns
+    elif control_dir is not None:
+        coord_turns = load_coordinator_turns(control_dir, repo, days=days, now=moment)
+    elif records is None and record_file is None:
+        coord_turns = load_coordinator_turns(None, repo, days=days, now=moment)
+    else:
+        coord_turns = []
+
+    if not filtered and not coord_turns:
         return f"Nessun esito registrato negli ultimi {days} giorni."
 
     by_key = {m.key: m for m in MODELS}
@@ -1356,23 +1581,65 @@ def report(days: int = 7, record_file: Path | None = None, records: list[dict[st
             f"rilievi (P0: {p0}, P1: {p1}, P2: {p2}, P3: {p3}), rilavorazioni {rework}, escalation {escalations}"
         )
 
+    if coord_turns:
+        coord_by_pool: dict[str, list[dict[str, Any]]] = {}
+        for t in coord_turns:
+            coord_by_pool.setdefault(t["pool"], []).append(t)
+
+        workers_by_pool: dict[str, list[dict[str, Any]]] = {}
+        for r in filtered:
+            p = pool_of_record(r, by_key)
+            workers_by_pool.setdefault(p, []).append(r)
+
+        all_pools = set(coord_by_pool.keys()) | set(workers_by_pool.keys())
+        pool_order = [p for p in dict.fromkeys(COORDINATOR_AGENT_POOLS.values()) if p in all_pools]
+        pool_order.extend(sorted(p for p in all_pools if p not in pool_order))
+
+        for pool in pool_order:
+            c_turns = len(coord_by_pool.get(pool, []))
+            c_tokens = sum(t["tokens"] for t in coord_by_pool.get(pool, []))
+            p_workers = workers_by_pool.get(pool, [])
+            w_tasks = len(p_workers)
+            w_tokens = sum(
+                r["spend"]["tokens"]
+                for r in p_workers
+                if isinstance(r.get("spend"), dict)
+                and isinstance(r["spend"].get("tokens"), int)
+                and not isinstance(r["spend"].get("tokens"), bool)
+            )
+            if c_tokens + w_tokens > 0:
+                coord_share = pct(c_tokens / (c_tokens + w_tokens))
+                lines.append(
+                    f"- Pool {pool}: coordinatore {c_turns} turni ({c_tokens} token, {coord_share}), "
+                    f"worker {w_tasks} compiti ({w_tokens} token)"
+                )
+            else:
+                lines.append(
+                    f"- Pool {pool}: coordinatore {c_turns} turni ({c_tokens} token), "
+                    f"worker {w_tasks} compiti (0 token)"
+                )
+
     gemini_avoided = [
         r for r in filtered
         if family_of_record(r, by_key) == "gemini" and not r.get("escalated")
     ]
     avoided_count = len(gemini_avoided)
-    tokens = sum(r["coordinator_tokens"] for r in gemini_avoided
-                 if isinstance(r.get("coordinator_tokens"), int) and not isinstance(r["coordinator_tokens"], bool))
+    record_coord_tokens = sum(
+        r["coordinator_tokens"]
+        for r in gemini_avoided
+        if isinstance(r.get("coordinator_tokens"), int) and not isinstance(r["coordinator_tokens"], bool)
+    )
+    total_coord_tokens = sum(t["tokens"] for t in coord_turns) + record_coord_tokens
 
     lines.append(
         f"Risparmio netto: {avoided_count} compiti Claude e GPT evitati ({avoided_count} compiti Gemini non escalati), "
-        f"meno {tokens} token coordinatore registrati."
+        f"meno {total_coord_tokens} token coordinatore registrati."
     )
     return "\n".join(lines)
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    print(report(days=args.days, record_file=args.record_file))
+    print(report(days=args.days, record_file=args.record_file, control_dir=args.control_dir))
     return 0
 
 
@@ -1423,6 +1690,8 @@ def build_parser() -> argparse.ArgumentParser:
     rep.add_argument("--days", type=int, default=7, help="number of days to report (default: 7)")
     rep.add_argument("--record-file", type=Path, default=None,
                      help="record file of worker outcomes (default: main checkout .agent-relay/worker-outcomes.jsonl)")
+    rep.add_argument("--control-dir", type=Path, default=None,
+                     help="control directory of continuity missions (default: ~/jarvis-control/work/continuity or RELAY_CONTINUITY_DIR)")
     rep.set_defaults(func=cmd_report)
     summary = sub.add_parser("summary", help="one compact line of pool headroom")
     summary.add_argument("--quota-file", **quota_file)

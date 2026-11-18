@@ -78,6 +78,7 @@ class TurnReport:
     reaped: list[str] | None = None  # processes the turn left running, stopped at its end; None: not launched here
     context_used_tokens: int | None = None  # spec 267: cumulative reported tokens per turn
     timed_out: bool = False
+    usage: dict[str, int] | None = None
 
     @property
     def in_flight(self) -> list[ToolCall]:
@@ -850,6 +851,176 @@ def read_events(path: Path) -> tuple[list[dict[str, Any]], int]:
     return events, bad
 
 
+def _extract_claude_usage(events: list[dict[str, Any]], terminal: dict[str, Any] | None) -> dict[str, int] | None:
+    if isinstance(terminal, dict) and terminal.get("type") == "result":
+        mu = terminal.get("modelUsage")
+        if isinstance(mu, dict) and mu:
+            tot_in = 0
+            tot_out = 0
+            tot_cache = 0
+            has_valid = False
+            for m_entry in mu.values():
+                if isinstance(m_entry, dict):
+                    inp = m_entry.get("inputTokens")
+                    out = m_entry.get("outputTokens")
+                    cr = m_entry.get("cacheReadInputTokens", 0) or 0
+                    cc = m_entry.get("cacheCreationInputTokens", 0) or 0
+                    if (isinstance(inp, int) and not isinstance(inp, bool) and inp >= 0
+                            and isinstance(out, int) and not isinstance(out, bool) and out >= 0
+                            and isinstance(cr, int) and not isinstance(cr, bool) and cr >= 0
+                            and isinstance(cc, int) and not isinstance(cc, bool) and cc >= 0):
+                        tot_in += inp
+                        tot_out += out
+                        tot_cache += cr + cc
+                        has_valid = True
+            if has_valid:
+                return {
+                    "input_tokens": tot_in,
+                    "output_tokens": tot_out,
+                    "cache_tokens": tot_cache,
+                    "total_tokens": tot_in + tot_out + tot_cache,
+                }
+
+        tu = terminal.get("usage")
+        if isinstance(tu, dict):
+            inp = tu.get("input_tokens")
+            out = tu.get("output_tokens")
+            cr = tu.get("cache_read_input_tokens", 0) or 0
+            cc = tu.get("cache_creation_input_tokens", 0) or 0
+            if (isinstance(inp, int) and not isinstance(inp, bool) and inp >= 0
+                    and isinstance(out, int) and not isinstance(out, bool) and out >= 0
+                    and isinstance(cr, int) and not isinstance(cr, bool) and cr >= 0
+                    and isinstance(cc, int) and not isinstance(cc, bool) and cc >= 0):
+                c_tok = cr + cc
+                return {
+                    "input_tokens": inp,
+                    "output_tokens": out,
+                    "cache_tokens": c_tok,
+                    "total_tokens": inp + out + c_tok,
+                }
+
+    top_assistants = [e for e in events if e.get("type") == "assistant" and not e.get("parent_tool_use_id")]
+    assistants = top_assistants if top_assistants else [e for e in events if e.get("type") == "assistant"]
+
+    tot_in = 0
+    tot_out = 0
+    tot_cache = 0
+    has_valid = False
+    for e in assistants:
+        u = e.get("usage")
+        if not isinstance(u, dict):
+            msg = e.get("message")
+            if isinstance(msg, dict) and isinstance(msg.get("usage"), dict):
+                u = msg["usage"]
+            else:
+                u = None
+        if isinstance(u, dict):
+            inp = u.get("input_tokens")
+            out = u.get("output_tokens", 0) or 0
+            cr = u.get("cache_read_input_tokens", 0) or 0
+            cc = u.get("cache_creation_input_tokens", 0) or 0
+            if (isinstance(inp, int) and not isinstance(inp, bool) and inp >= 0
+                    and isinstance(out, int) and not isinstance(out, bool) and out >= 0
+                    and isinstance(cr, int) and not isinstance(cr, bool) and cr >= 0
+                    and isinstance(cc, int) and not isinstance(cc, bool) and cc >= 0):
+                tot_in += inp
+                tot_out += out
+                tot_cache += cr + cc
+                has_valid = True
+
+    if has_valid:
+        return {
+            "input_tokens": tot_in,
+            "output_tokens": tot_out,
+            "cache_tokens": tot_cache,
+            "total_tokens": tot_in + tot_out + tot_cache,
+        }
+    return None
+
+
+def _extract_codex_usage(events: list[dict[str, Any]], terminal: dict[str, Any] | None) -> dict[str, int] | None:
+    cand = None
+    if isinstance(terminal, dict) and terminal.get("type") == "turn.completed" and isinstance(terminal.get("usage"), dict):
+        cand = terminal["usage"]
+    else:
+        for e in reversed(events):
+            if e.get("type") == "turn.completed" and isinstance(e.get("usage"), dict):
+                cand = e["usage"]
+                break
+    if cand is not None:
+        raw_in = cand.get("input_tokens")
+        out_tok = cand.get("output_tokens")
+        cached = cand.get("cached_input_tokens", 0) or 0
+        cache_write = cand.get("cache_write_input_tokens", 0) or 0
+        if (isinstance(raw_in, int) and not isinstance(raw_in, bool) and raw_in >= 0
+                and isinstance(out_tok, int) and not isinstance(out_tok, bool) and out_tok >= 0
+                and isinstance(cached, int) and not isinstance(cached, bool) and cached >= 0
+                and isinstance(cache_write, int) and not isinstance(cache_write, bool) and cache_write >= 0):
+            inp_tok = max(0, raw_in - cached)
+            cache_tok = cached + cache_write
+            total_tokens = inp_tok + out_tok + cache_tok
+            return {
+                "input_tokens": inp_tok,
+                "output_tokens": out_tok,
+                "cache_tokens": cache_tok,
+                "total_tokens": total_tokens,
+            }
+    return None
+
+
+def _extract_native_usage(events: list[dict[str, Any]], results: list[dict[str, Any]]) -> dict[str, int] | None:
+    res_obj = None
+    if results:
+        res_obj = results[-1]
+    else:
+        for e in reversed(events):
+            if e.get("event") == "result" and isinstance(e.get("result"), dict):
+                res_obj = e["result"]
+                break
+    if isinstance(res_obj, dict) and isinstance(res_obj.get("usage"), dict):
+        u = res_obj["usage"]
+        inp_tok = u.get("input_tokens")
+        out_tok = u.get("output_tokens")
+        cache_read = u.get("cache_read_tokens", 0) or 0
+        raw_total = u.get("total_tokens")
+        if (isinstance(inp_tok, int) and not isinstance(inp_tok, bool) and inp_tok >= 0
+                and isinstance(out_tok, int) and not isinstance(out_tok, bool) and out_tok >= 0
+                and isinstance(cache_read, int) and not isinstance(cache_read, bool) and cache_read >= 0):
+            cache_tokens = cache_read
+            total_tokens = (raw_total if (isinstance(raw_total, int) and not isinstance(raw_total, bool)
+                                         and raw_total >= inp_tok + out_tok)
+                            else (inp_tok + out_tok + cache_tokens))
+            return {
+                "input_tokens": inp_tok,
+                "output_tokens": out_tok,
+                "cache_tokens": cache_tokens,
+                "total_tokens": total_tokens,
+            }
+    return None
+
+
+def _apply_usage_fallback(report: TurnReport) -> None:
+    if (report.usage is None and isinstance(report.context_used_tokens, int)
+            and not isinstance(report.context_used_tokens, bool) and report.context_used_tokens > 0):
+        report.usage = {
+            "input_tokens": report.context_used_tokens,
+            "output_tokens": 0,
+            "cache_tokens": 0,
+            "total_tokens": report.context_used_tokens,
+        }
+
+
+def _apply_turn_usage(report: TurnReport, agent: str | None, events: list[dict[str, Any]],
+                      terminal: dict[str, Any] | None) -> None:
+    if agent == "codex":
+        report.usage = _extract_codex_usage(events, terminal)
+    elif agent == "claude":
+        report.usage = _extract_claude_usage(events, terminal)
+    else:
+        report.usage = _extract_codex_usage(events, terminal) or _extract_claude_usage(events, terminal)
+    _apply_usage_fallback(report)
+
+
 def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any = None,
                   diagnostics: str = "", timed_out: bool = False) -> TurnReport:
     state: dict[str, Any] = {}
@@ -862,7 +1033,9 @@ def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any 
     agent = state.get("agent_key")
     if agent in NATIVE_AGENTS:
         events, bad = relay_argon.read_events(output)
-        return classify_argon_turn(turn_dir, events, bad, agent=agent, ref=ref, timed_out=timed_out)
+        report = classify_argon_turn(turn_dir, events, bad, agent=agent, ref=ref, timed_out=timed_out)
+        _apply_usage_fallback(report)
+        return report
     if agent not in AGENTS:
         agent = "codex" if any(e.get("type") == "thread.started" for e in events) else (
             "claude" if any(e.get("type") in ("result", "system") for e in events) else None)
@@ -884,11 +1057,13 @@ def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any 
     if not events:
         report.detail = "output missing" if not output.exists() else ("output unparseable" if bad else "output empty")
         report.no_evidence = not bad
+        _apply_usage_fallback(report)
         return no_terminal_evidence(report, turn_dir, diagnostics)
     if same_output_as_previous_turn(turn_dir):
         # Relay keeps the previous turn's output when it captures nothing ("No response captured"); the agent
         # may still have worked for hours. Those events are not this turn's evidence.
         report.detail, report.no_evidence = "no output of its own (previous turn's output kept)", True
+        _apply_usage_fallback(report)
         return no_terminal_evidence(report, turn_dir, diagnostics)
     terminal: dict[str, Any] | None = None
     terminal_index = -1
@@ -940,6 +1115,7 @@ def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any 
         if parent is not None and not parent.pending and not parent.ended_abnormally:
             call.done = True
     report.calls = list(calls.values())
+    _apply_turn_usage(report, agent, events, terminal)
     if terminal is None:
         return no_terminal_evidence(report, turn_dir, diagnostics)
     report.terminal = True
@@ -1104,6 +1280,8 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
         else:
             report.bad_lines += 1
     report.calls = list(calls.values())
+    report.usage = _extract_native_usage(events, results)
+    _apply_usage_fallback(report)
     if events and not initialized:
         report.bad_lines += 1
     # The runner's structured error (stderr), when present, names a harness or provider cause. It is applied only
