@@ -419,7 +419,8 @@ def _digest_data_root(data_root: Path) -> dict[str, str]:
     if not data_root.exists():
         return digests
     for p in sorted(data_root.rglob("*")):
-        if p.is_file():
+        # SQLite's WAL and shared-memory sidecars are engine state left by a read-only reader, not data.
+        if p.is_file() and not p.name.endswith(("-wal", "-shm")):
             rel = str(p.relative_to(data_root))
             digests[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
     return digests

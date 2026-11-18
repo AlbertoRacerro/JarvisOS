@@ -208,5 +208,3 @@ def hermes_role_pack_defaults() -> dict[str, str]:
 def readiness_case_files() -> tuple[Path, ...]:
     return tuple(pack.readiness_cases_file for pack in load_packs() if pack.readiness_cases_file)
 
-
-readiness_cases_files = readiness_case_files

@@ -272,7 +272,6 @@ def _read_backing_lines(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
-read_backing_lines = _read_backing_lines
 BackingText = _BackingText
 
 

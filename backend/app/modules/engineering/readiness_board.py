@@ -13,7 +13,7 @@ from typing import Any, Literal
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.core.database import open_sqlite_connection
+from app.core.database import get_database_path, open_sqlite_connection
 from app.core.packs import readiness_case_files
 from app.modules.engineering.bench_runs_view import list_runs
 from app.modules.memory.literature_checks import check_datum
@@ -147,12 +147,10 @@ def load_case_definitions(case_files: tuple[Path, ...] | None = None) -> tuple[l
             continue
         try:
             data = tomllib.loads(file_path.read_text(encoding="utf-8"))
-        except Exception as exc:
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
             errors.append(BoardError(message=f"Cannot read case file {file_path}: {exc}"))
             continue
         raw_cases = data.get("cases")
-        if raw_cases is None:
-            raw_cases = data.get("case")
         if not isinstance(raw_cases, list):
             errors.append(BoardError(message=f"{file_path}: 'cases' must be a list of tables"))
             continue
@@ -173,44 +171,36 @@ def load_case_definitions(case_files: tuple[Path, ...] | None = None) -> tuple[l
     return definitions, errors
 
 
+def _workspace_missing(case: CaseDefinition) -> CaseResult:
+    steps = {
+        step: StepResult(
+            step=step,
+            status="red",
+            reason=REASON_WORKSPACE_MISSING,
+            missing=[case.workspace],
+            detail=f"Workspace '{case.workspace}' does not exist",
+        )
+        for step in STEPS
+    }
+    return CaseResult(id=case.id, title=case.title, workspace=case.workspace, source_title=case.source_title, steps=steps)
+
+
 def _compute_case(connection, case: CaseDefinition) -> CaseResult:
-    try:
-        ws_row = connection.execute(
-            "SELECT id FROM workspaces WHERE slug = ? OR id = ?",
-            (case.workspace, case.workspace),
-        ).fetchone()
-    except Exception:
-        ws_row = None
+    ws_row = connection.execute(
+        "SELECT id FROM workspaces WHERE slug = ? OR id = ?",
+        (case.workspace, case.workspace),
+    ).fetchone()
 
     if ws_row is None:
-        steps = {
-            step: StepResult(
-                step=step,
-                status="red",
-                reason=REASON_WORKSPACE_MISSING,
-                missing=[case.workspace],
-                detail=f"Workspace '{case.workspace}' does not exist",
-            )
-            for step in STEPS
-        }
-        return CaseResult(
-            id=case.id,
-            title=case.title,
-            workspace=case.workspace,
-            source_title=case.source_title,
-            steps=steps,
-        )
+        return _workspace_missing(case)
 
     workspace_id = str(ws_row["id"])
 
     # 1. paper
-    try:
-        src_row = connection.execute(
-            "SELECT id, artifact_id, title FROM literature_sources WHERE workspace_id = ? AND title = ? ORDER BY created_at DESC LIMIT 1",
-            (workspace_id, case.source_title),
-        ).fetchone()
-    except Exception:
-        src_row = None
+    src_row = connection.execute(
+        "SELECT id, artifact_id, title FROM literature_sources WHERE workspace_id = ? AND title = ? ORDER BY created_at DESC LIMIT 1",
+        (workspace_id, case.source_title),
+    ).fetchone()
 
     source_id: str | None = None
     backing_lines: list[str] | None = None
@@ -226,11 +216,7 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
         )
     else:
         source_id = str(src_row["id"])
-        try:
-            backing = BackingText(connection, workspace_id, src_row)
-            lines, backing_reason = backing.get()
-        except Exception as exc:
-            lines, backing_reason = None, str(exc)
+        lines, backing_reason = BackingText(connection, workspace_id, src_row).get()
         if lines is None:
             step_paper = StepResult(
                 step="paper",
@@ -261,17 +247,14 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
     else:
         missing_facts: list[str] = []
         for qty in case.facts:
-            try:
-                datum_rows = connection.execute(
-                    """
-                    SELECT id, value_number, value_text, unit, locator_kind, locator_start, locator_end
-                    FROM literature_entries
-                    WHERE workspace_id = ? AND source_id = ? AND entry_kind = 'datum' AND status = 'accepted' AND quantity = ?
-                    """,
-                    (workspace_id, source_id, qty),
-                ).fetchall()
-            except Exception:
-                datum_rows = []
+            datum_rows = connection.execute(
+                """
+                SELECT id, value_number, value_text, unit, locator_kind, locator_start, locator_end
+                FROM literature_entries
+                WHERE workspace_id = ? AND source_id = ? AND entry_kind = 'datum' AND status = 'accepted' AND quantity = ?
+                """,
+                (workspace_id, source_id, qty),
+            ).fetchall()
             satisfied = False
             for d in datum_rows:
                 _, verdict = check_datum(
@@ -318,25 +301,19 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
     else:
         missing_inputs: list[str] = []
         for inp in case.inputs:
-            try:
-                param_rows = connection.execute(
-                    "SELECT id, source_ref FROM parameters WHERE workspace_id = ? AND name = ?",
-                    (workspace_id, inp),
-                ).fetchall()
-            except Exception:
-                param_rows = []
+            param_rows = connection.execute(
+                "SELECT id, source_ref FROM parameters WHERE workspace_id = ? AND name = ?",
+                (workspace_id, inp),
+            ).fetchall()
             bound = False
             for p in param_rows:
                 sref = p["source_ref"]
                 if sref and sref.startswith("literature_entry:"):
                     eid = sref.split(":", 1)[1]
-                    try:
-                        entry = connection.execute(
-                            "SELECT id, source_id, status FROM literature_entries WHERE workspace_id = ? AND id = ?",
-                            (workspace_id, eid),
-                        ).fetchone()
-                    except Exception:
-                        entry = None
+                    entry = connection.execute(
+                        "SELECT id, source_id, status FROM literature_entries WHERE workspace_id = ? AND id = ?",
+                        (workspace_id, eid),
+                    ).fetchone()
                     if entry and str(entry["source_id"]) == source_id and str(entry["status"]) == "accepted":
                         bound = True
                         break
@@ -360,12 +337,8 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
             )
 
     # 4. run
-    try:
-        runs_res = list_runs(workspace_id)
-        runs = runs_res.get("runs", [])
-        has_usable_run = any(r.get("verdict") in ("usable", "usable_with_warnings") for r in runs)
-    except Exception:
-        has_usable_run = False
+    runs = list_runs(workspace_id)["runs"]
+    has_usable_run = any(r.get("verdict") in ("usable", "usable_with_warnings") for r in runs)
 
     if has_usable_run:
         step_run = StepResult(step="run", status="green", reason=None, missing=[], detail=None)
@@ -388,17 +361,14 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
     )
 
     # 6. decide
-    try:
-        dec_row = connection.execute(
-            """
-            SELECT id FROM decisions
-            WHERE workspace_id = ? AND status = 'accepted' AND linked_run_id IS NOT NULL AND trim(linked_run_id) != ''
-            LIMIT 1
-            """,
-            (workspace_id,),
-        ).fetchone()
-    except Exception:
-        dec_row = None
+    dec_row = connection.execute(
+        """
+        SELECT id FROM decisions
+        WHERE workspace_id = ? AND status = 'accepted' AND linked_run_id IS NOT NULL AND trim(linked_run_id) != ''
+        LIMIT 1
+        """,
+        (workspace_id,),
+    ).fetchone()
 
     if dec_row is not None:
         step_decide = StepResult(step="decide", status="green", reason=None, missing=[], detail=None)
@@ -412,12 +382,7 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
         )
 
     # 7. answer
-    try:
-        runs_res = list_runs(workspace_id)
-        runs = runs_res.get("runs", [])
-        has_answer_run = any(r.get("evaluator_id") == "retrieval.eval" and r.get("verdict") == "usable" for r in runs)
-    except Exception:
-        has_answer_run = False
+    has_answer_run = any(r.get("evaluator_id") == "retrieval.eval" and r.get("verdict") == "usable" for r in runs)
 
     if has_answer_run:
         step_answer = StepResult(step="answer", status="green", reason=None, missing=[], detail=None)
@@ -451,9 +416,12 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
 def compute_readiness_board(case_files: tuple[Path, ...] | None = None) -> ReadinessBoardRead:
     definitions, errors = load_case_definitions(case_files)
     case_results: list[CaseResult] = []
-    with open_sqlite_connection() as connection:
-        for cdef in definitions:
-            case_results.append(_compute_case(connection, cdef))
+    if definitions:
+        if get_database_path().is_file():
+            with open_sqlite_connection(read_only=True) as connection:
+                case_results = [_compute_case(connection, cdef) for cdef in definitions]
+        else:
+            case_results = [_workspace_missing(cdef) for cdef in definitions]
 
     total_cases = len(case_results)
     total_cells = 7 * total_cases
