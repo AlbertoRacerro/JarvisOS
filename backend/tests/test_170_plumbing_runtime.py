@@ -176,8 +176,8 @@ def test_run_accepts_an_explicit_zero_oxygen_and_nitrogen(workspace_and_pin: tup
 
 # ---- model card resolution
 
-@pytest.mark.parametrize("override", [{"nutrients": ["nutrient.droop"]}, {"light": "light.steele"},
-                                      {"light": "light.eilers_peeters_steady"}])
+@pytest.mark.parametrize("override", [{"nutrients": ["nutrient.droop"]},
+                                      {"nutrients": ["nutrient.monod", "nutrient.monod"]}])
 def test_unsupported_forms_are_refused_with_form_unsupported(override: dict[str, Any]) -> None:
     workspace_id = new_workspace()
     card = _card(workspace_id, "Unsupported T1 form", {**FACTORS, **override})
