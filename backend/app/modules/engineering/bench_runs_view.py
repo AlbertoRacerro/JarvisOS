@@ -7,6 +7,7 @@ payload carries a filesystem path.
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,15 @@ def _when(data: dict[str, Any], result_file: Path) -> datetime:
     return datetime.fromtimestamp(result_file.stat().st_mtime, UTC)
 
 
+def _finite(value: Any) -> float:
+    if isinstance(value, bool):
+        raise TypeError("boolean is not a coordinate")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite number")
+    return number
+
+
 def _read_ports(run_dir: Path) -> list[dict[str, Any]]:
     manifest_path = run_dir / "artifacts" / "manifest.json"
     try:
@@ -99,16 +109,16 @@ def _read_ports(run_dir: Path) -> list[dict[str, Any]]:
                 entry: dict[str, Any] = {
                     "name": str(port_name),
                     "interface": str(port.get("interface", "")),
-                    "origin": list(origin),
-                    "direction": list(direction),
+                    "origin": [_finite(value) for value in origin],
+                    "direction": [_finite(value) for value in direction],
                 }
                 outer_d = port.get("outer_d")
                 if outer_d is not None:
-                    entry["outer_d"] = float(outer_d)
-                    entry["wall_t"] = float(port.get("wall_t", 0.0))
+                    entry["outer_d"] = _finite(outer_d)
+                    entry["wall_t"] = _finite(port.get("wall_t", 0.0))
                 pad_d = port.get("pad_d")
                 if pad_d is not None:
-                    entry["pad_d"] = float(pad_d)
+                    entry["pad_d"] = _finite(pad_d)
             except (TypeError, ValueError, OverflowError):
                 continue
             ports.append(entry)

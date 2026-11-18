@@ -6,12 +6,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.core.database import initialize_database
 from app.main import create_app
 from app.modules.engineering.operator_service import workspace_dir
 from app.modules.workspaces.models import WorkspaceCreate
 from app.modules.workspaces.service import create_workspace
-from fastapi.testclient import TestClient
 
 SECRET_DIR = "/home/someone/private/work"
 
@@ -146,6 +147,8 @@ def test_show_returns_named_ports_from_manifest(client: TestClient) -> None:
                     "wall_t": 1.5,
                 },
                 "malformed": {"interface": "tube", "origin": "not-a-list", "direction": [1, 0, 0]},
+                "not_finite": {"interface": "pad", "origin": [float("nan"), 0, 0], "direction": [1, 0, 0], "pad_d": 5},
+                "boolean": {"interface": "pad", "origin": [True, 0, 0], "direction": [1, 0, 0], "pad_d": 5},
             }
         }
     }), encoding="utf-8")
