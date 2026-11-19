@@ -47,6 +47,7 @@ def retrieval_eval_descriptor() -> EvaluatorDescriptor:
             "RETRIEVAL_QUESTIONS_NONEMPTY",
             "RETRIEVAL_EVAL_COMPLETE",
         ),
+        advisory_checks=("RETRIEVAL_EXPECTED_IN_TOP3",),
     )
 
 
@@ -270,6 +271,7 @@ def evaluate_retrieval_request(
     mrr = sum(1.0 / rank for rank in ranks if rank is not None)
     denominator = question_count or 1
     zero_hit = sum(item["hit_count"] == 0 for item in per_question)
+    answer_measured = document_count > 0 and question_count > 0 and not errors
     checks = (
         ResultCheck(
             id="RETRIEVAL_CORPUS_NONEMPTY", family="input",
@@ -289,6 +291,17 @@ def evaluate_retrieval_request(
             actual=float(len(errors)), limit=0.0, unit="1",
             hint="Every retrieval question completed without an evaluation error." if not errors
             else "One or more retrieval questions raised an evaluation error.",
+            source="constant:retrieval_bench",
+        ),
+        ResultCheck(
+            id="RETRIEVAL_EXPECTED_IN_TOP3", family="reference",
+            status="not_evaluated" if not answer_measured else "pass" if top3 == question_count else "warn",
+            actual=float(top3) / question_count if answer_measured else None,
+            limit=1.0 if answer_measured else None, unit="1" if answer_measured else None,
+            hint="Not evaluated: the other retrieval checks failed." if not answer_measured
+            else "Every retrieval question found its expected answer within the top three."
+            if top3 == question_count
+            else f"{question_count - top3} retrieval questions missed an expected answer in the top three.",
             source="constant:retrieval_bench",
         ),
     )
