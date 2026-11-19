@@ -82,6 +82,23 @@ def _source_row(connection, workspace_id: str, source_id: str):
     return row
 
 
+def literature_backing_digests(workspace_id: str, expected: list[str]) -> dict[str, str]:
+    """Backing SHA-256 (hex) per expected value that is the id or exact title of a source in the workspace."""
+    digests: dict[str, str] = {}
+    with open_sqlite_connection() as connection:
+        for item in expected:
+            rows = connection.execute(
+                "SELECT * FROM literature_sources WHERE workspace_id = ? AND (id = ? OR title = ?)",
+                (workspace_id, item, item),
+            ).fetchall()
+            for row in rows:
+                digest = _BackingText(connection, workspace_id, row).current_sha256()
+                if digest is not None:
+                    digests[item] = digest
+                    break
+    return digests
+
+
 def _artifact_row_or_none(connection, workspace_id: str, artifact_id: str):
     return connection.execute(
         """

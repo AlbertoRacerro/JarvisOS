@@ -40,12 +40,23 @@ export type RetrievalEvalPayload = {
   mode?: "lexical" | "hybrid" | "vector";
 };
 
+export type RetrievalEvalQuestionResult = {
+  id?: string | null;
+  query: string;
+  expected_ids: string[];
+  accepted_ids?: string[];
+  first_matching_rank: number | null;
+  matched_accepted?: boolean;
+  hit_count: number;
+};
+
 export type RetrievalEvalResult = {
   run_id: string;
   evaluator_id: string;
   status: string;
   verdict: "usable" | "usable_with_warnings" | "unchecked" | "not_usable";
   outputs: Array<{ name: string; value: { value: number; unit: string } }>;
+  questions?: RetrievalEvalQuestionResult[];
 };
 
 export class MemorySearchError extends Error {
