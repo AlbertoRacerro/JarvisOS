@@ -46,6 +46,7 @@ export type RetrievalEvalQuestionResult = {
   expected_ids: string[];
   accepted_ids?: string[];
   first_matching_rank: number | null;
+  matched_accepted?: boolean;
   hit_count: number;
 };
 

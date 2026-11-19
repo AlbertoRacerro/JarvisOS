@@ -40,6 +40,7 @@ def test_identical_folder_file_is_credited_to_source(client: TestClient, tmp_pat
     question = result["questions"][0]
     assert question["accepted_ids"] == ["sub/copy.md"]
     assert question["first_matching_rank"] == 1
+    assert question["matched_accepted"] is True
     assert str(tmp_path) not in str(result)
 
 
@@ -48,6 +49,7 @@ def test_one_byte_change_adds_nothing(client: TestClient, tmp_path: Path) -> Non
     question = _ask(client, endpoint, "Paper sulla fermentazione")["questions"][0]
     assert question["accepted_ids"] == []
     assert question["first_matching_rank"] is None
+    assert question["matched_accepted"] is False
 
 
 def test_expected_that_is_not_a_source_adds_nothing(client: TestClient, tmp_path: Path) -> None:  # noqa: F811

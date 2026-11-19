@@ -22,6 +22,7 @@ for (const label of ["Utilizzabile", "Utilizzabile con avvertenze", "Non verific
 assert.ok(page.includes("Contato come fonte:"));
 assert.ok(page.includes("(file {question.accepted_ids[0]})"));
 assert.ok(api.includes("accepted_ids?: string[]"));
+assert.ok(page.includes("question.matched_accepted && question.accepted_ids"));
 assert.ok(api.includes("runRetrievalEval"));
 assert.ok(api.includes("/retrieval-eval"));
 assert.ok(packageJson.includes('"test:316"'));

@@ -402,7 +402,7 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
             <p>Posizione media della risposta attesa (mrr): {evalMetric("mrr") ?? "—"}</p>
             <p>Domande senza alcun risultato (zero_hit_count): {evalMetric("zero_hit_count") ?? "—"}</p>
             {(evalResult.questions ?? []).map((question, index) =>
-              question.first_matching_rank != null && question.accepted_ids && question.accepted_ids.length > 0 ? (
+              question.matched_accepted && question.accepted_ids && question.accepted_ids.length > 0 ? (
                 <p key={index}>Contato come fonte: {question.expected_ids[0]} (file {question.accepted_ids[0]})</p>
               ) : null
             )}

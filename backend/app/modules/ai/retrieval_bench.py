@@ -250,11 +250,12 @@ def evaluate_retrieval_request(
                     raise ValueError("question workspace_id must be a string")
                 search = getattr(store, f"search_{mode}")
                 hits = search(question["query"], limit=limit, workspace_id=q_ws)
-                rank = next(
-                    (position for position, hit in enumerate(hits, 1)
-                     if any(_matches(item, hit, title_for(hit.source_ref.model_dump_json()))
-                            for item in (*expected, *accepted))),
-                    None,
+                rank, via_accepted = next(
+                    ((position, not any(_matches(item, hit, title) for item in expected))
+                     for position, hit in enumerate(hits, 1)
+                     for title in (title_for(hit.source_ref.model_dump_json()),)
+                     if any(_matches(item, hit, title) for item in (*expected, *accepted))),
+                    (None, False),
                 )
                 per_question.append({
                     "id": question.get("id"),
@@ -262,6 +263,7 @@ def evaluate_retrieval_request(
                     "expected_ids": expected,
                     "accepted_ids": accepted,
                     "first_matching_rank": rank,
+                    "matched_accepted": via_accepted,
                     "hit_count": len(hits),
                 })
             except Exception as exc:
