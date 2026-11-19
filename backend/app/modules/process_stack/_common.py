@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 from app.modules.engineering.evaluator_contracts import (
     EngineeringEvaluator,
@@ -17,6 +19,7 @@ from app.modules.engineering.evaluator_contracts import (
     NamedQuantity,
     NumericalDiagnostics,
     OptionValue,
+    ResultCheck,
 )
 from app.modules.engineering.refs import EvaluationResultRef, Quantity
 from app.modules.process_kernel.errors import ProcessKernelError
@@ -170,3 +173,48 @@ def descriptor_version(module: str) -> str:
         return str(__import__(module).__version__)
     except Exception:  # noqa: BLE001 - descriptor must exist even when the backend is absent
         return "not_installed"
+
+
+class ValidityPoint(NamedTuple):
+    """The governing input of a run, the nearest bound of the enforced range, and where the range comes from."""
+
+    actual: float
+    limit: float
+    unit: str
+    hint: str
+
+
+def card_checks(
+    evaluator_id: str, validity: ValidityPoint, outputs: tuple[NamedQuantity, ...]
+) -> tuple[ResultCheck, ...]:
+    """VALIDITY_RANGE (the body already refused anything outside the range) and FINITE_OUTPUTS for a card run."""
+    finite = all(math.isfinite(item.value.value) for item in outputs)
+    return (
+        ResultCheck(
+            id="VALIDITY_RANGE", family="input", status="pass", actual=validity.actual, limit=validity.limit,
+            unit=validity.unit, hint=validity.hint, source=f"constant:{evaluator_id}",
+        ),
+        ResultCheck(
+            id="FINITE_OUTPUTS", family="numerical", status="pass" if finite else "fail",
+            hint="Every output value must be finite.", source="physical_limit",
+        ),
+    )
+
+
+def evaluate_card(
+    evaluator: EngineeringEvaluator,
+    request: EvaluationRequest,
+    body: Callable[[], tuple[tuple[NamedQuantity, ...], NumericalDiagnostics, ValidityPoint]],
+) -> EvaluationResult:
+    """``evaluate_with`` for a body that also reports its validity point; checks attach to succeeded results only."""
+    reported: list[ValidityPoint] = []
+
+    def run() -> tuple[tuple[NamedQuantity, ...], NumericalDiagnostics]:
+        outputs, numerical, validity = body()
+        reported.append(validity)
+        return outputs, numerical
+
+    result = evaluate_with(evaluator, request, run)
+    if result.status != "succeeded" or not reported:
+        return result
+    return result.model_copy(update={"checks": card_checks(result.evaluator_id, reported[0], result.outputs)})

@@ -18,8 +18,9 @@ from app.modules.engineering.evaluator_contracts import (
 )
 from app.modules.process_stack._common import (
     EvaluationRefusal,
+    ValidityPoint,
     descriptor_version,
-    evaluate_with,
+    evaluate_card,
     import_availability,
     option,
     quantities,
@@ -28,6 +29,7 @@ from app.modules.process_stack._common import (
 
 PIPE_EVALUATOR_ID: Final = "fluids.pipe_pressure_drop"
 CONVECTION_EVALUATOR_ID: Final = "ht.internal_convection"
+CARD_CHECKS: Final = ("VALIDITY_RANGE", "FINITE_OUTPUTS")
 TURBULENT_RE_MIN: Final = 4000.0  # below this and above fluids' laminar limit the regime is transitional
 MAX_RELATIVE_ROUGHNESS: Final = 0.05  # Colebrook/Moody chart range
 # Incropera & DeWitt ranges: (Re_min, Re_max, Pr_min, Pr_max)
@@ -46,13 +48,14 @@ class PipePressureDropEvaluator:
             evaluator_id=PIPE_EVALUATOR_ID, backend_kind="specialist", backend_name="fluids",
             backend_version=descriptor_version("fluids"), fidelity="screening",
             capabilities=("pipe_friction", "darcy_weisbach"),
+            required_checks=CARD_CHECKS,
         )
 
     def availability(self) -> EvaluatorAvailability:
         return import_availability(PIPE_EVALUATOR_ID, "fluids", lambda: descriptor_version("fluids"))
 
     def evaluate(self, request: EvaluationRequest) -> EvaluationResult:
-        return evaluate_with(self, request, lambda: _pipe(request))
+        return evaluate_card(self, request, lambda: _pipe(request))
 
 
 class InternalConvectionEvaluator:
@@ -63,13 +66,14 @@ class InternalConvectionEvaluator:
             evaluator_id=CONVECTION_EVALUATOR_ID, backend_kind="specialist", backend_name="ht",
             backend_version=descriptor_version("ht"), fidelity="screening",
             capabilities=("internal_convection", *CONVECTION_METHODS),
+            required_checks=CARD_CHECKS,
         )
 
     def availability(self) -> EvaluatorAvailability:
         return import_availability(CONVECTION_EVALUATOR_ID, "ht", lambda: descriptor_version("ht"))
 
     def evaluate(self, request: EvaluationRequest) -> EvaluationResult:
-        return evaluate_with(self, request, lambda: _convection(request))
+        return evaluate_card(self, request, lambda: _convection(request))
 
 
 def _positive(values: dict[str, float]) -> None:
@@ -107,7 +111,17 @@ def darcy_pipe_pressure_drop(
     return reynolds, darcy, pressure_drop
 
 
-def _pipe(request: EvaluationRequest) -> tuple[tuple[NamedQuantity, ...], NumericalDiagnostics]:
+def _pipe_validity(reynolds: float) -> ValidityPoint:
+    from fluids.friction import LAMINAR_TRANSITION_PIPE
+
+    if reynolds < LAMINAR_TRANSITION_PIPE:
+        return ValidityPoint(reynolds, LAMINAR_TRANSITION_PIPE, "1",
+                             f"Laminar branch: Re < {LAMINAR_TRANSITION_PIPE:g}; e/D <= {MAX_RELATIVE_ROUGHNESS:g}.")
+    return ValidityPoint(reynolds, TURBULENT_RE_MIN, "1",
+                         f"Turbulent branch: Re >= {TURBULENT_RE_MIN:g}; e/D <= {MAX_RELATIVE_ROUGHNESS:g}.")
+
+
+def _pipe(request: EvaluationRequest) -> tuple[tuple[NamedQuantity, ...], NumericalDiagnostics, ValidityPoint]:
     option(request, "method", ("Clamond",), "Clamond")
     x = required_inputs(request, {
         "density": "kg/m3", "dynamic_viscosity": "Pa*s", "velocity": "m/s",
@@ -120,10 +134,10 @@ def _pipe(request: EvaluationRequest) -> tuple[tuple[NamedQuantity, ...], Numeri
     return quantities({
         "reynolds_number": (reynolds, "1"), "relative_roughness": (x["roughness"] / x["diameter"], "1"),
         "darcy_friction_factor": (darcy, "1"), "pressure_drop": (pressure_drop, "Pa"),
-    }), NumericalDiagnostics(converged=True)
+    }), NumericalDiagnostics(converged=True), _pipe_validity(reynolds)
 
 
-def _convection(request: EvaluationRequest) -> tuple[tuple[NamedQuantity, ...], NumericalDiagnostics]:
+def _convection(request: EvaluationRequest) -> tuple[tuple[NamedQuantity, ...], NumericalDiagnostics, ValidityPoint]:
     from fluids.friction import friction_factor
     from ht.conv_internal import turbulent_Dittus_Boelter, turbulent_Gnielinski
 
@@ -141,7 +155,10 @@ def _convection(request: EvaluationRequest) -> tuple[tuple[NamedQuantity, ...], 
         nusselt = float(turbulent_Gnielinski(Re=reynolds, Pr=prandtl, fd=friction_factor(Re=reynolds, eD=0.0)))
     else:
         nusselt = float(turbulent_Dittus_Boelter(Re=reynolds, Pr=prandtl, heating=method.endswith("heating")))
+    # Re is the governing input; the nearest Re bound is the one the run sits closest to (Pr is enforced too).
+    limit = min((re_min, re_max), key=lambda bound: abs(reynolds - bound))
+    hint = f"{method}: Re in [{re_min:g}, {re_max:g}], Pr in [{pr_min:g}, {pr_max:g}]."
     return quantities({
         "nusselt_number": (nusselt, "1"),
         "heat_transfer_coefficient": (nusselt * x["thermal_conductivity"] / x["diameter"], "W/(m**2*K)"),
-    }), NumericalDiagnostics(converged=True)
+    }), NumericalDiagnostics(converged=True), ValidityPoint(reynolds, limit, "1", hint)

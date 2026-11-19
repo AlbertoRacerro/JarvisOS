@@ -8,6 +8,8 @@ import locale
 import re
 import uuid
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -30,17 +32,31 @@ _CANONICAL_STEP_TIMESTAMP = "1970-01-01T00:00:00"
 _STEP_FILE_NAME_TIMESTAMP_RE = re.compile(r"(FILE_NAME\('[^']*',)'[^']*'")
 
 
+@contextmanager
+def _preserved_locale() -> Iterator[None]:
+    """OpenCascade / VTK C++ readers and writers can reset the process locale to "C"; restore it."""
+    previous_locale = locale.setlocale(locale.LC_ALL)
+    try:
+        yield
+    finally:
+        try:
+            locale.setlocale(locale.LC_ALL, previous_locale)
+        except locale.Error:
+            pass
+
+
 def build_artifacts(spec_payload: dict[str, Any], out_dir: str | Path) -> dict[str, Any]:
     spec = canonicalize_geometry_spec(spec_payload)
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    parts = assemble_parts(spec)
-    try:
-        scene_bindings, print_handoff = _export_shapes(parts, out_path)
-    except Exception as exc:
-        if isinstance(exc, BluecadError):
-            raise
-        raise BluecadError("EXPORT_ERROR", {"message": str(exc)}) from exc
+    with _preserved_locale():
+        parts = assemble_parts(spec)
+        try:
+            scene_bindings, print_handoff = _export_shapes(parts, out_path)
+        except Exception as exc:
+            if isinstance(exc, BluecadError):
+                raise
+            raise BluecadError("EXPORT_ERROR", {"message": str(exc)}) from exc
     manifest = _manifest(spec, parts, out_path, scene_bindings=scene_bindings, print_handoff=print_handoff)
     manifest_path = out_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -54,8 +70,7 @@ def export_imported_step(step_path: str | Path, out_dir: str | Path) -> dict[str
     except ImportError as exc:  # pragma: no cover
         raise BluecadError("KERNEL_ERROR", {"message": "build123d is not installed"}) from exc
 
-    previous_locale = locale.setlocale(locale.LC_ALL)
-    try:
+    with _preserved_locale():
         shape = bd.import_step(str(step_path))
         out_path = Path(out_dir)
         out_path.mkdir(parents=True, exist_ok=True)
@@ -80,12 +95,6 @@ def export_imported_step(step_path: str | Path, out_dir: str | Path) -> dict[str
         mesher.meshes[-1].SetName("freecad")
         mesher.write(str(out_path / "model.3mf"))
         _normalize_3mf_uuids(out_path / "model.3mf")
-    finally:
-        # OpenCascade / VTK C++ readers can reset the process locale to "C".
-        try:
-            locale.setlocale(locale.LC_ALL, previous_locale)
-        except locale.Error:
-            pass
 
     digests: dict[str, str] = {}
     for name in ("model.step", "model.stl", "model.glb", "model.3mf"):
