@@ -6,11 +6,11 @@ import {
   listFreecadDocuments,
   listFreecadObjects,
   previewFreecadEdit,
+  API_BASE_URL,
   uploadBluecadFreecadFile,
   listBluecadFreecadReferences,
   addBluecadFreecadReference,
   removeBluecadFreecadReference,
-  type BluecadFreecadObject,
   type BluecadFreecadReference,
   type BluecadFreecadUpload,
   type FreecadEditPreview,
@@ -18,7 +18,12 @@ import {
   type FreecadStatus
 } from "../../api/client";
 
-type Props = Readonly<{ workspaceId: string; candidateId: string | null }>;
+type Props = Readonly<{
+  workspaceId: string;
+  candidateId: string | null;
+  freecadRefs: BluecadFreecadReference[];
+  onFreecadRefsChange: (references: BluecadFreecadReference[]) => void;
+}>;
 type Property = { name: string; value: unknown; readOnly: boolean };
 
 function propertiesOf(object: FreecadObject): Property[] {
@@ -43,7 +48,7 @@ function parseValue(raw: string, old: unknown): unknown {
   return raw;
 }
 
-export default function FreecadPanel({ workspaceId, candidateId }: Props) {
+export default function FreecadPanel({ workspaceId, candidateId, freecadRefs, onFreecadRefsChange }: Props) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<FreecadStatus | null>(null);
   const [documents, setDocuments] = useState<string[]>([]);
@@ -57,7 +62,6 @@ export default function FreecadPanel({ workspaceId, candidateId }: Props) {
   const [busy, setBusy] = useState(false);
   const [freecadUpload, setFreecadUpload] = useState<BluecadFreecadUpload | null>(null);
   const [freecadObjectName, setFreecadObjectName] = useState("");
-  const [freecadRefs, setFreecadRefs] = useState<BluecadFreecadReference[]>([]);
 
   const selectedObject = objects.find((item) => item.Name === objectName);
   const properties = useMemo(() => selectedObject ? propertiesOf(selectedObject) : [], [selectedObject]);
@@ -118,13 +122,6 @@ export default function FreecadPanel({ workspaceId, candidateId }: Props) {
     }).catch((error: Error) => setMessage(error.message)).finally(() => setBusy(false));
   };
 
-  useEffect(() => {
-    if (!workspaceId || !candidateId) { setFreecadRefs([]); return; }
-    void listBluecadFreecadReferences(workspaceId, candidateId)
-      .then(setFreecadRefs)
-      .catch((error: Error) => setMessage(error.message));
-  }, [workspaceId, candidateId]);
-
   const onChooseFile = (file: File | undefined) => {
     if (!file) return;
     setBusy(true);
@@ -142,7 +139,7 @@ export default function FreecadPanel({ workspaceId, candidateId }: Props) {
       file_sha256: freecadUpload.file_sha256,
       object_name: freecadObjectName
     }).then(() => listBluecadFreecadReferences(workspaceId, candidateId))
-      .then(setFreecadRefs)
+      .then(onFreecadRefsChange)
       .catch((error: Error) => setMessage(error.message))
       .finally(() => setBusy(false));
   };
@@ -152,7 +149,7 @@ export default function FreecadPanel({ workspaceId, candidateId }: Props) {
     void removeBluecadFreecadReference(reference).then(() => {
       if (candidateId) return listBluecadFreecadReferences(workspaceId, candidateId);
       return [];
-    }).then(setFreecadRefs)
+    }).then(onFreecadRefsChange)
       .catch((error: Error) => setMessage(error.message))
       .finally(() => setBusy(false));
   };
@@ -198,9 +195,9 @@ export default function FreecadPanel({ workspaceId, candidateId }: Props) {
           <p>{reference.fcstd_sha256.slice(0, 12)} · STEP {reference.step_sha256.slice(0, 12)} · GLB {reference.glb_sha256.slice(0, 12)}</p>
           <p>{reference.valid ? "Valida" : `Non valida: ${reference.finding ?? "artefatto modificato"}`}</p>
           {reference.valid && <p>
-            {reference.step_url && <a href={reference.step_url}>STEP</a>}
-            {reference.stl_url && <> · <a href={reference.stl_url}>STL</a></>}
-            {reference.three_mf_url && <> · <a href={reference.three_mf_url}>3MF</a></>}
+            {reference.step_url && <a href={`${API_BASE_URL}${reference.step_url}`}>STEP</a>}
+            {reference.stl_url && <> · <a href={`${API_BASE_URL}${reference.stl_url}`}>STL</a></>}
+            {reference.three_mf_url && <> · <a href={`${API_BASE_URL}${reference.three_mf_url}`}>3MF</a></>}
           </p>}
           <button type="button" disabled={busy} onClick={() => onRemoveFreecad(reference)}>Rimuovi</button>
         </article>)}

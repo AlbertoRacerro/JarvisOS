@@ -27,7 +27,8 @@ MAX_FILE_BYTES = 64 * 1024 * 1024
 OBJECT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 FREECAD_EXPORT_SCRIPT = Path(__file__).with_name("freecad_export.py")
 FRAME = "mm_z_up_rotation_RxRyRz_deg"
-_UPLOADED_FILE_NAMES: dict[tuple[str, str], tuple[str, dict[str, str]]] = {}
+EXPORT_TIMEOUT_SECONDS = 120
+ARTIFACT_NAMES = ("model.step", "model.stl", "model.glb", "model.3mf")
 
 
 class FreecadReferenceError(Exception):
@@ -144,7 +145,7 @@ def _run_freecad(mode: str, fcstd_path: Path, out_dir: Path, object_name: str | 
             encoding="utf-8",
             errors="replace",
         )
-        stdout, _ = process.communicate(timeout=120)
+        stdout, _ = process.communicate(timeout=EXPORT_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as exc:
         process.kill()
         process.communicate()
@@ -188,8 +189,22 @@ def upload_freecad_file(workspace_id: str, file_name: str, body: bytes) -> dict:
         for item in upload_objects
         if isinstance(item, dict)
     }
-    _UPLOADED_FILE_NAMES[(workspace_id, file_sha256)] = (file_name, labels)
-    return {"file_sha256": file_sha256, "file_name": file_name, "objects": objects or []}
+    # The latest upload's name and labels survive a restart; the pin itself is the digest.
+    manifest = source.with_name("upload.json")
+    temporary_manifest = manifest.with_name(manifest.name + ".tmp")
+    temporary_manifest.write_text(json.dumps({"file_name": file_name, "labels": labels}, ensure_ascii=False), encoding="utf-8")
+    temporary_manifest.replace(manifest)
+    return {"file_sha256": file_sha256, "file_name": file_name, "objects": upload_objects}
+
+
+def _upload_names(source: Path, object_name: str) -> tuple[str, str]:
+    try:
+        manifest = json.loads(source.with_name("upload.json").read_text(encoding="utf-8"))
+        file_name = validate_file_name(str(manifest["file_name"]))
+        label = str(manifest.get("labels", {}).get(object_name) or object_name)
+        return file_name, label
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, FreecadReferenceError):
+        return "source.FCStd", object_name
 
 
 def _candidate(connection: sqlite3.Connection, workspace_id: str, candidate_id: str) -> None:
@@ -259,28 +274,21 @@ def list_freecad_references(workspace_id: str, candidate_id: str) -> list[dict]:
         return [_present(connection, row) for row in rows]
 
 
-def add_freecad_reference(workspace_id: str, candidate_id: str, data: FreecadReferenceAdd) -> dict:
-    if not re.fullmatch(r"[0-9a-f]{64}", data.file_sha256):
-        raise FreecadReferenceError("FREECAD_FILE_INVALID", "Digest del file non valido.", 400)
-    if OBJECT_NAME_RE.fullmatch(data.object_name) is None:
-        raise FreecadReferenceError("FREECAD_OBJECT_NAME_INVALID", "Nome oggetto FreeCAD non valido.", 400)
-    source = build_paths().bluecad_freecad_source_file(workspace_id, data.file_sha256)
-    if not source.is_file() or source.is_symlink():
-        raise FreecadReferenceError("FREECAD_FILE_INVALID", "Il file FCStd non è presente.", 404)
-    if _digest_file(source) != data.file_sha256:
-        raise FreecadReferenceError("FREECAD_FILE_INVALID", "Il file FCStd è stato modificato.", 409)
-    with open_sqlite_connection() as connection:
-        _candidate(connection, workspace_id, candidate_id)
-        existing = connection.execute(
-            "SELECT 1 FROM bluecad_freecad_references WHERE candidate_id = ? AND fcstd_sha256 = ? AND object_name = ?",
-            (candidate_id, data.file_sha256, data.object_name),
-        ).fetchone()
-        if existing is not None:
-            raise FreecadReferenceError("freecad_reference_duplicate", "Questa parte FreeCAD è già aggiunta alla vista.")
+def _existing_export(out_dir: Path) -> dict[str, str] | None:
+    """Reuse a complete earlier export of the same pinned file and object, so a second add never rewrites it."""
+    digests: dict[str, str] = {}
+    for name in ARTIFACT_NAMES:
+        path = out_dir / name
+        if path.is_symlink() or not path.is_file() or path.stat().st_size <= 0:
+            return None
+        digests[name] = _digest_file(path)
+    return digests
 
+
+def _export_object(source: Path, object_name: str, out_dir: Path) -> dict[str, str]:
     with tempfile.TemporaryDirectory(dir=str(source.parent)) as temp_dir:
         temp = Path(temp_dir)
-        _run_freecad("export", source, temp, data.object_name)
+        _run_freecad("export", source, temp, object_name)
         step = temp / "model.step"
         if not step.is_file() or step.stat().st_size <= 0:
             raise FreecadReferenceError("FREECAD_EXPORT_FAILED", "FreeCAD non ha creato lo STEP.", 502)
@@ -289,24 +297,46 @@ def add_freecad_reference(workspace_id: str, candidate_id: str, data: FreecadRef
         except Exception as exc:
             code = getattr(exc, "code", "FREECAD_EXPORT_FAILED")
             raise FreecadReferenceError(code if isinstance(code, str) else "FREECAD_EXPORT_FAILED", "Il kernel non ha esportato la parte.", 502) from exc
-
-        out_dir = _export_dir(workspace_id, data.file_sha256, data.object_name)
         out_dir.mkdir(parents=True, exist_ok=True)
         digests: dict[str, str] = {}
-        for name in ("model.step", "model.stl", "model.glb", "model.3mf"):
+        for name in ARTIFACT_NAMES:
             path = temp / name
             if not path.is_file():
                 raise FreecadReferenceError("FREECAD_EXPORT_FAILED", "Manca un artefatto esportato.", 502)
-            bytes_data = path.read_bytes()
-            digests[name] = _sha256(bytes_data)
-            (out_dir / name).write_bytes(bytes_data)
+            digests[name] = _digest_file(path)
+            path.replace(out_dir / name)
+        return digests
+
+
+def add_freecad_reference(workspace_id: str, candidate_id: str, data: FreecadReferenceAdd) -> dict:
+    if not re.fullmatch(r"[0-9a-f]{64}", data.file_sha256):
+        raise FreecadReferenceError("FREECAD_FILE_INVALID", "Digest del file non valido.", 400)
+    if OBJECT_NAME_RE.fullmatch(data.object_name) is None:
+        raise FreecadReferenceError("FREECAD_OBJECT_NAME_INVALID", "Nome oggetto FreeCAD non valido.", 400)
+    with open_sqlite_connection() as connection:
+        _candidate(connection, workspace_id, candidate_id)
+    source = build_paths().bluecad_freecad_source_file(workspace_id, data.file_sha256)
+    if not source.is_file() or source.is_symlink():
+        raise FreecadReferenceError("FREECAD_FILE_INVALID", "Il file FCStd non è presente.", 404)
+    if _digest_file(source) != data.file_sha256:
+        raise FreecadReferenceError("FREECAD_FILE_INVALID", "Il file FCStd è stato modificato.", 409)
+    with open_sqlite_connection() as connection:
+        existing = connection.execute(
+            "SELECT 1 FROM bluecad_freecad_references WHERE candidate_id = ? AND fcstd_sha256 = ? AND object_name = ?",
+            (candidate_id, data.file_sha256, data.object_name),
+        ).fetchone()
+        if existing is not None:
+            raise FreecadReferenceError("freecad_reference_duplicate", "Questa parte FreeCAD è già aggiunta alla vista.")
+
+    out_dir = _export_dir(workspace_id, data.file_sha256, data.object_name)
+    digests = _existing_export(out_dir)
+    if digests is None:
+        digests = _export_object(source, data.object_name, out_dir)
 
     with open_sqlite_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
         _candidate(connection, workspace_id, candidate_id)
-        cached = _UPLOADED_FILE_NAMES.get((workspace_id, data.file_sha256))
-        document_name = cached[0] if cached is not None else "source.FCStd"
-        object_label = cached[1].get(data.object_name, data.object_name) if cached is not None else data.object_name
+        document_name, object_label = _upload_names(source, data.object_name)
         now = utc_now()
         ref_id = str(uuid4())
         try:

@@ -16,6 +16,7 @@ from app.core.bootstrap import initialize_storage
 from app.core.database import open_sqlite_connection
 from app.core.paths import build_paths
 from app.main import create_app
+from app.modules.bluecad import freecad_references
 
 
 def _fcstd(path: Path) -> bytes:
@@ -35,7 +36,7 @@ log = os.environ["FREECAD_ARGV_LOG"]
 with open(log, "a", encoding="utf-8") as out:
     out.write("\\n".join(sys.argv[1:]) + "\\n")
 if os.environ.get("FREECAD_TIMEOUT") == "1":
-    time.sleep(121)
+    time.sleep(30)
 mode = sys.argv[2]
 out_dir = sys.argv[4]
 if mode == "list":
@@ -170,6 +171,7 @@ def test_timeout_leaves_no_reference_and_tamper_serves_404(
         uploaded = client.post(f"{base}/freecad/files", content=body,
                                headers={"X-Filename": "Box.FCStd"}).json()
         monkeypatch.setenv("FREECAD_TIMEOUT", "1")
+        monkeypatch.setattr(freecad_references, "EXPORT_TIMEOUT_SECONDS", 1)
         timed = client.post(
             f"{base}/candidates/{candidate_id}/freecad-references",
             json={"file_sha256": uploaded["file_sha256"], "object_name": "Box"},
@@ -177,6 +179,7 @@ def test_timeout_leaves_no_reference_and_tamper_serves_404(
         assert timed.status_code == 504
         assert client.get(f"{base}/candidates/{candidate_id}/freecad-references").json() == []
         monkeypatch.delenv("FREECAD_TIMEOUT")
+        monkeypatch.setattr(freecad_references, "EXPORT_TIMEOUT_SECONDS", 120)
 
         added = client.post(
             f"{base}/candidates/{candidate_id}/freecad-references",
@@ -197,3 +200,31 @@ def test_timeout_leaves_no_reference_and_tamper_serves_404(
         (out_dir / "model.glb").write_bytes(glb_bytes)
         (out_dir / "model.step").write_bytes(b"tampered step")
         assert client.get(reference["step_url"]).status_code == 404
+
+
+def test_second_candidate_reuses_pinned_export_and_name_survives_restart(
+    tmp_path: Path,
+    isolated_data_root: None,
+    fake_freecad: tuple[Path, Path],
+) -> None:
+    initialize_storage(seed_default=True)
+    first, second = _candidate(), _candidate()
+    body = _fcstd(tmp_path / "Shared.FCStd")
+    with TestClient(create_app()) as client:
+        base = "/workspaces/main/bluecad"
+        uploaded = client.post(f"{base}/freecad/files", content=body,
+                               headers={"X-Filename": "Shared.FCStd"}).json()
+    # A new app instance stands for a backend restart between upload and add.
+    with TestClient(create_app()) as client:
+        payload = {"file_sha256": uploaded["file_sha256"], "object_name": "Box"}
+        one = client.post(f"{base}/candidates/{first}/freecad-references", json=payload)
+        assert one.status_code == 201, one.text
+        assert one.json()["document_file_name"] == "Shared.FCStd"
+        assert one.json()["object_label"] == "Boîte"
+        exports_before = fake_freecad[1].read_text().count("export")
+        two = client.post(f"{base}/candidates/{second}/freecad-references", json=payload)
+        assert two.status_code == 201, two.text
+        assert fake_freecad[1].read_text().count("export") == exports_before
+        assert two.json()["glb_sha256"] == one.json()["glb_sha256"]
+        refs = client.get(f"{base}/candidates/{first}/freecad-references").json()
+        assert refs[0]["valid"] is True

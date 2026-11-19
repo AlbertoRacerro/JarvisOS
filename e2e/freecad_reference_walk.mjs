@@ -39,7 +39,8 @@ if len(sys.argv) > 2:
 import json
 for line in sys.stdin:
     request = json.loads(line)
-    print(json.dumps({"id": request["id"], "ok": True, "result": True}), flush=True)
+    result = [] if request["method"] in ("list_documents", "get_objects") else True
+    print(json.dumps({"id": request["id"], "ok": True, "result": result}), flush=True)
 `, { mode: 0o755 });
 const sha = createHash("sha256").update(await readFile(peer)).digest("hex");
 const env = {
@@ -53,37 +54,10 @@ delete env.GH_TOKEN; delete env.GITHUB_TOKEN; delete env.JARVISOS_GITHUB_READ_TO
 const init = spawnSync(python, ["-c", "from app.core.bootstrap import initialize_storage\ninitialize_storage(seed_default=True)\n"], { cwd: backend, env, encoding: "utf8" });
 if (init.status !== 0) throw new Error(`database initialization failed: ${init.stderr}`);
 
-// Tiny uncompressed ZIP containing Document.xml.
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-const name = Buffer.from("Document.xml");
-const xml = Buffer.from("<document/>");
-const crc = crc32(xml);
-const local = Buffer.alloc(30);
-local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0, 6);
-local.writeUInt16LE(0, 8); local.writeUInt16LE(0, 10); local.writeUInt32LE(crc, 14);
-local.writeUInt32LE(xml.length, 18); local.writeUInt32LE(xml.length, 22);
-local.writeUInt16LE(name.length, 26); local.writeUInt16LE(0, 28);
-const central = Buffer.alloc(46);
-central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6);
-central.writeUInt16LE(0, 8); central.writeUInt16LE(0, 10); central.writeUInt16LE(0, 12);
-central.writeUInt16LE(0, 14); central.writeUInt32LE(crc, 16); central.writeUInt32LE(xml.length, 20);
-central.writeUInt32LE(xml.length, 24); central.writeUInt16LE(name.length, 28); central.writeUInt16LE(0, 30);
-central.writeUInt16LE(0, 32); central.writeUInt16LE(0, 34); central.writeUInt16LE(0, 36);
-central.writeUInt32LE(0, 38); central.writeUInt32LE(30 + name.length, 42);
-const end = Buffer.alloc(22);
-end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(0, 4); end.writeUInt16LE(0, 6);
-end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10); end.writeUInt32LE(central.length, 12);
-end.writeUInt32LE(local.length + name.length + xml.length, 16); end.writeUInt16LE(0, 20);
-const fcstd = Buffer.concat([local, name, xml, central, name, end]);
+// An .FCStd is a ZIP with Document.xml; the fake FreeCAD never reads it.
 const fcstdPath = join(dataRoot, "Demo.FCStd");
-await writeFile(fcstdPath, fcstd);
+const zip = spawnSync(python, ["-c", "import sys, zipfile\nwith zipfile.ZipFile(sys.argv[1], 'w') as z: z.writestr('Document.xml', '<document/>')\n", fcstdPath], { encoding: "utf8" });
+if (zip.status !== 0) throw new Error(`FCStd fixture failed: ${zip.stderr}`);
 
 const log = await open(join(evidence, "backend.log"), "w");
 const server = spawn(python, ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(port)],
@@ -118,9 +92,17 @@ try {
   await page.getByLabel("Scegli file .FCStd").setInputFiles(fcstdPath);
   await page.getByLabel("Oggetto FreeCAD").waitFor();
   await page.getByRole("button", { name: "Aggiungi alla vista", exact: true }).click();
-  await page.getByText("Boîte", { exact: true }).waitFor();
-  await page.getByText("Valida", { exact: true }).waitFor();
-  for (const label of ["STEP", "STL", "3MF"]) assert(await page.getByRole("link", { name: label, exact: true }).isVisible(), `missing ${label}`);
+  const card = page.locator("article.bluecad-freecad__reference");
+  await card.getByText("Boîte", { exact: true }).waitFor();
+  await card.getByText("Valida", { exact: true }).waitFor();
+  for (const label of ["STEP", "STL", "3MF"]) {
+    const link = card.getByRole("link", { name: label, exact: true });
+    assert(await link.isVisible(), `missing ${label}`);
+    const download = await page.request.get(new URL(await link.getAttribute("href"), base).toString());
+    assert(download.ok() && (await download.body()).length > 0, `${label} download failed`);
+  }
+  await page.screenshot({ path: join(evidence, "freecad-reference-added.png"), fullPage: true });
+  summary.screenshots.push("freecad-reference-added.png");
   summary.steps.push({ step: "upload_choose_add_and_validate", status: "pass" });
   await page.getByRole("button", { name: "Rimuovi", exact: true }).click();
   await page.getByText("Nessuna parte FreeCAD nella vista.", { exact: true }).waitFor();

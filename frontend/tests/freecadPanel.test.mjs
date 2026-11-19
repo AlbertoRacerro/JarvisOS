@@ -22,5 +22,6 @@ assert.match(source, /STEP/);
 assert.match(source, /STL/);
 assert.match(source, /3MF/);
 assert.match(workbench, /freecadRefs/);
-assert.match(workbench, /FreecadPanel workspaceId=\{workspaceId\} candidateId=\{selectedId\}/);
+assert.match(workbench, /FreecadPanel workspaceId=\{workspaceId\} candidateId=\{selectedId\} freecadRefs=\{freecadRefs\} onFreecadRefsChange=\{setFreecadRefs\}/);
+assert.match(workbench, /\.\.\.freecadRefs\.filter\(\(reference\) => reference\.valid && reference\.glb_url\)/);
 console.log("freecad panel static assertions passed");

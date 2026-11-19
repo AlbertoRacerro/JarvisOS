@@ -206,6 +206,11 @@ def _freecad_reference_error(exc: FreecadReferenceError) -> HTTPException:
 async def upload_freecad_file_endpoint(workspace_id: str, request: Request) -> dict[str, Any]:
     _require_workspace(workspace_id)
     file_name = request.headers.get("x-filename", "")
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_FILE_BYTES:
+        raise _freecad_reference_error(
+            FreecadReferenceError("FREECAD_FILE_TOO_LARGE", "Il file supera il limite di 64 MiB.", 413)
+        )
     body = await request.body()
     if len(body) > MAX_FILE_BYTES:
         raise _freecad_reference_error(
