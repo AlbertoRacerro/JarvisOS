@@ -87,6 +87,36 @@ def test_number_tokens_match(text: str, wanted: float) -> None:
     assert any(abs(token - wanted) <= 1e-12 + 1e-9 * abs(wanted) for token in number_tokens(text))
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1.8\u2009·\u200910−3\u00a0Pa s",
+        "1.8\u00a0·\u00a010−3\u00a0Pa s",
+        "1.8\u202f×\u202f10−3\u00a0Pa s",
+        "1.8\u2009·\u200910^−3\u00a0Pa s",
+    ],
+)
+def test_number_tokens_accept_unicode_spaces_in_scientific_notation(text: str) -> None:
+    assert number_tokens(text) == pytest.approx([0.0018])
+
+
+def test_unicode_spaced_scientific_notation_passes_datum_check() -> None:
+    lines = ["viscosity: 1.8\u2009·\u200910−3\u00a0Pa s"]
+    statuses, verdict = _datum(
+        lines=lines,
+        value_number=0.0018,
+        unit="Pa*s",
+        locator_start=1,
+        locator_end=1,
+    )
+    assert statuses["LIT_VALUE_AT_LOCATOR"] == "pass"
+    assert verdict == "usable"
+
+
+def test_thin_space_without_multiplication_sign_stays_two_numbers() -> None:
+    assert number_tokens("1.8\u2009 10") == [1.8, 10.0]
+
+
 @pytest.mark.parametrize(("text", "unwanted"), [("15", 1.5), ("11.5", 1.5), ("-0.5", 0.5), ("0.5", -0.5)])
 def test_number_tokens_do_not_over_match(text: str, unwanted: float) -> None:
     assert unwanted not in number_tokens(text)

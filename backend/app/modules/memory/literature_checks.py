@@ -25,7 +25,7 @@ _NUMBER_TOKEN = re.compile(
     (?P<sign>[{_SIGNS}])?
     (?P<num>\d+(?:[.,]\d+)?|\.\d+)
     (?:
-        \s*[×x·]\s*10
+        [\t\n\v\f\r \u00a0\u2002-\u200a\u202f]*[×x·][\t\n\v\f\r \u00a0\u2002-\u200a\u202f]*10
         (?:
             \^\s*(?P<csign>[{_SIGNS}]?)(?P<cexp>\d+)
             | (?P<dsign>[{_SIGNS}])(?P<dexp>\d+)
