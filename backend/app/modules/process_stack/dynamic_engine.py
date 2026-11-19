@@ -62,19 +62,9 @@ class EngineResult:
     manifest: dict[str, Any]
 
 
-def _growth_for_unit(item: dict[str, Any], *, dark: bool = False, scenario: dict[str, Any] | None = None) -> Any:
+def _growth_for_unit(item: dict[str, Any], *, dark: bool = False) -> Any:
     growth = pbr_unit.build_growth(item["params"] if _unit_type(item) == "PhotobioreactorT1"
                                    else item["growth_template_params"], item["model"], (0, 0, 0), 0)
-    if scenario is not None:
-        tag = str(item["tag"])
-        optics_geometry = scenario.get("optics_geometry", {}).get(tag, "cylinder")
-        back_wall_albedo = float(scenario.get("back_wall_albedo", {}).get(tag, 0.0))
-        if (optics_geometry != "cylinder" or back_wall_albedo != 0.0) and is_dataclass(growth):
-            growth = replace(
-                growth,
-                optics_geometry=optics_geometry,
-                back_wall_albedo=back_wall_albedo,
-            )
     if not dark:
         return growth
     params = item["params"]
@@ -1487,7 +1477,19 @@ def run(
             for key, value in topology["feeds"].items()
         }
     topology = dict(topology, flows=dict(topology["flows"]), feeds=feeds)
-    growths = [_growth_for_unit(item, dark=_unit_type(item) == "HoldupTank") for item in units]
+    growths = []
+    for item in units:
+        growth = _growth_for_unit(item, dark=_unit_type(item) == "HoldupTank")
+        tag = str(item["tag"])
+        optics_geometry = scenario.get("optics_geometry", {}).get(tag, "cylinder")
+        back_wall_albedo = float(scenario.get("back_wall_albedo", {}).get(tag, 0.0))
+        if (optics_geometry != "cylinder" or back_wall_albedo != 0.0) and isinstance(growth, pbr_unit.Growth):
+            growth = replace(
+                growth,
+                optics_geometry=optics_geometry,
+                back_wall_albedo=back_wall_albedo,
+            )
+        growths.append(growth)
     for item, growth in zip(units, growths, strict=True):
         item["growth"] = growth
         item["initial_volume_m3"] = item["volume_m3"]
