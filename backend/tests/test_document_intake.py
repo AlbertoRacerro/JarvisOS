@@ -112,6 +112,30 @@ def test_heading_and_paragraph_split() -> None:
     assert extract_passages("A\n\nB", markdown=False)[0][1] == "A\n\nB"
 
 
+def test_long_blank_line_block_is_split_into_bounded_passages(tmp_path: Path) -> None:
+    lines = [f"line {index:03} " + "x" * 52 for index in range(1, 301)]
+    text = "\n".join(lines)
+    passages = extract_passages(text, markdown=False)
+
+    assert passages
+    assert all(len(passage) <= document_intake.MAX_PASSAGE_CHARS for _, passage, _, _ in passages)
+    assert [line for _, passage, _, _ in passages for line in passage.splitlines()] == lines
+    assert [start for _, _, start, _ in passages] == [1, 130, 259]
+    source = tmp_path / "paper.txt"
+    source.write_text(text, encoding="utf-8")
+    result = document_intake._file_documents(tmp_path, Path("paper.txt"), "workspace")
+    assert not result.skipped
+
+
+def test_fitting_blocks_keep_existing_passage_shape_and_line_numbers() -> None:
+    sample = "# Heading\n\nFirst paragraph.\n\nSecond paragraph.\n\n## Subheading\n\nThird paragraph."
+
+    assert extract_passages(sample, markdown=True) == [
+        ("Heading", "First paragraph.\n\nSecond paragraph.", 3, (0, 0)),
+        ("Subheading", "Third paragraph.", 7, (0, 0)),
+    ]
+
+
 def test_passage_identity_survives_earlier_heading_and_content_edit(tmp_path: Path) -> None:
     initialize_database()
     workspace = _workspace("stable-headings")
