@@ -1,6 +1,6 @@
 # 322 — CARBON-PH-STATE-1: Dissolved inorganic carbon, carbonate pH, and CO2 mass transfer in culture units
 
-Status: ready
+Status: merged
 Depends on: 321
 
 ## Goal
