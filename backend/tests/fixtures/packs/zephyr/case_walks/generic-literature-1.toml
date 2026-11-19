@@ -1,0 +1,40 @@
+# Walk input for e2e/case_walk.mjs: what the case file does not say. Generic content only.
+paper_file = "generic-literature-1-paper.md"
+
+# One entry per case fact: the located datum typed into the Literature screen, and the case input it binds to.
+[[facts]]
+quantity = "density"
+reported = "density of water at 298.15 K is 997 kg/m^3"
+value = 997.0
+unit = "kg/m^3"
+line_from = 2
+line_to = 2
+input = "material_density"
+
+[[facts]]
+quantity = "thermal_conductivity"
+reported = "thermal conductivity of water at 298.15 K is 0.607 W/(m*K)"
+value = 0.607
+unit = "W/(m*K)"
+line_from = 3
+line_to = 3
+input = "inlet_conductivity"
+
+# The Runs card whose output named like the case compare quantity is compared with the published value.
+[run]
+card_title = "Proprietà termofisiche di fluido puro"
+fields = { Temperatura = 298.15, Pressione = 101325.0 }
+options = { Fluido = "Water" }
+
+[verdict]
+rationale = "Computed density agrees with the published value within the case tolerance."
+
+[decision]
+title = "Accept the benchmark comparison"
+text = "The model reproduces the published value."
+rationale = "Accepted verdict within tolerance."
+
+# Retrieval check on a temporary folder holding the paper text.
+[answer]
+question = "benchmark validation density"
+expected = "Benchmark Validation Study"

@@ -39,6 +39,37 @@ optional pack, not by this repository.
 | `freecad_bridge_walk.mjs` | Spec 326 FreeCAD document listing, typed numeric preview/apply and rolled-back failure against a fake peer | `node e2e/freecad_bridge_walk.mjs <evidence-dir> [<data-root-copy>]` |
 | `readiness_process_compare_walk.mjs` | Spec 320 Prontezza: a converged Process-editor run turns Calcolo and Confronto green, the comparison names the flowsheet, and a verdict is recorded on it (fresh temporary data root, temporary pack copy) | `node e2e/readiness_process_compare_walk.mjs <evidence-dir>` |
 | `process_dynamic_physics_walk.mjs` | Spec 325 Dynamic physics UI: thermal, carbonate/pH and optics/fouling controls save and persist on a photobioreactor draft (fresh temporary data root) | `node e2e/process_dynamic_physics_walk.mjs <evidence-dir> [<data-root-copy>]` |
+| `case_walk.mjs` | Spec 328 CASE-WALK-1: one readiness case from seven red cells to seven green through visible controls only (workspace, source with paper file, located datum, accept, parameter, card run, verdict, decision, retrieval check). After the backend starts the script only GETs the board; it never writes through the API. A step with no visible control fails the walk and `summary.json` names the step and control. Evidence: `board.jsonl`, one screenshot per step, `summary.json` | `node e2e/case_walk.mjs <evidence-dir> [--pack <pack-dir>] [--case <case-id>] [--data-root-copy <dir>]` |
+
+**`case_walk.mjs` walk input.** Defaults: the fake pack (`backend/tests/fixtures/packs/zephyr`), case `generic-literature-1`,
+a fresh empty temporary data root; `--data-root-copy` runs on a temporary copy and never touches the original. The case
+comes from `<pack>/readiness_cases.toml`; what it does not say comes from `<pack>/case_walks/<case-id>.toml`
+(read by the walk only, never by the product):
+
+```toml
+paper_file = "paper.md"            # text file in case_walks/ attached to the literature source
+[[facts]]                          # one per case fact
+quantity = "density"               # case fact name
+reported = "density is 997 kg/m^3" # text typed as the reported value
+value = 997.0
+unit = "kg/m^3"
+line_from = 2                      # location in the paper file
+line_to = 2
+input = "material_density"         # case input this fact binds to
+[run]                              # Runs card whose output named like compare.quantity is compared
+card_title = "..."
+fields = { Temperatura = 298.15 }  # field label -> value
+options = { Fluido = "Water" }     # option label -> choice
+[verdict]
+rationale = "..."
+[decision]
+title = "..."
+text = "..."
+rationale = "..."
+[answer]                           # retrieval check over a folder holding the paper text
+question = "..."
+expected = "..."
+```
 
 Prerequisites: `(cd frontend && VITE_API_BASE_URL= npm run build)`, a backend virtualenv
 (`JARVISOS_PROOF_PYTHON`, default `backend/.venv/bin/python`), and Playwright
