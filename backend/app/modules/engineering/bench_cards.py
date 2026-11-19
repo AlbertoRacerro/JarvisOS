@@ -10,8 +10,8 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.engineering import bench, bench_runs_view
-from app.modules.engineering.evaluator_contracts import EvaluationRequest
-from app.modules.engineering.refs import EvaluationRequestRef, MaterialStateRef
+from app.modules.engineering.evaluator_contracts import EvaluationRequest, NamedQuantity, OptionValue
+from app.modules.engineering.refs import EvaluationRequestRef, MaterialStateRef, Quantity
 
 
 class CardNumericField(BaseModel):
@@ -185,20 +185,21 @@ def run_card(workspace_id: str, payload: CreateBenchRunRequest) -> dict[str, Any
     if unknown_options:
         raise _validation_error("unknown_option", f"Opzioni sconosciute: {unknown_options}")
     for name, option in option_names.items():
-        value = payload.options.get(name, option.default)
-        if value not in option.choices:
+        opt_value = payload.options.get(name, option.default)
+        if opt_value not in option.choices:
             raise _validation_error("unknown_option", f"Valore non valido per {name}")
 
     now = datetime.now(UTC)
     run_id = f"run_{uuid4().hex}"
     fields_by_name = {field.name: field for field in card.fields}
-    inputs = [
-        {
-            "name": name,
-            "value": {"value": float(payload.inputs[name]), "unit": fields_by_name[name].unit},
-        }
+    inputs = tuple(
+        NamedQuantity(
+            name=name,
+            value=Quantity(value=float(payload.inputs[name]), unit=fields_by_name[name].unit),
+        )
         for name in sorted(field_names)
-    ]
+    )
+    backend_options: dict[str, OptionValue] = dict(payload.options)
     subject = MaterialStateRef(
         authority_owner="correlation_cards",
         object_type="material_state",
@@ -217,7 +218,7 @@ def run_card(workspace_id: str, payload: CreateBenchRunRequest) -> dict[str, Any
         evaluator_id=card.evaluator_id,
         subject_ref=subject,
         inputs=inputs,
-        backend_options=payload.options,
+        backend_options=backend_options,
         requested_at=now,
         deadline_at=now + timedelta(minutes=5),
     )
