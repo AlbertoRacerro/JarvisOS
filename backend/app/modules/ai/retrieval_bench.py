@@ -159,6 +159,14 @@ def _matches(expected: str, hit: RetrievalHit, title: str | None) -> bool:
     values = {source_id, title or "", f"{hit.source_ref.authority_owner}:{source_id}"}
     if "#L" in source_id:
         values.add(source_id.split("#L", 1)[0])
+    # Document passages: also the file path, fragment and heading the Memory search screen shows.
+    if hit.source_ref.authority_owner == "workspace_documents":
+        values.add(source_id.split("::", 1)[0])
+        fragment = hit.source_ref.location.fragment if hit.source_ref.location else None
+        if fragment:
+            values.add(fragment)
+            if "#" in fragment:
+                values.add(fragment.split("#", 1)[1])
     return expected in values
 
 
