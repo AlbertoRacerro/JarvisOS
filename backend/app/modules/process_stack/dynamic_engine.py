@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import numpy as np
 
+from app.modules.bio_models import slab
 from app.modules.process_stack import draft, optics_t2, pbr_unit
 from app.modules.process_stack.dynamic_models import (
     MAX_CONTROLLERS,
@@ -1476,7 +1477,19 @@ def run(
             for key, value in topology["feeds"].items()
         }
     topology = dict(topology, flows=dict(topology["flows"]), feeds=feeds)
-    growths = [_growth_for_unit(item, dark=_unit_type(item) == "HoldupTank") for item in units]
+    growths = []
+    for item in units:
+        growth = _growth_for_unit(item, dark=_unit_type(item) == "HoldupTank")
+        tag = str(item["tag"])
+        optics_geometry = scenario.get("optics_geometry", {}).get(tag, "cylinder")
+        back_wall_albedo = float(scenario.get("back_wall_albedo", {}).get(tag, 0.0))
+        if (optics_geometry != "cylinder" or back_wall_albedo != 0.0) and isinstance(growth, pbr_unit.Growth):
+            growth = replace(
+                growth,
+                optics_geometry=optics_geometry,
+                back_wall_albedo=back_wall_albedo,
+            )
+        growths.append(growth)
     for item, growth in zip(units, growths, strict=True):
         item["growth"] = growth
         item["initial_volume_m3"] = item["volume_m3"]
@@ -1664,12 +1677,30 @@ def run(
                         t_culture = state[off + 6] if is_thermal_state else (item["params"]["temperature"] if is_tank else temperature)
                         if "optics_t2" in item:
                             handoff = item["optics_t2"]["intervals"]
+                            i0_eq = float(handoff["i0_eq"][optics_step])
+                            if not is_tank:
+                                tag = str(item["tag"])
+                                i0_eq *= slab.wall_transmission_factor(
+                                    elapsed,
+                                    float(scenario.get("wall_transmittance", {}).get(tag, 1.0)),
+                                    float(scenario.get("wall_fouling_rate_1_s", {}).get(tag, 0.0)),
+                                    float(scenario.get("wall_fouling_floor", {}).get(tag, 0.0)),
+                                )
                             mu, loss = growth.rates_at(
-                                float(handoff["i0_eq"][optics_step]), t_culture, x, nitrogen,
+                                i0_eq, t_culture, x, nitrogen,
                                 float(handoff["diffuse_fraction"][optics_step]),
                             )
                         else:
-                            mu, loss = growth.rates_at(0.0 if is_tank else par_value,
+                            effective_par = par_value
+                            if not is_tank:
+                                tag = str(item["tag"])
+                                effective_par *= slab.wall_transmission_factor(
+                                    elapsed,
+                                    float(scenario.get("wall_transmittance", {}).get(tag, 1.0)),
+                                    float(scenario.get("wall_fouling_rate_1_s", {}).get(tag, 0.0)),
+                                    float(scenario.get("wall_fouling_floor", {}).get(tag, 0.0)),
+                                )
+                            mu, loss = growth.rates_at(0.0 if is_tank else effective_par,
                                                        t_culture,
                                                        x, nitrogen)
                         rx = (mu - loss) * x / 3600.0
@@ -1926,8 +1957,14 @@ def _valid_state(state: tuple[float, ...] | np.ndarray, units: list[dict[str, An
                 )
         growth = growths[i] if growths is not None else _growth_for_unit(
             item, dark=_unit_type(item) == "HoldupTank")
+        slab_depth = getattr(growth, "slab_depth_m", None)
+        depth = (
+            slab_depth
+            if getattr(growth, "optics_geometry", "cylinder") == "flat_slab" and slab_depth is not None
+            else growth.diameter
+        )
         if (_unit_type(item) == "PhotobioreactorT1"
-                and growth.extinction * max(0.0, float(state[_slot(i)])) * growth.diameter > 1e6):
+                and growth.extinction * max(0.0, float(state[_slot(i)])) * depth > 1e6):
             raise DynamicError("OPTICS_TAU_MAX", "Optical depth exceeds the model limit.", {"unit": item["tag"]})
 
 

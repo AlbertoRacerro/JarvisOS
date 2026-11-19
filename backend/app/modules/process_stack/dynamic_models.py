@@ -226,6 +226,11 @@ class Scenario(StrictModel):
     thermal_heat_w: dict[str, float] = Field(default_factory=dict)
     water_density_kg_m3: float = Field(default=1000.0, gt=0)
     water_cp_j_kg_k: float = Field(default=4184.0, gt=0)
+    optics_geometry: dict[str, Literal["cylinder", "flat_slab"]] = Field(default_factory=dict)
+    back_wall_albedo: dict[str, Annotated[float, Field(ge=0, le=1)]] = Field(default_factory=dict)
+    wall_transmittance: dict[str, Annotated[float, Field(gt=0, le=1)]] = Field(default_factory=dict)
+    wall_fouling_rate_1_s: dict[str, Annotated[float, Field(ge=0)]] = Field(default_factory=dict)
+    wall_fouling_floor: dict[str, Annotated[float, Field(ge=0, le=1)]] = Field(default_factory=dict)
 
     @field_validator("thermal_ua")
     @classmethod

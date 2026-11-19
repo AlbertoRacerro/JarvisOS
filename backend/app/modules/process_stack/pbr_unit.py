@@ -33,11 +33,11 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import numpy as np
 
-from app.modules.bio_models import cylinder, forms
+from app.modules.bio_models import cylinder, forms, slab
 from app.modules.photobioreactor.pbr_core import (
     cardinal_temperature,
     nitrogen_factor,
@@ -145,6 +145,11 @@ class Growth:
     inlet: tuple[float, float, float]  # X_in, N_in, O₂_in in kg m⁻³
     light_form: str = "light.monod"
     light_parameters: tuple[float, ...] = ()
+    optics_geometry: Literal["cylinder", "flat_slab"] = "cylinder"
+    slab_depth_m: float | None = None
+    back_wall_albedo: float = 0.0
+    front_wall_albedo: float = 0.0
+    wall_transmittance: float = 1.0
 
     @property
     def z_in(self) -> float:
@@ -205,13 +210,25 @@ class Growth:
     def light(self, par: float, biomass: float, diffuse_fraction: float | None = None) -> float:
         if par <= 0.0:
             return 0.0
+        incident = par * self.wall_transmittance
+        if incident <= 0.0:
+            return 0.0
+        if self.optics_geometry == "flat_slab":
+            depth = self.diameter if self.slab_depth_m is None else self.slab_depth_m
+            tau = slab.optical_depth(self.extinction, biomass, depth)
+            if tau > cylinder.TAU_MAX:
+                raise _optics_failure(self, biomass)
+            return slab.response_average_tau(
+                self._light_response, incident, tau, self.back_wall_albedo, self.front_wall_albedo
+            )
         tau = cylinder.optical_depth(self.extinction, biomass, self.diameter)
         if tau <= 0.0:
-            return self._light_scalar(par)
+            return self._light_scalar(incident)
         if tau > cylinder.TAU_MAX:
             raise _optics_failure(self, biomass)
         return cylinder.response_average_tau(
-            self._light_response, par, tau, self.diffuse_fraction if diffuse_fraction is None else diffuse_fraction
+            self._light_response, incident, tau,
+            self.diffuse_fraction if diffuse_fraction is None else diffuse_fraction
         )
 
     def rates(self, hour: float, biomass: float, nitrogen: float) -> tuple[float, float]:
@@ -439,11 +456,15 @@ def _sign_pattern_ok(points: list[tuple[float, float]]) -> bool:
 
 
 def _tau_cap(growth: Growth) -> float:
-    return math.inf if growth.extinction <= 0.0 else cylinder.TAU_MAX / (growth.extinction * growth.diameter)
+    depth = growth.diameter if growth.optics_geometry != "flat_slab" or growth.slab_depth_m is None \
+        else growth.slab_depth_m
+    return math.inf if growth.extinction <= 0.0 else cylinder.TAU_MAX / (growth.extinction * depth)
 
 
 def _optics_failure(growth: Growth, biomass: float) -> PbrFailure:
-    tau = cylinder.optical_depth(growth.extinction, biomass, growth.diameter)
+    depth = growth.diameter if growth.optics_geometry != "flat_slab" or growth.slab_depth_m is None \
+        else growth.slab_depth_m
+    tau = cylinder.optical_depth(growth.extinction, biomass, depth)
     return PbrFailure(
         "PBR_OPTICS_OUT_OF_RANGE",
         f"The productive state needs optical depth τ = k_X·X·D above the Tier-1 limit {cylinder.TAU_MAX:g} "
@@ -617,7 +638,9 @@ def certify(growth: Growth, x_star: float, clock: _Clock) -> _Orbit:
             {"residuals_kg_m3": dict(zip(("biomass", "nitrogen", "oxygen"), residuals, strict=True)),
              "tolerances_kg_m3": dict(zip(("biomass", "nitrogen", "oxygen"), tolerances, strict=True)),
              "z_identity_max_kg_m3": z_max, "z_tolerance_kg_m3": tolerances[1]})
-    max_tau = cylinder.optical_depth(growth.extinction, max(row[0] for row in samples), growth.diameter)
+    depth = growth.diameter if growth.optics_geometry != "flat_slab" or growth.slab_depth_m is None \
+        else growth.slab_depth_m
+    max_tau = cylinder.optical_depth(growth.extinction, max(row[0] for row in samples), depth)
     if max_tau > cylinder.TAU_MAX:
         raise _optics_failure(growth, max(row[0] for row in samples))
     return _Orbit(initial, samples, residuals, tolerances, z_max)
@@ -988,8 +1011,14 @@ def evaluate_pbr(unit: dict[str, Any], inlet: dict[str, Any], context: JarvisUni
                                                  "Maximum O₂ saturation ratio (loop mean, not a degasser design value)"),
         "oxygen_gas_transfer": _quantity(24.0 * volume * transfer_mean, "kg/d",
                                          "Net O₂ gas transfer (+ degassing, − absorption)"),
-        "optical_depth_max": _quantity(cylinder.optical_depth(growth.extinction, max(x_series), growth.diameter),
-                                       "1", "Maximum optical depth τ = k_X·X·D (T1 limit 1000)"),
+        "optical_depth_max": _quantity(
+            cylinder.optical_depth(
+                growth.extinction, max(x_series),
+                growth.diameter if growth.optics_geometry != "flat_slab" or growth.slab_depth_m is None
+                else growth.slab_depth_m,
+            ),
+            "1", "Maximum optical depth τ = k_X·X·D (T1 limit 1000)",
+        ),
         "reynolds_number": _quantity(hydro["reynolds_number"], "1", "Reynolds number"),
         "pressure_drop": _quantity(hydro["pressure_drop"], "Pa", "Tube pressure drop" if cfd else "Tube pressure drop (screening)"),
         "pumping_power": _quantity(hydro["pumping_power"], "W", "Circulation pumping power" if cfd else "Circulation pumping power (screening)"),
