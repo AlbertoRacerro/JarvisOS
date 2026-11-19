@@ -5,11 +5,13 @@ import {
   refreshFolder,
   registerFolder,
   removeFolder,
+  runRetrievalEval,
   searchMemory,
   MemorySearchError,
   type DocumentFolderInfo,
   type FolderRefreshResult,
-  type MemorySearchItem
+  type MemorySearchItem,
+  type RetrievalEvalResult
 } from "../api/memorySearch";
 
 export const MEMORY_SEARCH_TITLE = "Ricerca";
@@ -34,6 +36,13 @@ export const OWNER_NAMES: Record<string, string> = {
 export const ownerLabel = (owner: string): string => OWNER_NAMES[owner] ?? owner;
 
 export const FOLDER_LOAD_ERROR = "Impossibile leggere lo stato della cartella.";
+
+const VERDICT_LABELS: Record<RetrievalEvalResult["verdict"], string> = {
+  usable: "Utilizzabile",
+  usable_with_warnings: "Utilizzabile con avvertenze",
+  unchecked: "Non verificato",
+  not_usable: "Non utilizzabile"
+};
 
 const SKIP_REASONS: Record<string, string> = {
   binary: "file binario",
@@ -78,6 +87,12 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
   const [folderPathInput, setFolderPathInput] = useState("");
   const [folderError, setFolderError] = useState<string | null>(null);
   const [refreshReport, setRefreshReport] = useState<FolderRefreshResult | null>(null);
+  const [evalQuery, setEvalQuery] = useState("");
+  const [evalExpected, setEvalExpected] = useState("");
+  const [evalMode, setEvalMode] = useState<"lexical" | "hybrid">("lexical");
+  const [evalRunning, setEvalRunning] = useState(false);
+  const [evalError, setEvalError] = useState<string | null>(null);
+  const [evalResult, setEvalResult] = useState<RetrievalEvalResult | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -133,6 +148,8 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
     setSearchError(null);
     setRefreshReport(null);
     setFolderError(null);
+    setEvalResult(null);
+    setEvalError(null);
     loadFolder();
   }, [activeWorkspaceId, loadFolder]);
 
@@ -155,6 +172,39 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
       .finally(() => {
         if (stillCurrent(requested)) setSearching(false);
       });
+  };
+
+  const handleRetrievalEval = () => {
+    const query = evalQuery.trim();
+    const expected = evalExpected.trim();
+    if (!activeWorkspaceId || !query || !expected) {
+      setEvalError("Inserisci una domanda e almeno un titolo o ID atteso.");
+      return;
+    }
+    const requested = activeWorkspaceId;
+    setEvalRunning(true);
+    setEvalError(null);
+    runRetrievalEval(requested, {
+      mode: evalMode,
+      questions: [{ query, expected_ids: [expected] }]
+    })
+      .then((result) => {
+        if (stillCurrent(requested)) setEvalResult(result);
+      })
+      .catch(() => {
+        if (stillCurrent(requested)) {
+          setEvalResult(null);
+          setEvalError("Verifica del recupero non riuscita.");
+        }
+      })
+      .finally(() => {
+        if (stillCurrent(requested)) setEvalRunning(false);
+      });
+  };
+
+  const evalMetric = (name: string): number | null => {
+    const output = evalResult?.outputs.find((item) => item.name === name);
+    return output ? output.value.value : null;
   };
 
   const handleRegisterFolder = () => {
@@ -315,6 +365,42 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
           {searchError}
         </p>
       )}
+
+      <section className="memory-search__retrieval-eval" aria-labelledby="retrieval-eval-title">
+        <h2 id="retrieval-eval-title">Verifica del recupero</h2>
+        <label htmlFor="retrieval-eval-query">Domanda</label>
+        <input
+          id="retrieval-eval-query"
+          type="text"
+          value={evalQuery}
+          onChange={(e) => setEvalQuery(e.target.value)}
+        />
+        <label htmlFor="retrieval-eval-expected">Titolo o ID atteso</label>
+        <input
+          id="retrieval-eval-expected"
+          type="text"
+          value={evalExpected}
+          onChange={(e) => setEvalExpected(e.target.value)}
+        />
+        <label htmlFor="retrieval-eval-mode">Modalità</label>
+        <select id="retrieval-eval-mode" value={evalMode} onChange={(e) => setEvalMode(e.target.value as "lexical" | "hybrid")}>
+          <option value="lexical">Lessicale</option>
+          <option value="hybrid">Ibrida</option>
+        </select>
+        <button type="button" onClick={handleRetrievalEval} disabled={evalRunning || !activeWorkspaceId}>
+          {evalRunning ? "Verifica in corso…" : "Verifica recupero"}
+        </button>
+        {evalError && <p role="alert">{evalError}</p>}
+        {evalResult && (
+          <div className="memory-search__retrieval-eval-result">
+            <p>Esito: <strong>{VERDICT_LABELS[evalResult.verdict]}</strong></p>
+            <p>top1_hit_rate: {evalMetric("top1_hit_rate") ?? "—"}</p>
+            <p>top3_hit_rate: {evalMetric("top3_hit_rate") ?? "—"}</p>
+            <p>mrr: {evalMetric("mrr") ?? "—"}</p>
+            <p>zero_hit_count: {evalMetric("zero_hit_count") ?? "—"}</p>
+          </div>
+        )}
+      </section>
 
       {/* Results or Empty State */}
       <div className="memory-search__results">

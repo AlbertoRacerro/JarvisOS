@@ -29,6 +29,25 @@ export type FolderRefreshResult = {
   reasons: FolderRefreshReason[];
 };
 
+export type RetrievalEvalQuestion = {
+  id?: string;
+  query: string;
+  expected_ids: string[];
+};
+
+export type RetrievalEvalPayload = {
+  questions: RetrievalEvalQuestion[];
+  mode?: "lexical" | "hybrid" | "vector";
+};
+
+export type RetrievalEvalResult = {
+  run_id: string;
+  evaluator_id: string;
+  status: string;
+  verdict: "usable" | "usable_with_warnings" | "unchecked" | "not_usable";
+  outputs: Array<{ name: string; value: { value: number; unit: string } }>;
+};
+
 export class MemorySearchError extends Error {
   status: number;
   code?: string;
@@ -87,5 +106,16 @@ export function refreshFolder(workspaceId: string): Promise<FolderRefreshResult>
 export function removeFolder(workspaceId: string): Promise<DocumentFolderInfo> {
   return requestJson<DocumentFolderInfo>(`${base(workspaceId)}/documents`, {
     method: "DELETE",
+  });
+}
+
+export function runRetrievalEval(
+  workspaceId: string,
+  payload: RetrievalEvalPayload
+): Promise<RetrievalEvalResult> {
+  return requestJson<RetrievalEvalResult>(`${base(workspaceId)}/retrieval-eval`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
 }

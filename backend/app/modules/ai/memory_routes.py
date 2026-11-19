@@ -15,6 +15,7 @@ import re
 import stat
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
@@ -23,7 +24,9 @@ from app.core.errors import workspace_not_found_http_error
 from app.core.paths import build_paths
 from app.modules.ai import document_intake, retrieval_query
 from app.modules.ai.retrieval_query import WORKSPACE_SCOPED_OWNERS
+from app.modules.engineering import bench, bench_runs_view
 from app.modules.engineering.bench import _strip_paths
+from app.modules.engineering.operator_service import SAFE_ID
 from app.modules.workspaces.service import get_workspace
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/memory", tags=["ai-memory"])
@@ -31,6 +34,44 @@ router = APIRouter(prefix="/workspaces/{workspace_id}/memory", tags=["ai-memory"
 
 def _folder_invalid() -> HTTPException:
     return HTTPException(status_code=422, detail={"code": "folder_invalid"})
+
+
+def _retrieval_eval_invalid() -> HTTPException:
+    return HTTPException(status_code=422, detail={"code": "retrieval_eval_invalid"})
+
+
+def _retrieval_eval_request(body: object) -> tuple[list[dict[str, Any]], str]:
+    if not isinstance(body, dict):
+        raise _retrieval_eval_invalid()
+    mode = body.get("mode", "lexical")
+    questions = body.get("questions")
+    if mode not in {"lexical", "hybrid", "vector"} or not isinstance(questions, list) or not questions:
+        raise _retrieval_eval_invalid()
+    parsed: list[dict[str, Any]] = []
+    for question in questions:
+        if not isinstance(question, dict):
+            raise _retrieval_eval_invalid()
+        query = question.get("query")
+        expected_ids = question.get("expected_ids")
+        if (
+            not isinstance(query, str)
+            or not query.strip()
+            or not isinstance(expected_ids, list)
+            or not expected_ids
+            or any(not isinstance(item, str) or not item.strip() for item in expected_ids)
+        ):
+            raise _retrieval_eval_invalid()
+        item: dict[str, Any] = {
+            "query": query,
+            "expected_ids": expected_ids,
+        }
+        question_id = question.get("id")
+        if question_id is not None:
+            if not isinstance(question_id, str) or not question_id.strip():
+                raise _retrieval_eval_invalid()
+            item["id"] = question_id
+        parsed.append(item)
+    return parsed, mode
 
 
 def _repo_root() -> Path:
@@ -167,6 +208,39 @@ def search_memory(
         items.append(item_dict)
 
     return items
+
+
+@router.post("/retrieval-eval")
+async def retrieval_eval(workspace_id: str, request: Request) -> dict[str, Any]:
+    if get_workspace(workspace_id) is None:
+        raise workspace_not_found_http_error()
+    try:
+        body = json.loads(await request.body())
+    except (ValueError, RecursionError):
+        raise _retrieval_eval_invalid() from None
+    questions, mode = _retrieval_eval_request(body)
+
+    paths = build_paths()
+    root = paths.data_root.resolve()
+    request_data = {
+        "workspace_id": workspace_id,
+        "questions": [{**question, "workspace_id": workspace_id} for question in questions],
+        "mode": mode,
+        "index_db_path": str(paths.retrieval_index_file.resolve()),
+    }
+    run_id = f"retrieval-{uuid4().hex}"
+    if not SAFE_ID.fullmatch(run_id):
+        raise HTTPException(status_code=500, detail={"code": "retrieval_eval_run_id_invalid"})
+    out_dir = bench_runs_view.bench_root(workspace_id) / run_id
+    try:
+        bench.run_evaluation("retrieval.eval", request_data, out_dir=out_dir, root=root)
+        return bench_runs_view.show(workspace_id, run_id)
+    except bench.BenchInputError as exc:
+        raise HTTPException(status_code=422, detail={"code": "retrieval_eval_invalid"}) from exc
+    except bench_runs_view.BenchViewError as exc:
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code}) from exc
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"code": "retrieval_eval_invalid"}) from None
 
 
 @router.get("/documents")
