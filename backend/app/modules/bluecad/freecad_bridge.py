@@ -85,13 +85,13 @@ def _unit_suffix(value: str) -> str | None:
 def validate_edit(obj: dict[str, Any], property_name: str, value: Any) -> Any:
     exists, old, readonly = _property_info(obj, property_name)
     if not exists:
-        raise FreecadBridgeError("FREECAD_PROPERTY_NOT_FOUND", "FreeCAD property was not found.")
+        raise FreecadBridgeError("FREECAD_PROPERTY_NOT_FOUND", "La proprietà non esiste in questo oggetto.")
     if readonly:
-        raise FreecadBridgeError("FREECAD_PROPERTY_READ_ONLY", "FreeCAD property is read-only.")
+        raise FreecadBridgeError("FREECAD_PROPERTY_READ_ONLY", "La proprietà è di sola lettura.")
     if not _same_value(old, value):
-        raise FreecadBridgeError("FREECAD_PROPERTY_TYPE_MISMATCH", "FreeCAD property value has a different type.")
+        raise FreecadBridgeError("FREECAD_PROPERTY_TYPE_MISMATCH", "Il nuovo valore deve essere dello stesso tipo di quello attuale.")
     if isinstance(old, str) and _unit_suffix(old) != _unit_suffix(value):
-        raise FreecadBridgeError("FREECAD_PROPERTY_UNIT_MISMATCH", "FreeCAD quantity must keep its unit.")
+        raise FreecadBridgeError("FREECAD_PROPERTY_UNIT_MISMATCH", "Il nuovo valore deve mantenere la stessa unità di misura.")
     return old
 
 
@@ -105,10 +105,10 @@ class FreecadBridge:
 
     def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
         if method not in FREECAD_ALLOWLIST:
-            raise FreecadBridgeError("FREECAD_METHOD_NOT_ALLOWED", "FreeCAD method is not allowed.", 400)
+            raise FreecadBridgeError("FREECAD_METHOD_NOT_ALLOWED", "Operazione non consentita verso FreeCAD.", 400)
         executable, _, reason = _configured_runtime()
         if reason or executable is None:
-            raise FreecadBridgeError(reason or "FREECAD_BRIDGE_UNAVAILABLE", "FreeCAD bridge is unavailable.")
+            raise FreecadBridgeError(reason or "FREECAD_BRIDGE_UNAVAILABLE", "Il collegamento a FreeCAD non è configurato.")
         request = {"id": 1, "method": method, "params": params or {}}
         try:
             process = subprocess.Popen(
@@ -123,26 +123,29 @@ class FreecadBridge:
         except subprocess.TimeoutExpired as exc:
             process.kill()
             process.communicate()
-            raise FreecadBridgeError("FREECAD_BRIDGE_TIMEOUT", "FreeCAD request timed out.", 504) from exc
+            raise FreecadBridgeError("FREECAD_BRIDGE_TIMEOUT", "FreeCAD non ha risposto in tempo.", 504) from exc
         except OSError as exc:
-            raise FreecadBridgeError("FREECAD_BRIDGE_UNAVAILABLE", "FreeCAD bridge could not start.") from exc
+            raise FreecadBridgeError("FREECAD_BRIDGE_UNAVAILABLE", "Il collegamento a FreeCAD non è partito.") from exc
         try:
             response = json.loads(stdout.splitlines()[0])
         except (IndexError, json.JSONDecodeError) as exc:
             raise FreecadBridgeError(
-                "FREECAD_BRIDGE_PROTOCOL_ERROR", "FreeCAD relay returned an invalid response.", 502
+                "FREECAD_BRIDGE_PROTOCOL_ERROR", "Risposta non valida dal collegamento con FreeCAD.", 502
             ) from exc
         if response.get("ok") is not True:
             error = response.get("error") if isinstance(response.get("error"), dict) else {}
             code = str(error.get("code") or "FREECAD_ADDON_ERROR")
-            status = 503 if code == "FREECAD_ADDON_NOT_RUNNING" else 502
-            raise FreecadBridgeError(code, "FreeCAD add-on request failed.", status)
+            if code == "FREECAD_ADDON_NOT_RUNNING":
+                raise FreecadBridgeError(
+                    code, "L'add-on di FreeCAD non è in esecuzione: avvia il suo server in FreeCAD e riprova.", 503
+                )
+            raise FreecadBridgeError(code, "FreeCAD ha rifiutato la richiesta.", 502)
         return response.get("result")
 
     def get_object(self, document: str, obj_name: str) -> dict[str, Any]:
         result = self.request("get_object", {"doc_name": document, "obj_name": obj_name})
         if not isinstance(result, dict) or result.get("success") is False or not isinstance(result.get("Name"), str):
-            raise FreecadBridgeError("FREECAD_OBJECT_NOT_FOUND", "FreeCAD object was not found.", 404)
+            raise FreecadBridgeError("FREECAD_OBJECT_NOT_FOUND", "Oggetto non trovato nel documento FreeCAD.", 404)
         return result
 
     def validate_edit(self, document: str, obj_name: str, property_name: str, value: Any) -> Any:
@@ -151,5 +154,5 @@ class FreecadBridge:
 
 def validate_request(bridge: FreecadBridge, document: str, obj_name: str, property_name: str, value: Any) -> Any:
     if not document or not obj_name or not property_name:
-        raise FreecadBridgeError("FREECAD_INVALID_EDIT", "FreeCAD edit identifiers are required.", 400)
+        raise FreecadBridgeError("FREECAD_INVALID_EDIT", "Scegli documento, oggetto e proprietà.", 400)
     return bridge.validate_edit(document, obj_name, property_name, value)

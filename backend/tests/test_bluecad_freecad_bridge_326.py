@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import socket
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -121,7 +124,8 @@ def test_routes_validate_preview_stale_and_failed_apply(
         assert "edit_object" not in peer[1].read_text()
         applied = client.post(
             f"/workspaces/{workspace_id}/bluecad/freecad/edit/apply",
-            json={**preview.json(), "value": 20},
+            json={"document": "Demo", "object": "Box", "property": "Length", "value": 20,
+                  "old_value": preview.json()["old_value"]},
         )
         assert applied.status_code == 200
         assert applied.json()["outcome"]["success"] is True
@@ -137,4 +141,60 @@ def test_routes_validate_preview_stale_and_failed_apply(
         )
         assert failed.status_code == 200
         assert failed.json()["document_unchanged"] is True
+        assert failed.json()["outcome"] == {"success": False, "mutation_outcome": "rolled_back"}
         assert "non è stato modificato" in failed.json()["message"]
+
+
+def _run_relay(*requests: dict) -> list[dict]:
+    relay = Path(__file__).resolve().parents[1] / "app" / "modules" / "bluecad" / "freecad_relay.py"
+    completed = subprocess.run(
+        [sys.executable, str(relay)],
+        input="".join(json.dumps(item) + "\n" for item in requests),
+        capture_output=True, text=True, timeout=30, check=True,
+    )
+    return [json.loads(line) for line in completed.stdout.splitlines()]
+
+
+def test_relay_refuses_methods_outside_the_allowlist_without_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.modules.bluecad import freecad_relay
+
+    def no_proxy(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the relay must not connect for a refused method")
+
+    monkeypatch.setattr(freecad_relay.xmlrpc.client, "ServerProxy", no_proxy)
+    for method in ("execute_code", "execute_code_async", "delete_object", "create_object", "reload_document"):
+        with pytest.raises(ValueError, match="FREECAD_METHOD_NOT_ALLOWED"):
+            freecad_relay._call(method, {})
+    responses = _run_relay({"id": 1, "method": "execute_code", "params": {"code": "print(1)"}}, {"id": 2})
+    assert responses == [
+        {"id": 1, "ok": False, "error": {"code": "FREECAD_METHOD_NOT_ALLOWED", "message": "FreeCAD request failed."}},
+        {"id": 2, "ok": False, "error": {"code": "FREECAD_INVALID_REQUEST", "message": "FreeCAD request failed."}},
+    ]
+
+
+def test_relay_reports_a_missing_addon() -> None:
+    with socket.socket() as probe:
+        if probe.connect_ex(("127.0.0.1", 9875)) == 0:
+            pytest.skip("a listener occupies the add-on port on this machine")
+    [response] = _run_relay({"id": 3, "method": "ping", "params": {}})
+    assert response["ok"] is False
+    assert response["error"]["code"] == "FREECAD_ADDON_NOT_RUNNING"
+
+
+def test_relay_forwards_typed_edit_to_the_addon(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.modules.bluecad import freecad_relay
+
+    calls: list[tuple] = []
+
+    class Proxy:
+        def __init__(self, url: str, **_kwargs: object) -> None:
+            assert url == "http://127.0.0.1:9875"
+
+        def edit_object(self, *args: object) -> dict:
+            calls.append(args)
+            return {"success": True}
+
+    monkeypatch.setattr(freecad_relay.xmlrpc.client, "ServerProxy", Proxy)
+    params = {"doc_name": "Demo", "obj_name": "Box", "properties": {"Properties": {"Length": "20 mm"}}}
+    assert freecad_relay._call("edit_object", params) == {"success": True}
+    assert calls == [("Demo", "Box", {"Properties": {"Length": "20 mm"}})]

@@ -12,4 +12,6 @@ assert.match(source, /Anteprima/);
 assert.match(source, /Applica/);
 assert.match(source, /window\.confirm/);
 assert.match(source, /document_unchanged/);
+assert.match(source, /Proprietà di /);
+assert.doesNotMatch(source, /execute_code|delete_object/);
 console.log("freecad panel static assertions passed");

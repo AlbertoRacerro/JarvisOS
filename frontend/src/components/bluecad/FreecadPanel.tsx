@@ -119,7 +119,11 @@ export default function FreecadPanel({ workspaceId }: Props) {
       {status?.connected && <label>Documento<select value={document} onChange={(event) => setDocument(event.target.value)}>{documents.map((item) => <option key={item}>{item}</option>)}</select></label>}
       {status?.connected && objects.length > 0 && <div>
         <h3>Oggetti</h3>
-        <ul>{objects.map((item) => <li key={item.Name}><strong>{item.Label ?? item.Name}</strong> · {item.TypeId ?? "FreeCAD"}<dl>{propertiesOf(item).map((property) => <div key={property.name}><dt>{property.name}</dt><dd>{display(property.value)}</dd></div>)}</dl></li>)}</ul>
+        <ul>{objects.map((item) => <li key={item.Name}><strong>{item.Label ?? item.Name}</strong> · {item.TypeId ?? "FreeCAD"}</li>)}</ul>
+        {selectedObject && <details>
+          <summary>Proprietà di {selectedObject.Label ?? selectedObject.Name}</summary>
+          <dl>{properties.map((property) => <div key={property.name}><dt>{property.name}</dt><dd>{display(property.value)}</dd></div>)}</dl>
+        </details>}
         <form onSubmit={(event) => { event.preventDefault(); onPreview(); }}>
           <label>Oggetto<select value={objectName} onChange={(event) => setObjectName(event.target.value)}>{objects.map((item) => <option key={item.Name} value={item.Name}>{item.Label ?? item.Name}</option>)}</select></label>
           <label>Proprietà<select value={propertyName} onChange={(event) => setPropertyName(event.target.value)}>{properties.map((item) => <option key={item.name} value={item.name} disabled={item.readOnly}>{item.name}</option>)}</select></label>

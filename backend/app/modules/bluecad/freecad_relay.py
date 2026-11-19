@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import socket
 import sys
 import xmlrpc.client
 from http.client import HTTPConnection
@@ -52,7 +51,7 @@ def main() -> None:
                 raise ValueError("FREECAD_INVALID_REQUEST")
             result = _call(method, params)
             response = {"id": request["id"], "ok": True, "result": result}
-        except (ConnectionRefusedError, ConnectionError, OSError, socket.timeout, URLError):
+        except (TimeoutError, ConnectionRefusedError, ConnectionError, OSError, URLError):
             response = {"id": request.get("id") if isinstance(request, dict) else None, "ok": False,
                         "error": {"code": "FREECAD_ADDON_NOT_RUNNING", "message": "FreeCAD add-on is not running."}}
         except Exception as exc:

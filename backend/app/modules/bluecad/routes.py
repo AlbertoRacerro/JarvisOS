@@ -21,8 +21,10 @@ from app.modules.bluecad.print_handoff import (
     PrintHandoffCapability,
     PrintHandoffError,
     PrintHandoffEventRead,
-    capability as print_handoff_capability,
     open_in_slicer,
+)
+from app.modules.bluecad.print_handoff import (
+    capability as print_handoff_capability,
 )
 from app.modules.bluecad.read_model import BluecadCandidateAggregateRead, get_bluecad_candidate_aggregate
 from app.modules.bluecad.studio_references import (
@@ -93,7 +95,7 @@ def freecad_documents_endpoint(workspace_id: str) -> list[str]:
     if not isinstance(result, list) or not all(isinstance(item, str) for item in result):
         raise HTTPException(
             status_code=502,
-            detail={"code": "FREECAD_BRIDGE_PROTOCOL_ERROR", "message": "Invalid document list."},
+            detail={"code": "FREECAD_BRIDGE_PROTOCOL_ERROR", "message": "Elenco documenti non valido."},
         )
     return result
 
@@ -108,7 +110,7 @@ def freecad_objects_endpoint(workspace_id: str, doc: str) -> list[dict[str, Any]
     if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
         raise HTTPException(
             status_code=502,
-            detail={"code": "FREECAD_BRIDGE_PROTOCOL_ERROR", "message": "Invalid object list."},
+            detail={"code": "FREECAD_BRIDGE_PROTOCOL_ERROR", "message": "Elenco oggetti non valido."},
         )
     return result
 
@@ -137,7 +139,7 @@ def freecad_edit_apply_endpoint(workspace_id: str, payload: FreecadApplyRequest)
             bridge, payload.document, payload.object, payload.property, payload.value
         )
         if live_old != payload.old_value:
-            raise FreecadBridgeError("FREECAD_STALE_PREVIEW", "FreeCAD property changed since preview.", 409)
+            raise FreecadBridgeError("FREECAD_STALE_PREVIEW", "Il valore in FreeCAD è cambiato dopo l'anteprima: rifai l'anteprima.", 409)
         outcome = bridge.request(
             "edit_object",
             {
@@ -149,6 +151,9 @@ def freecad_edit_apply_endpoint(workspace_id: str, payload: FreecadApplyRequest)
     except FreecadBridgeError as exc:
         raise _freecad_error(exc) from exc
     success = isinstance(outcome, dict) and outcome.get("success") is True
+    # Only the typed outcome leaves the bridge: add-on error text can carry local file names.
+    mutation = outcome.get("mutation_outcome") if isinstance(outcome, dict) else None
+    outcome = {"success": success, "mutation_outcome": mutation if isinstance(mutation, str) else None}
     result: dict[str, Any] = {
         "document": payload.document, "object": payload.object, "property": payload.property,
         "old_value": payload.old_value, "new_value": payload.value, "outcome": outcome,
