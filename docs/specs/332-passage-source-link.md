@@ -27,8 +27,8 @@ does not tune the question or the ranking.
   per question `expected_ids` and `first_matching_rank`.
 - `backend/app/modules/ai/document_intake.py::registered_folder` gives the workspace's registered folder;
   `_file_documents` names a passage by the folder-relative path of its file.
-- `literature_sources.artifact_id` points to the backing artifact; `backend/app/modules/memory/literature_service.py::
-  _BackingText.current_sha256` returns the SHA-256 of the stored backing bytes (None when absent, linked or unreadable).
+- `literature_sources.artifact_id` points to the backing artifact; `backend/app/modules/memory/literature_service.py::_BackingText.current_sha256`
+  returns the SHA-256 of the stored backing bytes (None when absent, linked or unreadable).
 
 ## Scope
 
