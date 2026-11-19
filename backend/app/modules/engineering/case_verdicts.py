@@ -17,6 +17,7 @@ from app.core.database import open_sqlite_connection
 from app.modules.engineering import bench_runs_view
 from app.modules.engineering.operator_models import CaseVerdictRead
 from app.modules.engineering.operator_service import SAFE_ID
+from app.modules.engineering.process_run_values import resolve_process_run_reference
 from app.modules.engineering.readiness_board import _convert, _run_output
 from app.modules.events.service import utc_now
 
@@ -130,30 +131,48 @@ def create_verdict(workspace_id: str, payload: CreateCaseVerdictRequest) -> Case
             detail={"code": "rel_tol_invalid", "message": "rel_tol must satisfy 0 < rel_tol <= 1.0."},
         )
 
-    try:
-        bench_data = bench_runs_view.list_runs(workspace_id)
-    except bench_runs_view.BenchViewError as exc:
-        raise HTTPException(exc.status, detail={"code": exc.code}) from exc
-
-    runs = bench_data.get("runs", [])
-    matching_run = next((r for r in runs if r.get("run_id") == payload.run_id.strip()), None)
-    if matching_run is None:
-        raise HTTPException(
-            404,
-            detail={"code": "run_not_found", "message": f"Run '{payload.run_id}' not found in workspace '{workspace_id}'."},
+    if payload.run_id.strip().startswith("process:"):
+        code, output = resolve_process_run_reference(
+            workspace_id, payload.run_id.strip(), payload.quantity.strip()
         )
+        if code == "run_not_found":
+            raise HTTPException(
+                404,
+                detail={"code": "run_not_found", "message": f"Run '{payload.run_id}' not found in workspace '{workspace_id}'."},
+            )
+        if code == "run_not_usable":
+            raise HTTPException(
+                422,
+                detail={"code": "run_not_usable", "message": f"Run '{payload.run_id}' is not usable."},
+            )
+        if code == "run_lacks_quantity":
+            raise HTTPException(
+                422,
+                detail={"code": "run_lacks_quantity", "message": f"Run '{payload.run_id}' lacks quantity '{payload.quantity}'."},
+            )
+    else:
+        try:
+            bench_data = bench_runs_view.list_runs(workspace_id)
+        except bench_runs_view.BenchViewError as exc:
+            raise HTTPException(exc.status, detail={"code": exc.code}) from exc
 
-    if matching_run.get("verdict") not in ("usable", "usable_with_warnings"):
-        raise HTTPException(
-            422,
-            detail={
-                "code": "run_not_usable",
-                "message": f"Run '{payload.run_id}' verdict is '{matching_run.get('verdict')}', must be usable.",
-            },
-        )
-
-    root = bench_runs_view.bench_root(workspace_id)
-    output = _run_output(root, payload.run_id.strip(), payload.quantity.strip())
+        runs = bench_data.get("runs", [])
+        matching_run = next((r for r in runs if r.get("run_id") == payload.run_id.strip()), None)
+        if matching_run is None:
+            raise HTTPException(
+                404,
+                detail={"code": "run_not_found", "message": f"Run '{payload.run_id}' not found in workspace '{workspace_id}'."},
+            )
+        if matching_run.get("verdict") not in ("usable", "usable_with_warnings"):
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "run_not_usable",
+                    "message": f"Run '{payload.run_id}' verdict is '{matching_run.get('verdict')}', must be usable.",
+                },
+            )
+        root = bench_runs_view.bench_root(workspace_id)
+        output = _run_output(root, payload.run_id.strip(), payload.quantity.strip())
     if output is None:
         raise HTTPException(
             422,

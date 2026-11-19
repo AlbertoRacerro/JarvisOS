@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from app.core.database import get_database_path, open_sqlite_connection
 from app.core.packs import readiness_case_files
 from app.modules.engineering.bench_runs_view import bench_root, list_runs
+from app.modules.engineering.process_run_values import has_usable_process_run, list_process_run_values
 from app.modules.memory.literature_checks import check_datum
 from app.modules.memory.literature_service import BackingText
 from app.modules.process_kernel.errors import ProcessKernelError
@@ -46,6 +47,7 @@ class ComparisonValue(BaseModel):
 class Comparison(BaseModel):
     quantity: str | None = None
     run_id: str
+    run_label: str | None = None
     computed: ComparisonValue
     computed_in_published_unit: float | None = None
     published: ComparisonValue
@@ -279,17 +281,23 @@ def _compare_step(compare: CaseCompare | None, workspace_id: str, runs: list[dic
             continue
         output = _run_output(root, run_id, compare.quantity)
         if output is not None:
-            found = (run_id, *output)
+            found = (run_id, *output, None)
             break
     if found is None:
+        process_runs = list_process_run_values(workspace_id, compare.quantity)
+        if process_runs:
+            _started_at, run_id, run_label, value, unit = process_runs[0]
+            found = (run_id, value, unit, run_label)
+    if found is None:
         return StepResult(step="compare", status="red", reason=REASON_MISSING_RECORD, missing=[compare.quantity],
-                          detail=f"No usable bench run with output '{compare.quantity}'")
-    run_id, value, unit = found
+                          detail=f"No usable bench run or convergent process run with output '{compare.quantity}'")
+    run_id, value, unit, run_label = found
     converted = _convert(value, unit, compare.unit)
     deviation = None if converted is None else abs(converted - compare.value) / abs(compare.value)
     comparison = Comparison(
         quantity=compare.quantity,
         run_id=run_id,
+        run_label=run_label,
         computed=ComparisonValue(value=value, unit=unit),
         computed_in_published_unit=converted,
         published=ComparisonValue(value=compare.value, unit=compare.unit),
@@ -459,6 +467,8 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
     # 4. run
     runs = list_runs(workspace_id)["runs"]
     has_usable_run = any(r.get("verdict") in ("usable", "usable_with_warnings") for r in runs)
+    if not has_usable_run:
+        has_usable_run = has_usable_process_run(workspace_id)
 
     if has_usable_run:
         step_run = StepResult(step="run", status="green", reason=None, missing=[], detail=None)
@@ -468,7 +478,7 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
             status="red",
             reason=REASON_MISSING_RECORD,
             missing=["bench_run"],
-            detail="No bench run with usable verdict in workspace",
+            detail="Nessun calcolo utilizzabile: né banco di prova né diagramma di processo convergente",
         )
 
     # 5. compare

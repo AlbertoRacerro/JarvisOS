@@ -122,6 +122,14 @@ assert.ok(pageSource.includes("<th>Pubblicato</th>"), "comparison table has Pubb
 assert.ok(pageSource.includes("<th>Scarto</th>"), "comparison table has Scarto header");
 assert.ok(pageSource.includes("<th>Tolleranza</th>"), "comparison table has Tolleranza header");
 assert.ok(pageSource.includes("<th>Run</th>"), "comparison table has Run header");
+assert.ok(
+  pageSource.includes("stepResult.comparison.run_label ?? stepResult.comparison.run_id"),
+  "comparison table prefers run_label and posts the raw run_id unchanged"
+);
+assert.ok(
+  pageSource.includes("run_id: stepResult.comparison.run_id"),
+  "verdict form posts comparison.run_id unchanged"
+);
 
 // 6. Route wiring in routes.ts and App.tsx
 const routes = read("src/app/routes.ts");
