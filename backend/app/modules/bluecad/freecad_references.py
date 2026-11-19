@@ -173,9 +173,13 @@ def upload_freecad_file(workspace_id: str, file_name: str, body: bytes) -> dict:
         raise FreecadReferenceError("FREECAD_FILE_INVALID", "Il file non è un FCStd ZIP valido.", 400)
     file_sha256 = _sha256(body)
     source = build_paths().bluecad_freecad_source_file(workspace_id, file_sha256)
+    if source.parent.is_symlink() or source.is_symlink():
+        raise FreecadReferenceError("FREECAD_FILE_INVALID", "Percorso del file non valido.", 409)
     source.parent.mkdir(parents=True, exist_ok=True)
     if not source.is_file():
         temporary = source.with_name(source.name + ".tmp")
+        if temporary.is_symlink():
+            raise FreecadReferenceError("FREECAD_FILE_INVALID", "Percorso temporaneo non valido.", 409)
         temporary.write_bytes(body)
         temporary.replace(source)
     else:
@@ -274,14 +278,25 @@ def list_freecad_references(workspace_id: str, candidate_id: str) -> list[dict]:
         return [_present(connection, row) for row in rows]
 
 
-def _existing_export(out_dir: Path) -> dict[str, str] | None:
-    """Reuse a complete earlier export of the same pinned file and object, so a second add never rewrites it."""
+def _existing_export(out_dir: Path, baseline: sqlite3.Row | None) -> dict[str, str] | None:
+    """Reuse a complete earlier export only when it matches an existing reference's trusted digests."""
+    if baseline is None:
+        return None
+    expected = {
+        "model.step": baseline["step_sha256"],
+        "model.stl": baseline["stl_sha256"],
+        "model.glb": baseline["glb_sha256"],
+        "model.3mf": baseline["three_mf_sha256"],
+    }
     digests: dict[str, str] = {}
     for name in ARTIFACT_NAMES:
         path = out_dir / name
         if path.is_symlink() or not path.is_file() or path.stat().st_size <= 0:
             return None
-        digests[name] = _digest_file(path)
+        digest = _digest_file(path)
+        if digest != expected[name]:
+            return None
+        digests[name] = digest
     return digests
 
 
@@ -327,9 +342,16 @@ def add_freecad_reference(workspace_id: str, candidate_id: str, data: FreecadRef
         ).fetchone()
         if existing is not None:
             raise FreecadReferenceError("freecad_reference_duplicate", "Questa parte FreeCAD è già aggiunta alla vista.")
+        baseline = connection.execute(
+            """SELECT step_sha256, stl_sha256, three_mf_sha256, glb_sha256
+            FROM bluecad_freecad_references
+            WHERE workspace_id = ? AND fcstd_sha256 = ? AND object_name = ?
+            LIMIT 1""",
+            (workspace_id, data.file_sha256, data.object_name),
+        ).fetchone()
 
     out_dir = _export_dir(workspace_id, data.file_sha256, data.object_name)
-    digests = _existing_export(out_dir)
+    digests = _existing_export(out_dir, baseline)
     if digests is None:
         digests = _export_object(source, data.object_name, out_dir)
 
