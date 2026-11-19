@@ -1,6 +1,6 @@
 # 332 — PASSAGE-SOURCE-LINK-1: The retrieval check credits a folder passage to the literature source whose file it is
 
-Status: ready
+Status: merged
 Depends on: 316, 328, 331
 
 ## Goal
