@@ -1,6 +1,6 @@
 # 327 — FREECAD-EXPORT-REFERENCE-1: Export a saved FreeCAD part and place it in the BlueCAD view
 
-Status: ready
+Status: merged
 Depends on: 326
 
 ## Goal
