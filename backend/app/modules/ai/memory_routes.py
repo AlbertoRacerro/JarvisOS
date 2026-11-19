@@ -233,7 +233,7 @@ async def retrieval_eval(workspace_id: str, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail={"code": "retrieval_eval_run_id_invalid"})
     out_dir = bench_runs_view.bench_root(workspace_id) / run_id
     try:
-        bench.run_evaluation("retrieval.eval", request_data, out_dir=out_dir, root=root)
+        await run_in_threadpool(bench.run_evaluation, "retrieval.eval", request_data, out_dir=out_dir, root=root)
         return bench_runs_view.show(workspace_id, run_id)
     except bench.BenchInputError as exc:
         raise HTTPException(status_code=422, detail={"code": "retrieval_eval_invalid"}) from exc

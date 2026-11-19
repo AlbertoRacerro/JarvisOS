@@ -394,10 +394,10 @@ export default function MemorySearch({ workspaceId, onWorkspaceChange }: Props) 
         {evalResult && (
           <div className="memory-search__retrieval-eval-result">
             <p>Esito: <strong>{VERDICT_LABELS[evalResult.verdict]}</strong></p>
-            <p>top1_hit_rate: {evalMetric("top1_hit_rate") ?? "—"}</p>
-            <p>top3_hit_rate: {evalMetric("top3_hit_rate") ?? "—"}</p>
-            <p>mrr: {evalMetric("mrr") ?? "—"}</p>
-            <p>zero_hit_count: {evalMetric("zero_hit_count") ?? "—"}</p>
+            <p>Risposta attesa al primo posto (top1_hit_rate): {evalMetric("top1_hit_rate") ?? "—"}</p>
+            <p>Risposta attesa tra i primi tre (top3_hit_rate): {evalMetric("top3_hit_rate") ?? "—"}</p>
+            <p>Posizione media della risposta attesa (mrr): {evalMetric("mrr") ?? "—"}</p>
+            <p>Domande senza alcun risultato (zero_hit_count): {evalMetric("zero_hit_count") ?? "—"}</p>
           </div>
         )}
       </section>
