@@ -51,12 +51,12 @@ cannot turn green through the interface at all:
 ## Scope
 
 In scope:
-- Migration `0036_decision_case_verdict`: `ALTER TABLE decisions ADD COLUMN case_verdict_id TEXT REFERENCES
-  case_verdicts(id)`, nullable, existing rows unchanged; fresh and upgraded schemas equal; update the digest and
-  baseline in `backend/tests/test_migration_discipline.py`.
+- Migration `0036_decision_case_verdict`: `case_verdict_id TEXT` in the `decisions` CREATE statement and
+  `ALTER TABLE decisions ADD COLUMN case_verdict_id TEXT` in the migration list, nullable, no foreign key (checked in
+  code, so fresh and upgraded schemas stay equal), existing rows unchanged; `test_migration_discipline.py` passes.
 - `DecisionCreate` and `DecisionRead` gain `case_verdict_id: str | None = None`; the insert writes it. When it is
-  set, `create_decision` rejects it (HTTP 400 through the existing `_domain_error`) unless the verdict exists in the
-  same workspace with `status = 'accepted'`. Regenerate `frontend/src/api/generated`.
+  set, `create_decision_in_transaction` rejects it with `ProjectKnowledgeOwnerError("case_verdict_invalid")` (HTTP
+  422 through the existing `_domain_error`) unless the verdict exists in the same workspace with `status = 'accepted'`. Regenerate `frontend/src/api/generated`.
 - `_compute_case` `decide`: green iff an accepted decision of the workspace has a `case_verdict_id` whose verdict
   has this case's `case_id`, the same workspace and `status != 'superseded'`. Red detail:
   `No accepted decision linked to an accepted verdict of this case`. The `linked_run_id` rule is removed from the
@@ -95,7 +95,7 @@ Out of scope:
 1. On an upgraded copy of a database at `0035_case_verdicts`, `initialize_database` adds `case_verdict_id` and
    keeps every existing decision row; fresh and upgraded schemas match in `test_migration_discipline.py`.
 2. `POST /workspaces/{id}/decisions` with a `case_verdict_id` of another workspace, of a `recorded` verdict, or
-   unknown, returns 400 and writes nothing; with an accepted verdict of the same workspace it returns 201 and
+   unknown, returns 422 `case_verdict_invalid` and writes nothing; with an accepted verdict of the same workspace it returns 201 and
    `case_verdict_id` in the body.
 3. The board's `decide` cell for case A is red when the only accepted decision links a verdict of case B, or a
    superseded verdict of A, or has no `case_verdict_id`; green when it links an accepted verdict of A.
