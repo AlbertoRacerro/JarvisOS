@@ -642,6 +642,45 @@ export function getBluecadGenerationAvailability(workspaceId: string): Promise<B
   return getJson<BluecadGenerationAvailability>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/generation-availability`);
 }
 
+export type FreecadStatus = { configured: boolean; connected: boolean; code: string | null };
+export type FreecadObject = {
+  Name?: string;
+  Label?: string;
+  TypeId?: string;
+  Properties?: Record<string, unknown>;
+  properties?: Record<string, unknown>;
+};
+export type FreecadEditPreview = {
+  document: string;
+  object: string;
+  property: string;
+  old_value: unknown;
+  new_value: unknown;
+};
+export type FreecadEditApply = FreecadEditPreview & {
+  outcome: Record<string, unknown>;
+  document_unchanged: boolean;
+  message?: string;
+};
+
+export function getFreecadStatus(workspaceId: string): Promise<FreecadStatus> {
+  return getJson<FreecadStatus>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/status`);
+}
+export function listFreecadDocuments(workspaceId: string): Promise<string[]> {
+  return getJson<string[]>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/documents`);
+}
+export function listFreecadObjects(workspaceId: string, document: string): Promise<FreecadObject[]> {
+  return getJson<FreecadObject[]>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/documents/${encodeURIComponent(document)}/objects`
+  );
+}
+export function previewFreecadEdit(workspaceId: string, payload: Record<string, unknown>): Promise<FreecadEditPreview> {
+  return postJson<FreecadEditPreview>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/edit/preview`, payload);
+}
+export function applyFreecadEdit(workspaceId: string, payload: Record<string, unknown>): Promise<FreecadEditApply> {
+  return postJson<FreecadEditApply>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/edit/apply`, payload);
+}
+
 export function archiveBluecadCandidate(workspaceId: string, candidateId: string): Promise<BluecadCandidate> {
   return postJson<BluecadCandidate>(`/workspaces/${workspaceId}/bluecad/candidates/${candidateId}/archive`);
 }
