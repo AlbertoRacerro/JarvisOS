@@ -1,6 +1,6 @@
 # 325 — DYNAMIC-PHYSICS-UI-1: Expose thermal state, carbonate/pH, and flat-wall optics fields in ScenarioEditor
 
-Status: ready
+Status: merged
 Depends on: 321, 322, 323
 
 ## Goal
