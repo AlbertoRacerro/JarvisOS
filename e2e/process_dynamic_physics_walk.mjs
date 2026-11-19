@@ -99,35 +99,56 @@ try {
   const workspaceId = (await (await created).json()).workspace_id;
   if (!workspaceId) throw new Error("question has no workspace_id");
 
-  const seed = spawnSync(python, ["-c", [
+  // Test setup, not part of the reachability claim: a requirement and a source make "model" the next step (as in the 319 walk).
+  const seed = (code) => {
+    const result = spawnSync(python, ["-c", code, workspaceId], { cwd: backend, env, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`seed failed: ${result.stderr}`);
+  };
+  seed([
+    "import sys",
+    "from uuid import uuid4",
+    "from app.core.database import open_sqlite_connection",
+    "from app.modules.events.service import utc_now",
+    "ws, now = sys.argv[1], utc_now()",
+    "with open_sqlite_connection() as c:",
+    "    c.execute(\"INSERT INTO requirements (id, workspace_id, statement, status, created_at, updated_at) VALUES (?, ?, 'Produttivita minima', 'active', ?, ?)\", (str(uuid4()), ws, now, now))",
+    "    c.execute(\"INSERT INTO literature_sources (id, workspace_id, title, source_kind, state, created_at, updated_at) VALUES (?, ?, 'Manuale', 'book', 'accepted', ?, ?)\", (str(uuid4()), ws, now, now))",
+    "    c.commit()",
+  ].join("\n"));
+  await page.reload({ waitUntil: "networkidle" });
+  await page.locator(".guided-flow-bar__question-card", { hasText: "Physics UI proof" }).click();
+  await page.locator(".guided-flow-bar__next-title", { hasText: "Apri il diagramma di processo" }).waitFor();
+  await page.locator(".guided-flow-bar__next-btn").click();
+  await page.waitForURL("**/design/process");
+  seed([
     "import sys",
     "from app.modules.process_stack import draft",
     "from app.modules.process_stack.draft_models import AddUnit",
     "ws=sys.argv[1]",
     "s=draft.create_draft(ws,'Physics proof')",
     "draft.patch(ws,s['draft_id'],s['revision'],[AddUnit(op='add_unit',id='pbr',type='PhotobioreactorT1',tag='PBR',x=100,y=100)])",
-  ].join("\n"), workspaceId], { cwd: backend, env, encoding: "utf8" });
-  if (seed.status !== 0) throw new Error(`seed failed: ${seed.stderr}`);
-
+    "from datetime import UTC, datetime, timedelta",
+    "from app.modules.environment import profiles",
+    "t0=datetime(2026,1,1,tzinfo=UTC); stamps=[(t0+timedelta(hours=h)).isoformat().replace('+00:00','Z') for h in range(169)]",
+    "profiles.create_profile(ws,name='Walk profile',timestamps=stamps,channels={'par':[500.0]*len(stamps)},resolution_minutes=60,provenance={'kind':'deterministic_test'})",
+  ].join("\n"));
   await page.reload({ waitUntil: "networkidle" });
-  await page.locator(".guided-flow-bar__question-card", { hasText: "Physics UI proof" }).click();
-  await page.locator(".guided-flow-bar__next-btn").click();
-  await page.waitForURL("**/design/process");
   await page.getByRole("link", { name: "Design › Dynamic", exact: true }).waitFor();
   await shot("process-editor-with-pbr");
   summary.steps.push({ step: "reach_process_editor_with_photobioreactor", status: "pass" });
 
   await page.getByRole("link", { name: "Design › Dynamic", exact: true }).click();
   await page.getByRole("region", { name: "Dynamic Studio" }).waitFor();
-  await page.getByRole("button", { name: "Scenarios", exact: true }).click();
-  await page.getByRole("region", { name: "Scenario editor" }).waitFor();
+  await page.getByRole("navigation", { name: "Dynamic simulation steps" }).getByRole("button", { name: /Scenario/ }).click();
+  await page.locator('[aria-label="Scenario editor"]').waitFor();
   await shot("dynamic-scenario-editor");
   summary.steps.push({ step: "reach_dynamic_scenario_editor", status: "pass" });
 
   const profile = page.getByLabel("Environment profile");
-  const profileOptions = await profile.locator("option").count();
-  if (profileOptions > 1) await profile.selectOption({ index: 1 });
+  await profile.selectOption(await profile.locator("option", { hasText: "Walk profile" }).getAttribute("value"));
 
+  const unitBox = page.getByLabel("Unit PBR");
+  if (!(await unitBox.isChecked())) await unitBox.check();
   await page.getByLabel("Thermal mode").selectOption("state");
   await page.getByLabel("Carbon mode").selectOption("state");
   await page.getByLabel("Water density [kg/m3]").fill("1001");
@@ -140,7 +161,8 @@ try {
   summary.steps.push({ step: "save_physics_scenario", status: "pass" });
 
   await page.reload({ waitUntil: "networkidle" });
-  await page.getByRole("region", { name: "Scenario editor" }).waitFor();
+  await page.getByRole("navigation", { name: "Dynamic simulation steps" }).getByRole("button", { name: /Scenario/ }).click();
+  await page.locator('[aria-label="Scenario editor"]').waitFor();
   await page.getByLabel("Thermal mode").waitFor();
   const thermal = await page.getByLabel("Thermal mode").inputValue();
   const carbon = await page.getByLabel("Carbon mode").inputValue();
