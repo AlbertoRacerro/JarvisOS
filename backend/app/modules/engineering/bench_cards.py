@@ -140,6 +140,31 @@ CARDS: tuple[BenchCard, ...] = (
             ),
         ),
     ),
+    BenchCard(
+        card_id="marine.rigid_body_waves",
+        evaluator_id="marine.rigid_body_waves",
+        title="Moto rigido in onde e ormeggio",
+        formula="X = ((K - ω²M) + iωB)^-1 F, con 3 DOF surge-heave-pitch disaccoppiati",
+        validity="Risposta lineare di frequenza in onde regolari; ormeggio quasi-statico",
+        source="Rigid-body frequency-domain / marine_motion",
+        fields=(
+            CardNumericField(name="mass_kg", label="Massa", unit="kg", default=500000.0),
+            CardNumericField(name="added_mass_surge_kg", label="Massa aggiunta surge", unit="kg", default=50000.0),
+            CardNumericField(name="added_mass_heave_kg", label="Massa aggiunta heave", unit="kg", default=150000.0),
+            CardNumericField(name="pitch_inertia_kg_m2", label="Inerzia di pitch", unit="kg*m**2", default=5e8),
+            CardNumericField(name="waterplane_area_m2", label="Area di galleggiamento", unit="m2", default=400.0),
+            CardNumericField(name="gm_pitch_m", label="Metacentro GM pitch", unit="m", default=2.0),
+            CardNumericField(name="damping_surge_n_s_m", label="Smorzamento surge", unit="N*s/m", default=500000.0),
+            CardNumericField(name="damping_heave_n_s_m", label="Smorzamento heave", unit="N*s/m", default=800000.0),
+            CardNumericField(name="damping_pitch_n_m_s_rad", label="Smorzamento pitch", unit="N*m*s/rad", default=2e8),
+            CardNumericField(name="mooring_kx_n_m", label="Rigidezza ormeggio surge", unit="N/m", default=500000.0),
+            CardNumericField(name="mooring_kz_n_m", label="Rigidezza ormeggio heave", unit="N/m", default=0.0),
+            CardNumericField(name="wave_amplitude_m", label="Ampiezza d'onda", unit="m", default=1.0),
+            CardNumericField(name="wave_period_s", label="Periodo d'onda", unit="s", default=8.0),
+            CardNumericField(name="water_density_kg_m3", label="Densità dell'acqua", unit="kg/m3", default=1025.0),
+            CardNumericField(name="gravity_m_s2", label="Accelerazione gravitazionale", unit="m/s2", default=9.80665),
+        ),
+    ),
 )
 
 CARD_BY_ID = {card.card_id: card for card in CARDS}

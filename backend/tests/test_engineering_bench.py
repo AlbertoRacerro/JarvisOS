@@ -186,17 +186,18 @@ def test_list_absent_tool_registry(tmp_path: Path, capsys: pytest.CaptureFixture
     captured = capsys.readouterr()
     data = json.loads(captured.out)
     assert isinstance(data, list)
-    assert len(data) == 11
+    assert len(data) == 12
 
     by_id = {row["evaluator_id"]: row for row in data}
     assert by_id["retrieval.eval"]["availability_state"] == "available"
-    # Verify the six registry evaluators are present
+    # Verify the seven registry evaluators are present
     assert "fluids.pipe_pressure_drop" in by_id
     assert "ht.internal_convection" in by_id
     assert "coolprop.pure_fluid_properties" in by_id
     assert "dwsim.flowsheet" in by_id
     assert "openfoam_channel_v1" in by_id
     assert "photobioreactor.day_night" in by_id
+    assert "marine.rigid_body_waves" in by_id
 
     # Verify four BLUECAD evaluators are present and marked unavailable with reason codes
     solid_row = by_id["bluecad.solid"]

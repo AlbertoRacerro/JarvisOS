@@ -19,6 +19,7 @@ from app.modules.engineering.evaluator_contracts import (
     EvaluatorDescriptor,
 )
 from app.modules.engineering.evidence_contracts import FidelityTier
+from app.modules.engineering.marine_motion import RigidBodyWavesEvaluator
 from app.modules.engineering.operator_models import CapabilityRead, EvaluatorRead
 from app.modules.photobioreactor.pbr_evaluator import PbrDayNightEvaluator
 from app.modules.process_stack.correlations import InternalConvectionEvaluator, PipePressureDropEvaluator
@@ -39,6 +40,7 @@ def evaluator_registry() -> dict[str, EngineeringEvaluator]:
         ("dwsim.flowsheet", DwsimEvaluator, "dynamic_simulator", "DWSIM", "dynamic_detailed"),
         ("openfoam_channel_v1", OpenFoamEvaluator, "cfd_solver", "OpenFOAM", "field_resolved"),
         ("photobioreactor.day_night", PbrDayNightEvaluator, "dynamic_simulator", "scikit-sundae", "reduced_order"),
+        ("marine.rigid_body_waves", RigidBodyWavesEvaluator, "specialist", "marine_motion", "screening"),
     )
     registry: dict[str, EngineeringEvaluator] = {}
     for evaluator_id, factory, kind, name, fidelity in factories:
