@@ -51,7 +51,8 @@ LEGACY_CREATE_ONLY_COLUMNS: dict[tuple[str, str], str] = {}
 # Reviewed for spec 297: literature_ingestion_batches is a new CREATE IF NOT EXISTS table; the new
 # literature_entries columns are in both the CREATE and LITERATURE_SCHEMA_MIGRATION_STATEMENTS.
 # Reviewed for spec 312: design_questions is a new CREATE IF NOT EXISTS table.
-BASE_CREATE_ONLY_SHA256 = "9db88e8692c5e3da39d4ffe00dcd7c914101db5126a66a662a47621005cd9319"
+# Reviewed for spec 314: case_verdicts is a new CREATE IF NOT EXISTS table.
+BASE_CREATE_ONLY_SHA256 = "049320a1cf93e38e6332ad5e8248b71c2b024d71b6485d5a0b35870a49ca3899"
 
 # KNOWN DRIFT (spec 028, recorded not fixed): columns added by a migration
 # statement but absent from their owner's CREATE TABLE. A fresh database only has

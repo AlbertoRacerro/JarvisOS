@@ -23,6 +23,27 @@ class CapabilityRead(BaseModel):
     reason_code: str | None
 
 
+class CaseVerdictRead(BaseModel):
+    id: str
+    workspace_id: str
+    case_id: str
+    run_id: str
+    quantity: str
+    computed_value: float
+    computed_unit: str
+    published_value: float
+    published_unit: str
+    rel_tol: float
+    deviation: float
+    verdict: Literal["pass", "fail"]
+    status: Literal["recorded", "accepted", "superseded"]
+    rationale: str | None = None
+    accepted_by: str | None = None
+    accepted_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
 
 class EscalationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")

@@ -26,6 +26,14 @@ export type BenchCompare = {
   checks: Record<string, { status_a: string | null; actual_a: number | null; status_b: string | null; actual_b: number | null }>;
   truncated: boolean;
 };
+export type BenchCardField = { name: string; label: string; unit: string; default: number };
+export type BenchCardOption = { name: string; label: string; choices: string[]; default: string };
+export type BenchCard = {
+  card_id: string; evaluator_id: string; title: string; formula: string;
+  validity: string; source: string; fields: BenchCardField[]; options: BenchCardOption[];
+};
+export type BenchCardCatalog = { cards: BenchCard[] };
+export type CreateBenchRunPayload = { card_id: string; inputs: Record<string, number>; options: Record<string, string> };
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`);
@@ -45,4 +53,22 @@ export function getBenchRun(workspaceId: string, runId: string): Promise<BenchRu
 
 export function compareBenchRuns(workspaceId: string, runA: string, runB: string): Promise<BenchCompare> {
   return getJson(`${base(workspaceId)}/compare?run_a=${encodeURIComponent(runA)}&run_b=${encodeURIComponent(runB)}`);
+}
+
+export function listBenchCards(workspaceId: string): Promise<BenchCardCatalog> {
+  return getJson(`${base(workspaceId)}/cards`);
+}
+
+export function createBenchRun(workspaceId: string, payload: CreateBenchRunPayload): Promise<BenchRunDetail> {
+  return fetch(`${API_BASE_URL}${base(workspaceId)}/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then(async (response) => {
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw new Error(body?.detail?.message ?? body?.detail?.code ?? `Richiesta non riuscita (${response.status})`);
+    }
+    return response.json() as Promise<BenchRunDetail>;
+  });
 }

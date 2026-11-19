@@ -44,12 +44,22 @@ class ComparisonValue(BaseModel):
 
 
 class Comparison(BaseModel):
+    quantity: str | None = None
     run_id: str
     computed: ComparisonValue
     computed_in_published_unit: float | None = None
     published: ComparisonValue
     deviation: float | None = None
     rel_tol: float
+
+
+class StoredVerdictSummary(BaseModel):
+    id: str
+    verdict: Literal["pass", "fail"]
+    status: Literal["recorded", "accepted", "superseded"]
+    run_id: str
+    deviation: float
+    rationale: str | None = None
 
 
 class StepResult(BaseModel):
@@ -59,6 +69,7 @@ class StepResult(BaseModel):
     missing: list[str] = Field(default_factory=list)
     detail: str | None = None
     comparison: Comparison | None = None
+    stored_verdict: StoredVerdictSummary | None = None
 
 
 class CaseCompare(BaseModel):
@@ -277,6 +288,7 @@ def _compare_step(compare: CaseCompare | None, workspace_id: str, runs: list[dic
     converted = _convert(value, unit, compare.unit)
     deviation = None if converted is None else abs(converted - compare.value) / abs(compare.value)
     comparison = Comparison(
+        quantity=compare.quantity,
         run_id=run_id,
         computed=ComparisonValue(value=value, unit=unit),
         computed_in_published_unit=converted,
@@ -461,6 +473,26 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
 
     # 5. compare
     step_compare = _compare_step(case.compare, workspace_id, runs)
+    if step_compare.comparison is not None and step_compare.comparison.run_id:
+        v_row = connection.execute(
+            """
+            SELECT id, verdict, status, run_id, deviation, rationale
+            FROM case_verdicts
+            WHERE workspace_id = ? AND case_id = ? AND run_id = ? AND status != 'superseded'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (workspace_id, case.id, step_compare.comparison.run_id),
+        ).fetchone()
+        if v_row is not None:
+            step_compare.stored_verdict = StoredVerdictSummary(
+                id=str(v_row["id"]),
+                verdict=v_row["verdict"],
+                status=v_row["status"],
+                run_id=str(v_row["run_id"]),
+                deviation=float(v_row["deviation"]),
+                rationale=v_row["rationale"],
+            )
 
     # 6. decide
     dec_row = connection.execute(
