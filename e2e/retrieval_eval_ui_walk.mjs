@@ -57,6 +57,8 @@ try {
   for (const metric of ["top1_hit_rate", "top3_hit_rate", "mrr", "zero_hit_count"]) {
     await page.getByText(new RegExp(metric)).waitFor();
   }
+  // The expected answer typed as shown in the search results must be among the first three results.
+  await page.getByText("(top3_hit_rate): 1", { exact: false }).waitFor();
   await page.screenshot({ path: join(evidence, "retrieval-eval.png"), fullPage: true });
   await writeFile(join(evidence, "summary.json"), JSON.stringify({ passed: true, spec: "316" }) + "\n");
 } finally {

@@ -28,7 +28,8 @@ In scope:
 - Add tests: `backend/tests/test_retrieval_eval_ui_316.py`, `frontend/tests/316-retrieval-eval-ui.test.mjs` (registered in `frontend/package.json`), and `e2e/retrieval_eval_ui_walk.mjs`.
 
 Out of scope (binding non-goals):
-- Editing `retrieval_bench.py` scoring, verdict thresholds, or `readiness_board.py` logic.
+- Editing `retrieval_bench.py` scoring (except the amendment below), verdict thresholds, or `readiness_board.py` logic.
+  Amendment at review of #186: `_matches` also accepts, for `workspace_documents` passages, the file path, location fragment and heading that the `"Ricerca"` results show; without it the expected value a user copies from the screen never matched and every check scored 0.
 - Uploading or managing external benchmark JSON question sets on disk.
 - SQLite schema changes or migrations.
 

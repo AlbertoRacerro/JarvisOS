@@ -56,6 +56,25 @@ def test_retrieval_eval_persists_path_free_result(client: TestClient, tmp_path: 
     result = response.json()
     assert result["evaluator_id"] == "retrieval.eval"
     assert result["verdict"] == "usable"
+    outputs = {item["name"]: item["value"]["value"] for item in result["outputs"]}
+    assert outputs["top3_hit_rate"] == 1.0
     assert result["run_id"].startswith("retrieval-")
     assert str(build_paths().data_root) not in response.text
     assert (bench_root(workspace_id) / result["run_id"] / "result.json").is_file()
+
+
+def test_retrieval_eval_matches_what_search_shows(client: TestClient, tmp_path: Path) -> None:
+    workspace_id = _workspace()
+    folder = tmp_path / "docs"
+    folder.mkdir()
+    (folder / "guide.md").write_text("# Fermentazione\n\nProcesso aerobico.\n", encoding="utf-8")
+    endpoint = f"/workspaces/{workspace_id}/memory"
+    client.put(f"{endpoint}/documents", json={"folder": str(folder)})
+    client.post(f"{endpoint}/documents/refresh")
+    for expected, top3 in (("guide.md", 1.0), ("guide.md#Fermentazione", 1.0), ("Altro", 0.0)):
+        result = client.post(
+            f"{endpoint}/retrieval-eval",
+            json={"questions": [{"query": "fermentazione", "expected_ids": [expected]}]},
+        ).json()
+        outputs = {item["name"]: item["value"]["value"] for item in result["outputs"]}
+        assert outputs["top3_hit_rate"] == top3, expected
