@@ -1,4 +1,5 @@
 import { API_BASE_URL } from "./client";
+export * from "./caseVerdicts";
 
 export type StepStatus = "green" | "red";
 
@@ -7,7 +8,17 @@ export type ComparisonValue = {
   unit: string;
 };
 
+export type StoredVerdictSummary = {
+  id: string;
+  verdict: "pass" | "fail";
+  status: "recorded" | "accepted" | "superseded";
+  run_id: string;
+  deviation: number;
+  rationale?: string | null;
+};
+
 export type Comparison = {
+  quantity?: string | null;
   run_id: string;
   computed: ComparisonValue;
   computed_in_published_unit: number | null;
@@ -23,6 +34,7 @@ export type StepResult = {
   missing: string[];
   detail: string | null;
   comparison?: Comparison | null;
+  stored_verdict?: StoredVerdictSummary | null;
 };
 
 export type CaseResult = {
