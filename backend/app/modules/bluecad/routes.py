@@ -7,13 +7,25 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
 
 from app.core.database import open_sqlite_connection
 from app.core.paths import build_paths
 from app.modules.bluecad.freecad_bridge import FreecadBridge, FreecadBridgeError, validate_request
+from app.modules.bluecad.freecad_references import (
+    MAX_FILE_BYTES,
+    FreecadReferenceAdd,
+    FreecadReferenceError,
+    FreecadReferenceMove,
+    add_freecad_reference,
+    list_freecad_references,
+    move_freecad_reference,
+    reference_artifact,
+    remove_freecad_reference,
+    upload_freecad_file,
+)
 from app.modules.bluecad.ledger import archive_candidate, get_candidate, list_candidates, mark_promoted
 from app.modules.bluecad.loop import _external_blocked_reason, create_bluecad_candidate
 from app.modules.bluecad.models import BluecadCandidateCreate, BluecadCandidateRead
@@ -184,6 +196,96 @@ def freecad_edit_apply_endpoint(workspace_id: str, payload: FreecadApplyRequest)
 
 def _reference_error(exc: ReferenceError) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message})
+
+
+def _freecad_reference_error(exc: FreecadReferenceError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message})
+
+
+@router.post("/freecad/files", status_code=201)
+async def upload_freecad_file_endpoint(workspace_id: str, request: Request) -> dict[str, Any]:
+    _require_workspace(workspace_id)
+    file_name = request.headers.get("x-filename", "")
+    body = await request.body()
+    if len(body) > MAX_FILE_BYTES:
+        raise _freecad_reference_error(
+            FreecadReferenceError("FREECAD_FILE_TOO_LARGE", "Il file supera il limite di 64 MiB.", 413)
+        )
+    try:
+        return upload_freecad_file(workspace_id, file_name, body)
+    except FreecadReferenceError as exc:
+        raise _freecad_reference_error(exc) from exc
+
+
+@router.get("/candidates/{candidate_id}/freecad-references")
+def list_freecad_references_endpoint(workspace_id: str, candidate_id: str) -> list[dict]:
+    try:
+        return list_freecad_references(workspace_id, candidate_id)
+    except FreecadReferenceError as exc:
+        raise _freecad_reference_error(exc) from exc
+
+
+@router.post("/candidates/{candidate_id}/freecad-references", status_code=201)
+def add_freecad_reference_endpoint(workspace_id: str, candidate_id: str, data: FreecadReferenceAdd) -> dict:
+    try:
+        return add_freecad_reference(workspace_id, candidate_id, data)
+    except FreecadReferenceError as exc:
+        raise _freecad_reference_error(exc) from exc
+
+
+@router.put("/candidates/{candidate_id}/freecad-references/{reference_id}")
+def move_freecad_reference_endpoint(workspace_id: str, candidate_id: str, reference_id: str,
+                                    data: FreecadReferenceMove) -> dict:
+    try:
+        return move_freecad_reference(workspace_id, candidate_id, reference_id, data)
+    except FreecadReferenceError as exc:
+        raise _freecad_reference_error(exc) from exc
+
+
+@router.delete("/candidates/{candidate_id}/freecad-references/{reference_id}", status_code=204, response_model=None)
+def remove_freecad_reference_endpoint(workspace_id: str, candidate_id: str, reference_id: str,
+                                      expected_revision: int = Query(ge=1)) -> None:
+    try:
+        remove_freecad_reference(workspace_id, candidate_id, reference_id, expected_revision)
+    except FreecadReferenceError as exc:
+        raise _freecad_reference_error(exc) from exc
+
+
+def _freecad_artifact_response(workspace_id: str, candidate_id: str, reference_id: str,
+                               artifact_name: str, media_type: str) -> Response:
+    try:
+        data = reference_artifact(workspace_id, candidate_id, reference_id, artifact_name)
+    except FreecadReferenceError as exc:
+        raise _freecad_reference_error(exc) from exc
+    return Response(
+        data,
+        media_type=media_type,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="{artifact_name}"',
+        },
+    )
+
+
+@router.get("/candidates/{candidate_id}/freecad-references/{reference_id}/model.glb")
+def freecad_reference_glb_endpoint(workspace_id: str, candidate_id: str, reference_id: str) -> Response:
+    return _freecad_artifact_response(workspace_id, candidate_id, reference_id, "model.glb", "model/gltf-binary")
+
+
+@router.get("/candidates/{candidate_id}/freecad-references/{reference_id}/model.step")
+def freecad_reference_step_endpoint(workspace_id: str, candidate_id: str, reference_id: str) -> Response:
+    return _freecad_artifact_response(workspace_id, candidate_id, reference_id, "model.step", "model/step")
+
+
+@router.get("/candidates/{candidate_id}/freecad-references/{reference_id}/model.stl")
+def freecad_reference_stl_endpoint(workspace_id: str, candidate_id: str, reference_id: str) -> Response:
+    return _freecad_artifact_response(workspace_id, candidate_id, reference_id, "model.stl", "model/stl")
+
+
+@router.get("/candidates/{candidate_id}/freecad-references/{reference_id}/model.3mf")
+def freecad_reference_3mf_endpoint(workspace_id: str, candidate_id: str, reference_id: str) -> Response:
+    return _freecad_artifact_response(workspace_id, candidate_id, reference_id, "model.3mf", "model/3mf")
 
 
 @router.get("/candidates/{candidate_id}/studio-references")

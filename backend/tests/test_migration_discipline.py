@@ -52,7 +52,8 @@ LEGACY_CREATE_ONLY_COLUMNS: dict[tuple[str, str], str] = {}
 # literature_entries columns are in both the CREATE and LITERATURE_SCHEMA_MIGRATION_STATEMENTS.
 # Reviewed for spec 312: design_questions is a new CREATE IF NOT EXISTS table.
 # Reviewed for spec 314: case_verdicts is a new CREATE IF NOT EXISTS table.
-BASE_CREATE_ONLY_SHA256 = "049320a1cf93e38e6332ad5e8248b71c2b024d71b6485d5a0b35870a49ca3899"
+# Reviewed for spec 327: bluecad_freecad_references is a new CREATE IF NOT EXISTS table.
+BASE_CREATE_ONLY_SHA256 = "7d027d7ce51ea651f134827be2b4496faae62925ba4e96a35b3a27237e6f26d3"
 
 # KNOWN DRIFT (spec 028, recorded not fixed): columns added by a migration
 # statement but absent from their owner's CREATE TABLE. A fresh database only has

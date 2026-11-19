@@ -45,6 +45,19 @@ class JarvisPaths:
         """Workspace-scoped biological model sets and cards (spec 169)."""
         return self.workspaces_dir / workspace_id / "bio_models"
 
+    def bluecad_freecad_source_file(self, workspace_id: str, file_sha256: str) -> Path:
+        return self.data_root / "bluecad" / "freecad" / workspace_id / file_sha256 / "source.FCStd"
+
+    def bluecad_freecad_export_dir(self, workspace_id: str, file_sha256: str, object_name_digest: str) -> Path:
+        return (
+            self.data_root
+            / "bluecad"
+            / "freecad"
+            / workspace_id
+            / file_sha256
+            / object_name_digest
+        )
+
     @property
     def scaleway_secret_file(self) -> Path:
         return self.secrets_dir / "scaleway-api-key.v1.json"

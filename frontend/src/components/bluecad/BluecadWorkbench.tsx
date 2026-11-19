@@ -14,6 +14,7 @@ import {
   getBluecadPrintHandoffCapability,
   listBluecadCandidates,
   listBluecadStudioReferences,
+  listBluecadFreecadReferences,
   listSimulationRuns,
   listWorkspaces,
   openBluecadArtifactInSlicer,
@@ -22,6 +23,7 @@ import {
   removeBluecadStudioReference,
   type BluecadCandidate,
   type BluecadStudioReference,
+  type BluecadFreecadReference,
   type BluecadArtifactRefRead,
   type BluecadCandidateAggregateRead,
   type BluecadGenerationAvailability,
@@ -109,6 +111,7 @@ function BluecadWorkbench({ appWorkspaceId, onSelectionChange, onShellRegionsCha
   const [selectedStudioRun, setSelectedStudioRun] = useState("");
   const [studioBusy, setStudioBusy] = useState(false);
   const [studioFinding, setStudioFinding] = useState<string | null>(null);
+  const [freecadRefs, setFreecadRefs] = useState<BluecadFreecadReference[]>([]);
 
   const refreshStudioRefs = useCallback(async (ws: string, candidateId: string) => {
     const next = await listBluecadStudioReferences(ws, candidateId);
@@ -116,15 +119,16 @@ function BluecadWorkbench({ appWorkspaceId, onSelectionChange, onShellRegionsCha
   }, []);
 
   useEffect(() => {
-    if (!workspaceId || !selectedId) { setStudioRefs([]); setStudioRuns([]); return; }
+    if (!workspaceId || !selectedId) { setStudioRefs([]); setFreecadRefs([]); setStudioRuns([]); return; }
     let cancelled = false;
     setStudioRefs([]);
     setSelectedStudioRun("");
     setStudioFinding(null);
-    void Promise.all([listBluecadStudioReferences(workspaceId, selectedId), listSimulationRuns(workspaceId), listStudioLibrary(workspaceId)])
-      .then(([refs, runs, library]) => {
+    void Promise.all([listBluecadStudioReferences(workspaceId, selectedId), listBluecadFreecadReferences(workspaceId, selectedId), listSimulationRuns(workspaceId), listStudioLibrary(workspaceId)])
+      .then(([refs, freecad, runs, library]) => {
         if (cancelled) return;
         setStudioRefs(refs);
+        setFreecadRefs(freecad);
         setStudioLibrary(library.filter((item) => item.category === "geometry"));
         setStudioRuns(runs.filter((item) => item.status === "succeeded"));
       }).catch((error: Error) => { if (!cancelled) setStudioFinding(error.message); });
@@ -873,12 +877,15 @@ function BluecadWorkbench({ appWorkspaceId, onSelectionChange, onShellRegionsCha
       : showCreate || noCandidates
         ? <div className="bluecad-workbench__empty-viewer">{createPanel}</div>
         : candidate?.glb_artifact_id
-          ? <BluecadGlbViewer artifactUrl={bluecadArtifactContentUrl(candidate.workspace_id, candidate.glb_artifact_id)} references={studioRefs.filter((reference) => reference.valid && reference.glb_url).map((reference) => ({ id: reference.id, url: `${API_BASE_URL}${reference.glb_url}`, translation_mm: reference.translation_mm, rotation_deg: reference.rotation_deg }))} inspectionCommand={inspectionCommand} onInspectionChange={handleInspectionChange} />
+          ? <BluecadGlbViewer artifactUrl={bluecadArtifactContentUrl(candidate.workspace_id, candidate.glb_artifact_id)} references={[
+            ...studioRefs.filter((reference) => reference.valid && reference.glb_url).map((reference) => ({ id: reference.id, url: `${API_BASE_URL}${reference.glb_url}`, translation_mm: reference.translation_mm, rotation_deg: reference.rotation_deg })),
+            ...freecadRefs.filter((reference) => reference.valid && reference.glb_url).map((reference) => ({ id: reference.id, url: `${API_BASE_URL}${reference.glb_url}`, translation_mm: reference.translation_mm, rotation_deg: reference.rotation_deg }))
+          ]} inspectionCommand={inspectionCommand} onInspectionChange={handleInspectionChange} />
           : candidate
             ? <div className="bluecad-workbench__empty-viewer"><h2>Geometry unavailable</h2><p>{candidate.parked_reason ? `Generation was parked: ${candidate.parked_reason}` : "No GLB artifact is available for this candidate yet."}</p><p><button type="button" className="secondary-button" onClick={() => setShowCreate(true)}>Create geometry</button></p></div>
             : <div className="bluecad-workbench__empty-viewer"><p>{selectedId && aggregateState === "error" ? "Candidate detail unavailable. Use Refresh to retry." : aggregateState === "loading" || candidateState === "loading" ? "Loading candidate geometry…" : "Select a candidate from the navigator."}</p>{candidateState === "ready" && aggregateState !== "loading" && <p className="button-row"><button type="button" className="secondary-button" onClick={() => requestShellRegionOpen("navigator")}>Open candidate list</button><button type="button" className="secondary-button" onClick={() => setShowCreate(true)}>Create geometry</button></p>}</div>;
 
-  return <section className="bluecad-workbench" aria-labelledby="bluecad-workbench-title"><header className="bluecad-workbench__chrome"><div style={{ minWidth: 0, flex: "1 1 18rem" }}><p className="eyebrow">BlueCad</p><h1 id="bluecad-workbench-title" ref={workbenchTitleRef} tabIndex={-1}>Model workbench</h1>{candidate && !showCreate && <div style={{ minWidth: 0, overflowWrap: "anywhere" }}><p className="panel-subtitle">{candidate.brief_text.slice(0, 180)}{candidate.brief_text.length > 180 ? "…" : ""}</p><details><summary>Candidate details</summary><dl><dt>Candidate ID</dt><dd>{candidate.id}</dd></dl><p style={{ maxHeight: "10rem", overflow: "auto", whiteSpace: "pre-wrap" }}>{candidate.brief_text}</p></details></div>}</div><div className="button-row"><FreecadPanel workspaceId={workspaceId} />{candidate && !showCreate && <><span className={`status-pill status-${candidate.status}`}>{candidate.status}</span>{exports.length > 0 && <ExportMenu exports={exports} workspaceId={candidate.workspace_id} />}<button type="button" className="secondary-button" onClick={() => requestShellRegionOpen("dock")}>Evidence references</button><button type="button" className="secondary-button" onClick={() => requestShellRegionOpen("sidecar")}>Inspect candidate</button><button type="button" className="secondary-button" onClick={duplicateSelectedBrief}>Duplicate brief</button>{candidate.status !== "archived" && <button type="button" className="secondary-button" onClick={() => void onArchive()} disabled={busy}>Archive</button>}{canPromote && <button type="button" className="primary-button" onClick={() => void onPromote()} disabled={busy}>Promote to Decision</button>}</>}{workspaceId && !noCandidates && !showCreate && <button type="button" className="secondary-button" onClick={() => setShowCreate(true)} disabled={busy}>New geometry</button>}</div></header>{message && <div className="panel-subtitle" role="status">{message}</div>}{sceneBindingNotice && <div className={sceneBindingPresentation === "resolving" ? "panel-subtitle" : "warning-banner"} role="status">{sceneBindingNotice}</div>}<div className="bluecad-workbench__viewport">{viewportContent}</div></section>;
+  return <section className="bluecad-workbench" aria-labelledby="bluecad-workbench-title"><header className="bluecad-workbench__chrome"><div style={{ minWidth: 0, flex: "1 1 18rem" }}><p className="eyebrow">BlueCad</p><h1 id="bluecad-workbench-title" ref={workbenchTitleRef} tabIndex={-1}>Model workbench</h1>{candidate && !showCreate && <div style={{ minWidth: 0, overflowWrap: "anywhere" }}><p className="panel-subtitle">{candidate.brief_text.slice(0, 180)}{candidate.brief_text.length > 180 ? "…" : ""}</p><details><summary>Candidate details</summary><dl><dt>Candidate ID</dt><dd>{candidate.id}</dd></dl><p style={{ maxHeight: "10rem", overflow: "auto", whiteSpace: "pre-wrap" }}>{candidate.brief_text}</p></details></div>}</div><div className="button-row"><FreecadPanel workspaceId={workspaceId} candidateId={selectedId} />{candidate && !showCreate && <><span className={`status-pill status-${candidate.status}`}>{candidate.status}</span>{exports.length > 0 && <ExportMenu exports={exports} workspaceId={candidate.workspace_id} />}<button type="button" className="secondary-button" onClick={() => requestShellRegionOpen("dock")}>Evidence references</button><button type="button" className="secondary-button" onClick={() => requestShellRegionOpen("sidecar")}>Inspect candidate</button><button type="button" className="secondary-button" onClick={duplicateSelectedBrief}>Duplicate brief</button>{candidate.status !== "archived" && <button type="button" className="secondary-button" onClick={() => void onArchive()} disabled={busy}>Archive</button>}{canPromote && <button type="button" className="primary-button" onClick={() => void onPromote()} disabled={busy}>Promote to Decision</button>}</>}{workspaceId && !noCandidates && !showCreate && <button type="button" className="secondary-button" onClick={() => setShowCreate(true)} disabled={busy}>New geometry</button>}</div></header>{message && <div className="panel-subtitle" role="status">{message}</div>}{sceneBindingNotice && <div className={sceneBindingPresentation === "resolving" ? "panel-subtitle" : "warning-banner"} role="status">{sceneBindingNotice}</div>}<div className="bluecad-workbench__viewport">{viewportContent}</div></section>;
 }
 
 const EXPORT_LABELS: Record<string, [string, string]> = {

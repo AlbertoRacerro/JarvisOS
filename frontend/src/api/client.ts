@@ -778,6 +778,71 @@ export const removeBluecadStudioReference = async (reference: BluecadStudioRefer
   if (!response.ok) throw new Error(`Reference removal failed: ${response.status}`);
 };
 
+export type BluecadFreecadObject = {
+  name: string;
+  label: string;
+  type_id: string;
+};
+
+export type BluecadFreecadUpload = {
+  file_sha256: string;
+  file_name: string;
+  objects: BluecadFreecadObject[];
+};
+
+export type BluecadFreecadReference = {
+  id: string;
+  workspace_id: string;
+  candidate_id: string;
+  document_file_name: string;
+  object_name: string;
+  object_label: string;
+  fcstd_sha256: string;
+  step_sha256: string;
+  stl_sha256: string;
+  three_mf_sha256: string;
+  glb_sha256: string;
+  translation_mm: [number, number, number];
+  rotation_deg: [number, number, number];
+  revision: number;
+  valid: boolean;
+  finding: string | null;
+  glb_url: string | null;
+  step_url: string | null;
+  stl_url: string | null;
+  three_mf_url: string | null;
+};
+
+const freecadReferencePath = (workspaceId: string, candidateId: string) =>
+  `/workspaces/${encodeURIComponent(workspaceId)}/bluecad/candidates/${encodeURIComponent(candidateId)}/freecad-references`;
+
+export const uploadBluecadFreecadFile = async (workspaceId: string, file: File): Promise<BluecadFreecadUpload> => {
+  const response = await fetch(`${API_BASE_URL}/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/files`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream", "X-Filename": file.name },
+    body: file
+  });
+  if (!response.ok) throw new Error(`FreeCAD file upload failed: ${response.status}`);
+  return response.json() as Promise<BluecadFreecadUpload>;
+};
+
+export const listBluecadFreecadReferences = (workspaceId: string, candidateId: string) =>
+  getJson<BluecadFreecadReference[]>(freecadReferencePath(workspaceId, candidateId));
+
+export const addBluecadFreecadReference = (workspaceId: string, candidateId: string,
+  payload: { file_sha256: string; object_name: string }) =>
+  postJson<BluecadFreecadReference>(freecadReferencePath(workspaceId, candidateId), payload);
+
+export const moveBluecadFreecadReference = (reference: BluecadFreecadReference,
+  translation_mm: [number, number, number], rotation_deg: [number, number, number]) =>
+  putJson<BluecadFreecadReference>(`${freecadReferencePath(reference.workspace_id, reference.candidate_id)}/${encodeURIComponent(reference.id)}`,
+    { expected_revision: reference.revision, translation_mm, rotation_deg });
+
+export const removeBluecadFreecadReference = async (reference: BluecadFreecadReference) => {
+  const response = await fetch(`${API_BASE_URL}${freecadReferencePath(reference.workspace_id, reference.candidate_id)}/${encodeURIComponent(reference.id)}?expected_revision=${reference.revision}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(`FreeCAD reference removal failed: ${response.status}`);
+};
+
 export async function getBluecadArtifactJson<T>(workspaceId: string, artifactId: string): Promise<T> {
   const response = await fetch(bluecadArtifactContentUrl(workspaceId, artifactId));
   if (!response.ok) {
