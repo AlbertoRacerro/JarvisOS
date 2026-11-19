@@ -1,7 +1,7 @@
 # 319 — GUIDED-PROCESS-REACH-1: The guided path sees process flowsheets and their runs
 
 Status: ready
-Depends on: 312, 318
+Depends on: 312
 
 ## Goal
 

@@ -16,6 +16,7 @@ from app.modules.engineering import bench_runs_view
 from app.modules.engineering.readiness_board import compute_readiness_board
 from app.modules.events.service import utc_now
 from app.modules.memory import literature_ingest
+from app.modules.process_stack import draft as process_draft
 
 StepState = Literal["done", "blocked", "in_progress", "not_started"]
 QuestionStatus = Literal["open", "closed"]
@@ -85,6 +86,28 @@ class UpdateQuestionRequest(BaseModel):
     sensitivity: str | None = None
     explore_skip_reason: str | None = None
     linked_decision_id: str | None = None
+
+
+def _process_draft_records(
+    workspace_id: str,
+) -> list[tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]]:
+    try:
+        drafts = process_draft.list_drafts(workspace_id)[:20]
+    except Exception:
+        return []
+
+    records = []
+    for draft_info in drafts:
+        try:
+            directory = process_draft.draft_dir(workspace_id, draft_info["draft_id"])
+            document = process_draft.load_revision(directory, draft_info["revision"])["document"]
+            runs = process_draft.list_runs(directory)
+            if not isinstance(document, dict) or not isinstance(runs, list):
+                continue
+        except Exception:
+            continue
+        records.append((draft_info, document, runs))
+    return records
 
 
 GUIDED_STEPS: tuple[dict[str, Any], ...] = (
@@ -214,6 +237,12 @@ def evaluate_step(
 
         if comp_row is not None or spec_row is not None or draft_row is not None:
             return "done", []
+        for _draft_info, document, _runs in _process_draft_records(workspace_id):
+            objects = document.get("objects")
+            if isinstance(objects, dict) and any(
+                isinstance(item, dict) and item.get("kind") == "unit" for item in objects.values()
+            ):
+                return "done", []
         return "not_started", []
 
     elif step_name == "run":
@@ -235,15 +264,32 @@ def evaluate_step(
         sim_statuses = [r["status"] for r in sim_rows]
 
         has_completed_sim = any(s == "completed" for s in sim_statuses)
+        draft_records = _process_draft_records(workspace_id)
+        has_completed_draft = any(
+            any(
+                run.get("action") == "run"
+                and run.get("status") == "completed"
+                and (run.get("outcome") or {}).get("state") == "converged"
+                for run in runs
+            )
+            for _draft_info, _document, runs in draft_records
+        )
 
-        if has_usable_bench or has_completed_sim:
+        if has_usable_bench or has_completed_sim or has_completed_draft:
             return "done", []
 
         if any(s in ("running", "queued") for s in sim_statuses):
             return "in_progress", []
 
-        if bench_runs or sim_statuses:
-            return "blocked", ["No runs produced a usable verdict"]
+        draft_blocked_items = [
+            f'Diagramma "{process_draft.plain_text(draft_info.get("name") or draft_info.get("draft_id"))}": '
+            f'{"non converge" if (runs[0].get("outcome") or {}).get("state") == "non_converged" else "fallito"}'
+            for draft_info, _document, runs in draft_records
+            if runs
+            and (runs[0].get("outcome") or {}).get("state") in {"non_converged", "failed"}
+        ]
+        if bench_runs or sim_statuses or draft_blocked_items:
+            return "blocked", draft_blocked_items or ["No runs produced a usable verdict"]
 
         return "not_started", []
 
@@ -401,6 +447,17 @@ def compute_next_action(
                     action_label_it="Collega i parametri",
                     route=step.route,
                 )
+            if step.state == "not_started":
+                return NextAction(
+                    step=step.step,
+                    title_it="Apri il diagramma di processo",
+                    reason_it=(
+                        "Costruisci il diagramma con le unità esistenti: pompa, separatore, "
+                        "unità di coltura e scambiatore."
+                    ),
+                    action_label_it="Apri il diagramma di processo",
+                    route="/design/process",
+                )
             return NextAction(
                 step=step.step,
                 title_it="Definisci il modello di progetto",
@@ -410,6 +467,14 @@ def compute_next_action(
             )
         elif step.step == "run":
             if step.state == "blocked":
+                if any(item.startswith('Diagramma "') for item in step.blocked_items):
+                    return NextAction(
+                        step=step.step,
+                        title_it="Risolvi i problemi nel diagramma di processo",
+                        reason_it="L'ultimo calcolo del diagramma di processo non converge o è fallito.",
+                        action_label_it="Apri il diagramma di processo",
+                        route="/design/process",
+                    )
                 return NextAction(
                     step=step.step,
                     title_it="Risolvi i problemi nei calcoli",
