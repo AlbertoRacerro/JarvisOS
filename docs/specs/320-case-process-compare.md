@@ -34,7 +34,7 @@ interface". No unit, card or physics is added.
 - `backend/app/modules/process_stack/results_view.py::build` returns, for a converged run, `kpis` (list of
   `{id, value, unit, status}`), `units[<tag>]["quantities"][<key>]` and `streams[<tag>][<property>]` as
   `{value, unit}` items; `outcome["state"] == "converged"` together with `action == "run"` and
-  `status == "completed"` is the only usable answer (`draft.py::_converged`, spec 319).
+  `status == "completed"` is the only usable answer (`backend/app/modules/process_stack/draft.py::_converged`, spec 319).
 - `frontend/src/pages/ReadinessBoard.tsx` shows `comparison.run_id` in the comparison table and posts it back as
   `run_id` when recording a verdict.
 
