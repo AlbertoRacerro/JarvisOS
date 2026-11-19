@@ -232,20 +232,20 @@ def test_registry_evaluator_valid_and_invalid_run(tmp_path: Path, capsys: pytest
     req_file.write_text(json.dumps(req_data), encoding="utf-8")
     out_dir = tmp_path / "out_valid"
 
-    # Valid run: exit code 1 because registry evaluators declare no required checks (verdict is 'unchecked')
+    # Valid run: the pipe card records VALIDITY_RANGE and FINITE_OUTPUTS, so the verdict is 'usable' and the exit code 0
     code = main(["run", "fluids.pipe_pressure_drop", str(req_file), "--out", str(out_dir), "--root", str(tmp_path)])
-    assert code == 1
+    assert code == 0
     captured = capsys.readouterr()
     view = json.loads(captured.out)
     assert view["evaluator_id"] == "fluids.pipe_pressure_drop"
     assert view["status"] == "succeeded"
-    assert view["verdict"] == "unchecked"
+    assert view["verdict"] == "usable"
     assert len(captured.out) <= MAX_VIEW_CHARS
 
     result_file = out_dir / "result.json"
     assert result_file.is_file()
     saved_res = json.loads(result_file.read_text(encoding="utf-8"))
-    assert saved_res["verdict"] == "unchecked"
+    assert saved_res["verdict"] == "usable"
     assert saved_res["status"] == "succeeded"
     outputs = {o["name"]: o["value"]["value"] for o in saved_res["outputs"]}
     assert "pressure_drop" in outputs

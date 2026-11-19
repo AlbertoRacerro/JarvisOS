@@ -15,8 +15,9 @@ from app.modules.engineering.evaluator_contracts import (
 )
 from app.modules.process_stack._common import (
     EvaluationRefusal,
+    ValidityPoint,
     descriptor_version,
-    evaluate_with,
+    evaluate_card,
     import_availability,
     option,
     quantities,
@@ -42,16 +43,17 @@ class CoolPropPropertyEvaluator:
             evaluator_id=EVALUATOR_ID, backend_kind="property_package", backend_name="CoolProp",
             backend_version=descriptor_version("CoolProp"), fidelity="steady_state_detailed",
             capabilities=("pure_fluid_properties", "single_phase"),
+            required_checks=("VALIDITY_RANGE", "FINITE_OUTPUTS"),
         )
 
     def availability(self) -> EvaluatorAvailability:
         return import_availability(EVALUATOR_ID, "CoolProp.CoolProp", lambda: descriptor_version("CoolProp"))
 
     def evaluate(self, request: EvaluationRequest) -> EvaluationResult:
-        return evaluate_with(self, request, lambda: _properties(request))
+        return evaluate_card(self, request, lambda: _properties(request))
 
 
-def _properties(request: EvaluationRequest) -> tuple[tuple[NamedQuantity, ...], NumericalDiagnostics]:
+def _properties(request: EvaluationRequest) -> tuple[tuple[NamedQuantity, ...], NumericalDiagnostics, ValidityPoint]:
     from CoolProp.CoolProp import PhaseSI, PropsSI
 
     if request.subject_ref.object_type not in {"material_state", "property_basis"}:
@@ -76,4 +78,6 @@ def _properties(request: EvaluationRequest) -> tuple[tuple[NamedQuantity, ...], 
         raise EvaluationRefusal("outside_validity_domain", "coolprop_state_invalid", str(exc)) from exc
     if not all(math.isfinite(value) for value, _unit in values.values()):
         raise EvaluationRefusal("numerical_error", "coolprop_non_finite", f"non-finite property at {phase}")
-    return quantities(values), NumericalDiagnostics(converged=True)
+    limit = t_min if temperature - t_min <= t_max - temperature else t_max
+    hint = f"{fluid} EOS range T in [{t_min:g}, {t_max:g}] K, 0 < p <= {p_max:g} Pa, single phase."
+    return quantities(values), NumericalDiagnostics(converged=True), ValidityPoint(temperature, limit, "K", hint)
