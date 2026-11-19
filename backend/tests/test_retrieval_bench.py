@@ -232,3 +232,24 @@ def test_title_lookups_are_cached_across_questions(tmp_path: Path, monkeypatch: 
     assert verdict == 'usable'
     assert [q['first_matching_rank'] for q in payload['questions']] == [1, 1, 1]
     assert calls == 1
+
+
+def test_accepted_ids_count_for_rank_and_are_reported(tmp_path: Path) -> None:
+    request = _request()
+    request["questions"] = [
+        {"id": "q1", "query": "alpha", "expected_ids": ["missing"], "accepted_ids": ["alpha"]},
+        {"id": "q2", "query": "beta", "expected_ids": ["beta"]},
+    ]
+    _, _, report = evaluate_retrieval_request(request, root=tmp_path, out_dir=tmp_path)
+    first, second = report["questions"]
+    assert first["accepted_ids"] == ["alpha"] and first["first_matching_rank"] == 1
+    assert second["accepted_ids"] == [] and second["first_matching_rank"] == 1
+    assert not report["errors"]
+
+
+@pytest.mark.parametrize("accepted", ["alpha", [""], [1], [None]])
+def test_accepted_ids_are_validated_like_expected_ids(tmp_path: Path, accepted: object) -> None:
+    request = _request()
+    request["questions"] = [{"id": "q", "query": "alpha", "expected_ids": ["alpha"], "accepted_ids": accepted}]
+    _, _, report = evaluate_retrieval_request(request, root=tmp_path, out_dir=tmp_path)
+    assert report["errors"] and "accepted_ids" in report["errors"][0]["error"]

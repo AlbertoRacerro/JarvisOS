@@ -19,6 +19,9 @@ for (const metric of ["top1_hit_rate", "top3_hit_rate", "mrr", "zero_hit_count"]
 for (const label of ["Utilizzabile", "Utilizzabile con avvertenze", "Non verificato", "Non utilizzabile"]) {
   assert.ok(page.includes(label), `missing verdict ${label}`);
 }
+assert.ok(page.includes("Contato come fonte:"));
+assert.ok(page.includes("(file {question.accepted_ids[0]})"));
+assert.ok(api.includes("accepted_ids?: string[]"));
 assert.ok(api.includes("runRetrievalEval"));
 assert.ok(api.includes("/retrieval-eval"));
 assert.ok(packageJson.includes('"test:316"'));

@@ -9,6 +9,7 @@ Provides:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -27,6 +28,7 @@ from app.modules.ai.retrieval_query import WORKSPACE_SCOPED_OWNERS
 from app.modules.engineering import bench, bench_runs_view
 from app.modules.engineering.bench import _strip_paths
 from app.modules.engineering.operator_service import SAFE_ID
+from app.modules.memory.literature_service import literature_backing_digests
 from app.modules.workspaces.service import get_workspace
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/memory", tags=["ai-memory"])
@@ -72,6 +74,42 @@ def _retrieval_eval_request(body: object) -> tuple[list[dict[str, Any]], str]:
             item["id"] = question_id
         parsed.append(item)
     return parsed, mode
+
+
+def _folder_file_digests(workspace_id: str) -> dict[str, list[str]]:
+    """SHA-256 -> folder-relative paths of the registered folder's .md/.txt files, bounded like intake."""
+    root = document_intake.registered_folder(workspace_id)
+    digests: dict[str, list[str]] = {}
+    if root is None or root.is_symlink() or not root.is_dir():
+        return digests
+    candidates: list[Path] = []
+    try:
+        for count, (directory, dirs, files) in enumerate(os.walk(root, followlinks=False), 1):
+            if count > document_intake.MAX_DIRECTORIES:
+                break
+            dirs[:] = sorted(name for name in dirs if not (Path(directory) / name).is_symlink())
+            for name in sorted(files):
+                relative = (Path(directory) / name).relative_to(root)
+                if relative.suffix.lower() in (".md", ".txt") and len(candidates) < document_intake.MAX_FILES:
+                    candidates.append(relative)
+    except OSError:
+        return digests
+    for relative in sorted(candidates, key=lambda path: path.as_posix()):
+        raw = document_intake._read_file(root, relative)
+        if raw is not None:
+            digests.setdefault(hashlib.sha256(raw).hexdigest(), []).append(relative.as_posix())
+    return digests
+
+
+def _accepted_ids(workspace_id: str, expected: list[str], folder_digests: dict[str, list[str]]) -> list[str]:
+    if not folder_digests:
+        return []
+    accepted: list[str] = []
+    for digest in literature_backing_digests(workspace_id, expected).values():
+        for path in folder_digests.get(digest, []):
+            if path not in accepted:
+                accepted.append(path)
+    return accepted
 
 
 def _repo_root() -> Path:
@@ -222,9 +260,14 @@ async def retrieval_eval(workspace_id: str, request: Request) -> dict[str, Any]:
 
     paths = build_paths()
     root = paths.data_root.resolve()
+    folder_digests = await run_in_threadpool(_folder_file_digests, workspace_id)
+    enriched: list[dict[str, Any]] = []
+    for question in questions:
+        accepted = await run_in_threadpool(_accepted_ids, workspace_id, question["expected_ids"], folder_digests)
+        enriched.append({**question, "workspace_id": workspace_id, **({"accepted_ids": accepted} if accepted else {})})
     request_data = {
         "workspace_id": workspace_id,
-        "questions": [{**question, "workspace_id": workspace_id} for question in questions],
+        "questions": enriched,
         "mode": mode,
         "index_db_path": str(paths.retrieval_index_file.resolve()),
     }
@@ -234,7 +277,12 @@ async def retrieval_eval(workspace_id: str, request: Request) -> dict[str, Any]:
     out_dir = bench_runs_view.bench_root(workspace_id) / run_id
     try:
         await run_in_threadpool(bench.run_evaluation, "retrieval.eval", request_data, out_dir=out_dir, root=root)
-        return bench_runs_view.show(workspace_id, run_id)
+        view = bench_runs_view.show(workspace_id, run_id)
+        try:
+            view["questions"] = json.loads((out_dir / "per_question.json").read_text(encoding="utf-8"))["questions"]
+        except (OSError, ValueError, KeyError):
+            view["questions"] = []
+        return view
     except bench.BenchInputError as exc:
         raise HTTPException(status_code=422, detail={"code": "retrieval_eval_invalid"}) from exc
     except bench_runs_view.BenchViewError as exc:

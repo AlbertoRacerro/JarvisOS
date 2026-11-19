@@ -242,6 +242,9 @@ def evaluate_retrieval_request(
                     not isinstance(item, str) or not item for item in expected
                 ):
                     raise ValueError("question expected_ids must be non-empty strings")
+                accepted = question.get("accepted_ids", [])
+                if not isinstance(accepted, list) or any(not isinstance(item, str) or not item for item in accepted):
+                    raise ValueError("question accepted_ids must be non-empty strings")
                 q_ws = question.get("workspace_id", default_ws)
                 if q_ws is not None and not isinstance(q_ws, str):
                     raise ValueError("question workspace_id must be a string")
@@ -249,13 +252,15 @@ def evaluate_retrieval_request(
                 hits = search(question["query"], limit=limit, workspace_id=q_ws)
                 rank = next(
                     (position for position, hit in enumerate(hits, 1)
-                     if any(_matches(item, hit, title_for(hit.source_ref.model_dump_json())) for item in expected)),
+                     if any(_matches(item, hit, title_for(hit.source_ref.model_dump_json()))
+                            for item in (*expected, *accepted))),
                     None,
                 )
                 per_question.append({
                     "id": question.get("id"),
                     "query": question["query"],
                     "expected_ids": expected,
+                    "accepted_ids": accepted,
                     "first_matching_rank": rank,
                     "hit_count": len(hits),
                 })
