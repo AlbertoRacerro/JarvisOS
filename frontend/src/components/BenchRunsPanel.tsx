@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import NumericInput from "./ui/NumericInput";
 import {
-  compareBenchRuns, getBenchRun, listBenchRuns,
-  type BenchCompare, type BenchRunDetail, type BenchRunList, type BenchRunRow, type BenchVerdict
+  compareBenchRuns, createBenchRun, getBenchRun, listBenchCards, listBenchRuns,
+  type BenchCard, type BenchCompare, type BenchRunDetail, type BenchRunList, type BenchRunRow, type BenchVerdict
 } from "../api/benchRuns";
 
-// Spec 299: read-only bench results. Nothing here starts, edits or deletes a run.
+// Spec 299: bench results. Spec 315: the form starts a correlation-card run; nothing here edits or deletes a run.
 export const BENCH_TITLE = "Banco di prova";
 export const BENCH_EMPTY = "Nessun risultato: i risultati compaiono qui quando l'assistente usa il banco di prova.";
 export const VERDICT_LABELS: Record<BenchVerdict, string> = {
@@ -123,6 +124,20 @@ export default function BenchRunsPanel({ workspaceId }: Readonly<{ workspaceId: 
   const [marked, setMarked] = useState<string[]>([]);
   const [compare, setCompare] = useState<BenchCompare | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cards, setCards] = useState<BenchCard[]>([]);
+  const [cardId, setCardId] = useState("");
+  const [inputs, setInputs] = useState<Record<string, number>>({});
+  const [options, setOptions] = useState<Record<string, string>>({});
+  const [running, setRunning] = useState(false);
+
+  const selectedCard = cards.find((card) => card.card_id === cardId) ?? null;
+
+  const chooseCard = (nextId: string) => {
+    const card = cards.find((item) => item.card_id === nextId);
+    setCardId(nextId);
+    setInputs(Object.fromEntries((card?.fields ?? []).map((field) => [field.name, field.default])));
+    setOptions(Object.fromEntries((card?.options ?? []).map((option) => [option.name, option.default])));
+  };
 
   const load = useCallback(() => {
     if (!workspaceId) return;
@@ -131,7 +146,19 @@ export default function BenchRunsPanel({ workspaceId }: Readonly<{ workspaceId: 
   }, [workspaceId]);
   useEffect(() => {
     setList(null); setSelected(null); setDetail(null); setMarked([]); setCompare(null); setError(null);
+    setCards([]); setCardId(""); setInputs({}); setOptions({});
     load();
+    if (workspaceId) {
+      listBenchCards(workspaceId).then((catalog) => {
+        setCards(catalog.cards);
+        if (catalog.cards[0]) {
+          const first = catalog.cards[0];
+          setCardId(first.card_id);
+          setInputs(Object.fromEntries(first.fields.map((field) => [field.name, field.default])));
+          setOptions(Object.fromEntries(first.options.map((option) => [option.name, option.default])));
+        }
+      }).catch(() => setError("Catalogo delle schede non disponibile."));
+    }
   }, [load]);
 
   const open = (run: BenchRunRow) => {
@@ -147,9 +174,49 @@ export default function BenchRunsPanel({ workspaceId }: Readonly<{ workspaceId: 
     compareBenchRuns(workspaceId, marked[0], marked[1]).then((doc) => { setCompare(doc); setDetail(null); setSelected(null); })
       .catch(() => setError("Confronto non riuscito."));
   };
+  const executeCard = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!workspaceId || !selectedCard) return;
+    setRunning(true); setError(null);
+    createBenchRun(workspaceId, { card_id: selectedCard.card_id, inputs, options })
+      .then((run) => {
+        setSelected(run.run_id); setCompare(null); setDetail(run);
+        listBenchRuns(workspaceId).then(setList).catch(() => setFailed(true));
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Esecuzione non riuscita."))
+      .finally(() => setRunning(false));
+  };
 
   return <section className="bench-panel" aria-label={BENCH_TITLE}>
     <header><h2>{BENCH_TITLE}</h2><button type="button" onClick={load}>Aggiorna</button></header>
+    <section className="bench-card-form" aria-label="Nuova esecuzione">
+      <h3>Nuova esecuzione</h3>
+      {cards.length > 0 ? <form onSubmit={executeCard}>
+        <label>Correlazione
+          <select value={cardId} onChange={(event) => chooseCard(event.target.value)}>
+            {cards.map((card) => <option key={card.card_id} value={card.card_id}>{card.title}</option>)}
+          </select>
+        </label>
+        {selectedCard ? <>
+          <p><strong>Formula:</strong> {selectedCard.formula}</p>
+          <p><strong>Intervallo di validità:</strong> {selectedCard.validity}</p>
+          <p><strong>Fonte:</strong> {selectedCard.source}</p>
+          {selectedCard.fields.map((field) =>
+            <label key={field.name}>{field.label} ({field.unit})
+              <NumericInput required value={inputs[field.name] ?? field.default}
+                onValueChange={(value) => setInputs((current) => ({ ...current, [field.name]: Number(value) }))} />
+            </label>)}
+          {selectedCard.options.map((option) =>
+            <label key={option.name}>{option.label}
+              <select value={options[option.name] ?? option.default}
+                onChange={(event) => setOptions((current) => ({ ...current, [option.name]: event.target.value }))}>
+                {option.choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
+              </select>
+            </label>)}
+          <button type="submit" disabled={running}>{running ? "Esecuzione…" : "Esegui"}</button>
+        </> : null}
+      </form> : <p>Caricamento delle schede…</p>}
+    </section>
     {failed ? <p role="alert">Elenco non disponibile.</p> : null}
     {list === null && !failed ? <p>Caricamento…</p> : null}
     {list ? <BenchRunsList data={list} selected={selected} marked={marked} onOpen={open} onMark={mark} /> : null}

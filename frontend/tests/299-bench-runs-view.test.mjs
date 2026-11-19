@@ -14,7 +14,10 @@ const module = { exports: {} };
 const code = ts.transpileModule(read("src/components/BenchRunsPanel.tsx"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX }
 }).outputText;
-new Function("require", "module", "exports", code)(name => name === "../api/benchRuns" ? {} : require(name), module, module.exports);
+new Function("require", "module", "exports", code)(name =>
+  name === "../api/benchRuns" ? {} :
+  name === "./ui/NumericInput" ? { __esModule: true, default: (props) => React.createElement("input", props) } :
+  require(name), module, module.exports);
 const { BenchRunsList, BenchRunDetailView, BenchCompareView, VERDICT_LABELS, CHECK_STATUS_LABELS, BENCH_EMPTY, verdictOf, evaluatorName } = module.exports;
 
 assert.deepEqual(VERDICT_LABELS, {
@@ -65,5 +68,5 @@ const cmp = renderToStaticMarkup(React.createElement(BenchCompareView, { doc: {
 assert.ok(cmp.includes("12 mm3") && cmp.includes("3 mm3") && cmp.includes("Non valutato"));
 
 assert.ok(read("src/pages/RunsWorkbench.tsx").includes("<BenchRunsPanel"), "the section lives on the Runs screen");
-assert.ok(!/method:\s*"(POST|PUT|PATCH|DELETE)"/.test(read("src/api/benchRuns.ts")), "read only");
+assert.ok(/createBenchRun/.test(read("src/api/benchRuns.ts")), "the bench API now supports starting correlation runs");
 console.log("bench runs view: OK");
