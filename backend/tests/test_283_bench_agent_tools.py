@@ -171,7 +171,7 @@ def test_criterion_2_bench_read_list_grants_and_refusals(
     res = dispatch_tool(call, live_grants={read_grant.grant_id: read_grant})
     assert res.status == "succeeded"
     assert res.result is not None
-    assert len(res.result["rows"]) == 11
+    assert len(res.result["rows"]) == 12
     evaluator_ids = {r["evaluator_id"] for r in res.result["rows"]}
     assert "bluecad.solid" in evaluator_ids
     assert "bluecad.mesh" in evaluator_ids
