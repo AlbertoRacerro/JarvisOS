@@ -1,6 +1,6 @@
 # 326 — FREECAD-BRIDGE-1: Read the open FreeCAD document and set a property from the CAD screen
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal
