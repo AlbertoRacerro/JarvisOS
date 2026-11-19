@@ -432,7 +432,7 @@ try {
     await page.getByRole("button", { name: "Registra cartella" }).click();
     await need("'Cartella registrata'", page.getByText("Cartella registrata:", { exact: false }));
     await page.getByRole("button", { name: "Aggiorna cartella" }).click();
-    await need("'Inclusi: 1'", page.getByText("Inclusi: 1", { exact: false }));
+    await need("'Inclusi: N, Saltati: 0'", page.getByText(/Inclusi: [1-9]\d*, Saltati: 0\b/));
     await page.getByLabel("Domanda").fill(answer.question);
     await page.getByLabel("Titolo o ID atteso").fill(answer.expected);
     await page.getByRole("button", { name: "Verifica recupero" }).click();

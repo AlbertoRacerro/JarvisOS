@@ -188,14 +188,20 @@ def _passages(text: str, markdown: bool) -> list[tuple[str, str, int, tuple[int,
         passage = ""
         first = 0
         ordinal = 0
+        pieces: list[tuple[int, str, str]] = []
         for line_no, block in blocks:
             if len(block) > MAX_PASSAGE_CHARS:
-                continue
-            candidate = f"{passage}\n\n{block}" if passage else block
+                pieces.extend((line_no + index, line, "\n" if index else "\n\n")
+                              for index, line in enumerate(block.splitlines())
+                              if len(line) <= MAX_PASSAGE_CHARS)
+            else:
+                pieces.append((line_no, block, "\n\n"))
+        for line_no, piece, separator in pieces:
+            candidate = f"{passage}{separator}{piece}" if passage else piece
             if len(candidate) > MAX_PASSAGE_CHARS:
                 output.append((title, passage, first, (occurrence, ordinal)))
                 ordinal += 1
-                passage = block
+                passage = piece
                 first = line_no
             else:
                 passage = candidate
@@ -233,7 +239,7 @@ def _file_documents(root: Path, relative: Path, workspace_id: str) -> ScanResult
     if "\x00" in content:
         return ScanResult((), ({"path": label, "reason": "binary"},))
     skipped: list[dict[str, str]] = []
-    if any(len(block.strip()) > MAX_PASSAGE_CHARS for block in re.split(r"\n\s*\n", content)):
+    if any(len(line) > MAX_PASSAGE_CHARS for line in content.splitlines()):
         skipped.append({"path": label, "reason": "passage_too_large"})
     passages = extract_passages(content, markdown=relative.suffix.lower() == ".md")
     if not passages and content.strip():
