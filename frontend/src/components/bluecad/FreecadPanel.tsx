@@ -6,12 +6,24 @@ import {
   listFreecadDocuments,
   listFreecadObjects,
   previewFreecadEdit,
+  API_BASE_URL,
+  uploadBluecadFreecadFile,
+  listBluecadFreecadReferences,
+  addBluecadFreecadReference,
+  removeBluecadFreecadReference,
+  type BluecadFreecadReference,
+  type BluecadFreecadUpload,
   type FreecadEditPreview,
   type FreecadObject,
   type FreecadStatus
 } from "../../api/client";
 
-type Props = Readonly<{ workspaceId: string }>;
+type Props = Readonly<{
+  workspaceId: string;
+  candidateId: string | null;
+  freecadRefs: BluecadFreecadReference[];
+  onFreecadRefsChange: (references: BluecadFreecadReference[]) => void;
+}>;
 type Property = { name: string; value: unknown; readOnly: boolean };
 
 function propertiesOf(object: FreecadObject): Property[] {
@@ -36,7 +48,7 @@ function parseValue(raw: string, old: unknown): unknown {
   return raw;
 }
 
-export default function FreecadPanel({ workspaceId }: Props) {
+export default function FreecadPanel({ workspaceId, candidateId, freecadRefs, onFreecadRefsChange }: Props) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<FreecadStatus | null>(null);
   const [documents, setDocuments] = useState<string[]>([]);
@@ -48,6 +60,8 @@ export default function FreecadPanel({ workspaceId }: Props) {
   const [preview, setPreview] = useState<FreecadEditPreview | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [freecadUpload, setFreecadUpload] = useState<BluecadFreecadUpload | null>(null);
+  const [freecadObjectName, setFreecadObjectName] = useState("");
 
   const selectedObject = objects.find((item) => item.Name === objectName);
   const properties = useMemo(() => selectedObject ? propertiesOf(selectedObject) : [], [selectedObject]);
@@ -108,6 +122,38 @@ export default function FreecadPanel({ workspaceId }: Props) {
     }).catch((error: Error) => setMessage(error.message)).finally(() => setBusy(false));
   };
 
+  const onChooseFile = (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true);
+    void uploadBluecadFreecadFile(workspaceId, file).then((next) => {
+      setFreecadUpload(next);
+      setFreecadObjectName(next.objects[0]?.name ?? "");
+      setMessage(null);
+    }).catch((error: Error) => setMessage(error.message)).finally(() => setBusy(false));
+  };
+
+  const onAddFreecad = () => {
+    if (!candidateId || !freecadUpload || !freecadObjectName) return;
+    setBusy(true);
+    void addBluecadFreecadReference(workspaceId, candidateId, {
+      file_sha256: freecadUpload.file_sha256,
+      object_name: freecadObjectName
+    }).then(() => listBluecadFreecadReferences(workspaceId, candidateId))
+      .then(onFreecadRefsChange)
+      .catch((error: Error) => setMessage(error.message))
+      .finally(() => setBusy(false));
+  };
+
+  const onRemoveFreecad = (reference: BluecadFreecadReference) => {
+    setBusy(true);
+    void removeBluecadFreecadReference(reference).then(() => {
+      if (candidateId) return listBluecadFreecadReferences(workspaceId, candidateId);
+      return [];
+    }).then(onFreecadRefsChange)
+      .catch((error: Error) => setMessage(error.message))
+      .finally(() => setBusy(false));
+  };
+
   return <section className="bluecad-freecad" aria-labelledby="freecad-panel-title">
     <button type="button" className="secondary-button" onClick={() => setOpen((current) => !current)} aria-expanded={open}>FreeCAD</button>
     {open && <div className="bluecad-freecad__panel">
@@ -131,6 +177,30 @@ export default function FreecadPanel({ workspaceId }: Props) {
           <button type="submit" disabled={busy || !selectedProperty || selectedProperty.readOnly}>Anteprima</button>
         </form>
         {preview && <div role="status"><p>Anteprima: {display(preview.old_value)} → {display(preview.new_value)}</p><button type="button" onClick={onApply} disabled={busy}>Applica</button></div>}
+      </div>}
+      <h3>Parte FreeCAD nella vista</h3>
+      {status && !status.configured && <p role="status">FreeCAD non configurato. Configura il percorso dell&apos;eseguibile per collegarti.</p>}
+      {status?.configured && candidateId && <div>
+        <label>Scegli file .FCStd<input type="file" accept=".FCStd" onChange={(event) => onChooseFile(event.target.files?.[0])} /></label>
+        {freecadUpload && <div>
+          <label>Oggetto FreeCAD<select value={freecadObjectName} onChange={(event) => setFreecadObjectName(event.target.value)}>
+            {freecadUpload.objects.map((item) => <option key={item.name} value={item.name}>{item.label || item.name}</option>)}
+          </select></label>
+          <button type="button" disabled={busy || !freecadObjectName} onClick={onAddFreecad}>Aggiungi alla vista</button>
+        </div>}
+        {freecadRefs.length === 0 && <p>Nessuna parte FreeCAD nella vista.</p>}
+        {freecadRefs.map((reference) => <article key={reference.id} className="bluecad-freecad__reference">
+          <strong>{reference.document_file_name}</strong>
+          <p>{reference.object_label || reference.object_name}</p>
+          <p>{reference.fcstd_sha256.slice(0, 12)} · STEP {reference.step_sha256.slice(0, 12)} · GLB {reference.glb_sha256.slice(0, 12)}</p>
+          <p>{reference.valid ? "Valida" : `Non valida: ${reference.finding ?? "artefatto modificato"}`}</p>
+          {reference.valid && <p>
+            {reference.step_url && <a href={`${API_BASE_URL}${reference.step_url}`}>STEP</a>}
+            {reference.stl_url && <> · <a href={`${API_BASE_URL}${reference.stl_url}`}>STL</a></>}
+            {reference.three_mf_url && <> · <a href={`${API_BASE_URL}${reference.three_mf_url}`}>3MF</a></>}
+          </p>}
+          <button type="button" disabled={busy} onClick={() => onRemoveFreecad(reference)}>Rimuovi</button>
+        </article>)}
       </div>}
     </div>}
   </section>;

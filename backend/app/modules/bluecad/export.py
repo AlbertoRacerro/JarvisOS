@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import locale
 import re
 import uuid
 import zipfile
@@ -44,6 +45,55 @@ def build_artifacts(spec_payload: dict[str, Any], out_dir: str | Path) -> dict[s
     manifest_path = out_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
+
+
+def export_imported_step(step_path: str | Path, out_dir: str | Path) -> dict[str, str]:
+    """Reuse the BLUECAD kernel export settings for an externally exported STEP."""
+    try:
+        import build123d as bd
+    except ImportError as exc:  # pragma: no cover
+        raise BluecadError("KERNEL_ERROR", {"message": "build123d is not installed"}) from exc
+
+    previous_locale = locale.setlocale(locale.LC_ALL)
+    try:
+        shape = bd.import_step(str(step_path))
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        bd.export_stl(
+            shape,
+            out_path / "model.stl",
+        )
+        bd.export_gltf(
+            shape,
+            out_path / "model.glb",
+            binary=True,
+            linear_deflection=THREE_MF_LINEAR_DEFLECTION,
+            angular_deflection=THREE_MF_ANGULAR_DEFLECTION,
+        )
+        mesher = bd.Mesher(unit=bd.Unit.MM)
+        mesher.add_shape(
+            shape,
+            linear_deflection=THREE_MF_LINEAR_DEFLECTION,
+            angular_deflection=THREE_MF_ANGULAR_DEFLECTION,
+            part_number="freecad",
+        )
+        mesher.meshes[-1].SetName("freecad")
+        mesher.write(str(out_path / "model.3mf"))
+        _normalize_3mf_uuids(out_path / "model.3mf")
+    finally:
+        # OpenCascade / VTK C++ readers can reset the process locale to "C".
+        try:
+            locale.setlocale(locale.LC_ALL, previous_locale)
+        except locale.Error:
+            pass
+
+    digests: dict[str, str] = {}
+    for name in ("model.step", "model.stl", "model.glb", "model.3mf"):
+        path = out_path / name
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise BluecadError("EXPORT_ERROR", {"artifact": name, "message": "artifact was not written"})
+        digests[name] = sha256_file(path)
+    return digests
 
 
 def _export_shapes(parts: dict[str, BuiltPart], out_dir: Path) -> tuple[dict[str, str], dict[str, Any]]:

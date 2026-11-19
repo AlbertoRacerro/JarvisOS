@@ -11,6 +11,9 @@ from app.core.ai_thread_schema import (
     AI_THREAD_TURN_EXTRAS_MIGRATION_RECORD,
 )
 from app.core.bluecad_studio_schema import (
+    BLUECAD_FREECAD_SCHEMA_INDEX_STATEMENTS,
+    BLUECAD_FREECAD_SCHEMA_MIGRATION_RECORD,
+    BLUECAD_FREECAD_SCHEMA_STATEMENTS,
     BLUECAD_STUDIO_SCHEMA_INDEX_STATEMENTS,
     BLUECAD_STUDIO_SCHEMA_MIGRATION_RECORD,
     BLUECAD_STUDIO_SCHEMA_STATEMENTS,
@@ -187,6 +190,8 @@ def initialize_database() -> DatabaseInfo:
             connection.execute(statement)
         for statement in BLUECAD_STUDIO_SCHEMA_STATEMENTS:
             connection.execute(statement)
+        for statement in BLUECAD_FREECAD_SCHEMA_STATEMENTS:
+            connection.execute(statement)
         for statement in SENSITIVITY_SCHEMA_STATEMENTS:
             connection.execute(statement)
         for statement in EGRESS_SCHEMA_STATEMENTS:
@@ -245,6 +250,8 @@ def initialize_database() -> DatabaseInfo:
         for statement in CAD_LINK_SCHEMA_INDEX_STATEMENTS:
             connection.execute(statement)
         for statement in BLUECAD_STUDIO_SCHEMA_INDEX_STATEMENTS:
+            connection.execute(statement)
+        for statement in BLUECAD_FREECAD_SCHEMA_INDEX_STATEMENTS:
             connection.execute(statement)
         for statement in SENSITIVITY_SCHEMA_INDEX_STATEMENTS:
             connection.execute(statement)
@@ -443,6 +450,7 @@ def _record_schema_migrations(connection: sqlite3.Connection) -> None:
         RELAY_GATEWAY_MIGRATION_RECORD,
         WORKSPACE_ACTIONS_MIGRATION_RECORD,
         BLUECAD_STUDIO_SCHEMA_MIGRATION_RECORD,
+        BLUECAD_FREECAD_SCHEMA_MIGRATION_RECORD,
         PRINT_HANDOFF_MIGRATION_RECORD,
         CONVERSATION_INTAKE_MIGRATION_RECORD,
         AI_THREAD_TURN_EXTRAS_MIGRATION_RECORD,
