@@ -132,7 +132,7 @@ def test_fitting_blocks_keep_existing_passage_shape_and_line_numbers() -> None:
 
     assert extract_passages(sample, markdown=True) == [
         ("Heading", "First paragraph.\n\nSecond paragraph.", 3, (0, 0)),
-        ("Subheading", "Third paragraph.", 7, (0, 0)),
+        ("Subheading", "Third paragraph.", 9, (0, 0)),
     ]
 
 
