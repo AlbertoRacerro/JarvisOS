@@ -26,7 +26,9 @@ for line in sys.stdin:
     method = request["method"]
     with open(log, "a", encoding="utf-8") as out:
         out.write(method + "\\n")
-    if method not in {"ping", "list_documents", "get_objects", "get_object", "edit_object"}:
+    if os.environ.get("FREECAD_NOT_RUNNING"):
+        response = {"id": request["id"], "ok": False, "error": {"code": "FREECAD_ADDON_NOT_RUNNING"}}
+    elif method not in {"ping", "list_documents", "get_objects", "get_object", "edit_object"}:
         response = {"id": request["id"], "ok": False, "error": {"code": "FREECAD_METHOD_NOT_ALLOWED"}}
     elif method == "ping":
         response = {"id": request["id"], "ok": True, "result": True}
@@ -86,8 +88,19 @@ def test_allowlist_and_digest_reasons(peer: tuple[Path, Path, Path], monkeypatch
     with pytest.raises(FreecadBridgeError) as mismatch:
         bridge.request("ping")
     assert mismatch.value.code == "FREECAD_BRIDGE_DIGEST_MISMATCH"
+    monkeypatch.setenv("JARVISOS_FREECAD_PYTHON_SHA256", "")
+    with pytest.raises(FreecadBridgeError) as unconfigured:
+        bridge.request("ping")
+    assert unconfigured.value.code == "FREECAD_BRIDGE_DIGEST_UNCONFIGURED"
     monkeypatch.delenv("JARVISOS_FREECAD_PYTHON_PATH")
     assert bridge.configuration()["code"] == "FREECAD_BRIDGE_UNAVAILABLE"
+
+
+def test_missing_addon_is_reported(peer: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FREECAD_NOT_RUNNING", "1")
+    with pytest.raises(FreecadBridgeError) as missing:
+        FreecadBridge().request("ping")
+    assert missing.value.code == "FREECAD_ADDON_NOT_RUNNING"
 
 
 def test_routes_validate_preview_stale_and_failed_apply(
