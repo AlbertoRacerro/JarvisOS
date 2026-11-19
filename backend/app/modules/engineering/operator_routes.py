@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app.core.database import open_sqlite_connection
 from app.modules.ai.context_builder import canonical_digest
-from app.modules.engineering import bench_runs_view, case_verdicts, guided_flow
+from app.modules.engineering import bench_cards, bench_runs_view, case_verdicts, guided_flow
 from app.modules.engineering.multifidelity import MultifidelityStudyRun, escalate_study
 from app.modules.engineering.operator_models import CapabilityRead, EscalationRequest, EvaluatorRead
 from app.modules.engineering.operator_service import (
@@ -168,6 +168,35 @@ def list_escalations(workspace_id: str, study_id: str, digest: str) -> list[Mult
 @router.get("/bench/runs")
 def list_bench_runs(workspace_id: str) -> dict[str, Any]:
     return _bench(bench_runs_view.list_runs, workspace_id)
+
+
+@router.get("/bench/cards", response_model=bench_cards.BenchCardCatalog)
+def list_bench_cards(workspace_id: str) -> bench_cards.BenchCardCatalog:
+    try:
+        return bench_cards.BenchCardCatalog.model_validate(bench_cards.list_cards(workspace_id))
+    except LookupError as exc:
+        raise HTTPException(404, detail={"code": "workspace_not_found"}) from exc
+
+
+@router.post("/bench/runs", response_model=bench_cards.BenchRunDetail)
+def create_bench_card_run(workspace_id: str, payload: bench_cards.CreateBenchRunRequest) -> bench_cards.BenchRunDetail:
+    try:
+        detail = bench_cards.run_card(workspace_id, payload)
+        return bench_cards.BenchRunDetail.model_validate(detail)
+    except LookupError as exc:
+        raise HTTPException(404, detail={"code": "workspace_not_found"}) from exc
+    except ValueError as exc:
+        message = str(exc)
+        code = "invalid_card_request"
+        if message.startswith("unknown_card"):
+            code = "card_not_found"
+        elif message.startswith("unknown_option"):
+            code = "option_invalid"
+        elif message.startswith("invalid_input") or message.startswith("invalid_inputs"):
+            code = "inputs_invalid"
+        raise HTTPException(422, detail={"code": code, "message": message}) from exc
+    except bench_runs_view.BenchViewError as exc:
+        raise HTTPException(exc.status, detail={"code": exc.code}) from exc
 
 
 @router.get("/bench/compare")
