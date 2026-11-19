@@ -5,7 +5,7 @@ import {
   type BenchCard, type BenchCompare, type BenchRunDetail, type BenchRunList, type BenchRunRow, type BenchVerdict
 } from "../api/benchRuns";
 
-// Spec 299: read-only bench results. Nothing here starts, edits or deletes a run.
+// Spec 299: bench results. Spec 315: the form starts a correlation-card run; nothing here edits or deletes a run.
 export const BENCH_TITLE = "Banco di prova";
 export const BENCH_EMPTY = "Nessun risultato: i risultati compaiono qui quando l'assistente usa il banco di prova.";
 export const VERDICT_LABELS: Record<BenchVerdict, string> = {

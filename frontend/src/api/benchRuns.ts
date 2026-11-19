@@ -60,7 +60,7 @@ export function listBenchCards(workspaceId: string): Promise<BenchCardCatalog> {
 }
 
 export function createBenchRun(workspaceId: string, payload: CreateBenchRunPayload): Promise<BenchRunDetail> {
-  return fetch(`${base(workspaceId)}/runs`, {
+  return fetch(`${API_BASE_URL}${base(workspaceId)}/runs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

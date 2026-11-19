@@ -19,5 +19,5 @@ assert.ok(api.includes("createBenchRun"));
 assert.ok(api.includes('method: "POST"'));
 assert.ok(api.includes("BenchCard"));
 assert.ok(api.includes("CreateBenchRunPayload"));
-assert.ok(!panel.includes("Run") || panel.includes("run"));
+assert.ok(/fetch\(`\$\{API_BASE_URL\}\$\{base\(workspaceId\)\}\/runs`/.test(api), "POST goes to the configured API base");
 console.log("correlation cards: OK");

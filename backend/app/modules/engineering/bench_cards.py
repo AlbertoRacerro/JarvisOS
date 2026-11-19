@@ -125,7 +125,7 @@ CARDS: tuple[BenchCard, ...] = (
         evaluator_id="coolprop.pure_fluid_properties",
         title="Proprietà termofisiche di fluido puro",
         formula="ρ, μ, k e cp = PropsSI(T, p) da CoolProp",
-        validity="Stato monofase entro i limiti EOS della fluido selezionata",
+        validity="Stato monofase entro i limiti EOS del fluido selezionato",
         source="CoolProp",
         fields=(
             CardNumericField(name="temperature", label="Temperatura", unit="K", default=298.15),
