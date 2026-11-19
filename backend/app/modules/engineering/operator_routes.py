@@ -6,13 +6,15 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.core.database import open_sqlite_connection
 from app.modules.ai.context_builder import canonical_digest
-from app.modules.engineering import bench_runs_view
+from app.modules.engineering import bench_runs_view, guided_flow
 from app.modules.engineering.multifidelity import MultifidelityStudyRun, escalate_study
 from app.modules.engineering.operator_models import CapabilityRead, EscalationRequest, EvaluatorRead
 from app.modules.engineering.operator_service import (
     DIGEST,
     MAX_STUDY_BUDGET,
+    SAFE_ID,
     RecordConflictError,
     capability_reads,
     digest_file_name,
@@ -25,6 +27,7 @@ from app.modules.engineering.operator_service import (
 )
 from app.modules.engineering.process_cad_handoff import ProcessDesignEnvelope, process_design_envelope
 from app.modules.engineering.studies import StudyDefinition, StudyRun, run_study
+from app.modules.workspaces.service import get_workspace
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/engineering", tags=["engineering"])
 
@@ -175,3 +178,110 @@ def compare_bench_runs(workspace_id: str, run_a: str, run_b: str) -> dict[str, A
 @router.get("/bench/runs/{run_id}")
 def show_bench_run(workspace_id: str, run_id: str) -> dict[str, Any]:
     return _bench(bench_runs_view.show, workspace_id, run_id)
+
+
+def _check_workspace(workspace_id: str) -> None:
+    if not SAFE_ID.fullmatch(workspace_id) or get_workspace(workspace_id) is None:
+        raise HTTPException(404, detail={"code": "workspace_not_found"})
+
+
+@router.get("/guided-questions", response_model=guided_flow.GuidedQuestionsResponse)
+def get_guided_questions(workspace_id: str) -> guided_flow.GuidedQuestionsResponse:
+    _check_workspace(workspace_id)
+    with open_sqlite_connection() as connection:
+        raw_questions = guided_flow.list_questions(connection, workspace_id)
+        steps_def = guided_flow.get_steps_definition()
+        questions: list[guided_flow.DesignQuestionRead] = []
+        for q in raw_questions:
+            steps = guided_flow.evaluate_all_steps(connection, workspace_id, q)
+            next_action = guided_flow.compute_next_action(steps)
+            questions.append(
+                guided_flow.DesignQuestionRead(
+                    **q,
+                    steps=steps,
+                    next_action=next_action,
+                )
+            )
+
+        active_question = next((q for q in questions if q.status == "open"), None)
+        if active_question is None and questions:
+            active_question = questions[0]
+
+        if active_question is not None:
+            active_steps = active_question.steps
+            active_next = active_question.next_action
+            active_id = active_question.id
+        else:
+            active_steps = guided_flow.evaluate_all_steps(connection, workspace_id, None)
+            active_next = guided_flow.compute_next_action(active_steps)
+            active_id = None
+
+        return guided_flow.GuidedQuestionsResponse(
+            steps_definition=steps_def,
+            questions=questions,
+            active_question_id=active_id,
+            steps=active_steps,
+            next_action=active_next,
+        )
+
+
+@router.post("/guided-questions", response_model=guided_flow.DesignQuestionRead, status_code=201)
+def create_guided_question(
+    workspace_id: str, payload: guided_flow.CreateQuestionRequest
+) -> guided_flow.DesignQuestionRead:
+    _check_workspace(workspace_id)
+    if not payload.title or not payload.title.strip():
+        raise HTTPException(
+            422, detail={"code": "title_required", "message": "Question title cannot be empty."}
+        )
+    with open_sqlite_connection() as connection:
+        try:
+            raw_q = guided_flow.create_question(
+                connection,
+                workspace_id,
+                title=payload.title,
+                what_changes=payload.what_changes,
+                sensitivity=payload.sensitivity,
+                explore_skip_reason=payload.explore_skip_reason,
+                linked_decision_id=payload.linked_decision_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, detail={"code": "validation_error", "message": str(exc)}) from exc
+        steps = guided_flow.evaluate_all_steps(connection, workspace_id, raw_q)
+        next_action = guided_flow.compute_next_action(steps)
+        return guided_flow.DesignQuestionRead(
+            **raw_q,
+            steps=steps,
+            next_action=next_action,
+        )
+
+
+@router.patch("/guided-questions/{question_id}", response_model=guided_flow.DesignQuestionRead)
+def update_guided_question(
+    workspace_id: str, question_id: str, payload: guided_flow.UpdateQuestionRequest
+) -> guided_flow.DesignQuestionRead:
+    _check_workspace(workspace_id)
+    if payload.title is not None and not payload.title.strip():
+        raise HTTPException(
+            422, detail={"code": "title_invalid", "message": "Question title cannot be empty."}
+        )
+    if payload.status is not None and payload.status not in ("open", "closed"):
+        raise HTTPException(
+            422, detail={"code": "status_invalid", "message": "Status must be 'open' or 'closed'."}
+        )
+    with open_sqlite_connection() as connection:
+        updates = payload.model_dump(exclude_unset=True)
+        try:
+            raw_q = guided_flow.update_question(connection, workspace_id, question_id, updates)
+        except LookupError as exc:
+            raise HTTPException(404, detail={"code": "question_not_found"}) from exc
+        except ValueError as exc:
+            raise HTTPException(422, detail={"code": "validation_error", "message": str(exc)}) from exc
+        steps = guided_flow.evaluate_all_steps(connection, workspace_id, raw_q)
+        next_action = guided_flow.compute_next_action(steps)
+        return guided_flow.DesignQuestionRead(
+            **raw_q,
+            steps=steps,
+            next_action=next_action,
+        )
+

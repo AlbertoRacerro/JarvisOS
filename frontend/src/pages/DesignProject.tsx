@@ -33,6 +33,7 @@ import { libraryLabel } from "../components/design/libraryLabel";
 import DesignOpticsPanel from "./DesignOpticsPanel";
 import DesignDynamicPanel from "./DesignDynamicPanel";
 import DesignSplitter, { clampDesignWidth, type DesignPanelBounds } from "../components/design/DesignSplitter";
+import GuidedFlowBar from "../components/design/GuidedFlowBar";
 import { designViewHref, readDesignView, STAGE_NODE, STAGES, type DesignView, type Stage } from "./designView";
 import "./designProject.css";
 
@@ -385,6 +386,7 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
   </aside>;
 
   return <div className="design-project">
+    <GuidedFlowBar workspaceId={active?.data_workspace_id ?? projectId} navigate={navigate} />
     <header className="design-project__header" aria-label="Design top bar">
       <div className="design-project__title"><p className="eyebrow">Design</p><h1>{projectName || "Project"}<ExampleBadge workspace={projectWorkspace} /></h1></div>
       <div className="design-project__version">
