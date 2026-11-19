@@ -93,6 +93,7 @@ def test_number_tokens_match(text: str, wanted: float) -> None:
         "1.8\u2009·\u200910−3\u00a0Pa s",
         "1.8\u00a0·\u00a010−3\u00a0Pa s",
         "1.8\u202f×\u202f10−3\u00a0Pa s",
+        "1.8\u2009·\u200910^−3\u00a0Pa s",
     ],
 )
 def test_number_tokens_accept_unicode_spaces_in_scientific_notation(text: str) -> None:

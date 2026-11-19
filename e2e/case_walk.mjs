@@ -364,7 +364,7 @@ try {
       throw new MissingControl(`card '${run.card_title}' in 'Correlazione'`);
     });
     for (const [label, value] of Object.entries(run.fields ?? {})) {
-      const input = form.getByLabel(new RegExp(`^${label}\\b`));
+      const input = form.getByLabel(new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "u"));
       await need(`field '${label}'`, input);
       await input.fill(String(value));
     }
