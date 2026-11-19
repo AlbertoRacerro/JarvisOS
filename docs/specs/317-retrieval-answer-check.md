@@ -42,7 +42,8 @@ In scope:
   unit `"1"`, source `"constant:retrieval_bench"`.
   - `pass` when every question's first matching rank is at most 3;
   - `warn` otherwise (including a top-3 rate of 0), with a plain hint naming how many questions missed;
-  - `not_evaluated` when there are no questions or an evaluation error occurred (the other checks already fail).
+  - `not_evaluated` when the corpus is empty, there are no questions or an evaluation error occurred (the other
+    checks already fail).
 - Register it in `retrieval_eval_descriptor` as an advisory check (not required), so a run whose answers are
   missing stays a valid, comparable measurement with visible outputs.
 - Update existing tests whose fixtures miss expected answers and asserted `usable`
@@ -78,7 +79,7 @@ Out of scope (binding non-goals):
    and verdict `usable`.
 2. A run in which at least one question misses (rank > 3 or no match) has the check `warn`, verdict
    `usable_with_warnings`, and its outputs present.
-3. A run with no questions or with an evaluation error keeps verdict `not_usable`; the new check is
+3. A run with an empty corpus, no questions or an evaluation error keeps verdict `not_usable`; the new check is
    `not_evaluated`.
 4. `retrieval_eval_descriptor().advisory_checks` contains `RETRIEVAL_EXPECTED_IN_TOP3`; `required_checks` is
    unchanged.
