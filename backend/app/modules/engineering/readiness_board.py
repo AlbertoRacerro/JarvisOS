@@ -274,7 +274,7 @@ def _compare_step(compare: CaseCompare | None, workspace_id: str, runs: list[dic
         return StepResult(step="compare", status="red", reason=REASON_NOT_DECLARED,
                           detail="Case does not declare a published comparison value")
     root = bench_root(workspace_id)
-    found: tuple[str, float, str] | None = None
+    found: tuple[str, float, str, str | None] | None = None
     for run in runs:
         run_id = run.get("run_id")
         if run.get("verdict") not in ("usable", "usable_with_warnings") or not isinstance(run_id, str):
@@ -286,8 +286,8 @@ def _compare_step(compare: CaseCompare | None, workspace_id: str, runs: list[dic
     if found is None:
         process_value = newest_process_run_value(workspace_id, compare.quantity)
         if process_value is not None:
-            run_id, run_label, value, unit = process_value
-            found = (run_id, value, unit, run_label)
+            proc_run_id, proc_run_label, value, unit = process_value
+            found = (proc_run_id, value, unit, proc_run_label)
     if found is None:
         return StepResult(step="compare", status="red", reason=REASON_MISSING_RECORD, missing=[compare.quantity],
                           detail=f"No usable bench run or converged process run with output '{compare.quantity}'")
