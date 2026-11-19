@@ -82,82 +82,59 @@ def _quantity_from_results(results: dict[str, Any], quantity: str) -> tuple[floa
     return None
 
 
+_READ_ERRORS = (draft.DraftError, OSError, ValueError, KeyError, TypeError, AttributeError)
+
+
 def _process_results(workspace_id: str, draft_id: str, run: dict[str, Any]) -> dict[str, Any] | None:
+    """Results view of one run at its own revision, as ``draft.run_results`` builds it; None when unreadable."""
     try:
-        directory = draft.draft_dir(workspace_id, draft_id)
-        revision = run.get("draft_revision")
-        if not isinstance(revision, str):
-            return None
-        document = draft.load_revision(directory, revision)["document"]
-        run_for_view = dict(run)
-        run_for_view["outcome"] = draft.run_outcome(run_for_view, document)
-        results = results_view.build(run_for_view, document)
-    except (draft.DraftError, OSError, ValueError, KeyError):
+        document = draft.load_revision(draft.draft_dir(workspace_id, draft_id), run["draft_revision"])["document"]
+        results = results_view.build(run, document)
+    except _READ_ERRORS:
         return None
     return results if isinstance(results, dict) else None
 
 
-def list_process_run_values(
-    workspace_id: str, quantity: str
-) -> list[tuple[str, str, float, str, str]]:
-    """List usable process runs carrying quantity, newest first by started_at."""
-    values: list[tuple[str, str, float, str, str]] = []
+def _usable_runs(workspace_id: str) -> list[tuple[str, str, str, dict[str, Any]]]:
+    """(started_at, draft_id, label, run) of every usable run in the 20 newest drafts, newest first."""
     try:
         drafts = draft.list_drafts(workspace_id)[:20]
-    except (draft.DraftError, OSError, ValueError, KeyError):
-        return values
-
+    except _READ_ERRORS:
+        return []
+    rows: list[tuple[str, str, str, dict[str, Any]]] = []
     for draft_row in drafts:
-        if not isinstance(draft_row, dict):
-            continue
-        draft_id = draft_row.get("draft_id")
-        draft_name = draft_row.get("name")
-        if not isinstance(draft_id, str) or DRAFT_ID_PATTERN.fullmatch(draft_id) is None:
-            continue
-        try:
-            directory = draft.draft_dir(workspace_id, draft_id)
-            runs = draft.list_runs(directory)
-        except (draft.DraftError, OSError, ValueError, KeyError):
-            continue
-        for run in runs:
-            if not isinstance(run, dict) or not _usable_run(run):
-                continue
-            run_id = run.get("run_id")
-            if not isinstance(run_id, str) or RUN_ID_PATTERN.fullmatch(run_id) is None:
-                continue
-            results = _process_results(workspace_id, draft_id, run)
-            if results is None:
-                continue
-            resolved = _quantity_from_results(results, quantity)
-            if resolved is None:
-                continue
-            value, unit = resolved
-            label = f'Diagramma "{draft_name}"' if isinstance(draft_name, str) and draft_name else "Diagramma"
-            started_at = run.get("started_at")
-            values.append((str(started_at or ""), f"process:{draft_id}:{run_id}", label, value, unit))
-    values.sort(key=lambda row: row[0], reverse=True)
-    return values
-
-
-def has_usable_process_run(workspace_id: str) -> bool:
-    """Return whether the workspace has any converged process run in its newest drafts."""
-    try:
-        drafts = draft.list_drafts(workspace_id)[:20]
-    except (draft.DraftError, OSError, ValueError, KeyError):
-        return False
-    for draft_row in drafts:
-        if not isinstance(draft_row, dict):
-            continue
-        draft_id = draft_row.get("draft_id")
+        draft_id = draft_row.get("draft_id") if isinstance(draft_row, dict) else None
         if not isinstance(draft_id, str) or DRAFT_ID_PATTERN.fullmatch(draft_id) is None:
             continue
         try:
             runs = draft.list_runs(draft.draft_dir(workspace_id, draft_id))
-        except (draft.DraftError, OSError, ValueError, KeyError):
+        except _READ_ERRORS:
             continue
-        if any(isinstance(run, dict) and _usable_run(run) for run in runs):
-            return True
-    return False
+        name = draft_row.get("name")
+        label = f'Diagramma "{name}"' if isinstance(name, str) and name else "Diagramma"
+        for run in runs:
+            if not isinstance(run, dict) or not _usable_run(run):
+                continue
+            run_id = run.get("run_id")
+            if isinstance(run_id, str) and RUN_ID_PATTERN.fullmatch(run_id) is not None:
+                rows.append((str(run.get("started_at") or ""), draft_id, label, run))
+    rows.sort(key=lambda row: row[0], reverse=True)
+    return rows
+
+
+def newest_process_run_value(workspace_id: str, quantity: str) -> tuple[str, str, float, str] | None:
+    """(reference, label, value, unit) of the newest usable process run carrying quantity, or None."""
+    for _started_at, draft_id, label, run in _usable_runs(workspace_id):
+        results = _process_results(workspace_id, draft_id, run)
+        resolved = None if results is None else _quantity_from_results(results, quantity)
+        if resolved is not None:
+            return f"process:{draft_id}:{run['run_id']}", label, *resolved
+    return None
+
+
+def has_usable_process_run(workspace_id: str) -> bool:
+    """Return whether the workspace has any converged process run in its newest drafts."""
+    return bool(_usable_runs(workspace_id))
 
 
 def resolve_process_run_reference(
@@ -170,7 +147,7 @@ def resolve_process_run_reference(
     draft_id, run_id = parsed
     try:
         run = draft.get_run(workspace_id, draft_id, run_id)
-    except (draft.DraftError, OSError, ValueError, KeyError):
+    except _READ_ERRORS:
         return "run_not_found", None
     if not _usable_run(run):
         return "run_not_usable", None

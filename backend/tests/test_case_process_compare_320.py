@@ -66,32 +66,33 @@ def _record_converged_run(
     started_at: str = "2026-11-19T01:00:00+00:00",
 ) -> str:
     directory = draft.draft_dir(workspace_id, state["draft_id"])
-    draft.record_run(
-        directory,
-        {
-            "run_id": run_id,
-            "draft_id": state["draft_id"],
-            "draft_revision": state["revision"],
-            "action": "run",
-            "status": "completed",
-            "started_at": started_at,
-            "outcome": {"state": "converged"},
-            "streams": {
-                "Feed": {
-                    "mass_flow_kg_s": 1.0,
-                    "mass_fractions": {"Water": 1.0},
-                    "display": {"temperature": {"value": 300.0, "unit": "K"}},
-                }
-            },
-            "units": {
-                "Pump1": {
-                    "reported": {
-                        "pressure": {"value": 3.0, "units": "bar"},
-                    }
-                }
-            },
+    run = {
+        "run_id": run_id,
+        "draft_id": state["draft_id"],
+        "draft_revision": state["revision"],
+        "action": "run",
+        "status": "completed",
+        "started_at": started_at,
+        "streams": {
+            "Feed": {
+                "mass_flow_kg_s": 1.0,
+                "mass_fractions": {"Water": 1.0},
+                "display": {"temperature": {"value": 300.0, "unit": "K"}},
+            }
         },
-    )
+        "units": {
+            "Pump1": {
+                "reported": {
+                    "pressure": {"value": 3.0, "units": "bar"},
+                }
+            }
+        },
+    }
+    # Store the outcome exactly as the product computes it, never a hand-written partial one.
+    document = draft.load_revision(directory, state["revision"])["document"]
+    run["outcome"] = draft.run_outcome(run, document)
+    assert run["outcome"]["state"] == "converged"
+    draft.record_run(directory, run)
     return run_id
 
 

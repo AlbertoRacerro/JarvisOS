@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from app.core.database import get_database_path, open_sqlite_connection
 from app.core.packs import readiness_case_files
 from app.modules.engineering.bench_runs_view import bench_root, list_runs
-from app.modules.engineering.process_run_values import has_usable_process_run, list_process_run_values
+from app.modules.engineering.process_run_values import has_usable_process_run, newest_process_run_value
 from app.modules.memory.literature_checks import check_datum
 from app.modules.memory.literature_service import BackingText
 from app.modules.process_kernel.errors import ProcessKernelError
@@ -284,13 +284,13 @@ def _compare_step(compare: CaseCompare | None, workspace_id: str, runs: list[dic
             found = (run_id, *output, None)
             break
     if found is None:
-        process_runs = list_process_run_values(workspace_id, compare.quantity)
-        if process_runs:
-            _started_at, run_id, run_label, value, unit = process_runs[0]
+        process_value = newest_process_run_value(workspace_id, compare.quantity)
+        if process_value is not None:
+            run_id, run_label, value, unit = process_value
             found = (run_id, value, unit, run_label)
     if found is None:
         return StepResult(step="compare", status="red", reason=REASON_MISSING_RECORD, missing=[compare.quantity],
-                          detail=f"No usable bench run or convergent process run with output '{compare.quantity}'")
+                          detail=f"No usable bench run or converged process run with output '{compare.quantity}'")
     run_id, value, unit, run_label = found
     converted = _convert(value, unit, compare.unit)
     deviation = None if converted is None else abs(converted - compare.value) / abs(compare.value)
@@ -478,7 +478,7 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
             status="red",
             reason=REASON_MISSING_RECORD,
             missing=["bench_run"],
-            detail="Nessun calcolo utilizzabile: né banco di prova né diagramma di processo convergente",
+            detail="No usable bench run or converged process run in workspace",
         )
 
     # 5. compare
