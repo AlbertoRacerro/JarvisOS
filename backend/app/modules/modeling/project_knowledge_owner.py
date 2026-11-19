@@ -210,14 +210,24 @@ def create_decision_in_transaction(
     *,
     record_id: str | None = None,
 ) -> sqlite3.Row:
+    if payload.case_verdict_id is not None:
+        verdict = connection.execute(
+            "SELECT status FROM case_verdicts WHERE id = ? AND workspace_id = ?",
+            (payload.case_verdict_id, workspace_id),
+        ).fetchone()
+        if verdict is None or verdict["status"] != "accepted":
+            raise ProjectKnowledgeOwnerError(
+                "case_verdict_invalid",
+                "case_verdict_id must name an accepted case verdict of this workspace.",
+            )
     record_id = record_id or str(uuid4())
     now = utc_now()
     connection.execute(
         """
         INSERT INTO decisions (
             id, workspace_id, title, decision_text, rationale, status, linked_run_id,
-            created_at, updated_at, notes, basis_lifecycle_state
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            created_at, updated_at, notes, basis_lifecycle_state, case_verdict_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record_id,
@@ -231,6 +241,7 @@ def create_decision_in_transaction(
             now,
             payload.notes,
             payload.basis_lifecycle_state,
+            payload.case_verdict_id,
         ),
     )
     log_event(

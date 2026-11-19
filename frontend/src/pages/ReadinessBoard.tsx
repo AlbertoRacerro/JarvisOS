@@ -4,6 +4,7 @@ import AppLink from "../app/AppLink";
 import {
   getReadiness,
   createCaseVerdict,
+  createDecision,
   listCaseVerdicts,
   updateCaseVerdict,
   type CaseResult,
@@ -12,6 +13,7 @@ import {
 } from "../api/readinessBoard";
 
 export const READINESS_TITLE = "Prontezza";
+export const DECISION_NEEDS_VERDICT = "Prima registra e accetta il verdetto nel passo Confronto.";
 export const READINESS_EMPTY_STATE =
   "Nessun caso di letteratura installato: i casi arrivano dal pacchetto di progetto";
 
@@ -47,7 +49,7 @@ export const MISSING_RECORD_SENTENCES: Record<StepId, string> = {
   bound: "Mancano parametri legati ai dati accettati della fonte:",
   run: "Manca un risultato del banco di prova con esito utilizzabile nel workspace del caso.",
   compare: "Nessun risultato utilizzabile riporta la grandezza confrontata:",
-  decide: "Manca una decisione accettata collegata a un calcolo.",
+  decide: "Manca una decisione accettata collegata al verdetto di questo caso.",
   answer: "Manca una misura della qualità della ricerca con esito utilizzabile nel workspace del caso."
 };
 
@@ -70,7 +72,6 @@ export const STEP_LINKS: Partial<Record<StepId, { path: string; label: string }>
   bound: { path: "/memory/literature", label: "Apri Letteratura" },
   run: { path: "/runs", label: "Apri Runs" },
   compare: { path: "/runs", label: "Apri Runs" },
-  decide: { path: "/memory/project-basis", label: "Apri Project Basis" },
   answer: { path: "/memory/search", label: "Apri Ricerca" }
 };
 
@@ -108,6 +109,11 @@ export default function ReadinessBoard({ navigate, onWorkspaceChange }: Props) {
   const [rationaleInput, setRationaleInput] = useState<string>("");
   const [verdictActionLoading, setVerdictActionLoading] = useState<boolean>(false);
   const [verdictActionError, setVerdictActionError] = useState<string | null>(null);
+  const [decisionTitle, setDecisionTitle] = useState<string>("");
+  const [decisionText, setDecisionText] = useState<string>("");
+  const [decisionRationale, setDecisionRationale] = useState<string>("");
+  const [decisionLoading, setDecisionLoading] = useState<boolean>(false);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -209,6 +215,9 @@ export default function ReadinessBoard({ navigate, onWorkspaceChange }: Props) {
     stepResult.stored_verdict.status !== "superseded"
       ? stepResult.stored_verdict
       : null);
+
+  const acceptedCaseVerdict =
+    wsVerdicts.find((v) => v.case_id === selectedCase?.id && v.status === "accepted") ?? null;
 
   const isCompareLinked =
     selectedStepId === "compare" &&
@@ -447,6 +456,61 @@ export default function ReadinessBoard({ navigate, onWorkspaceChange }: Props) {
                   <p className="readiness-board__verdict-error">{verdictActionError}</p>
                 )}
               </div>
+            </div>
+          )}
+          {selectedStepId === "decide" && stepResult.status === "red" && stepResult.reason !== "workspace_missing" && (
+            <div className="readiness-board__decision-panel">
+              {acceptedCaseVerdict ? (
+                <form
+                  className="readiness-board__decision-form"
+                  onSubmit={async (event) => {
+                    event.preventDefault();
+                    if (!selectedCase?.workspace_id || !decisionTitle.trim() || !decisionText.trim()) return;
+                    setDecisionLoading(true);
+                    setDecisionError(null);
+                    try {
+                      await createDecision(selectedCase.workspace_id, {
+                        title: decisionTitle.trim(),
+                        decision_text: decisionText.trim(),
+                        rationale: decisionRationale.trim() || null,
+                        status: "accepted",
+                        case_verdict_id: acceptedCaseVerdict.id,
+                      });
+                      setBoard(await getReadiness());
+                      setDecisionTitle("");
+                      setDecisionText("");
+                      setDecisionRationale("");
+                    } catch {
+                      setDecisionError("Impossibile registrare la decisione.");
+                    } finally {
+                      setDecisionLoading(false);
+                    }
+                  }}
+                >
+                  <label>
+                    Titolo
+                    <input type="text" value={decisionTitle} onChange={(e) => setDecisionTitle(e.target.value)} />
+                  </label>
+                  <label>
+                    Decisione
+                    <textarea value={decisionText} onChange={(e) => setDecisionText(e.target.value)} />
+                  </label>
+                  <label>
+                    Motivazione (opzionale)
+                    <textarea value={decisionRationale} onChange={(e) => setDecisionRationale(e.target.value)} />
+                  </label>
+                  <button
+                    type="submit"
+                    className="readiness-board__record-decision-button"
+                    disabled={decisionLoading || !decisionTitle.trim() || !decisionText.trim()}
+                  >
+                    Registra decisione
+                  </button>
+                  {decisionError && <p className="readiness-board__verdict-error">{decisionError}</p>}
+                </form>
+              ) : (
+                <p className="readiness-board__decision-hint">{DECISION_NEEDS_VERDICT}</p>
+              )}
             </div>
           )}
           {targetLink && (

@@ -278,3 +278,27 @@
   color: var(--color-text-secondary, #666);
   font-style: italic;
 }
+
+.readiness-board__decision-form {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 560px;
+}
+
+.readiness-board__decision-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.readiness-board__decision-form textarea {
+  min-height: 64px;
+}
+
+.readiness-board__decision-hint {
+  margin-top: 16px;
+  color: var(--color-text-secondary);
+}

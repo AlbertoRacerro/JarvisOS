@@ -497,11 +497,12 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
     # 6. decide
     dec_row = connection.execute(
         """
-        SELECT id FROM decisions
-        WHERE workspace_id = ? AND status = 'accepted' AND linked_run_id IS NOT NULL AND trim(linked_run_id) != ''
+        SELECT d.id FROM decisions d
+        JOIN case_verdicts v ON v.id = d.case_verdict_id AND v.workspace_id = d.workspace_id
+        WHERE d.workspace_id = ? AND d.status = 'accepted' AND v.case_id = ? AND v.status = 'accepted'
         LIMIT 1
         """,
-        (workspace_id,),
+        (workspace_id, case.id),
     ).fetchone()
 
     if dec_row is not None:
@@ -512,7 +513,7 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
             status="red",
             reason=REASON_MISSING_RECORD,
             missing=["decision"],
-            detail="No accepted decision linked to a run",
+            detail="No accepted decision linked to an accepted verdict of this case",
         )
 
     # 7. answer

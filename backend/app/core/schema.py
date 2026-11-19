@@ -34,8 +34,10 @@ SCHEMA_DESIGN_QUESTIONS_MIGRATION_ID = "0034_design_questions"
 SCHEMA_DESIGN_QUESTIONS_MIGRATION_NAME = "Design questions for guided engineering flow"
 SCHEMA_CASE_VERDICTS_MIGRATION_ID = "0035_case_verdicts"
 SCHEMA_CASE_VERDICTS_MIGRATION_NAME = "Case comparison and verdict product object"
-CURRENT_SCHEMA_MIGRATION_ID = "0035_case_verdicts"
-CURRENT_SCHEMA_MIGRATION_NAME = "Case comparison and verdict product object"
+SCHEMA_DECISION_CASE_VERDICT_MIGRATION_ID = "0036_decision_case_verdict"
+SCHEMA_DECISION_CASE_VERDICT_MIGRATION_NAME = "Decision linked to a case verdict"
+CURRENT_SCHEMA_MIGRATION_ID = "0036_decision_case_verdict"
+CURRENT_SCHEMA_MIGRATION_NAME = "Decision linked to a case verdict"
 
 SCHEMA_MIGRATION_RECORDS = [
     {
@@ -116,6 +118,11 @@ SCHEMA_MIGRATION_RECORDS = [
     {
         "migration_id": SCHEMA_CASE_VERDICTS_MIGRATION_ID,
         "name": SCHEMA_CASE_VERDICTS_MIGRATION_NAME,
+        "checksum": None,
+    },
+    {
+        "migration_id": SCHEMA_DECISION_CASE_VERDICT_MIGRATION_ID,
+        "name": SCHEMA_DECISION_CASE_VERDICT_MIGRATION_NAME,
         "checksum": None,
     },
 ]
@@ -540,6 +547,7 @@ SCHEMA_STATEMENTS = [
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         notes TEXT,
+        case_verdict_id TEXT,
         FOREIGN KEY (workspace_id) REFERENCES workspaces(id),
         FOREIGN KEY (linked_run_id) REFERENCES simulation_runs(id)
     )
@@ -737,6 +745,8 @@ SCHEMA_MIGRATION_STATEMENTS = [
     "ALTER TABLE decisions ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'",
     "ALTER TABLE decisions ADD COLUMN source_ai_job_id TEXT",
     "ALTER TABLE decisions ADD COLUMN promoted_at TEXT",
+    # CASE-DECISION-1 (spec 318): link to the case verdict the decision rests on; checked in code, no foreign key.
+    "ALTER TABLE decisions ADD COLUMN case_verdict_id TEXT",
     # RUNNER-EXT-1 (spec 016): dispatch key for the scoped bluecad_l2_v0 runner kind.
     "ALTER TABLE model_versions ADD COLUMN implementation_kind TEXT NOT NULL DEFAULT 'batch_growth_v0'",
     "ALTER TABLE runner_jobs ADD COLUMN implementation_kind TEXT NOT NULL DEFAULT 'batch_growth_v0'",

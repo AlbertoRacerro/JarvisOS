@@ -1,6 +1,6 @@
 # 318 — CASE-DECISION-1: Record an accepted decision on a case verdict from the readiness board
 
-Status: ready
+Status: in_review
 Depends on: 303, 304, 312, 314
 
 ## Goal
@@ -58,7 +58,8 @@ In scope:
   set, `create_decision_in_transaction` rejects it with `ProjectKnowledgeOwnerError("case_verdict_invalid")` (HTTP
   422 through the existing `_domain_error`) unless the verdict exists in the same workspace with `status = 'accepted'`. Regenerate `frontend/src/api/generated`.
 - `_compute_case` `decide`: green iff an accepted decision of the workspace has a `case_verdict_id` whose verdict
-  has this case's `case_id`, the same workspace and `status != 'superseded'`. Red detail:
+  has this case's `case_id`, the same workspace and `status = 'accepted'` (a verdict moved back to `recorded` or
+  `superseded` no longer counts). Red detail:
   `No accepted decision linked to an accepted verdict of this case`. The `linked_run_id` rule is removed from the
   board (it does not apply to bench runs). Optionally the green cell carries the decision's title for display.
 - `evaluate_step` `decide`: done iff the question's `linked_decision_id` names an accepted decision of the workspace,

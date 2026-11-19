@@ -98,7 +98,7 @@ assert.equal(STEP_LINKS.facts.path, "/memory/literature");
 assert.equal(STEP_LINKS.bound.path, "/memory/literature");
 assert.equal(STEP_LINKS.run.path, "/runs");
 assert.equal(STEP_LINKS.compare.path, "/runs");
-assert.equal(STEP_LINKS.decide.path, "/memory/project-basis");
+assert.equal(STEP_LINKS.decide, undefined);
 assert.equal(STEP_LINKS.answer.path, "/memory/search");
 
 // 5. Comparison formatting

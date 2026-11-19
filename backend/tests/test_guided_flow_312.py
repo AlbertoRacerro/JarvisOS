@@ -360,7 +360,14 @@ def test_guided_flow_seven_steps_state_transitions(client: TestClient) -> None:
     steps = get_steps()
     assert steps["compare"]["state"] == "done"
 
-    # Step 7: decide -> done when linked_decision_id is set
+    # Step 7: decide -> done when linked_decision_id names an accepted decision (spec 318)
+    with open_sqlite_connection() as conn:
+        conn.execute(
+            "INSERT INTO decisions (id, workspace_id, title, decision_text, status, created_at, updated_at) "
+            "VALUES ('dec-accepted-1', ?, 'Dec', 'Text', 'accepted', ?, ?)",
+            (ws_id, now, now),
+        )
+        conn.commit()
     client.patch(
         f"/workspaces/{ws_id}/engineering/guided-questions/{q_id}",
         json={"linked_decision_id": "dec-accepted-1"},
@@ -473,7 +480,15 @@ def test_deterministic_next_action_sequence_and_variants(client: TestClient) -> 
         )
         conn.commit()
 
-    # Step 7: decide - test via decisions row
+    # Step 7: decide - a draft decision does not count (spec 318), an accepted one does
+    assert current_next_action() == "decide"
+    with open_sqlite_connection() as conn:
+        conn.execute(
+            "INSERT INTO decisions (id, workspace_id, title, decision_text, status, created_at, updated_at) "
+            "VALUES (?, ?, 'Draft', 'Text', 'draft', ?, ?)",
+            (str(uuid4()), ws_id, now, now),
+        )
+        conn.commit()
     assert current_next_action() == "decide"
     with open_sqlite_connection() as conn:
         conn.execute(

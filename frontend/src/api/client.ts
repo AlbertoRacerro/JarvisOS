@@ -166,6 +166,7 @@ export type Decision = {
   decision_text: string;
   rationale?: string | null;
   status: string;
+  case_verdict_id?: string | null;
 };
 
 export function initializeSystem(): Promise<unknown> {

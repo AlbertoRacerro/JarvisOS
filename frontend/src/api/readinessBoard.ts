@@ -1,5 +1,6 @@
 import { API_BASE_URL } from "./client";
 export * from "./caseVerdicts";
+export { createDecision } from "./client";
 
 export type StepStatus = "green" | "red";
 
