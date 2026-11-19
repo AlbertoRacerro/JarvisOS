@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from shutil import which
 
 import pytest
 
@@ -33,6 +34,19 @@ def temp_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Pa
 
 
 @pytest.fixture
+def no_sandbox(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Path, Path]]:
+    """CI runners may forbid user namespaces; the bubblewrap argv is tested on its own below."""
+    calls: list[tuple[str, Path, Path]] = []
+
+    def fake(binary: str, worktree: Path, scratch: Path) -> list[str]:
+        calls.append((binary, worktree, scratch))
+        return []
+
+    monkeypatch.setattr(ow, "sandbox_argv", fake)
+    return calls
+
+
+@pytest.fixture
 def linked_worktree(tmp_path: Path) -> Path:
     worktree = tmp_path / "worktree"
     repo = Path(__file__).resolve().parents[2]
@@ -51,7 +65,7 @@ def linked_worktree(tmp_path: Path) -> Path:
 
 def test_run_refuses_pack_outside_repository_and_strips_environment(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, temp_pool: tuple[Path, Path],
-        linked_worktree: Path) -> None:
+        linked_worktree: Path, no_sandbox: list[tuple[str, Path, Path]]) -> None:
     capture = tmp_path / "child-env.json"
     fake_bin = tmp_path / "opencode"
     fake_bin.write_text(
@@ -112,7 +126,8 @@ def test_run_refuses_pack_outside_repository_and_strips_environment(
 
 
 def test_qualify_records_three_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-                                       temp_pool: tuple[Path, Path]) -> None:
+                                       temp_pool: tuple[Path, Path],
+                                       no_sandbox: list[tuple[str, Path, Path]]) -> None:
     capture_dir = tmp_path / "qualify-capture"
     capture_dir.mkdir()
     fake_bin = tmp_path / "opencode"
@@ -139,3 +154,69 @@ def test_qualify_records_three_results(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert sum(record["ci_first_pass"] == "pass" for record in records) == 2
     qualification = next((tmp_path / "continuity").parent.rglob("qualification.json"))
     assert json.loads(qualification.read_text(encoding="utf-8"))["tier"] == 1
+    assert len(no_sandbox) == 3
+    assert not any(worktree.exists() for _, worktree, _ in no_sandbox)
+
+
+def test_key_file_inside_repository_or_symlinked_is_refused(tmp_path: Path) -> None:
+    inside = ow.repo_root() / "scripts" / "opencode_worker.py"
+    entry = {"name": "p", "provider": "x", "base_url": "https://example.invalid/v1", "model": "m",
+             "expires_at": "2099-01-01T00:00:00Z", "key_file": str(inside)}
+    with pytest.raises(ow.Refused) as inside_refusal:
+        ow.validate_pool(entry)
+    assert inside_refusal.value.reason == "invalid_key_file"
+    link = tmp_path / "key-link"
+    link.symlink_to(inside)
+    with pytest.raises(ow.Refused) as link_refusal:
+        ow.validate_pool({**entry, "key_file": str(link)})
+    assert link_refusal.value.reason == "invalid_key_file"
+
+
+def test_unreadable_key_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                     temp_pool: tuple[Path, Path], linked_worktree: Path,
+                                     no_sandbox: list[tuple[str, Path, Path]]) -> None:
+    _, key = temp_pool
+    key.write_bytes(b"\xff\xfe not utf-8")
+    task = tmp_path / "task.md"
+    task.write_text("Do no harm.", encoding="utf-8")
+    args = ow.argparse.Namespace(pool="testpool", task_file=str(task), worktree=str(linked_worktree),
+                                 timeout=30, evidence_dir=str(tmp_path / "evidence"))
+    _, result = ow.execute_run(args)
+    assert result["status"] == "refused" and result["reason"] == "key_unreadable"
+
+
+def test_sandbox_hides_home_tmp_and_windows_drives(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                   linked_worktree: Path) -> None:
+    monkeypatch.setattr(ow.shutil, "which", lambda name: None)
+    with pytest.raises(ow.Refused) as missing:
+        ow.sandbox_argv("/usr/bin/true", linked_worktree, tmp_path)
+    assert missing.value.reason == "sandbox_missing"
+    monkeypatch.setattr(ow.shutil, "which", lambda name: "/usr/bin/bwrap")
+    argv = ow.sandbox_argv("/usr/bin/true", linked_worktree, tmp_path)
+    pairs = list(zip(argv, argv[1:], strict=False))
+    for hidden in (str(Path.home()), "/tmp", "/mnt"):
+        assert ("--tmpfs", hidden) in pairs
+    assert ("--bind", str(linked_worktree.resolve())) in pairs
+    assert argv.index("--tmpfs") < argv.index("--bind")  # writable binds are mounted over the hidden trees
+
+
+def _bwrap_runs() -> bool:
+    if not which("bwrap"):
+        return False
+    probe = subprocess.run(["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "true"], capture_output=True, check=False)
+    return probe.returncode == 0
+
+
+@pytest.mark.skipif(not _bwrap_runs(), reason="bubblewrap cannot create namespaces on this host")
+def test_sandbox_child_cannot_see_home(tmp_path: Path, linked_worktree: Path) -> None:
+    scratch = Path(ow.tempfile.mkdtemp(prefix="opencode-worker-"))
+    try:
+        argv = ow.sandbox_argv("/usr/bin/true", linked_worktree, scratch)
+        bound = [str(p) for p in (linked_worktree.resolve(), ow.repo_root().resolve(), Path("/usr/bin"))]
+        home = Path.home()
+        private = [p for p in home.iterdir() if not any(b == str(p) or b.startswith(str(p) + "/") for b in bound)]
+        listed = subprocess.run([*argv, "ls", "-a", str(home)], capture_output=True, text=True, check=False)
+        assert listed.returncode == 0
+        assert not set(listed.stdout.split()) & {p.name for p in private}
+    finally:
+        ow.shutil.rmtree(scratch, ignore_errors=True)

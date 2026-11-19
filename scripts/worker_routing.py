@@ -218,8 +218,9 @@ def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
     if not isinstance(entries, list):
         return []
     valid: list[dict[str, Any]] = []
-    for raw in entries:
+    for index, raw in enumerate(entries):
         if not isinstance(raw, dict):
+            valid.append({"name": f"invalid-{index}", "model": "", "invalid": "not an object"})
             continue
         name = raw.get("name")
         provider = raw.get("provider")
@@ -232,9 +233,11 @@ def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
                 or not isinstance(base_url, str) or not base_url.startswith("https://")
                 or not isinstance(model, str) or not model.strip()
                 or not isinstance(key_file, str) or not Path(key_file).is_absolute()
-                or expires is None):
-            continue
-        if "rate_limits" not in raw or "data_policy" not in raw:
+                or expires is None
+                or "rate_limits" not in raw or "data_policy" not in raw):
+            # Kept, so pick shows why it is skipped; never raised, never routed.
+            safe = name if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) else f"invalid-{index}"
+            valid.append({"name": safe, "model": str(raw.get("model") or ""), "invalid": "malformed entry"})
             continue
         valid.append({
             "name": name, "provider": provider.strip(), "base_url": base_url,
@@ -281,6 +284,8 @@ def all_models(outcomes: list[dict[str, Any]] | None = None) -> tuple[Model, ...
 def temp_pool_read(entry: dict[str, Any], now: datetime | None = None) -> Pool:
     moment = now or datetime.now(UTC)
     name = f"temp-{entry['name']}"
+    if entry.get("invalid"):
+        return unreadable(name, "invalid")
     expires = entry["expires_at"]
     if moment >= expires:
         return unreadable(name, "expired")
@@ -1534,11 +1539,12 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] | None
         eff_cap = copilot_effective_capability(outcomes, model.capability) if model.key == "copilot-auto" else model.capability
         if eff_cap == 0 and model.key.startswith("temp-"):
             pool = pools.get(model.pool) or unreadable(model.pool, "no_reading")
+            reason = pool.reason if pool.free is None else "unqualified"  # expired / no_key / invalid first
             skipped.append({"worker": model.key, "kind": model.kind, "model": model.model, "pool": model.pool,
                             "family": family(model), "capability": 0,
                             "free": None if pool.free is None else round(pool.free, 4),
                             "source": pool.source, "measured_cost": None, "record_count": 0,
-                            "skipped": "unqualified"})
+                            "skipped": reason})
             continue
         if eff_cap < required:
             continue
@@ -1648,6 +1654,8 @@ def summary_line(pools: dict[str, Pool], outcomes: list[dict[str, Any]] | None =
     models = all_models(outcomes)
     for name in dict.fromkeys(m.pool for m in models):
         pool = pools.get(name) or unreadable(name, "no_reading")
+        if name.startswith("temp-") and pool.reason == "expired":
+            continue  # an expired offer leaves the summary by itself
         if pool.free is None:
             parts.append(f"{name} unavailable ({pool.reason or 'unreadable'})")
             continue
@@ -1667,6 +1675,7 @@ def summary_line(pools: dict[str, Pool], outcomes: list[dict[str, Any]] | None =
     tiers = ", ".join(
         f"{m.key} t{copilot_effective_capability(outcomes, m.capability) if m.key == 'copilot-auto' else m.capability}"
         for m in models
+        if not (m.pool.startswith("temp-") and (pools.get(m.pool) or unreadable(m.pool, "")).reason == "expired")
     )
     return ("worker quota: " + " · ".join(parts) + " — effort by task tier, gemini first, then quota expiring "
             "unused; tiers: " + tiers)

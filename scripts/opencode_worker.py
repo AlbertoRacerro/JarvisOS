@@ -97,8 +97,12 @@ def validate_pool(entry: dict[str, Any]) -> tuple[datetime, Path, str, str, str]
     if not isinstance(key_file, str) or not Path(key_file).is_absolute():
         raise Refused("invalid_key_file")
     key_path = Path(key_file).expanduser()
+    if key_path.is_symlink():
+        raise Refused("invalid_key_file", "symlink")
     if not key_path.is_file():
         raise Refused("key_missing")
+    if key_path.resolve().is_relative_to(repo_root().resolve()):
+        raise Refused("invalid_key_file", "inside repository")
     return expires, key_path, base_url, model.strip(), provider.strip()
 
 
@@ -176,12 +180,32 @@ def child_env(scratch: Path, key: str) -> dict[str, str]:
     }
 
 
+def sandbox_argv(binary: str, worktree: Path, scratch: Path) -> list[str]:
+    """bubblewrap around the child: the user's home, /tmp and /mnt (Windows drives) are empty tmpfs, so the control
+    directory, private repositories, packs, keys and credentials are not on the child's filesystem at all. Only the
+    worktree and the scratch home are writable; the OpenCode package and this repository's git dir are read-only."""
+    bwrap = shutil.which("bwrap")
+    if not bwrap:
+        raise Refused("sandbox_missing", "bubblewrap (bwrap) is required")
+    common = Path(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()).resolve()
+    own_git_dir = Path(git(worktree, "rev-parse", "--path-format=absolute", "--git-dir").strip()).resolve()
+    package = Path(binary).resolve().parent.parent
+    argv = [bwrap, "--die-with-parent", "--unshare-pid", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+            "--tmpfs", str(Path.home()), "--tmpfs", "/tmp", "--tmpfs", "/mnt"]
+    if Path("/mnt/wsl").is_dir():  # WSL keeps resolv.conf here
+        argv += ["--ro-bind", "/mnt/wsl", "/mnt/wsl"]
+    argv += ["--ro-bind", str(package), str(package), "--ro-bind", str(common), str(common),
+             "--bind", str(own_git_dir), str(own_git_dir), "--bind", str(scratch), str(scratch), "--bind", str(worktree.resolve()), str(worktree.resolve()),
+             "--chdir", str(worktree.resolve()), "--"]
+    return argv
+
+
 def opencode_binary() -> str:
     configured = os.environ.get("JARVISOS_OPENCODE_BIN")
     found = shutil.which(configured) if configured else shutil.which("opencode")
     if not found:
         raise Refused("opencode_missing")
-    return found
+    return str(Path(found).resolve())  # the sandbox binds the package, not the launcher symlink
 
 
 def build_config(scratch: Path, name: str, provider: str, base_url: str, model: str) -> Path:
@@ -312,7 +336,10 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
             raise Refused("private_pack_visible")
         entry = find_pool(args.pool)
         _, key_path, base_url, model, provider = validate_pool(entry)
-        key = key_path.read_text(encoding="utf-8").strip()
+        try:
+            key = key_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError) as error:
+            raise Refused("key_unreadable") from error
         if not key:
             raise Refused("key_missing")
         task = read_task(Path(args.task_file))
@@ -321,11 +348,16 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
             raise Refused("timeout_out_of_range")
         binary = opencode_binary()
         scratch = Path(tempfile.mkdtemp(prefix="opencode-worker-"))
-        config = build_config(scratch, args.pool, provider, base_url, model)
-        shutil.copyfile(config, evidence / "opencode.json")
-        env = child_env(scratch, key)
+        try:
+            config = build_config(scratch, args.pool, provider, base_url, model)
+            shutil.copyfile(config, evidence / "opencode.json")
+            env = child_env(scratch, key)
+            sandbox = sandbox_argv(binary, worktree, scratch)
+        except Refused:
+            shutil.rmtree(scratch, ignore_errors=True)
+            raise
         # --standalone: a private server in this environment, never the user's background service.
-        argv = [binary, "run", "--standalone", "--model", f"{re_safe(args.pool)}/{model}",
+        argv = sandbox + [binary, "run", "--standalone", "--model", f"{re_safe(args.pool)}/{model}",
                 "--format", "json", "--auto", task]
         result["model"] = model
         proc_started = datetime.now(UTC)
