@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +18,7 @@ SPEC.loader.exec_module(ow)
 
 @pytest.fixture
 def temp_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+    monkeypatch.delenv("JARVISOS_PACK_PATH", raising=False)  # the suite loads a fake pack by default
     key = tmp_path / "pool.key"
     key.write_text("TEST_TEMP_POOL_SECRET", encoding="utf-8")
     pools = tmp_path / "temp-pools.json"
@@ -88,11 +88,12 @@ def test_run_refuses_pack_outside_repository_and_strips_environment(
     evidence_text = "\n".join(path.read_text(encoding="utf-8", errors="replace")
                               for path in evidence.rglob("*") if path.is_file())
     assert "TEST_TEMP_POOL_SECRET" not in evidence_text
-    config_text = (evidence / "xdg-config" / "opencode" / "opencode.json").read_text(encoding="utf-8")
+    config_text = (evidence / "opencode.json").read_text(encoding="utf-8")
     assert "TEST_TEMP_POOL_SECRET" not in config_text
     assert "{env:TEMP_POOL_API_KEY}" in config_text
     assert '"baseURL": "https://example.invalid/v1"' in config_text
-    assert '"package": "@opencode/ai/providers/openai-compatible"' in config_text
+    assert '"npm": "@ai-sdk/openai-compatible"' in config_text
+    assert '"external_directory": "deny"' in config_text
 
     monkeypatch.setenv("JARVISOS_PACK_PATH", "/tmp/private-pack")
     _, packed = ow.execute_run(args)
@@ -136,3 +137,5 @@ def test_qualify_records_three_results(monkeypatch: pytest.MonkeyPatch, tmp_path
     records = [json.loads(line) for line in record_file.read_text(encoding="utf-8").splitlines()]
     assert len(records) == 3
     assert sum(record["ci_first_pass"] == "pass" for record in records) == 2
+    qualification = next((tmp_path / "continuity").parent.rglob("qualification.json"))
+    assert json.loads(qualification.read_text(encoding="utf-8"))["tier"] == 1

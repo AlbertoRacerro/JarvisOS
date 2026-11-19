@@ -1957,8 +1957,9 @@ def test_temporary_pool_qualification_gates_tiers(monkeypatch: pytest.MonkeyPatc
     ]) == 2
 
     pool_map = {"temp-free-a": wr.Pool("temp-free-a", {"expires": 1.0}, 1.0)}
-    ranked, skipped = wr.rank(2, pool_map,
-                              models=(wr.Model("temp-free-a", "opencode", "free-model", "temp-free-a", 1),))
+    tier1_model = (wr.Model("temp-free-a", "opencode", "free-model", "temp-free-a", 1),)
+    assert wr.rank(2, pool_map, models=tier1_model)[0] == []
+    ranked, _ = wr.rank(1, pool_map, models=tier1_model)
     assert [entry["worker"] for entry in ranked] == ["temp-free-a"]
     unqualified, skipped_unqualified = wr.rank(1, pool_map,
                                                models=(wr.Model("temp-free-a", "opencode", "free-model", "temp-free-a", 0),))

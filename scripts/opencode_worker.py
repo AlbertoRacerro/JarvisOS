@@ -15,7 +15,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-
 SCHEMA = "opencode-worker.v1"
 DEFAULT_TIMEOUT = 1800
 MAX_TIMEOUT = 6 * 3600
@@ -127,9 +126,9 @@ def check_worktree(worktree: Path) -> tuple[str, list[str]]:
         common_resolved = Path(common).resolve()
         source_common = git(repo_root(), "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
         if not source_common or common_resolved != Path(source_common).resolve():
-            raise Refused("outside_repository")
+            raise Refused("outside_repository") from None
     except OSError:
-        raise Refused("outside_repository")
+        raise Refused("outside_repository") from None
     head = git(worktree, "rev-parse", "HEAD").strip()
     status = git(worktree, "status", "--porcelain", "--untracked-files=all").strip()
     changed = [line[3:] for line in status.splitlines() if len(line) >= 4]
@@ -151,17 +150,18 @@ def read_task(path: Path) -> str:
 
 def evidence_dir() -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return control_dir().parent / "work" / "evidence" / f"opencode-worker-{stamp}"
+    return control_dir().parent / "evidence" / f"opencode-worker-{stamp}"
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def child_env(evidence: Path, key: str) -> dict[str, str]:
-    home = evidence / "home"
-    config = evidence / "xdg-config"
-    data = evidence / "xdg-data"
+def child_env(scratch: Path, key: str) -> dict[str, str]:
+    """Home and config live in a scratch directory outside the control directory, so the child sees no evidence."""
+    home = scratch / "home"
+    config = scratch / "xdg-config"
+    data = scratch / "xdg-data"
     for path in (home, config, data):
         path.mkdir(parents=True, exist_ok=True)
         path.chmod(0o700)
@@ -184,25 +184,24 @@ def opencode_binary() -> str:
     return found
 
 
-def build_config(evidence: Path, name: str, provider: str, base_url: str, model: str) -> Path:
-    config_dir = evidence / "xdg-config" / "opencode"
+def build_config(scratch: Path, name: str, provider: str, base_url: str, model: str) -> Path:
+    """OpenCode 2.x config with only this provider. `--auto` approves every permission not explicitly denied, so
+    files outside the worktree, web fetches and session sharing are denied here."""
+    config_dir = scratch / "xdg-config" / "opencode"
     config_dir.mkdir(parents=True, exist_ok=True)
-    provider_id = re_safe(name)
     document = {
+        "$schema": "https://opencode.ai/config.json",
+        "autoupdate": False,
+        "share": "disabled",
+        "permission": {"external_directory": "deny", "webfetch": "deny"},
         "provider": {
-            provider_id: {
+            re_safe(name): {
+                "npm": "@ai-sdk/openai-compatible",
                 "name": provider,
-                "env": [KEY_ENV],
-                "package": "@opencode/ai/providers/openai-compatible",
-                "settings": {
-                    "baseURL": base_url,
-                    "apiKey": "{env:" + KEY_ENV + "}",
-                },
-                "models": {
-                    model: {"modelID": model, "name": model},
-                },
+                "options": {"baseURL": base_url, "apiKey": "{env:" + KEY_ENV + "}"},
+                "models": {model: {"name": model}},
             }
-        }
+        },
     }
     path = config_dir / "opencode.json"
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -214,7 +213,7 @@ def re_safe(value: str) -> str:
     return result.strip("-") or "temp"
 
 
-def changed_files(worktree: Path, start_head: str) -> list[str]:
+def changed_files(worktree: Path) -> list[str]:
     try:
         status = git(worktree, "status", "--porcelain", "--untracked-files=all").strip()
     except Refused:
@@ -242,6 +241,9 @@ def execute_qualification(args: argparse.Namespace) -> int:
         sys.stderr.write(f"qualify refused: {refusal.reason}\n")
         return 2
 
+    sys.path.insert(0, str(repo_root() / "scripts"))
+    import worker_routing as routing
+
     evidence_root = evidence_dir() / "qualification"
     evidence_root.mkdir(parents=True, exist_ok=True)
     base = repo_root()
@@ -264,30 +266,22 @@ def execute_qualification(args: argparse.Namespace) -> int:
                                            timeout=args.timeout,
                                            evidence_dir=str(tempdir / "evidence"))
             _, run_result = execute_run(task_args)
-            check = subprocess.run([sys.executable, task["check"]], cwd=worktree,
+            check = subprocess.run([sys.executable, "-B", task["check"]], cwd=worktree,
+                                   env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONPATH": str(worktree)},
                                    capture_output=True, text=True, timeout=args.timeout, check=False)
-            passed = run_result["status"] == "succeeded" and check.returncode == 0
-            outcomes.append({
-                "task": task["id"], "passed": passed,
-                "run_status": run_result["status"], "check_exit": check.returncode,
-            })
-            sys.path.insert(0, str(base / "scripts"))
-            try:
-                import worker_routing as routing
-                routing.record(task=task["id"], kind="tests", worker=f"temp-{args.pool}",
-                               tier=int(task["tier"]),
-                               ci_first_pass="pass" if passed else "fail",
-                               evidence=Path(task_args.evidence_dir) / "result.json",
-                               record_file=getattr(args, "record_file", None))
-            finally:
-                sys.path.pop(0)
+            outcome = {"task": task["id"], "passed": run_result["status"] == "succeeded" and check.returncode == 0,
+                       "run_status": run_result["status"], "check_exit": check.returncode}
         except (Refused, OSError, subprocess.TimeoutExpired) as error:
-            outcomes.append({"task": task["id"], "passed": False,
-                             "run_status": "failed",
-                             "check_exit": getattr(error, "returncode", 1)})
+            outcome = {"task": task["id"], "passed": False, "run_status": "failed",
+                       "check_exit": getattr(error, "returncode", None)}
         finally:
             subprocess.run(["git", "-C", str(base), "worktree", "remove", "--force", str(worktree)],
                            capture_output=True, text=True, check=False)
+        outcomes.append(outcome)
+        routing.record(task=task["id"], kind="tests", worker=f"temp-{args.pool}", tier=int(task["tier"]),
+                       ci_first_pass="pass" if outcome["passed"] else "fail",
+                       evidence=tempdir / "evidence" / "result.json",
+                       record_file=getattr(args, "record_file", None))
 
     passed_tier1 = sum(1 for item in outcomes if item["task"].startswith("tempqual-tier1-") and item["passed"])
     passed_tier2 = sum(1 for item in outcomes if item["task"].startswith("tempqual-tier2-") and item["passed"])
@@ -322,14 +316,16 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
         if not key:
             raise Refused("key_missing")
         task = read_task(Path(args.task_file))
-        start_head, initial_changed = check_worktree(worktree)
+        start_head, _ = check_worktree(worktree)
         if not 0 < args.timeout <= MAX_TIMEOUT:
             raise Refused("timeout_out_of_range")
-        config = build_config(evidence, args.pool, provider, base_url, model)
-        del config
-        env = child_env(evidence, key)
         binary = opencode_binary()
-        argv = [binary, "run", "--model", f"{re_safe(args.pool)}/{model}",
+        scratch = Path(tempfile.mkdtemp(prefix="opencode-worker-"))
+        config = build_config(scratch, args.pool, provider, base_url, model)
+        shutil.copyfile(config, evidence / "opencode.json")
+        env = child_env(scratch, key)
+        # --standalone: a private server in this environment, never the user's background service.
+        argv = [binary, "run", "--standalone", "--model", f"{re_safe(args.pool)}/{model}",
                 "--format", "json", "--auto", task]
         result["model"] = model
         proc_started = datetime.now(UTC)
@@ -348,13 +344,13 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
                     result.update(status="failed", reason=f"exit_code_{proc.returncode}")
             except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
-                proc.communicate()
+                stdout, stderr = proc.communicate()
                 result.update(status="timeout", reason=f"exceeded {args.timeout + KILL_MARGIN}s")
                 result["exit_code"] = None
-            stdout_safe = (stdout if "stdout" in locals() else "").replace(key, "[REDACTED]")
-            stderr_safe = (stderr if "stderr" in locals() else "").replace(key, "[REDACTED]")
-            (evidence / "transcript.json").write_text(stdout_safe, encoding="utf-8")
-            (evidence / "stderr.txt").write_text(stderr_safe, encoding="utf-8")
+            (evidence / "transcript.json").write_text((stdout or "").replace(key, "[REDACTED]"), encoding="utf-8")
+            (evidence / "stderr.txt").write_text((stderr or "").replace(key, "[REDACTED]"), encoding="utf-8")
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
         result["duration_seconds"] = round((datetime.now(UTC) - proc_started).total_seconds(), 3)
         try:
             end_head = git(worktree, "rev-parse", "HEAD").strip()
@@ -362,8 +358,7 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
                 result.update(status="failed", reason="worker_commit_detected")
         except Refused:
             result.update(status="failed", reason="git_verification_failed")
-        result["changed_files"] = changed_files(worktree, start_head)
-        del initial_changed
+        result["changed_files"] = changed_files(worktree)
     except Refused as refusal:
         result.update(status="refused",
                       reason=refusal.reason + (f": {refusal.detail}" if refusal.detail else ""))
