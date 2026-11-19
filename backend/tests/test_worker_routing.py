@@ -1914,3 +1914,85 @@ def test_spec_307_report_modelli_display_and_copilot_spend(tmp_path: Path) -> No
     assert "- auto (copilot-auto, modelli: mai-code-2-flash, claude-3.5-sonnet): 2 compiti" in rep2
 
 
+def test_temporary_pool_loading_expiry_and_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key = tmp_path / "pool.key"
+    key.write_text("secret", encoding="utf-8")
+    target = tmp_path / "temp-pools.json"
+    target.write_text(json.dumps([{
+        "name": "free-a", "provider": "free", "base_url": "https://example.invalid/v1",
+        "model": "free-model", "key_file": str(key),
+        "expires_at": "2026-11-19T20:00:00Z",
+        "rate_limits": "free", "data_policy": "public",
+    }]), encoding="utf-8")
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
+    entries = wr.load_temp_pools()
+    assert len(entries) == 1
+    now = datetime(2026, 11, 19, 19, 0, tzinfo=UTC)
+    active = wr.temp_pool_read(entries[0], now)
+    assert active.free == 1.0
+    expired = wr.temp_pool_read(entries[0], now + timedelta(hours=2))
+    assert expired.free is None and expired.reason == "expired"
+    key.unlink()
+    assert wr.temp_pool_read(entries[0], now).reason == "no_key"
+
+
+
+def test_temporary_pool_malformed_skipped_with_reason_and_expired_leaves_summary(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key = tmp_path / "pool.key"
+    key.write_text("secret", encoding="utf-8")
+    target = tmp_path / "temp-pools.json"
+    target.write_text(json.dumps([
+        {"name": "broken", "provider": "free", "base_url": "http://plain.invalid/v1", "model": "m",
+         "key_file": str(key), "expires_at": "2099-01-01T00:00:00Z", "rate_limits": "", "data_policy": ""},
+        {"name": "old", "provider": "free", "base_url": "https://example.invalid/v1", "model": "m",
+         "key_file": str(key), "expires_at": "2000-01-01T00:00:00Z", "rate_limits": "", "data_policy": ""},
+        "not an object",
+        {"name": "old", "provider": "free", "base_url": "https://example.invalid/v1", "model": "m2",
+         "key_file": str(key), "expires_at": "2099-01-01T00:00:00Z", "rate_limits": "", "data_policy": ""},
+    ]), encoding="utf-8")
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
+    entries = wr.load_temp_pools()
+    # bad entries get synthetic names; a duplicate name never shadows the first usable entry
+    assert [e["name"] for e in entries] == ["invalid#0", "old", "invalid#2", "invalid#3"]
+    pools = {f"temp-{e['name']}": wr.temp_pool_read(e) for e in entries}
+    assert pools["temp-invalid#0"].reason == "invalid" and pools["temp-old"].reason == "expired"
+    _, skipped = wr.rank(1, pools, models=wr.temp_models([]))
+    assert {s["worker"]: s["skipped"] for s in skipped} == {
+        "temp-invalid#0": "invalid", "temp-old": "expired", "temp-invalid#2": "invalid", "temp-invalid#3": "invalid"}
+    line = wr.summary_line(pools, [])
+    assert "temp-old" not in line
+    assert "temp-invalid#0 unavailable (invalid)" in line
+
+
+def test_temporary_pool_qualification_gates_tiers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key = tmp_path / "pool.key"
+    key.write_text("secret", encoding="utf-8")
+    target = tmp_path / "temp-pools.json"
+    target.write_text(json.dumps([{
+        "name": "free-a", "provider": "free", "base_url": "https://example.invalid/v1",
+        "model": "free-model", "key_file": str(key),
+        "expires_at": "2026-12-01T00:00:00Z",
+        "rate_limits": "free", "data_policy": "public",
+    }]), encoding="utf-8")
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
+    tier1 = [
+        {"worker": "temp-free-a", "task": "tempqual-tier1-add", "ci_first_pass": "pass"},
+        {"worker": "temp-free-a", "task": "tempqual-tier1-even", "ci_first_pass": "pass"},
+    ]
+    assert wr.qualify_temp_pool("temp-free-a", tier1) == 1
+    assert wr.qualify_temp_pool("temp-free-a", tier1 + [
+        {"worker": "temp-free-a", "task": "tempqual-tier2-merge", "ci_first_pass": "pass"},
+    ]) == 2
+
+    pool_map = {"temp-free-a": wr.Pool("temp-free-a", {"expires": 1.0}, 1.0)}
+    tier1_model = (wr.Model("temp-free-a", "opencode", "free-model", "temp-free-a", 1),)
+    assert wr.rank(2, pool_map, models=tier1_model)[0] == []
+    ranked, _ = wr.rank(1, pool_map, models=tier1_model)
+    assert [entry["worker"] for entry in ranked] == ["temp-free-a"]
+    unqualified, skipped_unqualified = wr.rank(1, pool_map,
+                                               models=(wr.Model("temp-free-a", "opencode", "free-model", "temp-free-a", 0),))
+    assert unqualified == []
+    assert skipped_unqualified[0]["skipped"] == "unqualified"
+
+
