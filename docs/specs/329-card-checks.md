@@ -1,6 +1,6 @@
 # 329 — CARD-CHECKS-1: Correlation and property cards record their validity checks, so their runs can be usable
 
-Status: ready
+Status: merged
 Depends on: 280, 315, 328
 
 ## Goal
