@@ -32,8 +32,10 @@ SCHEMA_HERMES_ROLE_MODELS_MIGRATION_ID = "0032_hermes_role_models"
 SCHEMA_HERMES_ROLE_MODELS_MIGRATION_NAME = "Hermes per-role local inference routes"
 SCHEMA_DESIGN_QUESTIONS_MIGRATION_ID = "0034_design_questions"
 SCHEMA_DESIGN_QUESTIONS_MIGRATION_NAME = "Design questions for guided engineering flow"
-CURRENT_SCHEMA_MIGRATION_ID = "0034_design_questions"
-CURRENT_SCHEMA_MIGRATION_NAME = "Design questions for guided engineering flow"
+SCHEMA_CASE_VERDICTS_MIGRATION_ID = "0035_case_verdicts"
+SCHEMA_CASE_VERDICTS_MIGRATION_NAME = "Case comparison and verdict product object"
+CURRENT_SCHEMA_MIGRATION_ID = "0035_case_verdicts"
+CURRENT_SCHEMA_MIGRATION_NAME = "Case comparison and verdict product object"
 
 SCHEMA_MIGRATION_RECORDS = [
     {
@@ -109,6 +111,11 @@ SCHEMA_MIGRATION_RECORDS = [
     {
         "migration_id": SCHEMA_DESIGN_QUESTIONS_MIGRATION_ID,
         "name": SCHEMA_DESIGN_QUESTIONS_MIGRATION_NAME,
+        "checksum": None,
+    },
+    {
+        "migration_id": SCHEMA_CASE_VERDICTS_MIGRATION_ID,
+        "name": SCHEMA_CASE_VERDICTS_MIGRATION_NAME,
         "checksum": None,
     },
 ]
@@ -670,6 +677,29 @@ SCHEMA_STATEMENTS = [
         FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS case_verdicts (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        case_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        quantity TEXT NOT NULL,
+        computed_value REAL NOT NULL,
+        computed_unit TEXT NOT NULL,
+        published_value REAL NOT NULL,
+        published_unit TEXT NOT NULL,
+        rel_tol REAL NOT NULL,
+        deviation REAL NOT NULL,
+        verdict TEXT NOT NULL CHECK (verdict IN ('pass', 'fail')),
+        status TEXT NOT NULL DEFAULT 'recorded' CHECK (status IN ('recorded', 'accepted', 'superseded')),
+        rationale TEXT,
+        accepted_by TEXT,
+        accepted_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
+    )
+    """,
 ]
 
 SCHEMA_MIGRATION_STATEMENTS = [
@@ -784,4 +814,5 @@ SCHEMA_INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_freshness_marks_invalidation_ref ON freshness_marks(invalidation_id, record_ref)",
     "CREATE INDEX IF NOT EXISTS idx_freshness_invalidations_workspace_created ON freshness_invalidations(workspace_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_design_questions_workspace ON design_questions(workspace_id)",
+    "CREATE INDEX IF NOT EXISTS idx_case_verdicts_workspace ON case_verdicts(workspace_id)",
 ]

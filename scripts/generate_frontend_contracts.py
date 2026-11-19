@@ -26,6 +26,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.modules.engineering.operator_models import (  # noqa: E402
     CapabilityRead,
+    CaseVerdictRead,
     EvaluatorRead,
 )
 from app.modules.modeling.models import ParameterRead  # noqa: E402
@@ -134,8 +135,12 @@ def render_parameter_read() -> str:
 
 def render_engineering_reads() -> str:
     header = HEADER.replace(SOURCE_LABEL, "backend/app/modules/engineering/operator_models.py")
-    return render_model(EvaluatorRead, "EvaluatorRead", header=header) + "\n" + render_model(
-        CapabilityRead, "CapabilityRead", header=""
+    return (
+        render_model(EvaluatorRead, "EvaluatorRead", header=header)
+        + "\n"
+        + render_model(CapabilityRead, "CapabilityRead", header="")
+        + "\n"
+        + render_model(CaseVerdictRead, "CaseVerdictRead", header="")
     )
 
 

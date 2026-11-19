@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app.core.database import open_sqlite_connection
 from app.modules.ai.context_builder import canonical_digest
-from app.modules.engineering import bench_runs_view, guided_flow
+from app.modules.engineering import bench_runs_view, case_verdicts, guided_flow
 from app.modules.engineering.multifidelity import MultifidelityStudyRun, escalate_study
 from app.modules.engineering.operator_models import CapabilityRead, EscalationRequest, EvaluatorRead
 from app.modules.engineering.operator_service import (
@@ -284,4 +284,24 @@ def update_guided_question(
             steps=steps,
             next_action=next_action,
         )
+
+
+@router.get("/case-verdicts", response_model=list[case_verdicts.CaseVerdictRead])
+def list_case_verdicts(workspace_id: str) -> list[case_verdicts.CaseVerdictRead]:
+    return case_verdicts.list_verdicts(workspace_id)
+
+
+@router.post("/case-verdicts", response_model=case_verdicts.CaseVerdictRead, status_code=201)
+def create_case_verdict(
+    workspace_id: str, payload: case_verdicts.CreateCaseVerdictRequest
+) -> case_verdicts.CaseVerdictRead:
+    return case_verdicts.create_verdict(workspace_id, payload)
+
+
+@router.patch("/case-verdicts/{verdict_id}", response_model=case_verdicts.CaseVerdictRead)
+def update_case_verdict(
+    workspace_id: str, verdict_id: str, payload: case_verdicts.UpdateCaseVerdictRequest
+) -> case_verdicts.CaseVerdictRead:
+    return case_verdicts.update_verdict(workspace_id, verdict_id, payload)
+
 

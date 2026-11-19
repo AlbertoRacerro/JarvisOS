@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 import type { Navigate } from "../app/AppLink";
 import AppLink from "../app/AppLink";
-import { getReadiness, type CaseResult, type ReadinessBoardRead } from "../api/readinessBoard";
+import {
+  getReadiness,
+  createCaseVerdict,
+  listCaseVerdicts,
+  updateCaseVerdict,
+  type CaseResult,
+  type CaseVerdictRead,
+  type ReadinessBoardRead,
+} from "../api/readinessBoard";
 
 export const READINESS_TITLE = "Prontezza";
 export const READINESS_EMPTY_STATE =
@@ -96,6 +104,10 @@ export default function ReadinessBoard({ navigate, onWorkspaceChange }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [board, setBoard] = useState<ReadinessBoardRead | null>(null);
   const [selectedCell, setSelectedCell] = useState<{ caseId: string; stepId: StepId } | null>(null);
+  const [workspaceVerdicts, setWorkspaceVerdicts] = useState<Record<string, CaseVerdictRead[]>>({});
+  const [rationaleInput, setRationaleInput] = useState<string>("");
+  const [verdictActionLoading, setVerdictActionLoading] = useState<boolean>(false);
+  const [verdictActionError, setVerdictActionError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -119,6 +131,26 @@ export default function ReadinessBoard({ navigate, onWorkspaceChange }: Props) {
       alive = false;
     };
   }, []);
+
+  const currentCase =
+    board && board.cases.length > 0
+      ? (board.cases.find((c) => c.id === selectedCell?.caseId) ?? board.cases[0])
+      : null;
+
+  useEffect(() => {
+    const wsId = currentCase?.workspace_id;
+    if (!wsId) return;
+    let alive = true;
+    listCaseVerdicts(wsId)
+      .then((verdicts) => {
+        if (!alive) return;
+        setWorkspaceVerdicts((prev) => ({ ...prev, [wsId]: verdicts }));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [currentCase?.workspace_id]);
 
   if (loading) {
     return (
@@ -163,6 +195,20 @@ export default function ReadinessBoard({ navigate, onWorkspaceChange }: Props) {
     board.cases.find((c) => c.id === selectedCell?.caseId) ?? board.cases[0];
   const selectedStepId = selectedCell?.stepId ?? "paper";
   const stepResult = selectedCase ? selectedCase.steps[selectedStepId] : null;
+
+  const wsVerdicts = selectedCase?.workspace_id ? (workspaceVerdicts[selectedCase.workspace_id] ?? []) : [];
+  const matchedStoredVerdict =
+    wsVerdicts.find(
+      (v) =>
+        v.case_id === selectedCase?.id &&
+        v.run_id === stepResult?.comparison?.run_id &&
+        v.status !== "superseded",
+    ) ??
+    (stepResult?.comparison &&
+    stepResult.stored_verdict?.run_id === stepResult.comparison.run_id &&
+    stepResult.stored_verdict.status !== "superseded"
+      ? stepResult.stored_verdict
+      : null);
 
   const isCompareLinked =
     selectedStepId === "compare" &&
@@ -292,6 +338,115 @@ export default function ReadinessBoard({ navigate, onWorkspaceChange }: Props) {
                   </tr>
                 </tbody>
               </table>
+
+              <div className="readiness-board__verdict-panel">
+                {matchedStoredVerdict ? (
+                  <>
+                    <div className="readiness-board__verdict-row">
+                      <span
+                        className="readiness-board__verdict-badge"
+                        data-verdict={matchedStoredVerdict.verdict}
+                      >
+                        {matchedStoredVerdict.verdict === "pass" ? "Entro tolleranza" : "Fuori tolleranza"}
+                      </span>
+                      <span
+                        className="readiness-board__verdict-status"
+                        data-status={matchedStoredVerdict.status}
+                      >
+                        {matchedStoredVerdict.status === "accepted" ? "Accettato" : "Registrato"}
+                      </span>
+                    </div>
+
+                    {matchedStoredVerdict.status === "recorded" ? (
+                      <div className="readiness-board__verdict-row">
+                        <input
+                          type="text"
+                          className="readiness-board__rationale-input"
+                          placeholder="Motivazione (opzionale)"
+                          value={rationaleInput}
+                          onChange={(e) => setRationaleInput(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          className="readiness-board__accept-verdict-button"
+                          disabled={verdictActionLoading}
+                          onClick={async () => {
+                            if (!selectedCase?.workspace_id) return;
+                            setVerdictActionLoading(true);
+                            setVerdictActionError(null);
+                            try {
+                              const updated = await updateCaseVerdict(
+                                selectedCase.workspace_id,
+                                matchedStoredVerdict.id,
+                                {
+                                  status: "accepted",
+                                  rationale: rationaleInput.trim() || undefined,
+                                },
+                              );
+                              setWorkspaceVerdicts((prev) => {
+                                const current = prev[selectedCase.workspace_id!] ?? [];
+                                const filtered = current.filter((v) => v.id !== updated.id);
+                                return {
+                                  ...prev,
+                                  [selectedCase.workspace_id!]: [updated, ...filtered],
+                                };
+                              });
+                            } catch {
+                              setVerdictActionError("Impossibile accettare il verdetto.");
+                            } finally {
+                              setVerdictActionLoading(false);
+                            }
+                          }}
+                        >
+                          Accetta verdetto
+                        </button>
+                      </div>
+                    ) : matchedStoredVerdict.rationale ? (
+                      <div className="readiness-board__verdict-rationale-display">
+                        Motivazione: {matchedStoredVerdict.rationale}
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="readiness-board__record-verdict-button"
+                    disabled={verdictActionLoading}
+                    onClick={async () => {
+                      if (!selectedCase?.workspace_id || !stepResult?.comparison) return;
+                      setVerdictActionLoading(true);
+                      setVerdictActionError(null);
+                      try {
+                        const created = await createCaseVerdict(selectedCase.workspace_id, {
+                          case_id: selectedCase.id,
+                          run_id: stepResult.comparison.run_id,
+                          quantity: stepResult.comparison.quantity ?? "",
+                          published_value: stepResult.comparison.published.value,
+                          published_unit: stepResult.comparison.published.unit,
+                          rel_tol: stepResult.comparison.rel_tol,
+                        });
+                        setWorkspaceVerdicts((prev) => {
+                          const current = prev[selectedCase.workspace_id!] ?? [];
+                          return {
+                            ...prev,
+                            [selectedCase.workspace_id!]: [created, ...current],
+                          };
+                        });
+                        setRationaleInput("");
+                      } catch {
+                        setVerdictActionError("Impossibile registrare il verdetto.");
+                      } finally {
+                        setVerdictActionLoading(false);
+                      }
+                    }}
+                  >
+                    Registra verdetto
+                  </button>
+                )}
+                {verdictActionError && (
+                  <p className="readiness-board__verdict-error">{verdictActionError}</p>
+                )}
+              </div>
             </div>
           )}
           {targetLink && (
