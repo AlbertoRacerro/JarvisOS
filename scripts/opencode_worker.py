@@ -294,7 +294,7 @@ def execute_qualification(args: argparse.Namespace) -> int:
             probe = subprocess.run(["git", "-C", str(base), "rev-parse", "--verify", ref],
                                    capture_output=True, text=True, check=False)
             if probe.returncode != 0:
-                ref = "master"
+                ref = "HEAD"
             add = subprocess.run(["git", "-C", str(base), "worktree", "add", "--detach",
                                   str(worktree), ref], capture_output=True, text=True, check=False)
             if add.returncode != 0:
@@ -315,9 +315,10 @@ def execute_qualification(args: argparse.Namespace) -> int:
             subprocess.run(["git", "-C", str(base), "worktree", "remove", "--force", str(worktree)],
                            capture_output=True, text=True, check=False)
         outcomes.append(outcome)
+        result_file = tempdir / "evidence" / "result.json"
         routing.record(task=task["id"], kind="tests", worker=f"temp-{args.pool}", tier=int(task["tier"]),
                        ci_first_pass="pass" if outcome["passed"] else "fail",
-                       evidence=tempdir / "evidence" / "result.json",
+                       evidence=result_file if result_file.is_file() else None,
                        record_file=getattr(args, "record_file", None))
 
     passed_tier1 = sum(1 for item in outcomes if item["task"].startswith("tempqual-tier1-") and item["passed"])

@@ -54,7 +54,7 @@ def linked_worktree(tmp_path: Path) -> Path:
     probe = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", ref],
                            capture_output=True, text=True, check=False)
     if probe.returncode != 0:
-        ref = "master"
+        ref = "HEAD"
     done = subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", str(worktree), ref],
                           capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
