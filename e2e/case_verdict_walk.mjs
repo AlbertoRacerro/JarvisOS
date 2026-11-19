@@ -6,7 +6,9 @@
 // 3. Clicks "Registra verdetto" to record a deterministic verdict ("Entro tolleranza", "Registrato").
 // 4. Enters rationale and clicks "Accetta verdetto", updating status to "Accettato".
 // 5. Reloads page to confirm persistence of the accepted verdict.
-// 6. Confirms zero console errors and zero page errors throughout.
+// 6. Spec 318: opens the Decisione cell, fills the decision form, clicks "Registra decisione"; the cell turns green
+//    and stays green after a reload.
+// 7. Confirms zero console errors and zero page errors throughout.
 
 import { createHash } from "node:crypto";
 import { openSync } from "node:fs";
@@ -253,9 +255,25 @@ try {
   await shot("reloaded-verdict-persisted");
   summary.steps.push({ step: "reload_confirms_verdict_persistence", status: "pass" });
 
+  // 6. Spec 318: record a decision on the accepted verdict from the Decisione cell
+  const decideCell = page.locator('.readiness-board__cell-button[aria-label*="Decisione"]').first();
+  await decideCell.click();
+  const decisionForm = page.locator(".readiness-board__decision-form");
+  await decisionForm.waitFor();
+  await decisionForm.getByLabel("Titolo").fill("Walk decision");
+  await decisionForm.getByLabel("Decisione", { exact: true }).fill("The model reproduces the published value.");
+  await decisionForm.getByLabel("Motivazione (opzionale)").fill("Accepted verdict within tolerance.");
+  await shot("decision-form-filled");
+  await decisionForm.getByRole("button", { name: "Registra decisione" }).click();
+  await page.locator('.readiness-board__cell-button[aria-label*="Decisione"][data-status="green"]').first().waitFor();
+  await page.reload({ waitUntil: "networkidle" });
+  await page.locator('.readiness-board__cell-button[aria-label*="Decisione"][data-status="green"]').first().waitFor();
+  await shot("decision-cell-green-after-reload");
+  summary.steps.push({ step: "record_decision_turns_decide_cell_green", status: "pass" });
+
   assert(summary.console_errors.length === 0, `console errors: ${JSON.stringify(summary.console_errors)}`);
   assert(summary.page_errors.length === 0, `page errors: ${JSON.stringify(summary.page_errors)}`);
-  summary.passed = summary.steps.length === 5 && summary.steps.every((s) => s.status === "pass");
+  summary.passed = summary.steps.length === 6 && summary.steps.every((s) => s.status === "pass");
   await context.close();
 } catch (error) {
   summary.failure = String(error.stack ?? error);
