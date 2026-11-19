@@ -5,12 +5,15 @@ from __future__ import annotations
 import re
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel, ConfigDict
 
 from app.core.database import open_sqlite_connection
 from app.core.paths import build_paths
+from app.modules.bluecad.freecad_bridge import FreecadBridge, FreecadBridgeError, validate_request
 from app.modules.bluecad.ledger import archive_candidate, get_candidate, list_candidates, mark_promoted
 from app.modules.bluecad.loop import _external_blocked_reason, create_bluecad_candidate
 from app.modules.bluecad.models import BluecadCandidateCreate, BluecadCandidateRead
@@ -35,10 +38,148 @@ from app.modules.bluecad.studio_references import (
     remove_reference,
 )
 from app.modules.bluecad.template import BluecadTemplateCreate, TemplateError, create_template_candidate
+from app.modules.events.service import log_event
 from app.modules.modeling.models import DecisionCreate
 from app.modules.modeling.service import create_decision
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/bluecad", tags=["bluecad"])
+
+
+class FreecadEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    document: str
+    object: str
+    property: str
+    value: Any
+
+
+class FreecadApplyRequest(FreecadEditRequest):
+    old_value: Any
+
+
+def _freecad_error(exc: FreecadBridgeError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": str(exc)})
+
+
+def _require_workspace(workspace_id: str) -> None:
+    with open_sqlite_connection() as connection:
+        if connection.execute("SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail={"error": "Workspace not found."})
+
+
+def _freecad_bridge() -> FreecadBridge:
+    return FreecadBridge()
+
+
+@router.get("/freecad/status")
+def freecad_status_endpoint(workspace_id: str) -> dict[str, Any]:
+    _require_workspace(workspace_id)
+    bridge = _freecad_bridge()
+    configuration = bridge.configuration()
+    if not configuration["configured"]:
+        return {"configured": False, "connected": False, "code": configuration["code"]}
+    try:
+        bridge.request("ping")
+    except FreecadBridgeError as exc:
+        return {"configured": True, "connected": False, "code": exc.code}
+    return {"configured": True, "connected": True, "code": None}
+
+
+@router.get("/freecad/documents")
+def freecad_documents_endpoint(workspace_id: str) -> list[str]:
+    _require_workspace(workspace_id)
+    try:
+        result = _freecad_bridge().request("list_documents")
+    except FreecadBridgeError as exc:
+        raise _freecad_error(exc) from exc
+    if not isinstance(result, list) or not all(isinstance(item, str) for item in result):
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "FREECAD_BRIDGE_PROTOCOL_ERROR", "message": "Elenco documenti non valido."},
+        )
+    return result
+
+
+@router.get("/freecad/documents/{doc}/objects")
+def freecad_objects_endpoint(workspace_id: str, doc: str) -> list[dict[str, Any]]:
+    _require_workspace(workspace_id)
+    try:
+        result = _freecad_bridge().request("get_objects", {"doc_name": doc})
+    except FreecadBridgeError as exc:
+        raise _freecad_error(exc) from exc
+    if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "FREECAD_BRIDGE_PROTOCOL_ERROR", "message": "Elenco oggetti non valido."},
+        )
+    return result
+
+
+@router.post("/freecad/edit/preview")
+def freecad_edit_preview_endpoint(workspace_id: str, payload: FreecadEditRequest) -> dict[str, Any]:
+    _require_workspace(workspace_id)
+    try:
+        old_value = validate_request(
+            _freecad_bridge(), payload.document, payload.object, payload.property, payload.value
+        )
+    except FreecadBridgeError as exc:
+        raise _freecad_error(exc) from exc
+    return {
+        "document": payload.document, "object": payload.object, "property": payload.property,
+        "old_value": old_value, "new_value": payload.value,
+    }
+
+
+@router.post("/freecad/edit/apply")
+def freecad_edit_apply_endpoint(workspace_id: str, payload: FreecadApplyRequest) -> dict[str, Any]:
+    _require_workspace(workspace_id)
+    bridge = _freecad_bridge()
+    try:
+        live_old = validate_request(
+            bridge, payload.document, payload.object, payload.property, payload.value
+        )
+        if live_old != payload.old_value:
+            raise FreecadBridgeError("FREECAD_STALE_PREVIEW", "Il valore in FreeCAD è cambiato dopo l'anteprima: rifai l'anteprima.", 409)
+        outcome = bridge.request(
+            "edit_object",
+            {
+                "doc_name": payload.document,
+                "obj_name": payload.object,
+                "properties": {"Properties": {payload.property: payload.value}},
+            },
+        )
+    except FreecadBridgeError as exc:
+        raise _freecad_error(exc) from exc
+    success = isinstance(outcome, dict) and outcome.get("success") is True
+    # Only the typed outcome leaves the bridge: add-on error text can carry local file names.
+    mutation = outcome.get("mutation_outcome") if isinstance(outcome, dict) else None
+    outcome = {"success": success, "mutation_outcome": mutation if isinstance(mutation, str) else None}
+    result: dict[str, Any] = {
+        "document": payload.document, "object": payload.object, "property": payload.property,
+        "old_value": payload.old_value, "new_value": payload.value, "outcome": outcome,
+        "document_unchanged": not success,
+    }
+    if not success:
+        result["message"] = "Il documento non è stato modificato."
+    with open_sqlite_connection() as connection:
+        log_event(
+            connection,
+            event_type="FreecadPropertyEditApplied",
+            actor="local-user",
+            target_type="FreeCADObject",
+            target_id=payload.object,
+            workspace_id=workspace_id,
+            payload={
+                "document": payload.document,
+                "object": payload.object,
+                "property": payload.property,
+                "old": payload.old_value,
+                "new": payload.value,
+                "outcome": outcome,
+            },
+        )
+        connection.commit()
+    return result
 
 
 def _reference_error(exc: ReferenceError) -> HTTPException:
