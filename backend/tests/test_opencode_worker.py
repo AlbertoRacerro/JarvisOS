@@ -197,6 +197,15 @@ def test_sandbox_hides_home_tmp_and_windows_drives(monkeypatch: pytest.MonkeyPat
     for hidden in (str(Path.home()), "/tmp", "/mnt"):
         assert ("--tmpfs", hidden) in pairs
     assert ("--bind", str(linked_worktree.resolve())) in pairs
+    git_dir = subprocess.run(["git", "-C", str(linked_worktree), "rev-parse", "--path-format=absolute", "--git-dir"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+    assert ("--ro-bind", str(Path(git_dir).resolve())) in pairs  # a worker cannot rewrite HEAD or refs
+    assert ("--bind", str(Path(git_dir).resolve())) not in pairs
+    # a loose binary in the home would bind back a private subtree of it
+    loose = Path.home() / "some-dir" / "bin" / "opencode"
+    with pytest.raises(ow.Refused) as loose_refusal:
+        ow.sandbox_argv(str(loose), linked_worktree, tmp_path)
+    assert loose_refusal.value.reason == "package_unrecognised"
     assert argv.index("--tmpfs") < argv.index("--bind")  # writable binds are mounted over the hidden trees
 
 

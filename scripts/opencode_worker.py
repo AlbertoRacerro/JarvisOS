@@ -190,14 +190,27 @@ def sandbox_argv(binary: str, worktree: Path, scratch: Path) -> list[str]:
     common = Path(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()).resolve()
     own_git_dir = Path(git(worktree, "rev-parse", "--path-format=absolute", "--git-dir").strip()).resolve()
     package = Path(binary).resolve().parent.parent
+    home = Path.home().resolve()
+    if package == home or home.is_relative_to(package) or (
+            package.is_relative_to(home) and not _is_opencode_package(package)):
+        # A loose binary under the home would bind back a whole private subtree.
+        raise Refused("package_unrecognised", str(package))
     argv = [bwrap, "--die-with-parent", "--unshare-pid", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
             "--tmpfs", str(Path.home()), "--tmpfs", "/tmp", "--tmpfs", "/mnt"]
     if Path("/mnt/wsl").is_dir():  # WSL keeps resolv.conf here
         argv += ["--ro-bind", "/mnt/wsl", "/mnt/wsl"]
     argv += ["--ro-bind", str(package), str(package), "--ro-bind", str(common), str(common),
-             "--bind", str(own_git_dir), str(own_git_dir), "--bind", str(scratch), str(scratch), "--bind", str(worktree.resolve()), str(worktree.resolve()),
+             "--ro-bind", str(own_git_dir), str(own_git_dir), "--bind", str(scratch), str(scratch), "--bind", str(worktree.resolve()), str(worktree.resolve()),
              "--chdir", str(worktree.resolve()), "--"]
     return argv
+
+
+def _is_opencode_package(package: Path) -> bool:
+    try:
+        name = json.loads((package / "package.json").read_text(encoding="utf-8")).get("name")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+        return False
+    return isinstance(name, str) and name.startswith("@opencode/")
 
 
 def opencode_binary() -> str:
@@ -353,7 +366,7 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
             shutil.copyfile(config, evidence / "opencode.json")
             env = child_env(scratch, key)
             sandbox = sandbox_argv(binary, worktree, scratch)
-        except Refused:
+        except BaseException:
             shutil.rmtree(scratch, ignore_errors=True)
             raise
         # --standalone: a private server in this environment, never the user's background service.

@@ -1948,18 +1948,21 @@ def test_temporary_pool_malformed_skipped_with_reason_and_expired_leaves_summary
         {"name": "old", "provider": "free", "base_url": "https://example.invalid/v1", "model": "m",
          "key_file": str(key), "expires_at": "2000-01-01T00:00:00Z", "rate_limits": "", "data_policy": ""},
         "not an object",
+        {"name": "old", "provider": "free", "base_url": "https://example.invalid/v1", "model": "m2",
+         "key_file": str(key), "expires_at": "2099-01-01T00:00:00Z", "rate_limits": "", "data_policy": ""},
     ]), encoding="utf-8")
     monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
     entries = wr.load_temp_pools()
-    assert [e["name"] for e in entries] == ["broken", "old", "invalid-2"]
+    # bad entries get synthetic names; a duplicate name never shadows the first usable entry
+    assert [e["name"] for e in entries] == ["invalid#0", "old", "invalid#2", "invalid#3"]
     pools = {f"temp-{e['name']}": wr.temp_pool_read(e) for e in entries}
-    assert pools["temp-broken"].reason == "invalid" and pools["temp-old"].reason == "expired"
+    assert pools["temp-invalid#0"].reason == "invalid" and pools["temp-old"].reason == "expired"
     _, skipped = wr.rank(1, pools, models=wr.temp_models([]))
     assert {s["worker"]: s["skipped"] for s in skipped} == {
-        "temp-broken": "invalid", "temp-old": "expired", "temp-invalid-2": "invalid"}
+        "temp-invalid#0": "invalid", "temp-old": "expired", "temp-invalid#2": "invalid", "temp-invalid#3": "invalid"}
     line = wr.summary_line(pools, [])
     assert "temp-old" not in line
-    assert "temp-broken unavailable (invalid)" in line
+    assert "temp-invalid#0 unavailable (invalid)" in line
 
 
 def test_temporary_pool_qualification_gates_tiers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

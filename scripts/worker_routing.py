@@ -218,9 +218,10 @@ def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
     if not isinstance(entries, list):
         return []
     valid: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for index, raw in enumerate(entries):
         if not isinstance(raw, dict):
-            valid.append({"name": f"invalid-{index}", "model": "", "invalid": "not an object"})
+            valid.append({"name": f"invalid#{index}", "model": "", "invalid": "not an object"})
             continue
         name = raw.get("name")
         provider = raw.get("provider")
@@ -234,11 +235,13 @@ def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
                 or not isinstance(model, str) or not model.strip()
                 or not isinstance(key_file, str) or not Path(key_file).is_absolute()
                 or expires is None
-                or "rate_limits" not in raw or "data_policy" not in raw):
+                or "rate_limits" not in raw or "data_policy" not in raw
+                or name in seen):
             # Kept, so pick shows why it is skipped; never raised, never routed.
-            safe = name if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) else f"invalid-{index}"
-            valid.append({"name": safe, "model": str(raw.get("model") or ""), "invalid": "malformed entry"})
+            # A synthetic name per bad entry, so it can never shadow or duplicate a usable pool.
+            valid.append({"name": f"invalid#{index}", "model": str(raw.get("model") or ""), "invalid": "malformed entry"})
             continue
+        seen.add(name)
         valid.append({
             "name": name, "provider": provider.strip(), "base_url": base_url,
             "model": model.strip(), "key_file": Path(key_file).expanduser(), "expires_at": expires,
