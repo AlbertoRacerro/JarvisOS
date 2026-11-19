@@ -471,7 +471,7 @@ def compute_next_action(
                     return NextAction(
                         step=step.step,
                         title_it="Risolvi i problemi nel diagramma di processo",
-                        reason_it="L'ultimo calcolo del diagramma di processo non converge.",
+                        reason_it="L'ultimo calcolo del diagramma di processo non converge o è fallito.",
                         action_label_it="Apri il diagramma di processo",
                         route="/design/process",
                     )

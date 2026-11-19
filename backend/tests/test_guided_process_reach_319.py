@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi.testclient import TestClient
 
 from app.core.bootstrap import initialize_storage
@@ -127,11 +129,33 @@ def test_non_converged_latest_process_run_blocks_and_routes_to_process(
         assert action.route == "/design/process"
 
 
-def test_workspace_without_process_drafts_keeps_existing_states_and_hides_paths(
-    isolated_data_root: None,
-) -> None:
+def test_workspace_without_process_drafts_keeps_existing_states(isolated_data_root: None) -> None:
     with _client(isolated_data_root) as client:
         workspace_id = _workspace(client, "reach-none")
         with open_sqlite_connection() as connection:
             assert evaluate_step(connection, workspace_id, "model") == ("not_started", [])
             assert evaluate_step(connection, workspace_id, "run") == ("not_started", [])
+
+
+def test_guided_questions_response_with_process_drafts_is_path_free(isolated_data_root: None) -> None:
+    with _client(isolated_data_root) as client:
+        workspace_id = _workspace(client, "reach-paths")
+        state = draft.create_draft(workspace_id, "Linea 4")
+        draft.record_run(
+            draft.draft_dir(workspace_id, state["draft_id"]),
+            {
+                "run_id": "failed",
+                "draft_id": state["draft_id"],
+                "draft_revision": state["revision"],
+                "action": "run",
+                "status": "failed",
+                "started_at": "2026-01-01T00:00:00+00:00",
+                "outcome": {"state": "failed"},
+            },
+        )
+        response = client.get(f"/workspaces/{workspace_id}/engineering/guided-questions")
+        assert response.status_code == 200
+        run_step = next(step for step in response.json()["steps"] if step["step"] == "run")
+        assert run_step["state"] == "blocked"
+        assert run_step["blocked_items"] == ['Diagramma "Linea 4": fallito']
+        assert os.environ["JARVISOS_DATA_ROOT"] not in response.text
