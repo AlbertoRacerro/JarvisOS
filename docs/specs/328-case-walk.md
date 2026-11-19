@@ -1,6 +1,6 @@
 # 328 — CASE-WALK-1: One rerunnable browser walk takes a literature case from seven red cells to seven green
 
-Status: ready
+Status: merged
 Depends on: 303, 304, 305, 311, 314, 315, 316, 318
 
 ## Goal
