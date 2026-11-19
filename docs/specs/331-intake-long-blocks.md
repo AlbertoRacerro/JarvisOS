@@ -37,6 +37,8 @@ In scope:
   single line longer than `MAX_PASSAGE_CHARS` is dropped.
 - `_file_documents` reports `passage_too_large` only for a single line longer than `MAX_PASSAGE_CHARS` (or when no
   passage results from non-empty content), so the report says what was actually dropped.
+- `e2e/case_walk.mjs` answer step: the refresh report counts passages, not files, so it waits for
+  `Inclusi: N, Saltati: 0` with N at least 1 instead of the literal `Inclusi: 1`.
 
 Out of scope (binding non-goals):
 - No change to `MAX_PASSAGE_CHARS`, the other limits, passage ids, or headings.
@@ -47,6 +49,7 @@ Out of scope (binding non-goals):
 
 - `backend/app/modules/ai/document_intake.py`
 - `backend/tests/test_document_intake.py`
+- `e2e/case_walk.mjs`
 
 ## Design constraints
 
