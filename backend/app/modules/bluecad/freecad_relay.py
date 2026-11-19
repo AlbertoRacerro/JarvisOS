@@ -15,7 +15,7 @@ _TIMEOUT_S = 10.0
 
 
 class _TimeoutTransport(xmlrpc.client.Transport):
-    def make_connection(self, host: str) -> HTTPConnection:
+    def make_connection(self, host: tuple[str, dict[str, str]] | str) -> HTTPConnection:
         connection = super().make_connection(host)
         connection.timeout = _TIMEOUT_S
         return connection
