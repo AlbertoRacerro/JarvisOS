@@ -1,6 +1,6 @@
 # 317 — RETRIEVAL-ANSWER-CHECK-1: A retrieval check that misses its expected answers is not green
 
-Status: in_review
+Status: merged
 Depends on: 300, 303, 316
 
 ## Goal
