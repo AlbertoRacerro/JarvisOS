@@ -12,6 +12,14 @@ const L = await import(`data:text/javascript;base64,${Buffer.from(js).toString("
 
 assert.equal(L.NOTICE, "Tier 1 lumped model. Unqualified. Simulation only. This does not command any equipment.");
 
+const scenarioEditor = read("src/components/dynamic/ScenarioEditor.tsx");
+assert.match(scenarioEditor, /<legend>Thermal<\/legend>/);
+assert.match(scenarioEditor, /<legend>Carbonate &amp; pH<\/legend>/);
+assert.match(scenarioEditor, /<legend>Optics &amp; wall fouling \(optional\)<\/legend>/);
+assert.match(scenarioEditor, /label="Thermal mode"/);
+assert.match(scenarioEditor, /label="Carbon mode"/);
+assert.match(scenarioEditor, /label=\{`Optics geometry of \${tag}`\}/);
+
 // Stored content omits fields at their model default; contentOf restores them and keeps every stored value.
 {
   const stored = { scenarios: { run: { id: "run", units: ["PBR"], profiles: [{ profile_id: "p", digest: "d" }], start_utc: "2026-01-01T00:00:00Z", end_utc: "2026-01-02T00:00:00Z", output_cadence_s: 3600, temperature_source: "unit_mean", rtol: 1e-9 } },
@@ -25,6 +33,22 @@ assert.equal(L.NOTICE, "Tier 1 lumped model. Unqualified. Simulation only. This 
   assert.equal(content.scenarios.run.atol, 1e-9);
   assert.equal(content.scenarios.run.downstream_enabled, false);
   assert.deepEqual(content.scenarios.run.initial, {});
+  assert.equal(content.scenarios.run.thermal_mode, "prescribed");
+  assert.deepEqual(content.scenarios.run.thermal_ua, {});
+  assert.deepEqual(content.scenarios.run.thermal_heat_w, {});
+  assert.equal(content.scenarios.run.water_density_kg_m3, 1000);
+  assert.equal(content.scenarios.run.water_cp_j_kg_k, 4184);
+  assert.equal(content.scenarios.run.carbon_mode, "off");
+  assert.deepEqual(content.scenarios.run.carbon_kla_h, {});
+  assert.deepEqual(content.scenarios.run.co2_partial_pressure_atm, {});
+  assert.equal(content.scenarios.run.biomass_carbon_fraction, 0.5);
+  assert.equal(content.scenarios.run.co2_half_saturation_mol_m3, 0);
+  assert.equal(content.scenarios.run.salinity_g_kg, 0);
+  assert.deepEqual(content.scenarios.run.optics_geometry, {});
+  assert.deepEqual(content.scenarios.run.back_wall_albedo, {});
+  assert.deepEqual(content.scenarios.run.wall_transmittance, {});
+  assert.deepEqual(content.scenarios.run.wall_fouling_rate_1_s, {});
+  assert.deepEqual(content.scenarios.run.wall_fouling_floor, {});
   assert.equal(content.controllers.c.direction, "above");
   assert.equal(content.controllers.c.upper, 1);
   assert.deepEqual(content.schedules.s.events, []);
@@ -133,7 +157,27 @@ assert.equal(scenario.fidelity, "T1");
 // A unit preselected for a new scenario gets the same editable starting state as one chosen later (the engine requires X, N and O2).
 assert.deepEqual(scenario.initial, { PBR: { X: 0.2, N: 0.05, O2: 0.008 } });
 assert.deepEqual(L.scenarioHints(scenario), []);
+assert.equal(scenario.thermal_mode, "prescribed");
+assert.deepEqual(scenario.thermal_ua, {});
+assert.deepEqual(scenario.thermal_heat_w, {});
+assert.equal(scenario.water_density_kg_m3, 1000);
+assert.equal(scenario.water_cp_j_kg_k, 4184);
+assert.equal(scenario.carbon_mode, "off");
+assert.deepEqual(scenario.carbon_kla_h, {});
+assert.deepEqual(scenario.co2_partial_pressure_atm, {});
+assert.equal(scenario.biomass_carbon_fraction, 0.5);
+assert.equal(scenario.co2_half_saturation_mol_m3, 0);
+assert.equal(scenario.salinity_g_kg, 0);
+assert.deepEqual(scenario.optics_geometry, {});
+assert.deepEqual(scenario.back_wall_albedo, {});
+assert.deepEqual(scenario.wall_transmittance, {});
+assert.deepEqual(scenario.wall_fouling_rate_1_s, {});
+assert.deepEqual(scenario.wall_fouling_floor, {});
 assert.ok(L.scenarioHints({ ...scenario, output_cadence_s: 30 }).some((x) => /at least 60 s/.test(x)));
+assert.ok(L.scenarioHints({ ...scenario, water_density_kg_m3: 0 }).some((x) => /Water density/.test(x)));
+assert.ok(L.scenarioHints({ ...scenario, biomass_carbon_fraction: 1.1 }).some((x) => /Biomass carbon fraction/.test(x)));
+assert.ok(L.scenarioHints({ ...scenario, back_wall_albedo: { PBR: 1.1 } }).some((x) => /Back-wall albedo/.test(x)));
+assert.ok(L.scenarioHints({ ...scenario, wall_transmittance: { PBR: 0 } }).some((x) => /Wall transmittance/.test(x)));
 assert.ok(L.scenarioHints({ ...scenario, end_utc: "2026-09-01T00:00:00Z" }).some((x) => /exceeds the limit of 120 d/.test(x)));
 assert.ok(L.scenarioHints({ ...scenario, end_utc: "2026-01-20T00:00:00Z", output_cadence_s: 60 }).some((x) => /output points exceed/.test(x)));
 assert.ok(L.scenarioHints({ ...scenario, start_utc: "2026-01-01T00:00:00" }).some((x) => /UTC offset/.test(x)));
