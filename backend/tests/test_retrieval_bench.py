@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.modules.ai.retrieval_bench import evaluate_retrieval_request
+from app.modules.ai.retrieval_bench import evaluate_retrieval_request, retrieval_eval_descriptor
 from app.modules.engineering.bench import BenchInputError, compare_runs, list_evaluators, run_evaluation
 
 
@@ -37,11 +37,23 @@ def test_list_includes_retrieval_evaluator() -> None:
     ]
 
 
+def test_retrieval_answer_check_descriptor() -> None:
+    descriptor = retrieval_eval_descriptor()
+    assert descriptor.advisory_checks == ("RETRIEVAL_EXPECTED_IN_TOP3",)
+    assert descriptor.required_checks == (
+        "RETRIEVAL_CORPUS_NONEMPTY",
+        "RETRIEVAL_QUESTIONS_NONEMPTY",
+        "RETRIEVAL_EVAL_COMPLETE",
+    )
+
+
 @pytest.mark.parametrize("mode", ["lexical", "hybrid"])
 def test_inline_retrieval_metrics(mode: str, tmp_path: Path) -> None:
     result, verdict, payload = evaluate_retrieval_request(_request(mode), root=tmp_path, out_dir=tmp_path)
     values = {item.name: item.value.value for item in result.outputs}
-    assert verdict == "usable"
+    assert verdict == "usable_with_warnings"
+    answer_check = next(check for check in result.checks if check.id == "RETRIEVAL_EXPECTED_IN_TOP3")
+    assert answer_check.status == "warn"
     assert values["top1_hit_rate"] == pytest.approx(2 / 3)
     assert values["top3_hit_rate"] == pytest.approx(2 / 3)
     assert values["top10_hit_rate"] == pytest.approx(2 / 3)
@@ -65,6 +77,10 @@ def test_corpus_directory_is_ingested(tmp_path: Path) -> None:
     assert verdict == "usable"
     assert result.outputs[0].name == "top1_hit_rate"
     assert result.outputs[0].value.value == 1
+    answer_check = next(check for check in result.checks if check.id == "RETRIEVAL_EXPECTED_IN_TOP3")
+    assert answer_check.status == "pass"
+    assert answer_check.actual == 1.0
+    assert answer_check.limit == 1.0
 
 
 @pytest.mark.parametrize(
@@ -76,10 +92,30 @@ def test_empty_inputs_are_not_usable(eval_request: dict[str, object], tmp_path: 
     assert result.status == "succeeded"
     assert verdict == "not_usable"
     assert any(check.status == "fail" for check in result.checks)
+    answer_check = next(check for check in result.checks if check.id == "RETRIEVAL_EXPECTED_IN_TOP3")
+    assert answer_check.status == "not_evaluated"
+    assert answer_check.actual is None
+    assert answer_check.limit is None
     run, view = run_evaluation("retrieval.eval", eval_request, tmp_path / "run", root=tmp_path)
     assert run["verdict"] == "not_usable"
     assert run["outputs"] == []
     assert view["outputs"] == "withheld (verdict not_usable)"
+
+
+def test_evaluation_error_is_not_evaluated(tmp_path: Path) -> None:
+    request = {
+        "documents": [{"id": "a", "text": "apple"}],
+        "questions": [{"query": 123, "expected_ids": ["a"]}],
+    }
+    result, verdict, payload = evaluate_retrieval_request(request, root=tmp_path, out_dir=tmp_path)
+    assert result.status == "failed"
+    assert verdict == "not_usable"
+    assert payload["errors"]
+    assert result.outputs == ()
+    answer_check = next(check for check in result.checks if check.id == "RETRIEVAL_EXPECTED_IN_TOP3")
+    assert answer_check.status == "not_evaluated"
+    assert answer_check.actual is None
+    assert answer_check.limit is None
 
 
 @pytest.mark.parametrize("field", ["corpus_dir", "index_db_path"])
@@ -107,7 +143,9 @@ def test_unrelated_hits_are_not_zero_hits(tmp_path: Path) -> None:
             "questions": [{"id": "q", "query": "apple", "expected_ids": ["missing"]}]}
     result, verdict, payload = evaluate_retrieval_request(data, root=tmp_path, out_dir=tmp_path)
     values = {item.name: item.value.value for item in result.outputs}
-    assert verdict == "usable"
+    assert verdict == "usable_with_warnings"
+    answer_check = next(check for check in result.checks if check.id == "RETRIEVAL_EXPECTED_IN_TOP3")
+    assert answer_check.status == "warn"
     assert payload["questions"][0]["hit_count"] == 1
     assert values["zero_hit_count"] == 0
     assert values["top10_hit_rate"] == values["mrr"] == 0
