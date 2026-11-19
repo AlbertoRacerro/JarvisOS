@@ -343,7 +343,7 @@ export default function ReadinessBoard({ navigate, onWorkspaceChange }: Props) {
                   </tr>
                   <tr>
                     <th>Run</th>
-                    <td>{stepResult.comparison.run_id}</td>
+                    <td>{stepResult.comparison.run_label ?? stepResult.comparison.run_id}</td>
                   </tr>
                 </tbody>
               </table>

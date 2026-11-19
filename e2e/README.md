@@ -36,6 +36,7 @@ optional pack, not by this repository.
 | `provider_quota_walk.mjs` | Coding → Runtime provider usage columns, quota rings, Claude windows, and failed-refresh retention | `node e2e/provider_quota_walk.mjs <evidence-dir>` |
 | `sim_results_requirement_verification_walk.mjs` | Spec 253 simulation result ingestion, red-dot exceptions, single batch notification, resolution (correct + confirm), requirement verdicts and unvalidated markers | `node e2e/sim_results_requirement_verification_walk.mjs <evidence-dir>` |
 | `cad_verdict_lights_walk.mjs` | Spec 301 CAD verdict lights: solid, mesh and static FEM evidence with shared verdict lights, Italian labels and check table (fresh temporary data root) | `node e2e/cad_verdict_lights_walk.mjs <evidence-dir>` |
+| `readiness_process_compare_walk.mjs` | Spec 320 Prontezza: a converged Process-editor run turns Calcolo and Confronto green, the comparison names the flowsheet, and a verdict is recorded on it (fresh temporary data root, temporary pack copy) | `node e2e/readiness_process_compare_walk.mjs <evidence-dir>` |
 
 Prerequisites: `(cd frontend && VITE_API_BASE_URL= npm run build)`, a backend virtualenv
 (`JARVISOS_PROOF_PYTHON`, default `backend/.venv/bin/python`), and Playwright

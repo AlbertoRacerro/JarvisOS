@@ -1,6 +1,6 @@
 # 320 — CASE-PROCESS-COMPARE-1: A converged process run can carry a case's comparison and verdict
 
-Status: ready
+Status: in_review
 Depends on: 303, 305, 314, 319
 
 ## Goal

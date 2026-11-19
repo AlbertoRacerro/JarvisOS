@@ -21,6 +21,7 @@ export type StoredVerdictSummary = {
 export type Comparison = {
   quantity?: string | null;
   run_id: string;
+  run_label?: string | null;
   computed: ComparisonValue;
   computed_in_published_unit: number | null;
   published: ComparisonValue;
