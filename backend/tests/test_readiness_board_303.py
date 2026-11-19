@@ -253,9 +253,11 @@ def test_criterion_1_seven_steps_transition_and_missing_names(client: TestClient
     assert board.cases[0].steps["compare"].reason == REASON_MISSING_RECORD
     assert board.cases[0].steps["compare"].missing == ["density"]
 
-    # 7. A decision on another case's or a superseded verdict keeps 'decide' red (spec 318)
+    # 7. A decision on another case's, a superseded or a recorded verdict keeps 'decide' red (spec 318);
+    # a verdict PATCHed back from accepted to recorded no longer counts.
     _create_decision(ws_id, "another_case")
     _create_decision(ws_id, board.cases[0].id, verdict_status="superseded")
+    _create_decision(ws_id, board.cases[0].id, verdict_status="recorded")
     board = compute_readiness_board()
     assert board.cases[0].steps["decide"].status == "red"
 

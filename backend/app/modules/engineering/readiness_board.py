@@ -499,7 +499,7 @@ def _compute_case(connection, case: CaseDefinition) -> CaseResult:
         """
         SELECT d.id FROM decisions d
         JOIN case_verdicts v ON v.id = d.case_verdict_id AND v.workspace_id = d.workspace_id
-        WHERE d.workspace_id = ? AND d.status = 'accepted' AND v.case_id = ? AND v.status != 'superseded'
+        WHERE d.workspace_id = ? AND d.status = 'accepted' AND v.case_id = ? AND v.status = 'accepted'
         LIMIT 1
         """,
         (workspace_id, case.id),
