@@ -1,6 +1,6 @@
 # 330 — DATUM-NUMBER-SPACES-1: The literature datum check reads scientific notation set with thin or no-break spaces
 
-Status: ready
+Status: merged
 Depends on: 311, 328
 
 ## Goal
