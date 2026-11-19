@@ -81,7 +81,7 @@ try {
   await page.getByRole("heading", { name: "Model workbench" }).waitFor();
   await page.getByRole("button", { name: "FreeCAD", exact: true }).click();
   await page.getByText("FreeCAD connesso").waitFor();
-  await page.getByText("Demo", { exact: true }).waitFor();
+  assert(await page.getByLabel("Documento").inputValue() === "Demo", "the open document is not selected");
   await page.getByText("Box", { exact: true }).first().waitFor();
   summary.steps.push({ step: "open_freecad_and_read_document", status: "pass" });
   const value = page.getByLabel("Nuovo valore");
@@ -97,6 +97,8 @@ try {
   await page.getByRole("button", { name: "Applica", exact: true }).click();
   await page.getByText("Il documento non è stato modificato.").waitFor();
   summary.steps.push({ step: "preview_apply_and_report_rollback", status: "pass" });
+  await page.screenshot({ path: join(evidence, "freecad-panel.png"), fullPage: true });
+  summary.screenshots.push("freecad-panel.png");
   assert(summary.console_errors.length === 0, `console errors: ${JSON.stringify(summary.console_errors)}`);
   assert(summary.page_errors.length === 0, `page errors: ${JSON.stringify(summary.page_errors)}`);
   summary.passed = true;
