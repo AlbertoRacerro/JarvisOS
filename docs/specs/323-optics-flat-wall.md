@@ -1,6 +1,6 @@
 # 323 — OPTICS-FLAT-WALL-1: Flat-slab geometry, wall transmittance, time-dependent fouling loss, and reflective back wall
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal
