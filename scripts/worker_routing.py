@@ -187,6 +187,113 @@ def unreadable(name: str, reason: str) -> Pool:
     return Pool(name, {}, None, reason)
 
 
+def temp_pools_file(control_dir: Path | None = None) -> Path:
+    override = os.environ.get("TEMP_POOLS_FILE")
+    if override:
+        return Path(override).expanduser()
+    base = control_dir if control_dir is not None else default_control_dir()
+    return base.parent / "temp-pools.json"
+
+
+def _parse_iso_zone(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
+    target = path if path is not None else temp_pools_file()
+    try:
+        document = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return []
+    entries = document if isinstance(document, list) else document.get("pools") if isinstance(document, dict) else None
+    if not isinstance(entries, list):
+        return []
+    valid: list[dict[str, Any]] = []
+    for raw in entries:
+        if not isinstance(raw, dict):
+            continue
+        name = raw.get("name")
+        provider = raw.get("provider")
+        base_url = raw.get("base_url")
+        model = raw.get("model")
+        key_file = raw.get("key_file")
+        expires = _parse_iso_zone(raw.get("expires_at"))
+        if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name)
+                or not isinstance(provider, str) or not provider.strip()
+                or not isinstance(base_url, str) or not base_url.startswith("https://")
+                or not isinstance(model, str) or not model.strip()
+                or not isinstance(key_file, str) or not Path(key_file).is_absolute()
+                or expires is None):
+            continue
+        if "rate_limits" not in raw or "data_policy" not in raw:
+            continue
+        valid.append({
+            "name": name, "provider": provider.strip(), "base_url": base_url,
+            "model": model.strip(), "key_file": Path(key_file).expanduser(), "expires_at": expires,
+        })
+    return valid
+
+
+def qualify_temp_pool(worker: str, outcomes: list[dict[str, Any]] | None = None,
+                      record_file: Path | None = None) -> int:
+    records = load_records(record_file) if outcomes is None else outcomes
+    tier1_tasks = {"tempqual-tier1-add", "tempqual-tier1-even"}
+    tier2_tasks = {"tempqual-tier2-merge"}
+    passed_tier1: set[str] = set()
+    passed_tier2: set[str] = set()
+    for record in records:
+        if record.get("worker") != worker or record.get("ci_first_pass") != "pass":
+            continue
+        task = record.get("task")
+        if isinstance(task, str) and task in tier1_tasks:
+            passed_tier1.add(task)
+        elif isinstance(task, str) and task in tier2_tasks:
+            passed_tier2.add(task)
+    if len(passed_tier1) >= 2 and len(passed_tier2) >= 1:
+        return 2
+    if len(passed_tier1) >= 2:
+        return 1
+    return 0
+
+
+def temp_models(outcomes: list[dict[str, Any]] | None = None) -> tuple[Model, ...]:
+    records = load_records() if outcomes is None else outcomes
+    result: list[Model] = []
+    for entry in load_temp_pools():
+        key = f"temp-{entry['name']}"
+        result.append(Model(key, "opencode", entry["model"], key, qualify_temp_pool(key, records)))
+    return tuple(result)
+
+
+def all_models(outcomes: list[dict[str, Any]] | None = None) -> tuple[Model, ...]:
+    return MODELS + temp_models(outcomes)
+
+
+def temp_pool_read(entry: dict[str, Any], now: datetime | None = None) -> Pool:
+    moment = now or datetime.now(UTC)
+    name = f"temp-{entry['name']}"
+    expires = entry["expires_at"]
+    if moment >= expires:
+        return unreadable(name, "expired")
+    try:
+        exists = entry["key_file"].is_file()
+    except OSError:
+        exists = False
+    if not exists:
+        return unreadable(name, "no_key")
+    return Pool(name, {"expires": 1.0}, 1.0, None, "live",
+                {"expires": expires})
+
+
 def _fraction(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or not 0 <= value <= 1:
         return None
@@ -930,7 +1037,7 @@ def record(task: str, kind: str, worker: str, *, tier: int | None = None, ci_fir
            coordinator_tokens: int | None = None, evidence: list[str | Path] | str | Path | None = None,
            record_file: Path | None = None, now: datetime | None = None) -> dict[str, Any]:
     """Append one worker outcome record atomically. Refuses invalid input."""
-    by_key = {m.key: m for m in MODELS}
+    by_key = {m.key: m for m in all_models(load_records(record_file))}
     if worker not in by_key:
         raise ValueError(f"unknown worker: {worker}")
     model_obj = by_key[worker]
@@ -1182,8 +1289,11 @@ def write_snapshot(path: Path, pools: dict[str, Pool], now: datetime | None = No
 def read_pools(readers: dict[str, Callable[[], Pool]] | None = None, timeout: float = TOTAL_TIMEOUT) -> dict[str, Pool]:
     """Every pool that MODELS uses, read in parallel within one bounded wait. A reader that raises or is still
     running at the deadline leaves its pool unreadable; nothing here ever hangs or raises."""
-    chosen = READERS if readers is None else readers
-    names = list(dict.fromkeys(m.pool for m in MODELS))
+    chosen = dict(READERS if readers is None else readers)
+    temp_entries = {f"temp-{entry['name']}": entry for entry in load_temp_pools()}
+    for name, entry in temp_entries.items():
+        chosen[name] = lambda entry=entry: temp_pool_read(entry)
+    names = list(dict.fromkeys(m.pool for m in all_models()))
     with _agy_lock:
         _agy_doc["at"] = None  # the agy pools share one fresh reading per call
     out: dict[str, Pool] = {name: unreadable(name, "timeout") for name in names}
@@ -1354,13 +1464,15 @@ def copilot_effective_capability(outcomes: list[dict[str, Any]] | None, base_cap
     return 2
 
 
-def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODELS, review_of: str | None = None,
+def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] | None = None, review_of: str | None = None,
          now: datetime | None = None, task: str | None = None, kind: str | None = None,
          outcomes: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(eligible, skipped) for a required tier. Eligible: another family than `review_of` first (never required),
     then smallest capability surplus (effort by task), the gemini family, the quota that would expire unused first,
     then most free quota."""
     now = now or datetime.now(UTC)
+    if models is None:
+        models = all_models(outcomes)
     by_key = {m.key: m for m in models}
     eligible: list[tuple[tuple[int, int, int, int, float, float, int], dict[str, Any]]] = []
     skipped: list[dict[str, Any]] = []
@@ -1420,6 +1532,14 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] = MODE
 
     for index, model in enumerate(models):
         eff_cap = copilot_effective_capability(outcomes, model.capability) if model.key == "copilot-auto" else model.capability
+        if eff_cap == 0 and model.key.startswith("temp-"):
+            pool = pools.get(model.pool) or unreadable(model.pool, "no_reading")
+            skipped.append({"worker": model.key, "kind": model.kind, "model": model.model, "pool": model.pool,
+                            "family": family(model), "capability": 0,
+                            "free": None if pool.free is None else round(pool.free, 4),
+                            "source": pool.source, "measured_cost": None, "record_count": 0,
+                            "skipped": "unqualified"})
+            continue
         if eff_cap < required:
             continue
         pool = pools.get(model.pool) or unreadable(model.pool, "no_reading")
@@ -1486,6 +1606,10 @@ def bare_command(model: Model) -> str:
     if model.kind == "copilot":
         return (f'python3 scripts/copilot_worker.py run --task-file "$TASK_FILE" '
                 f'--worktree "$WORKTREE" --model {model.key}')
+    if model.kind == "opencode":
+        pool_name = model.pool[len("temp-"):] if model.pool.startswith("temp-") else model.pool
+        return (f'python3 scripts/opencode_worker.py run --pool {pool_name} '
+                f'--task-file "$TASK_FILE" --worktree "$WORKTREE"')
     return f'python3 scripts/agy_worker.py run --task-file "$TASK_FILE" --worktree "$WORKTREE" --model {model.key}'
 
 
@@ -1500,10 +1624,12 @@ def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | 
            task: str | None = None, kind: str | None = None, outcomes: list[dict[str, Any]] | None = None,
            now: datetime | None = None) -> dict[str, Any]:
     required = tier(difficulty, risk)
-    eligible, skipped = rank(required, pools, review_of=review_of, now=now, task=task, kind=kind, outcomes=outcomes)
+    models = all_models(outcomes)
+    eligible, skipped = rank(required, pools, models=models, review_of=review_of, now=now,
+                             task=task, kind=kind, outcomes=outcomes)
     decision: dict[str, Any] = {"difficulty": difficulty, "risk": risk, "required_tier": required,
                                 "kind": kind, "review": REVIEW[risk], "reserves": RESERVES}
-    by_key = {m.key: m for m in MODELS}
+    by_key = {m.key: m for m in models}
     if not eligible:
         reason = "wait_for_escalation_pool" if any(s.get("skipped") == "escalated_from_family" for s in skipped) else "no_worker"
         return {**decision, "status": "no_worker", "reason": reason, "skipped": skipped}
@@ -1519,10 +1645,20 @@ def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | 
 
 def summary_line(pools: dict[str, Pool], outcomes: list[dict[str, Any]] | None = None) -> str:
     parts = []
-    for name in dict.fromkeys(m.pool for m in MODELS):
+    models = all_models(outcomes)
+    for name in dict.fromkeys(m.pool for m in models):
         pool = pools.get(name) or unreadable(name, "no_reading")
         if pool.free is None:
             parts.append(f"{name} unavailable ({pool.reason or 'unreadable'})")
+            continue
+        if name.startswith("temp-"):
+            expires = pool.resets.get("expires")
+            hours = max(0.0, (expires - datetime.now(UTC)).total_seconds() / 3600) if expires is not None else 0.0
+            model = next((m for m in models if m.pool == name), None)
+            if model is not None and model.capability == 0:
+                parts.append(f"{name} da qualificare ({hours:.1f}h left)")
+            else:
+                parts.append(f"{name} 100% free ({hours:.1f}h left)")
             continue
         short = f" (5h {pct(pool.windows['5h'])})" if "5h" in pool.windows else ""
         low = " [below reserve]" if below_reserve(pool) else ""
@@ -1530,7 +1666,7 @@ def summary_line(pools: dict[str, Pool], outcomes: list[dict[str, Any]] | None =
         parts.append(f"{name} {pct(pool.free)} free{short}{low}{stale}")
     tiers = ", ".join(
         f"{m.key} t{copilot_effective_capability(outcomes, m.capability) if m.key == 'copilot-auto' else m.capability}"
-        for m in MODELS
+        for m in models
     )
     return ("worker quota: " + " · ".join(parts) + " — effort by task tier, gemini first, then quota expiring "
             "unused; tiers: " + tiers)

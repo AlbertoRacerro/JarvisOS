@@ -1,0 +1,409 @@
+#!/usr/bin/env python3
+"""Run bounded temporary OpenAI-compatible pools through the OpenCode CLI."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+
+SCHEMA = "opencode-worker.v1"
+DEFAULT_TIMEOUT = 1800
+MAX_TIMEOUT = 6 * 3600
+KILL_MARGIN = 60
+MAX_TASK_BYTES = 200 * 1024
+KEY_ENV = "TEMP_POOL_API_KEY"
+
+
+class Refused(Exception):
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+def iso(now: datetime) -> str:
+    return now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def control_dir() -> Path:
+    return Path(os.environ.get("RELAY_CONTINUITY_DIR",
+                               Path.home() / "jarvis-control" / "work" / "continuity")).expanduser()
+
+
+def temp_pools_file() -> Path:
+    override = os.environ.get("TEMP_POOLS_FILE")
+    if override:
+        return Path(override).expanduser()
+    return control_dir().parent / "temp-pools.json"
+
+
+def load_pools() -> list[dict[str, Any]]:
+    try:
+        data = json.loads(temp_pools_file().read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return []
+    entries = data if isinstance(data, list) else data.get("pools") if isinstance(data, dict) else None
+    return [entry for entry in entries or [] if isinstance(entry, dict)]
+
+
+def find_pool(name: str) -> dict[str, Any]:
+    for entry in load_pools():
+        if entry.get("name") == name:
+            return entry
+    raise Refused("pool_not_found", name)
+
+
+def parse_expiry(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def validate_pool(entry: dict[str, Any]) -> tuple[datetime, Path, str, str, str]:
+    expires = parse_expiry(entry.get("expires_at"))
+    if expires is None:
+        raise Refused("invalid_pool")
+    if datetime.now(UTC) >= expires:
+        raise Refused("pool_expired")
+    base_url = entry.get("base_url")
+    model = entry.get("model")
+    provider = entry.get("provider")
+    key_file = entry.get("key_file")
+    if not isinstance(base_url, str) or not base_url.startswith("https://"):
+        raise Refused("invalid_base_url")
+    if not isinstance(model, str) or not model.strip():
+        raise Refused("invalid_model")
+    if not isinstance(provider, str) or not provider.strip():
+        raise Refused("invalid_provider")
+    if not isinstance(key_file, str) or not Path(key_file).is_absolute():
+        raise Refused("invalid_key_file")
+    key_path = Path(key_file).expanduser()
+    if not key_path.is_file():
+        raise Refused("key_missing")
+    return expires, key_path, base_url, model.strip(), provider.strip()
+
+
+def git(worktree: Path, *args: str, check: bool = True) -> str:
+    try:
+        proc = subprocess.run(["git", "-C", str(worktree), *args], capture_output=True,
+                              text=True, check=False)
+    except OSError as error:
+        raise Refused("git_failed", str(error)) from error
+    if check and proc.returncode != 0:
+        raise Refused("git_failed", proc.stderr.strip())
+    return proc.stdout
+
+
+def check_worktree(worktree: Path) -> tuple[str, list[str]]:
+    if not worktree.is_dir():
+        raise Refused("worktree_missing")
+    if not (worktree / ".git").is_file():
+        raise Refused("not_linked_worktree")
+    common = git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+    git_dir = git(worktree, "rev-parse", "--path-format=absolute", "--git-dir").strip()
+    if not common or common == git_dir:
+        raise Refused("main_checkout")
+    try:
+        common_resolved = Path(common).resolve()
+        source_common = git(repo_root(), "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+        if not source_common or common_resolved != Path(source_common).resolve():
+            raise Refused("outside_repository")
+    except OSError:
+        raise Refused("outside_repository")
+    head = git(worktree, "rev-parse", "HEAD").strip()
+    status = git(worktree, "status", "--porcelain", "--untracked-files=all").strip()
+    changed = [line[3:] for line in status.splitlines() if len(line) >= 4]
+    return head, changed
+
+
+def read_task(path: Path) -> str:
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise Refused("task_unreadable", str(error)) from error
+    if len(raw) > MAX_TASK_BYTES:
+        raise Refused("task_too_large")
+    text = raw.decode("utf-8", errors="replace")
+    if not text.strip():
+        raise Refused("task_empty")
+    return text
+
+
+def evidence_dir() -> Path:
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return control_dir().parent / "work" / "evidence" / f"opencode-worker-{stamp}"
+
+
+def write_json(path: Path, data: dict[str, Any]) -> None:
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def child_env(evidence: Path, key: str) -> dict[str, str]:
+    home = evidence / "home"
+    config = evidence / "xdg-config"
+    data = evidence / "xdg-data"
+    for path in (home, config, data):
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o700)
+    path = os.environ.get("PATH", "/usr/bin:/bin")
+    return {
+        "PATH": path,
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(config),
+        "XDG_DATA_HOME": str(data),
+        "LANG": "C.UTF-8",
+        KEY_ENV: key,
+    }
+
+
+def opencode_binary() -> str:
+    configured = os.environ.get("JARVISOS_OPENCODE_BIN")
+    found = shutil.which(configured) if configured else shutil.which("opencode")
+    if not found:
+        raise Refused("opencode_missing")
+    return found
+
+
+def build_config(evidence: Path, name: str, provider: str, base_url: str, model: str) -> Path:
+    config_dir = evidence / "xdg-config" / "opencode"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    provider_id = re_safe(name)
+    document = {
+        "provider": {
+            provider_id: {
+                "name": provider,
+                "env": [KEY_ENV],
+                "package": "@opencode/ai/providers/openai-compatible",
+                "settings": {
+                    "baseURL": base_url,
+                    "apiKey": "{env:" + KEY_ENV + "}",
+                },
+                "models": {
+                    model: {"modelID": model, "name": model},
+                },
+            }
+        }
+    }
+    path = config_dir / "opencode.json"
+    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def re_safe(value: str) -> str:
+    result = "".join(ch if ch.isascii() and (ch.isalnum() or ch in "-_") else "-" for ch in value)
+    return result.strip("-") or "temp"
+
+
+def changed_files(worktree: Path, start_head: str) -> list[str]:
+    try:
+        status = git(worktree, "status", "--porcelain", "--untracked-files=all").strip()
+    except Refused:
+        return []
+    return [line[3:] for line in status.splitlines() if len(line) >= 4]
+
+
+def qualification_tasks() -> list[dict[str, str]]:
+    base = repo_root() / "scripts" / "temp_pool_qualification"
+    return [
+        {"id": "tempqual-tier1-add", "task": str(base / "tier1-add" / "task.md"),
+         "check": str(base / "tier1-add" / "check.py"), "tier": "1"},
+        {"id": "tempqual-tier1-even", "task": str(base / "tier1-even" / "task.md"),
+         "check": str(base / "tier1-even" / "check.py"), "tier": "1"},
+        {"id": "tempqual-tier2-merge", "task": str(base / "tier2-merge" / "task.md"),
+         "check": str(base / "tier2-merge" / "check.py"), "tier": "2"},
+    ]
+
+
+def execute_qualification(args: argparse.Namespace) -> int:
+    try:
+        entry = find_pool(args.pool)
+        validate_pool(entry)
+    except Refused as refusal:
+        sys.stderr.write(f"qualify refused: {refusal.reason}\n")
+        return 2
+
+    evidence_root = evidence_dir() / "qualification"
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    base = repo_root()
+    outcomes: list[dict[str, Any]] = []
+    for task in qualification_tasks():
+        tempdir = Path(tempfile.mkdtemp(prefix="temp-pool-", dir=evidence_root))
+        worktree = tempdir / "worktree"
+        worktree.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            ref = "origin/master"
+            probe = subprocess.run(["git", "-C", str(base), "rev-parse", "--verify", ref],
+                                   capture_output=True, text=True, check=False)
+            if probe.returncode != 0:
+                ref = "master"
+            add = subprocess.run(["git", "-C", str(base), "worktree", "add", "--detach",
+                                  str(worktree), ref], capture_output=True, text=True, check=False)
+            if add.returncode != 0:
+                raise Refused("worktree_create_failed", add.stderr.strip())
+            task_args = argparse.Namespace(pool=args.pool, task_file=task["task"], worktree=str(worktree),
+                                           timeout=args.timeout,
+                                           evidence_dir=str(tempdir / "evidence"))
+            _, run_result = execute_run(task_args)
+            check = subprocess.run([sys.executable, task["check"]], cwd=worktree,
+                                   capture_output=True, text=True, timeout=args.timeout, check=False)
+            passed = run_result["status"] == "succeeded" and check.returncode == 0
+            outcomes.append({
+                "task": task["id"], "passed": passed,
+                "run_status": run_result["status"], "check_exit": check.returncode,
+            })
+            sys.path.insert(0, str(base / "scripts"))
+            try:
+                import worker_routing as routing
+                routing.record(task=task["id"], kind="tests", worker=f"temp-{args.pool}",
+                               tier=int(task["tier"]),
+                               ci_first_pass="pass" if passed else "fail",
+                               evidence=Path(task_args.evidence_dir) / "result.json",
+                               record_file=getattr(args, "record_file", None))
+            finally:
+                sys.path.pop(0)
+        except (Refused, OSError, subprocess.TimeoutExpired) as error:
+            outcomes.append({"task": task["id"], "passed": False,
+                             "run_status": "failed",
+                             "check_exit": getattr(error, "returncode", 1)})
+        finally:
+            subprocess.run(["git", "-C", str(base), "worktree", "remove", "--force", str(worktree)],
+                           capture_output=True, text=True, check=False)
+
+    passed_tier1 = sum(1 for item in outcomes if item["task"].startswith("tempqual-tier1-") and item["passed"])
+    passed_tier2 = sum(1 for item in outcomes if item["task"].startswith("tempqual-tier2-") and item["passed"])
+    tier = 2 if passed_tier1 == 2 and passed_tier2 == 1 else 1 if passed_tier1 == 2 else 0
+    summary = evidence_root / "qualification.json"
+    write_json(summary, {"pool": args.pool, "tier": tier, "outcomes": outcomes})
+    print(f"pool: temp-{args.pool}")
+    print(f"tier: {tier}")
+    return 0
+
+
+def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
+    started = datetime.now(UTC)
+    worktree = Path(args.worktree).expanduser()
+    evidence = Path(args.evidence_dir).expanduser() if args.evidence_dir else evidence_dir()
+    result: dict[str, Any] = {
+        "schema": SCHEMA, "pool": args.pool, "model": None, "status": "refused",
+        "reason": None, "exit_code": None, "started_at": iso(started),
+        "finished_at": None, "duration_seconds": 0, "changed_files": [],
+    }
+    try:
+        evidence.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        result["reason"] = f"evidence_dir_uncreatable: {error}"
+        return None, result
+    try:
+        if os.environ.get("JARVISOS_PACK_PATH"):
+            raise Refused("private_pack_visible")
+        entry = find_pool(args.pool)
+        _, key_path, base_url, model, provider = validate_pool(entry)
+        key = key_path.read_text(encoding="utf-8").strip()
+        if not key:
+            raise Refused("key_missing")
+        task = read_task(Path(args.task_file))
+        start_head, initial_changed = check_worktree(worktree)
+        if not 0 < args.timeout <= MAX_TIMEOUT:
+            raise Refused("timeout_out_of_range")
+        config = build_config(evidence, args.pool, provider, base_url, model)
+        del config
+        env = child_env(evidence, key)
+        binary = opencode_binary()
+        argv = [binary, "run", "--model", f"{re_safe(args.pool)}/{model}",
+                "--format", "json", "--auto", task]
+        result["model"] = model
+        proc_started = datetime.now(UTC)
+        try:
+            proc = subprocess.Popen(argv, cwd=worktree, env=env, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, start_new_session=True)
+        except OSError as error:
+            result.update(status="failed", reason=f"spawn_failed: {error}", exit_code=None)
+        else:
+            try:
+                stdout, stderr = proc.communicate(timeout=args.timeout + KILL_MARGIN)
+                result["exit_code"] = proc.returncode
+                if proc.returncode == 0:
+                    result["status"] = "succeeded"
+                else:
+                    result.update(status="failed", reason=f"exit_code_{proc.returncode}")
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.communicate()
+                result.update(status="timeout", reason=f"exceeded {args.timeout + KILL_MARGIN}s")
+                result["exit_code"] = None
+            stdout_safe = (stdout if "stdout" in locals() else "").replace(key, "[REDACTED]")
+            stderr_safe = (stderr if "stderr" in locals() else "").replace(key, "[REDACTED]")
+            (evidence / "transcript.json").write_text(stdout_safe, encoding="utf-8")
+            (evidence / "stderr.txt").write_text(stderr_safe, encoding="utf-8")
+        result["duration_seconds"] = round((datetime.now(UTC) - proc_started).total_seconds(), 3)
+        try:
+            end_head = git(worktree, "rev-parse", "HEAD").strip()
+            if end_head != start_head:
+                result.update(status="failed", reason="worker_commit_detected")
+        except Refused:
+            result.update(status="failed", reason="git_verification_failed")
+        result["changed_files"] = changed_files(worktree, start_head)
+        del initial_changed
+    except Refused as refusal:
+        result.update(status="refused",
+                      reason=refusal.reason + (f": {refusal.detail}" if refusal.detail else ""))
+    finished = datetime.now(UTC)
+    result["finished_at"] = iso(finished)
+    result["duration_seconds"] = result.get("duration_seconds") or round((finished - started).total_seconds(), 3)
+    path = evidence / "result.json"
+    write_json(path, result)
+    return path, result
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    path, result = execute_run(args)
+    print(f"result: {path}")
+    print(f"status: {result['status']}" + (f" ({result['reason']})" if result["reason"] else ""))
+    return 0 if result["status"] == "succeeded" else 2
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    run = sub.add_parser("run")
+    run.add_argument("--pool", required=True)
+    run.add_argument("--task-file", required=True)
+    run.add_argument("--worktree", required=True)
+    run.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    run.add_argument("--evidence-dir")
+    run.set_defaults(func=cmd_run)
+    qualify = sub.add_parser("qualify")
+    qualify.add_argument("--pool", required=True)
+    qualify.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    qualify.set_defaults(func=execute_qualification)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    value = args.func(args)
+    return int(value)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
