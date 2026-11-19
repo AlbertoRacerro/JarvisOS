@@ -1,6 +1,6 @@
 # 333 — TEMP-POOL-1: Temporary OpenAI-compatible worker pools that expire by themselves
 
-Status: ready
+Status: merged
 Depends on: —
 
 ## Goal
