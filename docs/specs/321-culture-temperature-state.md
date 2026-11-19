@@ -1,6 +1,6 @@
 # 321 — CULTURE-TEMPERATURE-STATE-1: Culture temperature as a dynamic state
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal

@@ -1,6 +1,6 @@
 # 324 — MOTION-WAVES-1: Rigid-body motion in waves and mooring evaluator
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal
