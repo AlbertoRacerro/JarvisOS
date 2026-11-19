@@ -231,6 +231,12 @@ class Scenario(StrictModel):
     wall_transmittance: dict[str, Annotated[float, Field(gt=0, le=1)]] = Field(default_factory=dict)
     wall_fouling_rate_1_s: dict[str, Annotated[float, Field(ge=0)]] = Field(default_factory=dict)
     wall_fouling_floor: dict[str, Annotated[float, Field(ge=0, le=1)]] = Field(default_factory=dict)
+    carbon_mode: Literal["off", "state"] = "off"
+    carbon_kla_h: dict[str, Annotated[float, Field(ge=0, allow_inf_nan=False)]] = Field(default_factory=dict)
+    co2_partial_pressure_atm: dict[str, Annotated[float, Field(ge=0, allow_inf_nan=False)]] = Field(default_factory=dict)
+    biomass_carbon_fraction: float = Field(default=0.50, gt=0, le=1)
+    co2_half_saturation_mol_m3: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    salinity_g_kg: float = Field(default=0.0, ge=0, allow_inf_nan=False)
 
     @field_validator("thermal_ua")
     @classmethod
