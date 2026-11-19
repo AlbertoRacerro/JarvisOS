@@ -46,15 +46,22 @@ export default function ScenarioEditor({ draft, content, profiles, onPatch }: { 
     if (on && !initial[tag]) initial[tag] = startingState();
     edit({ units: next, initial });
   };
-  const setInitial = (tag: string, key: "X" | "N" | "O2", next: number | undefined) => {
+  const setInitial = (tag: string, key: "X" | "N" | "O2" | "T" | "dic" | "alkalinity" | "ph", next: number | undefined) => {
     const current = { ...(value.initial[tag] ?? {}) };
     if (next === undefined) delete current[key]; else current[key] = next;
     edit({ initial: { ...value.initial, [tag]: current } });
   };
-  const setMap = (field: "feed_flows" | "circulation", tag: string, next: number | undefined) => {
+  type ScenarioMap = "feed_flows" | "circulation" | "thermal_ua" | "thermal_heat_w" | "carbon_kla_h" | "co2_partial_pressure_atm"
+    | "back_wall_albedo" | "wall_transmittance" | "wall_fouling_rate_1_s" | "wall_fouling_floor";
+  const setMap = (field: ScenarioMap, tag: string, next: number | undefined) => {
     const current = { ...value[field] };
     if (next === undefined) delete current[tag]; else current[tag] = next;
     edit({ [field]: current } as Partial<DynScenario>);
+  };
+  const setGeometry = (tag: string, next: "cylinder" | "flat_slab" | undefined) => {
+    const current = { ...value.optics_geometry };
+    if (next === undefined) delete current[tag]; else current[tag] = next;
+    edit({ optics_geometry: current });
   };
   const run = async (ops: Record<string, unknown>[], done: () => void, message: string) => {
     setBusy(true); setProblem(null);
@@ -97,9 +104,49 @@ export default function ScenarioEditor({ draft, content, profiles, onPatch }: { 
     <fieldset className="dyn-fieldset"><legend>Controllers</legend>
       {controllers.length ? controllers.map((id) => <label key={id}><input type="checkbox" aria-label={`Controller ${id}`} checked={value.controllers.includes(id)}
         onChange={(event) => edit({ controllers: event.target.checked ? [...value.controllers, id] : value.controllers.filter((item) => item !== id) })} />{id}</label>) : <p>No controller is defined yet.</p>}</fieldset>
+    <fieldset className="dyn-fieldset"><legend>Thermal</legend>
+      <div className="dyn-grid">
+        <SelectField label="Thermal mode" value={value.thermal_mode} onChange={(next) => edit({ thermal_mode: next as DynScenario["thermal_mode"] })}
+          options={[{ value: "prescribed", label: "prescribed" }, { value: "state", label: "state" }]} />
+        {value.thermal_mode === "state" ? <>
+          <NumField label="Water density [kg/m3]" value={value.water_density_kg_m3} onChange={(next) => next !== undefined && edit({ water_density_kg_m3: next })} />
+          <NumField label="Water Cp [J/(kg*K)]" value={value.water_cp_j_kg_k} onChange={(next) => next !== undefined && edit({ water_cp_j_kg_k: next })} />
+          {value.units.map((tag) => <NumField key={`thermal-ua-${tag}`} label={`Thermal UA of ${tag} [W/K]`} optional value={value.thermal_ua[tag]} onChange={(next) => setMap("thermal_ua", tag, next)} />)}
+          {value.units.map((tag) => <NumField key={`thermal-heat-${tag}`} label={`External heat of ${tag} [W]`} optional value={value.thermal_heat_w[tag]} onChange={(next) => setMap("thermal_heat_w", tag, next)} />)}
+        </> : null}
+      </div></fieldset>
+    <fieldset className="dyn-fieldset"><legend>Carbonate &amp; pH</legend>
+      <div className="dyn-grid">
+        <SelectField label="Carbon mode" value={value.carbon_mode} onChange={(next) => edit({ carbon_mode: next as DynScenario["carbon_mode"] })}
+          options={[{ value: "off", label: "off" }, { value: "state", label: "state" }]} />
+        {value.carbon_mode === "state" ? <>
+          <NumField label="Biomass carbon fraction" value={value.biomass_carbon_fraction} onChange={(next) => next !== undefined && edit({ biomass_carbon_fraction: next })} />
+          <NumField label="CO2 half-saturation [mol/m3]" value={value.co2_half_saturation_mol_m3} onChange={(next) => next !== undefined && edit({ co2_half_saturation_mol_m3: next })} />
+          <NumField label="Salinity [g/kg]" value={value.salinity_g_kg} onChange={(next) => next !== undefined && edit({ salinity_g_kg: next })} />
+          {value.units.map((tag) => <NumField key={`carbon-kla-${tag}`} label={`CO2 kLa of ${tag} [1/h]`} optional value={value.carbon_kla_h[tag]} onChange={(next) => setMap("carbon_kla_h", tag, next)} />)}
+          {value.units.map((tag) => <NumField key={`carbon-co2-${tag}`} label={`CO2 partial pressure of ${tag} [atm]`} optional value={value.co2_partial_pressure_atm[tag]} onChange={(next) => setMap("co2_partial_pressure_atm", tag, next)} />)}
+        </> : null}
+      </div></fieldset>
+    <fieldset className="dyn-fieldset"><legend>Optics &amp; wall fouling (optional)</legend>
+      {value.units.length ? value.units.map((tag) => <div className="dyn-grid" key={tag}>
+        <SelectField label={`Optics geometry of ${tag}`} value={value.optics_geometry[tag] ?? ""} onChange={(next) => setGeometry(tag, next === "" ? undefined : next as "cylinder" | "flat_slab")}
+          options={[{ value: "", label: "Not set" }, { value: "cylinder", label: "cylinder" }, { value: "flat_slab", label: "flat_slab" }]} />
+        <NumField label={`Back-wall albedo of ${tag}`} optional value={value.back_wall_albedo[tag]} onChange={(next) => setMap("back_wall_albedo", tag, next)} />
+        <NumField label={`Wall transmittance of ${tag}`} optional value={value.wall_transmittance[tag]} onChange={(next) => setMap("wall_transmittance", tag, next)} />
+        <NumField label={`Wall fouling rate of ${tag} [1/s]`} optional value={value.wall_fouling_rate_1_s[tag]} onChange={(next) => setMap("wall_fouling_rate_1_s", tag, next)} />
+        <NumField label={`Wall fouling floor of ${tag}`} optional value={value.wall_fouling_floor[tag]} onChange={(next) => setMap("wall_fouling_floor", tag, next)} />
+      </div>) : <p>Choose a unit first.</p>}</fieldset>
     <fieldset className="dyn-fieldset"><legend>Initial state [kg/m3]</legend>
-      {value.units.length ? value.units.map((tag) => <div className="dyn-grid" key={tag}>{(["X", "N", "O2"] as const).map((key) =>
-        <NumField key={key} label={`Initial ${key} of ${tag}`} value={value.initial[tag]?.[key]} onChange={(next) => setInitial(tag, key, next)} />)}</div>) : <p>Choose a unit first.</p>}
+      {value.units.length ? value.units.map((tag) => <div className="dyn-grid" key={tag}>
+        {(["X", "N", "O2"] as const).map((key) =>
+          <NumField key={key} label={`Initial ${key} of ${tag}`} value={value.initial[tag]?.[key]} onChange={(next) => setInitial(tag, key, next)} />)}
+        {value.thermal_mode === "state" ? <NumField label={`Initial T of ${tag} [K]`} optional value={value.initial[tag]?.T} onChange={(next) => setInitial(tag, "T", next)} /> : null}
+        {value.carbon_mode === "state" ? <>
+          <NumField label={`Initial dic of ${tag} [mol/m3]`} optional value={value.initial[tag]?.dic} onChange={(next) => setInitial(tag, "dic", next)} />
+          <NumField label={`Initial alkalinity of ${tag} [eq/m3]`} optional value={value.initial[tag]?.alkalinity} onChange={(next) => setInitial(tag, "alkalinity", next)} />
+          <NumField label={`Initial ph of ${tag}`} optional value={value.initial[tag]?.ph} onChange={(next) => setInitial(tag, "ph", next)} />
+        </> : null}
+      </div>) : <p>Choose a unit first.</p>}
       <p className="dyn-hint">Starting values are filled in when a unit is chosen. Edit them; nothing is corrected for you.</p></fieldset>
     <fieldset className="dyn-fieldset"><legend>Flows [m3/s] (optional)</legend>
       {feeds.map((tag) => <NumField key={tag} label={`Feed flow of ${tag}`} optional value={value.feed_flows[tag]} onChange={(next) => setMap("feed_flows", tag, next)} />)}
