@@ -1,6 +1,6 @@
 # 318 — CASE-DECISION-1: Record an accepted decision on a case verdict from the readiness board
 
-Status: ready
+Status: in_review
 Depends on: 303, 304, 312, 314
 
 ## Goal
