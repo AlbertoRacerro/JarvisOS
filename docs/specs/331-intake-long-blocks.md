@@ -1,6 +1,6 @@
 # 331 — INTAKE-LONG-BLOCKS-1: Folder intake splits a long block on line breaks instead of skipping the file
 
-Status: ready
+Status: merged
 Depends on: 316, 328
 
 ## Goal
