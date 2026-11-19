@@ -1,6 +1,6 @@
 # 315 — CORRELATION-CARDS-1: Correlation cards and bench run form on the Runs screen
 
-Status: ready
+Status: merged
 Depends on: 299
 
 ## Goal

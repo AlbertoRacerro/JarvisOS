@@ -1,6 +1,6 @@
 # 316 — RETRIEVAL-EVAL-UI-1: Run retrieval quality checks from Memory Search
 
-Status: ready
+Status: merged
 Depends on: 292, 300, 303
 
 ## Goal

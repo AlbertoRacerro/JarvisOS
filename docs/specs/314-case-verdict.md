@@ -1,6 +1,6 @@
 # 314 — CASE-VERDICT-1: Stored case comparison and verdict product object
 
-Status: ready
+Status: merged
 PR: —
 Depends on: 305
 
