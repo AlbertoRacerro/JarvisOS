@@ -232,6 +232,7 @@ class DecisionCreate(BaseModel):
     status: str = "draft"
     linked_run_id: str | None = None
     notes: str | None = None
+    case_verdict_id: str | None = None
     basis_lifecycle_state: Literal["active", "retired"] = "active"
 
 

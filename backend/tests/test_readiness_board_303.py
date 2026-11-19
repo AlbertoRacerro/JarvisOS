@@ -150,24 +150,27 @@ def _create_bench_run(workspace_id: str, run_id: str, evaluator_id: str, verdict
     res_file.write_text(json.dumps(data), encoding="utf-8")
 
 
-def _create_decision(workspace_id: str, status: str = "accepted", linked_run_id: str | None = "run-1") -> str:
+def _create_decision(workspace_id: str, case_id: str, verdict_status: str = "accepted") -> str:
+    """Accepted decision linked to a case verdict of ``case_id`` (spec 318)."""
     dec_id = str(uuid.uuid4())
+    verdict_id = str(uuid.uuid4())
     now = "2026-11-18T00:00:00Z"
     with open_sqlite_connection() as conn:
-        if linked_run_id:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO simulation_runs (id, workspace_id, status, created_at)
-                VALUES (?, ?, 'completed', ?)
-                """,
-                (linked_run_id, workspace_id, now),
-            )
         conn.execute(
             """
-            INSERT INTO decisions (id, workspace_id, title, decision_text, status, linked_run_id, created_at, updated_at)
-            VALUES (?, ?, 'Design decision', 'Adopted run outcome', ?, ?, ?, ?)
+            INSERT INTO case_verdicts (
+                id, workspace_id, case_id, run_id, quantity, computed_value, computed_unit,
+                published_value, published_unit, rel_tol, deviation, verdict, status, created_at, updated_at
+            ) VALUES (?, ?, ?, 'run_001', 'density', 1000.0, 'kg/m^3', 1000.0, 'kg/m^3', 0.05, 0.0, 'pass', ?, ?, ?)
             """,
-            (dec_id, workspace_id, status, linked_run_id, now, now),
+            (verdict_id, workspace_id, case_id, verdict_status, now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO decisions (id, workspace_id, title, decision_text, status, case_verdict_id, created_at, updated_at)
+            VALUES (?, ?, 'Design decision', 'Adopted run outcome', 'accepted', ?, ?, ?)
+            """,
+            (dec_id, workspace_id, verdict_id, now, now),
         )
         conn.commit()
     return dec_id
@@ -250,8 +253,14 @@ def test_criterion_1_seven_steps_transition_and_missing_names(client: TestClient
     assert board.cases[0].steps["compare"].reason == REASON_MISSING_RECORD
     assert board.cases[0].steps["compare"].missing == ["density"]
 
-    # 7. Add an accepted decision linked to a run: 'decide' turns green
-    _create_decision(ws_id, status="accepted", linked_run_id="run_001")
+    # 7. A decision on another case's or a superseded verdict keeps 'decide' red (spec 318)
+    _create_decision(ws_id, "another_case")
+    _create_decision(ws_id, board.cases[0].id, verdict_status="superseded")
+    board = compute_readiness_board()
+    assert board.cases[0].steps["decide"].status == "red"
+
+    # Accepted decision linked to an accepted verdict of this case: 'decide' turns green
+    _create_decision(ws_id, board.cases[0].id)
     board = compute_readiness_board()
     assert board.cases[0].steps["decide"].status == "green"
     assert board.cases[0].steps["answer"].status == "red"

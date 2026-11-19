@@ -364,10 +364,15 @@ def evaluate_step(
             (question.get("linked_decision_id") or "").strip() if question else ""
         )
         if linked_decision:
-            return "done", []
+            linked_row = connection.execute(
+                "SELECT 1 FROM decisions WHERE workspace_id = ? AND id = ? AND status = 'accepted'",
+                (workspace_id, linked_decision),
+            ).fetchone()
+            if linked_row is not None:
+                return "done", []
 
         dec_row = connection.execute(
-            "SELECT 1 FROM decisions WHERE workspace_id = ? LIMIT 1",
+            "SELECT 1 FROM decisions WHERE workspace_id = ? AND status = 'accepted' LIMIT 1",
             (workspace_id,),
         ).fetchone()
         if dec_row is not None:
