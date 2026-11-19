@@ -648,10 +648,17 @@ def _topology(document: dict[str, Any], units: list[dict[str, Any]], scenario: d
             equations.append(row)
             rhs.append(flow)
             feed_rows[len(rhs) - 1] = stream["id"]
+            spec = stream.get("spec", {})
+            raw_t = (spec.get("temperature") or {}).get("si") if isinstance(spec.get("temperature"), dict) else spec.get("temperature")
+            t_feed = 298.15 if raw_t is None else float(raw_t)
+            if not math.isfinite(t_feed) or t_feed <= 0:
+                raise DynamicError("FEED_TEMPERATURE_INVALID", "Feed stream temperature must be finite and positive.",
+                                   {"stream": stream["tag"], "temperature": t_feed})
             feeds[stream["id"]] = {
                 name: float((culture.get(key) or {}).get("si", 0.0))
                 for name, key in (("X", "biomass"), ("N", "nitrogen"), ("O2", "oxygen"))
             }
+            feeds[stream["id"]]["T"] = t_feed
         elif stream.get("source", {}).get("unit") not in active_units:
             raise DynamicError("UNSUPPORTED_TOPOLOGY", "A boundary product cannot be reintroduced as an internal feed.")
     for key, unit in active_units.items():
@@ -754,6 +761,18 @@ def prepare(workspace_id: str, draft_id: str, scenario_id: str) -> Snapshot:
         if len(scenario_raw.get("controllers", [])) > MAX_CONTROLLERS:
             raise DynamicError("CONTROLLER_LIMIT", "At most 16 controllers may participate.")
         scenario = Scenario.model_validate(scenario_raw)
+        for tag, ua in scenario.thermal_ua.items():
+            if not math.isfinite(ua) or ua < 0:
+                raise DynamicError("THERMAL_UA_INVALID", f"Thermal UA for {tag} must be finite and nonnegative.",
+                                   {"unit": tag, "thermal_ua": ua})
+        for tag, q in scenario.thermal_heat_w.items():
+            if not math.isfinite(q):
+                raise DynamicError("THERMAL_HEAT_INVALID", f"Thermal heat for {tag} must be finite.",
+                                   {"unit": tag, "thermal_heat_w": q})
+        if not math.isfinite(scenario.water_density_kg_m3) or scenario.water_density_kg_m3 <= 0:
+            raise DynamicError("WATER_PROPERTIES_INVALID", "Water density must be finite and positive.")
+        if not math.isfinite(scenario.water_cp_j_kg_k) or scenario.water_cp_j_kg_k <= 0:
+            raise DynamicError("WATER_PROPERTIES_INVALID", "Water heat capacity must be finite and positive.")
         start, end = _stamp(scenario.start_utc), _stamp(scenario.end_utc)
         duration = end - start
         if duration <= 0 or duration > MAX_DURATION_S:
@@ -880,7 +899,7 @@ def prepare(workspace_id: str, draft_id: str, scenario_id: str) -> Snapshot:
                                        {"unit": tag})
                 model = tank_model(unit)
             initial = scenario.initial.get(tag, {})
-            if set(initial) != {"X", "N", "O2"}:
+            if set(initial) not in ({"X", "N", "O2"}, {"X", "N", "O2", "T"}):
                 raise DynamicError("INITIAL_STATE_REQUIRED", "Each T1 unit requires explicit X, N and O2 initial state.",
                                    {"unit": tag})
             state = [float(initial.get(k, 0.0)) for k in ("X", "N", "O2")]
@@ -888,6 +907,13 @@ def prepare(workspace_id: str, draft_id: str, scenario_id: str) -> Snapshot:
                 raise DynamicError(
                     "INITIAL_STATE_INVALID", f"Initial concentrations for {tag} must be finite and nonnegative."
                 )
+            if "T" in initial:
+                t_init = float(initial["T"])
+                if not math.isfinite(t_init) or t_init <= 0:
+                    raise DynamicError(
+                        "INITIAL_STATE_INVALID", f"Initial temperature for {tag} must be finite and positive.",
+                        {"unit": tag, "channel": "T", "value": t_init},
+                    )
             if unit["type"] == "HoldupTank" and model is None:
                 raise DynamicError("TOPOLOGY_CARD_MISMATCH", "A HoldupTank requires a participating PBR model card.",
                                    {"units": [tag]})
@@ -1177,7 +1203,7 @@ def _network_runtime(topology: dict[str, Any], flows: dict[str, float], units: l
         key = item["unit"]["id"]
         inlet = [stream for stream in streams if (stream.get("target") or {}).get("unit") == key]
         total = sum(flows.get(stream["id"], 0.0) for stream in inlet)
-        incoming[key] = [(stream, flows.get(stream["id"], 0.0) / total) for stream in inlet]
+        incoming[key] = [(stream, flows.get(stream["id"], 0.0) / total if total > 0 else 0.0) for stream in inlet]
     algebraic_types = {"Mixer", "Splitter", "Pump", "Recycle", "SpecifiedSeparator"}
     pending = {key for key, unit in by_id.items() if unit.get("type") in algebraic_types}
     algebraic_incoming = {key: [stream for stream in streams if (stream.get("target") or {}).get("unit") == key]
@@ -1200,12 +1226,18 @@ def _network_runtime(topology: dict[str, Any], flows: dict[str, float], units: l
             "feed_quota": feed_quota}
 
 
-def _network_concentrations(topology: dict[str, Any], runtime: dict[str, Any], state: tuple[float, ...],
-                            units: list[dict[str, Any]], flows: dict[str, float]) -> dict[str, tuple[float, ...]]:
+def _network_concentrations(topology: dict[str, Any], runtime: dict[str, Any], state: tuple[float, ...] | np.ndarray,
+                            units: list[dict[str, Any]], flows: dict[str, float],
+                            thermal_mode: str = "prescribed") -> dict[str, tuple[float, ...]]:
     concentrations: dict[str, tuple[float, ...]] = {}
+    is_thermal_state = thermal_mode == "state"
     for i, item in enumerate(units):
         x, nitrogen, oxygen = (float(v) for v in state[_slot(i):_slot(i, 3)])
-        unit_value = (x, nitrogen, oxygen, item["growth"].nitrogen_quota * x)
+        if is_thermal_state:
+            t_unit = float(state[_slot(i, 6)])
+            unit_value: tuple[float, ...] = (x, nitrogen, oxygen, item["growth"].nitrogen_quota * x, t_unit)
+        else:
+            unit_value = (x, nitrogen, oxygen, item["growth"].nitrogen_quota * x)
         concentrations[item["unit"]["id"]] = unit_value
         for stream in topology["streams"]:
             if (stream.get("source") or {}).get("unit") == item["unit"]["id"]:
@@ -1215,7 +1247,7 @@ def _network_concentrations(topology: dict[str, Any], runtime: dict[str, Any], s
         total = sum(flows.get(stream["id"], 0.0) for stream in inlet)
         if total <= 0:
             raise DynamicError("ZERO_THROUGHFLOW", "Algebraic unit has zero throughflow.", {"unit_id": key})
-        mixed: np.ndarray = np.zeros(4, dtype=np.float64)
+        mixed: np.ndarray = np.zeros(5 if is_thermal_state else 4, dtype=np.float64)
         for stream in inlet:
             source = (stream.get("source") or {}).get("unit")
             value = topology["feeds"].get(stream["id"]) if source is None else concentrations.get(
@@ -1225,7 +1257,11 @@ def _network_concentrations(topology: dict[str, Any], runtime: dict[str, Any], s
                 raise DynamicError("TOPOLOGY_UNRESOLVED", "A stream concentration could not be resolved.")
             if source is None:
                 quota = runtime["feed_quota"].get(stream["id"], 0.0)
-                value = (*value[:3], quota * value[0])
+                if is_thermal_state:
+                    t_feed = float(value[3]) if len(value) > 3 else (float(value.get("T", 298.15)) if isinstance(value, dict) else 298.15)
+                    value = (value[0], value[1], value[2], quota * value[0], t_feed)
+                else:
+                    value = (value[0], value[1], value[2], quota * value[0])
             mixed += flows.get(stream["id"], 0.0) * np.asarray(value)
         inlet_value = mixed / total
         unit = next(item for item in topology["units"] if item["id"] == key)
@@ -1247,11 +1283,18 @@ def _network_concentrations(topology: dict[str, Any], runtime: dict[str, Any], s
             concentrate = recovery / factor
             clarified = 1.0 - concentrate
             # The ratio-weighted biomass and quota-N concentrations conserve their flow rates.
-            outlet_values: tuple[tuple[float, ...], ...] = (
-                (inlet_value[0] * factor, inlet_value[1], inlet_value[2], inlet_value[3] * factor),
-                (inlet_value[0] * (1.0 - recovery) / clarified, inlet_value[1], inlet_value[2],
-                 inlet_value[3] * (1.0 - recovery) / clarified),
-            )
+            if is_thermal_state:
+                outlet_values: tuple[tuple[float, ...], ...] = (
+                    (inlet_value[0] * factor, inlet_value[1], inlet_value[2], inlet_value[3] * factor, inlet_value[4]),
+                    (inlet_value[0] * (1.0 - recovery) / clarified, inlet_value[1], inlet_value[2],
+                     inlet_value[3] * (1.0 - recovery) / clarified, inlet_value[4]),
+                )
+            else:
+                outlet_values = (
+                    (inlet_value[0] * factor, inlet_value[1], inlet_value[2], inlet_value[3] * factor),
+                    (inlet_value[0] * (1.0 - recovery) / clarified, inlet_value[1], inlet_value[2],
+                     inlet_value[3] * (1.0 - recovery) / clarified),
+                )
         else:
             outlet_values = (tuple(inlet_value.tolist()),) * len(outgoing)
         for stream, value in zip(outgoing, outlet_values, strict=False):
@@ -1267,6 +1310,8 @@ def _result_series(snapshot: Snapshot, times: list[float], rows: list[np.ndarray
                    order_rows: list[int] | None = None) -> dict[str, np.ndarray]:
     elapsed = np.asarray(times, dtype=np.float64)
     matrix = np.asarray(rows, dtype=np.float64)
+    thermal_mode = snapshot.payload.get("scenario", {}).get("thermal_mode", "prescribed")
+    is_thermal_state = thermal_mode == "state"
     volumes = (np.asarray(volume_rows, dtype=np.float64) if volume_rows is not None
                else np.tile([unit["volume_m3"] for unit in units], (len(times), 1)))
     phases = list(phase_rows) if phase_rows is not None else [0] * len(times)
@@ -1282,7 +1327,11 @@ def _result_series(snapshot: Snapshot, times: list[float], rows: list[np.ndarray
         result[f"{unit['tag']}_temperature"] = np.asarray(
             [_profile_temperature(snapshot, float(t), i) for t in elapsed]
         )
-        result[f"{unit['tag']}_harvest_X_kg"] = matrix[:, _slot(i, 6)]
+        if is_thermal_state:
+            result[f"{unit['tag']}_T_K"] = matrix[:, _slot(i, 6)]
+            result[f"{unit['tag']}_harvest_X_kg"] = np.zeros(len(times), dtype=np.float64)
+        else:
+            result[f"{unit['tag']}_harvest_X_kg"] = matrix[:, _slot(i, 6)]
         if "optics_t2" in unit:
             optics = unit["optics_t2"]
             optics_indices = np.asarray([_optics_index(snapshot, float(t)) for t in elapsed], dtype=np.int64)
@@ -1360,6 +1409,9 @@ def _result_series(snapshot: Snapshot, times: list[float], rows: list[np.ndarray
                                                * volumes[:, indices]).sum(axis=1) / volume
             result[f"{loop['id']}_volume_m3"] = volume
             result[f"{loop['id']}_biomass_kg"] = biomass
+            if is_thermal_state:
+                temp_integral = (matrix[:, [_slot(index, 6) for index in indices]] * volumes[:, indices]).sum(axis=1)
+                result[f"{loop['id']}_T_mean_K"] = temp_integral / volume
         for unit in units:
             tag = unit["tag"]
             if not any(tag in values for values in hydro_at):
@@ -1407,11 +1459,23 @@ def run(
         outputs = np.insert(outputs, 0, 0.0)
     n = len(units)
     topology = snapshot.payload.get("topology", {"units": [], "streams": [], "flows": {}, "feeds": {}})
-    topology = dict(topology, flows=dict(topology["flows"]), feeds={
-        key: ([value.get("X", 0.0), value.get("N", 0.0), value.get("O2", 0.0)]
-              if isinstance(value, dict) else value)
-        for key, value in topology["feeds"].items()
-    })
+    thermal_mode = scenario.get("thermal_mode", "prescribed")
+    is_thermal_state = thermal_mode == "state"
+    feeds: dict[str, list[float]]
+    if is_thermal_state:
+        feeds = {
+            key: ([float(value.get("X", 0.0)), float(value.get("N", 0.0)), float(value.get("O2", 0.0)), float(value.get("T", 298.15))]
+                  if isinstance(value, dict)
+                  else [float(v) for v in (list(value) if len(value) >= 4 else [*value, 298.15])])
+            for key, value in topology["feeds"].items()
+        }
+    else:
+        feeds = {
+            key: ([float(value.get("X", 0.0)), float(value.get("N", 0.0)), float(value.get("O2", 0.0))]
+                  if isinstance(value, dict) else [float(v) for v in value[:3]])
+            for key, value in topology["feeds"].items()
+        }
+    topology = dict(topology, flows=dict(topology["flows"]), feeds=feeds)
     growths = [_growth_for_unit(item, dark=_unit_type(item) == "HoldupTank") for item in units]
     for item, growth in zip(units, growths, strict=True):
         item["growth"] = growth
@@ -1421,6 +1485,15 @@ def run(
     initial: np.ndarray = np.zeros(_slot(n) + 4, dtype=np.float64)
     for i, unit in enumerate(units):
         initial[_slot(i) : _slot(i, 3)] = unit["state"]
+        if is_thermal_state:
+            init_dict = scenario.get("initial", {}).get(unit["tag"], {})
+            if "T" in init_dict:
+                t0 = float(init_dict["T"])
+            elif _unit_type(unit) == "PhotobioreactorT1":
+                t0 = _profile_temperature(snapshot, 0.0, i)
+            else:
+                t0 = float(unit["params"]["temperature"])
+            initial[_slot(i, 6)] = t0
     rows: list[np.ndarray] = [initial.copy()]
     times_out = [0.0]
     # Per output row: unit liquid volumes, and the action-event phase (0 sample, -1 pre, +1 post) and order.
@@ -1581,27 +1654,29 @@ def run(
                 def rhs(elapsed: float, state: tuple[float, ...], network_state: dict[str, Any] = network,
                         par_value: float = par_segment, optics_step: int = optics_index) -> list[float]:
                     result = [0.0] * len(state)
-                    concentrations = _network_concentrations(topology, network_state, state, units, flows)
+                    concentrations = _network_concentrations(topology, network_state, state, units, flows, thermal_mode=thermal_mode)
                     for i, item in enumerate(units):
                         off = _slot(i)
                         x, nitrogen, oxygen = state[off:off + 3]
                         growth = growths[i]
                         temperature = _profile_temperature(snapshot, elapsed, i)
                         is_tank = _unit_type(item) == "HoldupTank"
+                        t_culture = state[off + 6] if is_thermal_state else (item["params"]["temperature"] if is_tank else temperature)
                         if "optics_t2" in item:
                             handoff = item["optics_t2"]["intervals"]
                             mu, loss = growth.rates_at(
-                                float(handoff["i0_eq"][optics_step]), temperature, x, nitrogen,
+                                float(handoff["i0_eq"][optics_step]), t_culture, x, nitrogen,
                                 float(handoff["diffuse_fraction"][optics_step]),
                             )
                         else:
                             mu, loss = growth.rates_at(0.0 if is_tank else par_value,
-                                                       item["params"]["temperature"] if is_tank else temperature,
+                                                       t_culture,
                                                        x, nitrogen)
                         rx = (mu - loss) * x / 3600.0
                         transfer = growth.kla_h * (growth.oxygen_saturation - oxygen) / 3600.0
                         inlet: np.ndarray = np.zeros(3, dtype=np.float64)
                         qin = 0.0
+                        t_inlet = 0.0
                         for stream, weight in network_state["incoming"][item["unit"]["id"]]:
                             flow = flows.get(stream["id"], 0.0)
                             source = (stream.get("source") or {}).get("unit")
@@ -1612,14 +1687,28 @@ def run(
                                 raise DynamicError("TOPOLOGY_UNRESOLVED", "A PBR inlet concentration could not be resolved.")
                             inlet += weight * np.asarray(value[:3])
                             qin += flow
+                            if is_thermal_state:
+                                stream_t = float(value[4] if len(value) >= 5 else value[3])
+                                t_inlet += weight * stream_t
                         volume = item["volume_m3"]
                         dilution = qin / volume
                         net_x = rx + dilution * (inlet[0] - x)
                         net_n = -growth.nitrogen_quota * rx + dilution * (inlet[1] - nitrogen)
                         net_o = growth.oxygen_yield * rx + transfer + dilution * (inlet[2] - oxygen)
+                        if is_thermal_state:
+                            ua_i = float(scenario.get("thermal_ua", {}).get(item["tag"], 0.0))
+                            q_ext_i = float(scenario.get("thermal_heat_w", {}).get(item["tag"], 0.0))
+                            rho = float(scenario.get("water_density_kg_m3", 1000.0))
+                            cp = float(scenario.get("water_cp_j_kg_k", 4184.0))
+                            t_env = temperature
+                            advection = (qin / volume) * (t_inlet - t_culture) if qin > 0 else 0.0
+                            heat_exchange = (ua_i * (t_env - t_culture) + q_ext_i) / (rho * cp * volume)
+                            dT_dt = advection + heat_exchange
+                        else:
+                            dT_dt = 0.0
                         # Accumulators are inventories in kg (spec 185), so a later volume change cannot rescale them.
                         result[off:off + 7] = [net_x, net_n, net_o, rx * volume, -growth.nitrogen_quota * rx * volume,
-                                               transfer * volume, 0.0]
+                                               transfer * volume, dT_dt]
                     # Boundary terms are inventory rates in kg/s. Fourth concentration is q*X,
                     # propagated independently through algebraic mixers/splitters.
                     active_ids = {unit["id"] for unit in topology["units"]}
@@ -1659,7 +1748,7 @@ def run(
                     raise DynamicError("SOLVER_FAILED", solved.message, {"segment_s": [t0, stop]})
                 for t, solved_state in zip(solved.times[1:], solved.states[1:], strict=True):
                     state_row = np.asarray(solved_state, dtype=np.float64)
-                    _valid_state(state_row, units, growths)
+                    _valid_state(state_row, units, growths, thermal_mode=thermal_mode)
                     _clip_tiny_negatives(state_row, units, roundoff_clips, float(t))
                     if any(abs(float(t) - float(out)) <= 1e-7 for out in outputs):
                         append_row(float(t), state_row)
@@ -1814,7 +1903,8 @@ def run(
         return diagnostic("failed", error)
 
 
-def _valid_state(state: tuple[float, ...] | np.ndarray, units: list[dict[str, Any]], growths: list[Any] | None = None) -> None:
+def _valid_state(state: tuple[float, ...] | np.ndarray, units: list[dict[str, Any]], growths: list[Any] | None = None,
+                 thermal_mode: str = "prescribed") -> None:
     if not all(math.isfinite(float(v)) for v in state):
         raise DynamicError("STATE_NONFINITE", "CVODE produced a nonfinite state.")
     for i, item in enumerate(units):
@@ -1825,6 +1915,14 @@ def _valid_state(state: tuple[float, ...] | np.ndarray, units: list[dict[str, An
                     "STATE_NEGATIVE",
                     f"{name} concentration became materially negative.",
                     {"unit": item["tag"], "channel": name, "value": value},
+                )
+        if thermal_mode == "state":
+            t_val = float(state[_slot(i, 6)])
+            if t_val <= 0:
+                raise DynamicError(
+                    "STATE_NONPHYSICAL",
+                    f"Culture temperature for {item['tag']} became nonpositive.",
+                    {"unit": item["tag"], "channel": "T", "value": t_val},
                 )
         growth = growths[i] if growths is not None else _growth_for_unit(
             item, dark=_unit_type(item) == "HoldupTank")
@@ -2568,7 +2666,7 @@ def _channel_units(series: dict[str, np.ndarray], controllers: list[dict[str, An
             unit = "umol/(s*m)"
         elif name.endswith("_beam_unshaded_fraction"):
             unit = "1"
-        elif name == "temperature" or name.endswith("_temperature"):
+        elif name == "temperature" or name.endswith("_temperature") or name.endswith(("_T_K", "_T_mean_K")):
             unit = "K"
         elif name == "harvest_X_kg" or name.endswith("_harvest_X_kg"):
             unit = "kg"

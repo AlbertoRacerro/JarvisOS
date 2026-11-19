@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -220,6 +221,27 @@ class Scenario(StrictModel):
     initial: dict[str, dict[str, float]] = Field(default_factory=dict)
     feed_flows: dict[str, float] = Field(default_factory=dict)
     circulation: dict[str, float] = Field(default_factory=dict)
+    thermal_mode: Literal["prescribed", "state"] = "prescribed"
+    thermal_ua: dict[str, float] = Field(default_factory=dict)
+    thermal_heat_w: dict[str, float] = Field(default_factory=dict)
+    water_density_kg_m3: float = Field(default=1000.0, gt=0)
+    water_cp_j_kg_k: float = Field(default=4184.0, gt=0)
+
+    @field_validator("thermal_ua")
+    @classmethod
+    def ua_nonnegative(cls, value: dict[str, float]) -> dict[str, float]:
+        for k, v in value.items():
+            if not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0:
+                raise ValueError(f"thermal_ua for {k} must be finite and nonnegative")
+        return value
+
+    @field_validator("thermal_heat_w")
+    @classmethod
+    def heat_finite(cls, value: dict[str, float]) -> dict[str, float]:
+        for k, v in value.items():
+            if not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise ValueError(f"thermal_heat_w for {k} must be finite")
+        return value
 
     @field_validator("start_utc", "end_utc")
     @classmethod
