@@ -32,7 +32,7 @@ never bundled, vendored or imported by Jarvis. FreeCAD itself is LGPL and stays 
 
 - `backend/app/modules/process_stack/dwsim.py::_configured_runtime` reads a Windows executable path and its pinned SHA-256
   from environment variables and returns a reason code (`..._UNAVAILABLE`, `..._DIGEST_UNCONFIGURED`,
-  `..._DIGEST_MISMATCH`) instead of raising; `process_stack/dwsim_mcp.py::DwsimMcpClient` runs it over stdio through WSL
+  `..._DIGEST_MISMATCH`) instead of raising; `backend/app/modules/process_stack/dwsim_mcp.py::DwsimMcpClient` runs it over stdio through WSL
   interop with bounded timeouts. This is the pattern to copy for reaching a Windows program from the backend.
 - WSL2 in its default NAT networking mode cannot reach a listener bound to Windows `127.0.0.1`; the add-on binds there by
   default. A relay run on the Windows side through interop reaches it without opening the port to the network.
@@ -48,7 +48,7 @@ A part modelled by hand lives in FreeCAD as `.FCStd`; AI-generated variants comp
 build123d candidates. This slice only reads and edits the live document. The reference from BlueCAD to a FreeCAD part is
 defined here and built in the next slice: a FreeCAD reference is (document file name, object name, SHA-256 of the saved
 `.FCStd`, SHA-256 of a STEP export made from it), attached to a candidate like a Studio reference
-(`bluecad/studio_references.py`); exports (STEP for exchange, STL/3MF for printing) are produced by the user's
+(`backend/app/modules/bluecad/studio_references.py`); exports (STEP for exchange, STL/3MF for printing) are produced by the user's
 `FreeCADCmd` from the saved file with a fixed Jarvis-owned script, not from the live session.
 
 ## Scope
