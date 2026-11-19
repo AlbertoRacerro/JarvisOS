@@ -156,3 +156,18 @@ Each entry must contain:
 - **Disposition:** PARK; one executor per host is the intended setup and the throwaway-user procedure works, so a unit-name prefix is not needed now.
 - **Expected benefit:** host rehearsals without a second Linux user.
 - **Likely surface:** `SERVICE_UNIT`, `UNIT_TEMPLATES` and the unit constants in `scripts/host_ops.py`.
+
+### F24 — FreeCAD beside Jarvis (directive step 2, docking) — PARK
+
+- **Origin:** directive L20261119070313-84a6 step 2, planned by the coordinator on 2026-11-19 after specs 326 and 327 merged.
+- **Observation:** placing the FreeCAD window beside the browser and bringing it back to the front on returning to Design
+  is a Windows window-management action. It cannot be proven from a Linux session, and the bridge it builds on (spec 326)
+  still owes its live proof on the maintainer's FreeCAD with the add-on running. FreeCAD keeps its open documents while it
+  stays open, so "same document and state" needs no Jarvis state; only window placement does.
+- **Disposition:** PARK until the spec 326 live proof exists and the bridge is used in practice. Until then the documented
+  manual layout is Windows Snap: the browser with `Win+Left`, FreeCAD with `Win+Right`.
+- **Expected benefit:** one click in the FreeCAD panel puts FreeCAD beside Jarvis on the same monitor and in front.
+- **Likely surface:** a fixed standard-library script run by the already pinned FreeCAD `python.exe` (the
+  `freecad_relay.py` pattern) that restores and positions FreeCAD's main window through `user32`; one route in
+  `backend/app/modules/bluecad/routes.py`; one button in `frontend/src/components/bluecad/FreecadPanel.tsx`. Needs a
+  Windows execution proof and its own spec.
