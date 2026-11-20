@@ -35,6 +35,12 @@ _MERGE_SUBJECT_RE = re.compile(
     re.ASCII,
 )
 _ANY_PR_RE = re.compile(r"#([1-9][0-9]*)\b")
+_SQUASH_PR_RE = re.compile(r"\(#([1-9][0-9]*)\)$", re.ASCII)
+_CC_TYPE_RE = re.compile(r"^([A-Za-z]+)(?=[(:])", re.ASCII)
+_SUBJECT_SPECS_RE = re.compile(
+    rf"\bspecs?\s+({_SPEC_TOKEN}(?:(?:\s*,\s*|\s+and\s+|\s+){_SPEC_TOKEN})*)\b",
+    re.ASCII | re.IGNORECASE,
+)
 _BRANCH_SPECS_RE = re.compile(rf"^(?:spec-)?({_SPEC_TOKEN}(?:-{_SPEC_TOKEN})*)(?=-|$)", re.ASCII)
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _CODE_NAME_RE = re.compile(r"^[A-Z0-9]+(?:-[A-Z0-9]+)*:?$", re.ASCII)
@@ -47,6 +53,7 @@ KIND_LABELS = {
     "repair": "repair",
     "fix": "repair",
 }
+_SQUASH_KINDS = {"feat": "implementation", "fix": "repair", "docs": "docs"}
 _ACRONYMS = frozenset(
     {
         "3D", "3MF", "ADR", "AI", "API", "CAD", "CI", "DOF", "DWSIM", "FEM", "GLB",
@@ -187,9 +194,32 @@ def branch_spec_ids(branch: str) -> list[str]:
     return list(dict.fromkeys(tokens))
 
 
+def _subject_spec_ids(subject: str) -> list[str]:
+    """Spec tokens written after the word ``spec``/``specs``, in order, deduplicated."""
+    tokens: list[str] = []
+    for match in _SUBJECT_SPECS_RE.finditer(subject):
+        tokens.extend(_DEP_RE.findall(match.group(1)))
+    return list(dict.fromkeys(tokens))
+
+
+def is_pull_request_subject(subject: str) -> bool:
+    """True for merge-commit subjects and squash subjects ending with ``(#N)``."""
+    return _MERGE_SUBJECT_RE.match(subject) is not None or _SQUASH_PR_RE.search(subject) is not None
+
+
 def parse_merge_subject(subject: str) -> dict[str, object]:
     match = _MERGE_SUBJECT_RE.match(subject)
     if match is None:
+        squash = _SQUASH_PR_RE.search(subject)
+        if squash is not None:
+            cc_type = _CC_TYPE_RE.match(subject)
+            kind = _SQUASH_KINDS.get(cc_type.group(1).lower(), "other") if cc_type else "other"
+            return {
+                "pr_number": int(squash.group(1)),
+                "branch": None,
+                "kind": kind,
+                "spec_ids": _subject_spec_ids(subject),
+            }
         any_pr = _ANY_PR_RE.search(subject)
         return {
             "pr_number": int(any_pr.group(1)) if any_pr else None,
@@ -228,6 +258,8 @@ def recent_work_items(log_text: str, registry: dict[str, RegistryRow]) -> tuple[
             warnings.append("recent_work_line_malformed")
             continue
         sha, merged_at, subject = fields
+        if not is_pull_request_subject(subject):
+            continue
         parsed = parse_merge_subject(subject)
         spec_ids = parsed["spec_ids"]
         assert isinstance(spec_ids, list)
@@ -241,6 +273,8 @@ def recent_work_items(log_text: str, registry: dict[str, RegistryRow]) -> tuple[
                 "specs": [_registry_entry(spec_id, registry) for spec_id in spec_ids],
             }
         )
+        if len(items) >= RECENT_WORK_LIMIT:
+            break
     return items, warnings
 
 
@@ -361,8 +395,7 @@ class ControlRoomProjection:
                 (
                     "log",
                     "--first-parent",
-                    "--merges",
-                    f"--max-count={RECENT_WORK_LIMIT}",
+                    f"--max-count={3 * RECENT_WORK_LIMIT}",
                     "--format=%H%x00%cI%x00%s",
                     sha,
                     "--",
