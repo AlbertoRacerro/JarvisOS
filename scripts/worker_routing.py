@@ -322,7 +322,9 @@ def _read_key(entry: dict[str, Any]) -> str | None:
 
 def _http_get_json(url: str, headers: dict[str, str], timeout: float) -> Any:
     import urllib.request
-    request = urllib.request.Request(url, headers={"Accept": "application/json", **headers})
+    # The Zen endpoint refuses urllib's default User-Agent (403); a named one is accepted.
+    request = urllib.request.Request(url, headers={"Accept": "application/json",
+                                                   "User-Agent": "jarvisos-worker-routing/1", **headers})
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - https URLs from the private file
         return json.loads(response.read().decode("utf-8"))
 
