@@ -27,7 +27,12 @@ from app.modules.coding.actions import (
     CodingInspectRequest,
     CodingSuggestModificationRequest,
 )
-from app.modules.coding.control_room import ControlRoomProjection, valid_target_ref
+from app.modules.coding.control_room import (
+    PLAN_MAX_BYTES,
+    ControlRoomProjection,
+    plan_projection,
+    valid_target_ref,
+)
 from app.modules.coding.pipeline_state import (
     DevelopmentPipelineStateService,
     PipelineStateInputError,
@@ -293,22 +298,49 @@ def _control_room_projection() -> ControlRoomProjection:
     return ControlRoomProjection()
 
 
+def _read_plan_text() -> str | None:
+    """The coordinator's ``<control_root>/plan.json`` (spec 336), read-only; None when absent.
+
+    Raises OSError when the file cannot be read or is a symlink resolving outside the control
+    root. Reads at most one byte past the plan limit so an oversized file is detected, never cut.
+    """
+    root = relay_monitor.control_root()
+    path = root / "plan.json"
+    if path.is_symlink() and not path.resolve().is_relative_to(root.resolve()):
+        raise OSError("plan_symlink_outside_control_root")
+    try:
+        with path.open("rb") as handle:
+            return handle.read(PLAN_MAX_BYTES + 1).decode("utf-8")
+    except FileNotFoundError:
+        return None
+
+
 @router.get("/control-room")
 def control_room(
     request: Request,
     repository: str,
     target_ref: str,
 ) -> dict[str, object]:
-    """Read-only maintainer projection: runtime truth, recent merges, upcoming registry rows."""
+    """Read-only maintainer projection: runtime truth, recent merges, upcoming registry rows, plan."""
     settings = get_settings()
     if repository != CANONICAL_RUNTIME_REPOSITORY or repository not in settings.coding_repositories:
         raise HTTPException(status_code=400, detail={"code": "repository_mismatch"})
     if not valid_target_ref(target_ref):
         raise HTTPException(status_code=400, detail={"code": "target_ref_invalid"})
 
-    projection = _control_room_projection().project(target_ref)
+    projection_service = _control_room_projection()
+    projection = projection_service.project(target_ref)
     warnings = projection["warnings"]
     assert isinstance(warnings, list)
+    plan: dict[str, object]
+    plan_warnings: list[str]
+    try:
+        plan_text = _read_plan_text()
+    except (OSError, UnicodeDecodeError):
+        plan, plan_warnings = {"status": "invalid"}, ["plan_invalid"]
+    else:
+        plan, plan_warnings = plan_projection(plan_text, projection_service.registry)
+    warnings.extend(plan_warnings)
     runtime: dict[str, object] | None = None
     startup = getattr(request.app.state, "runtime_startup_snapshot", None)
     if isinstance(startup, RuntimeSnapshot):
@@ -330,6 +362,7 @@ def control_room(
         "repository": repository,
         "target_ref": target_ref,
         "runtime": runtime,
+        "plan": plan,
         **projection,
     }
 

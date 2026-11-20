@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.modules.coding import control_room as cr
-from app.modules.coding import runtime_routes
+from app.modules.coding import relay_monitor, runtime_routes
 from app.modules.coding import runtime_truth as rt
 
 REPOSITORY = "AlbertoRacerro/JarvisOS"
@@ -380,6 +380,7 @@ def test_projection_caps_recent_work_at_limit_with_mixed_history(repo: Path) -> 
 class _FakeProjection:
     def __init__(self, sha: str | None) -> None:
         self.sha = sha
+        self.registry: dict[str, cr.RegistryRow] = {}
 
     def project(self, target_ref: str) -> dict[str, object]:
         return {
@@ -391,9 +392,13 @@ class _FakeProjection:
         }
 
 
-def _client(monkeypatch: pytest.MonkeyPatch, *, sha: str | None, startup: object | None) -> TestClient:
+def _client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, sha: str | None, startup: object | None
+) -> TestClient:
     monkeypatch.setattr(runtime_routes, "_control_room_projection", lambda: _FakeProjection(sha))
     monkeypatch.setattr(runtime_routes, "_repository_service", lambda: object())
+    # The plan file (spec 336) lives in a private control root; keep it out of the live one.
+    monkeypatch.setattr(relay_monitor, "control_root", lambda: tmp_path / "control")
 
     class FakeRuntime:
         def __init__(self, _service: object) -> None:
@@ -424,24 +429,25 @@ def _startup() -> rt.RuntimeSnapshot:
     )
 
 
-def test_route_reports_local_ref_lagging_remote(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _client(monkeypatch, sha="a" * 40, startup=_startup())
+def test_route_reports_local_ref_lagging_remote(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path, sha="a" * 40, startup=_startup())
     body = client.get("/api/coding/control-room", params={"repository": REPOSITORY, "target_ref": "master"}).json()
     assert body["runtime"]["alignment"] == "aligned"
     assert body["warnings"] == ["local_target_ref_differs_from_remote"]
     assert body["repository"] == REPOSITORY and body["target_ref"] == "master"
+    assert body["plan"] == {"status": "absent"}
 
 
-def test_route_without_startup_snapshot_keeps_projection(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _client(monkeypatch, sha="b" * 40, startup=None)
+def test_route_without_startup_snapshot_keeps_projection(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path, sha="b" * 40, startup=None)
     body = client.get("/api/coding/control-room", params={"repository": REPOSITORY, "target_ref": "master"}).json()
     assert body["runtime"] is None
     assert body["warnings"] == ["startup_snapshot_unavailable"]
     assert body["recent_work"]["status"] == "available"
 
 
-def test_route_refuses_other_repository_and_bad_ref(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _client(monkeypatch, sha=None, startup=_startup())
+def test_route_refuses_other_repository_and_bad_ref(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    client = _client(monkeypatch, tmp_path, sha=None, startup=_startup())
     bad_repo = client.get("/api/coding/control-room", params={"repository": "o/other", "target_ref": "master"})
     assert bad_repo.status_code == 400
     bad_ref = client.get("/api/coding/control-room", params={"repository": REPOSITORY, "target_ref": "../x"})
