@@ -19,7 +19,7 @@ character of the first changed path (`ackend/...`).
 
 ## Code facts checked at `9e0185f6`
 
-- `scripts/opencode_worker.py::run` (around the `argv = sandbox + [binary, "run", "--standalone", ...]` line) starts
+- `scripts/opencode_worker.py::execute_run` (around the `argv = sandbox + [binary, "run", "--standalone", ...]` line) starts
   `opencode run --standalone --model ... --format json --auto <task>` and writes stdout to `transcript.json` and
   stderr to `stderr.txt`, both with the key replaced by `[REDACTED]`.
 - OpenCode 2.0.12 accepts `--print-logs` (logs to stderr; server logs need `--standalone`, already passed) and
