@@ -101,6 +101,27 @@ def test_merge_subject_parsing(subject: str, pr: int | None, kind: str, spec_ids
 
 
 @pytest.mark.parametrize(
+    ("subject", "pr", "kind", "spec_ids"),
+    [
+        ("feat(supervisor): temporary worker pools (spec 333) (#228)", 228, "implementation", ["333"]),
+        ("docs: mark spec 333 merged (#228); park X (#229)", 229, "docs", ["333"]),
+        ("Update readme (#5)", 5, "other", []),
+        ("fix: repair status join (spec 154a, spec 154b) (#30)", 30, "repair", ["154a", "154b"]),
+        ("feat: add ready spec 334 (#7)", 7, "implementation", ["334"]),
+        ("chore: specs 333 and 333 334 (#8)", 8, "other", ["333", "334"]),
+        # Only a trailing (#N) marks a squash PR; an embedded one keeps the old fallback.
+        ("feat: work in progress (#4) more text", 4, "other", []),
+    ],
+)
+def test_squash_subject_parsing(subject: str, pr: int, kind: str, spec_ids: list[str]) -> None:
+    parsed = cr.parse_merge_subject(subject)
+    assert parsed["pr_number"] == pr
+    assert parsed["branch"] is None
+    assert parsed["kind"] == kind
+    assert parsed["spec_ids"] == spec_ids
+
+
+@pytest.mark.parametrize(
     ("name", "title"),
     [
         ("CODING-CONTROL-ROOM-1", "Coding Control Room"),
@@ -180,6 +201,12 @@ def _merge(root: Path, branch: str, message: str, file: str) -> None:
     _git(root, "commit", "-q", "-m", f"work on {branch}")
     _git(root, "checkout", "-q", "main")
     _git(root, "merge", "-q", "--no-ff", branch, "-m", message)
+
+
+def _squash(root: Path, subject: str, file: str) -> None:
+    (root / file).write_text(subject)
+    _git(root, "add", file)
+    _git(root, "commit", "-q", "-m", subject)
 
 
 @pytest.fixture
@@ -291,6 +318,60 @@ def test_projection_rejects_unsafe_target_ref_without_running_git() -> None:
 
     for ref in ("../etc", "-x", "a..b", "master.lock", ""):
         assert cr.ControlRoomProjection(git=git).project(ref)["warnings"] == ["target_ref_invalid"]
+
+
+# --- squash-merge history (spec 335) -------------------------------------------
+
+
+@pytest.fixture
+def squash_repo(repo: Path) -> Path:
+    _squash(repo, "feat(coding): recent work lists squash merges (spec 002) (#21)", "s1.txt")
+    _squash(repo, "chore: tidy local notes", "s2.txt")  # direct push, no PR subject
+    _squash(repo, "fix: repair projection edge case (#22)", "s3.txt")
+    # A squash commit inside a side branch never appears: only first-parent commits count.
+    _git(repo, "checkout", "-q", "-b", "hidden", "main")
+    _squash(repo, "feat: hidden work (spec 003) (#99)", "hidden.txt")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "hidden", "-m", "Merge branch 'hidden'")
+    _squash(repo, "docs: mark spec 001 merged (#23)", "s4.txt")
+    _git(repo, "update-ref", "refs/remotes/origin/master", "main")
+    return repo
+
+
+def test_projection_lists_squash_and_merge_prs_newest_first(squash_repo: Path) -> None:
+    result = cr.ControlRoomProjection(root=squash_repo).project("master")
+    assert result["warnings"] == []
+    assert result["recent_work"]["status"] == "available"
+    items = result["recent_work"]["items"]
+    # Direct pushes, the seed, the plain side-branch merge and its inner squash are absent.
+    assert [item["pr_number"] for item in items] == [23, 22, 21, 13, 12, 10]
+    subjects = [item["subject"] for item in items]
+    assert "chore: tidy local notes" not in subjects
+    assert "feat: hidden work (spec 003) (#99)" not in subjects
+    docs, repair, feat = items[:3]
+    assert all(item["branch"] is None for item in items[:3])
+    assert docs["kind"] == "docs" and docs["maintenance"] is False
+    assert [(s["spec_id"], s["title"], s["status"]) for s in docs["specs"]] == [("001", "First Thing", "merged")]
+    assert repair["kind"] == "repair" and repair["maintenance"] is True and repair["specs"] == []
+    assert feat["kind"] == "implementation"
+    assert [(s["spec_id"], s["title"], s["status"]) for s in feat["specs"]] == [("002", "Second Thing", "ready")]
+    assert items[0]["sha"] == _git(squash_repo, "rev-parse", "main")
+    keys = {"sha", "merged_at", "subject", "pr_number", "branch", "kind", "spec_ids", "maintenance", "specs"}
+    assert all(set(item) == keys for item in items)
+
+
+def test_projection_caps_recent_work_at_limit_with_mixed_history(repo: Path) -> None:
+    # More PR commits than the limit, interleaved with direct pushes that must not take slots.
+    for number in range(1, cr.RECENT_WORK_LIMIT + 6):
+        _squash(repo, f"feat: change {number} (#{number})", f"n{number}.txt")
+        _squash(repo, f"chore: direct push {number}", f"d{number}.txt")
+    _git(repo, "update-ref", "refs/remotes/origin/master", "main")
+    result = cr.ControlRoomProjection(root=repo).project("master")
+    assert result["warnings"] == []
+    items = result["recent_work"]["items"]
+    assert len(items) == cr.RECENT_WORK_LIMIT
+    newest_pr = cr.RECENT_WORK_LIMIT + 5
+    assert [item["pr_number"] for item in items] == list(range(newest_pr, newest_pr - cr.RECENT_WORK_LIMIT, -1))
 
 
 # --- route --------------------------------------------------------------------
