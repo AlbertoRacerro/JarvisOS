@@ -1914,85 +1914,143 @@ def test_spec_307_report_modelli_display_and_copilot_spend(tmp_path: Path) -> No
     assert "- auto (copilot-auto, modelli: mai-code-2-flash, claude-3.5-sonnet): 2 compiti" in rep2
 
 
-def test_temporary_pool_loading_expiry_and_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def _temp_file(tmp_path: Path, pools: list[object], scores: dict[str, int] | None = None) -> Path:
+    target = tmp_path / "temp-pools.json"
+    target.write_text(json.dumps({
+        "index": {"name": "public intelligence index", "url": "https://example.invalid/index"},
+        "reference": "luna", "scores": {"luna": 28, "sol": 40} if scores is None else scores,
+        "read_at": "2026-11-20", "pools": pools,
+    }), encoding="utf-8")
+    return target
+
+
+def _pool(name: str, key: Path, score: int | None = 43, **extra: object) -> dict[str, object]:
+    entry: dict[str, object] = {"name": name, "provider": "free", "base_url": "https://example.invalid/v1",
+                                "model": f"{name}:free", "key_file": str(key), "free_list": "openai_models",
+                                "rate_limits": "free", "data_policy": "public", **extra}
+    if score is not None:
+        entry["index_score"] = score
+    return entry
+
+
+def _fresh_lists(tmp_path: Path, ids: list[str], now: datetime, source: str = "https://example.invalid/v1") -> None:
+    (tmp_path / "temp-pool-lists.json").write_text(json.dumps({"sources": {source: {
+        "ids": ids, "read_at": now.strftime("%Y-%m-%dT%H:%M:%SZ")}}}), encoding="utf-8")
+
+
+def _refuse(*_args: object) -> object:
+    raise OSError("no network in tests")
+
+
+def test_temporary_pool_admitted_by_index_score_at_its_tier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     key = tmp_path / "pool.key"
     key.write_text("secret", encoding="utf-8")
-    target = tmp_path / "temp-pools.json"
-    target.write_text(json.dumps([{
-        "name": "free-a", "provider": "free", "base_url": "https://example.invalid/v1",
-        "model": "free-model", "key_file": str(key),
-        "expires_at": "2026-11-19T20:00:00Z",
-        "rate_limits": "free", "data_policy": "public",
-    }]), encoding="utf-8")
+    target = _temp_file(tmp_path, [_pool("high", key, 43), _pool("mid", key, 30), _pool("low", key, 20),
+                                   _pool("none", key, None)])
     monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
+    now = datetime(2026, 11, 20, 10, 0, tzinfo=UTC)
+    _fresh_lists(tmp_path, ["high:free", "mid:free", "low:free", "none:free"], now)
     entries = wr.load_temp_pools()
-    assert len(entries) == 1
-    now = datetime(2026, 11, 19, 19, 0, tzinfo=UTC)
-    active = wr.temp_pool_read(entries[0], now)
-    assert active.free == 1.0
-    expired = wr.temp_pool_read(entries[0], now + timedelta(hours=2))
-    assert expired.free is None and expired.reason == "expired"
-    key.unlink()
-    assert wr.temp_pool_read(entries[0], now).reason == "no_key"
+    pools = {f"temp-{e['name']}": wr.temp_pool_read(e, now, opener=_refuse) for e in entries}
+    models = wr.temp_models([])
+    assert {m.key: m.capability for m in models} == {"temp-high": 3, "temp-mid": 1, "temp-low": 0, "temp-none": 0}
+    assert pools["temp-high"].free == 1.0 and pools["temp-mid"].free == 1.0
+    ranked, skipped = wr.rank(3, pools, models=models, now=now)
+    assert [e["worker"] for e in ranked] == ["temp-high"]
+    assert {s["worker"]: s["skipped"] for s in skipped} == {"temp-low": "below_index", "temp-none": "unindexed"}
+    assert [e["worker"] for e in wr.rank(2, pools, models=models, now=now)[0]] == ["temp-high"]
+    assert [e["worker"] for e in wr.rank(1, pools, models=models, now=now)[0]] == ["temp-mid", "temp-high"]
+    line = wr.summary_line(pools, [])
+    assert "temp-high 100% free (listed, index 43)" in line and "temp-low unavailable (below_index)" in line
 
 
-
-def test_temporary_pool_malformed_skipped_with_reason_and_expired_leaves_summary(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_temporary_pool_tier_moves_with_outcomes_not_smoke_runs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     key = tmp_path / "pool.key"
     key.write_text("secret", encoding="utf-8")
-    target = tmp_path / "temp-pools.json"
-    target.write_text(json.dumps([
-        {"name": "broken", "provider": "free", "base_url": "http://plain.invalid/v1", "model": "m",
-         "key_file": str(key), "expires_at": "2099-01-01T00:00:00Z", "rate_limits": "", "data_policy": ""},
-        {"name": "old", "provider": "free", "base_url": "https://example.invalid/v1", "model": "m",
-         "key_file": str(key), "expires_at": "2000-01-01T00:00:00Z", "rate_limits": "", "data_policy": ""},
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(_temp_file(tmp_path, [_pool("high", key, 43)])))
+    smoke = [{"worker": "temp-high", "task": f"tempsmoke-{n}", "tier": 2, "ci_first_pass": "fail",
+              "failure": "model"} for n in ("a", "b", "c")]
+    assert wr.temp_models(smoke)[0].capability == 3
+    failing = [{"worker": "temp-high", "task": f"t{n}", "tier": 2, "ci_first_pass": "fail", "failure": "model"}
+               for n in range(3)]
+    assert wr.temp_models(failing)[0].capability == 1
+    harness = [{**r, "failure": "harness"} for r in failing]
+    assert wr.temp_models(harness)[0].capability == 3
+
+
+def test_temporary_pool_liveness_follows_the_free_list(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key = tmp_path / "pool.key"
+    key.write_text("secret", encoding="utf-8")
+    target = _temp_file(tmp_path, [_pool("a", key), _pool("old", key, expires_at="2000-01-01T00:00:00Z")])
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
+    now = datetime(2026, 11, 20, 10, 0, tzinfo=UTC)
+    entries = wr.load_temp_pools()
+    assert [e["name"] for e in entries] == ["a", "old"] and entries[0]["expires_at"] is None
+    assert wr.temp_pool_read(entries[1], now, opener=_refuse).reason == "expired"
+    _fresh_lists(tmp_path, ["other:free"], now)
+    assert wr.temp_pool_read(entries[0], now, opener=_refuse).reason == "not_listed"
+    _fresh_lists(tmp_path, ["a:free"], now - timedelta(hours=2))
+    assert wr.temp_pool_read(entries[0], now, opener=_refuse).reason == "list_unreadable"
+    seen: list[tuple[str, dict[str, str]]] = []
+
+    def opener(url: str, headers: dict[str, str], timeout: float) -> object:
+        seen.append((url, headers))
+        return {"data": [{"id": "a:free"}, {"id": "a"}, {"id": "paid-model"}]}
+
+    assert wr.temp_pool_read(entries[0], now, opener=opener).free == 1.0
+    assert seen == [("https://example.invalid/v1/models", {"Authorization": "Bearer secret"})]
+    cache = json.loads((tmp_path / "temp-pool-lists.json").read_text(encoding="utf-8"))
+    assert cache["sources"]["https://example.invalid/v1"]["ids"] == ["a:free"]
+    assert "secret" not in (tmp_path / "temp-pool-lists.json").read_text(encoding="utf-8")
+    assert wr.temp_pool_read(entries[0], now + timedelta(minutes=30), opener=_refuse).free == 1.0  # cached
+    key.unlink()
+    assert wr.temp_pool_read(entries[0], now, opener=_refuse).reason == "no_key"
+
+
+def test_temporary_pool_malformed_and_zen_entries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key = tmp_path / "pool.key"
+    key.write_text("secret", encoding="utf-8")
+    zen = {"name": "zen", "provider": "OpenCode Zen", "model": "some-model-free", "free_list": "opencode_zen",
+           "index_score": 33, "rate_limits": "", "data_policy": ""}
+    target = _temp_file(tmp_path, [
+        _pool("broken", key, base_url="http://plain.invalid/v1"),
+        zen,
         "not an object",
-        {"name": "old", "provider": "free", "base_url": "https://example.invalid/v1", "model": "m2",
-         "key_file": str(key), "expires_at": "2099-01-01T00:00:00Z", "rate_limits": "", "data_policy": ""},
-    ]), encoding="utf-8")
+        _pool("zen", key),
+        _pool("nolist", key, free_list="somewhere"),
+    ])
     monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
     entries = wr.load_temp_pools()
     # bad entries get synthetic names; a duplicate name never shadows the first usable entry
-    assert [e["name"] for e in entries] == ["invalid#0", "old", "invalid#2", "invalid#3"]
-    pools = {f"temp-{e['name']}": wr.temp_pool_read(e) for e in entries}
-    assert pools["temp-invalid#0"].reason == "invalid" and pools["temp-old"].reason == "expired"
-    _, skipped = wr.rank(1, pools, models=wr.temp_models([]))
+    assert [e["name"] for e in entries] == ["invalid#0", "zen", "invalid#2", "invalid#3", "invalid#4"]
+    assert entries[1]["key_file"] is None and entries[1]["base_url"] is None
+    now = datetime(2026, 11, 20, 10, 0, tzinfo=UTC)
+    seen: list[str] = []
+
+    def opener(url: str, headers: dict[str, str], timeout: float) -> object:
+        seen.append(url)
+        assert headers == {}
+        return {"data": [{"id": "some-model-free"}, {"id": "some-model"}]}
+
+    pools = {f"temp-{e['name']}": wr.temp_pool_read(e, now, opener=opener) for e in entries}
+    assert pools["temp-zen"].free == 1.0 and seen == [wr.ZEN_MODELS_URL]
+    _, skipped = wr.rank(1, pools, models=wr.temp_models([]), now=now)
     assert {s["worker"]: s["skipped"] for s in skipped} == {
-        "temp-invalid#0": "invalid", "temp-old": "expired", "temp-invalid#2": "invalid", "temp-invalid#3": "invalid"}
-    line = wr.summary_line(pools, [])
-    assert "temp-old" not in line
-    assert "temp-invalid#0 unavailable (invalid)" in line
+        "temp-invalid#0": "invalid", "temp-invalid#2": "invalid", "temp-invalid#3": "invalid",
+        "temp-invalid#4": "invalid"}
+    assert "temp-invalid#0 unavailable (invalid)" in wr.summary_line(pools, [])
 
 
-def test_temporary_pool_qualification_gates_tiers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_temporary_pool_bridge_suspect_skips_until_cleared(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     key = tmp_path / "pool.key"
     key.write_text("secret", encoding="utf-8")
-    target = tmp_path / "temp-pools.json"
-    target.write_text(json.dumps([{
-        "name": "free-a", "provider": "free", "base_url": "https://example.invalid/v1",
-        "model": "free-model", "key_file": str(key),
-        "expires_at": "2026-12-01T00:00:00Z",
-        "rate_limits": "free", "data_policy": "public",
-    }]), encoding="utf-8")
-    monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
-    tier1 = [
-        {"worker": "temp-free-a", "task": "tempqual-tier1-add", "ci_first_pass": "pass"},
-        {"worker": "temp-free-a", "task": "tempqual-tier1-even", "ci_first_pass": "pass"},
-    ]
-    assert wr.qualify_temp_pool("temp-free-a", tier1) == 1
-    assert wr.qualify_temp_pool("temp-free-a", tier1 + [
-        {"worker": "temp-free-a", "task": "tempqual-tier2-merge", "ci_first_pass": "pass"},
-    ]) == 2
-
-    pool_map = {"temp-free-a": wr.Pool("temp-free-a", {"expires": 1.0}, 1.0)}
-    tier1_model = (wr.Model("temp-free-a", "opencode", "free-model", "temp-free-a", 1),)
-    assert wr.rank(2, pool_map, models=tier1_model)[0] == []
-    ranked, _ = wr.rank(1, pool_map, models=tier1_model)
-    assert [entry["worker"] for entry in ranked] == ["temp-free-a"]
-    unqualified, skipped_unqualified = wr.rank(1, pool_map,
-                                               models=(wr.Model("temp-free-a", "opencode", "free-model", "temp-free-a", 0),))
-    assert unqualified == []
-    assert skipped_unqualified[0]["skipped"] == "unqualified"
-
-
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(_temp_file(tmp_path, [_pool("a", key)])))
+    now = datetime(2026, 11, 20, 10, 0, tzinfo=UTC)
+    _fresh_lists(tmp_path, ["a:free"], now)
+    entry = wr.load_temp_pools()[0]
+    wr.set_bridge_state("temp-a", "suspect", now)
+    assert wr.temp_pool_read(entry, now, opener=_refuse).reason == "bridge_suspect"
+    assert wr.temp_models([])[0].capability == 3  # the bridge state never sets a tier
+    wr.set_bridge_state("temp-a", "ok", now)
+    assert wr.temp_pool_read(entry, now, opener=_refuse).free == 1.0
+    assert not hasattr(wr, "qualify_temp_pool")
