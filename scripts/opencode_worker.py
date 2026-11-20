@@ -163,7 +163,8 @@ def read_task(path: Path) -> str:
 
 def evidence_dir() -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return control_dir().parent / "evidence" / f"opencode-worker-{stamp}"
+    # The pid keeps two runs started in the same second (parallel smoke runs) apart.
+    return control_dir().parent / "evidence" / f"opencode-worker-{stamp}-{os.getpid()}"
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
