@@ -2054,3 +2054,11 @@ def test_temporary_pool_bridge_suspect_skips_until_cleared(monkeypatch: pytest.M
     wr.set_bridge_state("temp-a", "ok", now)
     assert wr.temp_pool_read(entry, now, opener=_refuse).free == 1.0
     assert not hasattr(wr, "qualify_temp_pool")
+
+
+def test_free_list_read_refuses_plain_http_and_redirects() -> None:
+    with pytest.raises(ValueError):
+        wr._http_get_json("http://example.invalid/models", {"Authorization": "Bearer k"}, 1.0)
+    request = wr.urllib.request.Request("https://example.invalid/models", headers={"Authorization": "Bearer k"})
+    with pytest.raises(wr.urllib.error.HTTPError):
+        wr._NoRedirect().redirect_request(request, None, 302, "Found", {}, "https://elsewhere.invalid/")

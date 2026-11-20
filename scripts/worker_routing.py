@@ -36,6 +36,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -320,12 +322,21 @@ def _read_key(entry: dict[str, Any]) -> str | None:
     return key or None
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would carry the Authorization header to another URL; refuse it."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, fp)
+
+
 def _http_get_json(url: str, headers: dict[str, str], timeout: float) -> Any:
-    import urllib.request
+    if not url.startswith("https://"):
+        raise ValueError("free-list URL must be https")
     # The Zen endpoint refuses urllib's default User-Agent (403); a named one is accepted.
     request = urllib.request.Request(url, headers={"Accept": "application/json",
                                                    "User-Agent": "jarvisos-worker-routing/1", **headers})
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - https URLs from the private file
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    with opener.open(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
