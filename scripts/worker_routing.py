@@ -36,6 +36,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -208,6 +210,36 @@ def _parse_iso_zone(value: Any) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+FREE_LISTS = ("openai_models", "openrouter_public", "opencode_zen")
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models"
+LIST_TTL = timedelta(hours=1)
+LIST_TIMEOUT = 10
+SMOKE_PREFIX = "tempsmoke-"
+_lists_lock = threading.Lock()
+
+
+def temp_pool_lists_file() -> Path:
+    return temp_pools_file().parent / "temp-pool-lists.json"
+
+
+def _admission(document: Any) -> tuple[int | None, dict[str, int]]:
+    """(reference score, worker key -> index score) from the top level of temp-pools.json; malformed values drop."""
+    if not isinstance(document, dict):
+        return None, {}
+    raw = document.get("scores")
+    scores = {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)} \
+        if isinstance(raw, dict) else {}
+    reference = document.get("reference")
+    return (scores.get(reference) if isinstance(reference, str) else None), scores
+
+
+def start_tier(score: int, scores: dict[str, int]) -> int:
+    """The highest tier of an existing worker whose index score is at most `score`; none: tier 1."""
+    capability = {m.key: m.capability for m in MODELS}
+    return max((capability[k] for k, v in scores.items() if k in capability and v <= score), default=1)
+
+
 def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
     target = path if path is not None else temp_pools_file()
     try:
@@ -217,6 +249,7 @@ def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
     entries = document if isinstance(document, list) else document.get("pools") if isinstance(document, dict) else None
     if not isinstance(entries, list):
         return []
+    reference, scores = _admission(document)
     valid: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, raw in enumerate(entries):
@@ -228,13 +261,20 @@ def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
         base_url = raw.get("base_url")
         model = raw.get("model")
         key_file = raw.get("key_file")
+        free_list = raw.get("free_list")
+        score = raw.get("index_score")
         expires = _parse_iso_zone(raw.get("expires_at"))
+        # Zen needs neither URL nor key; OpenRouter reads its list without a key but calls with one.
+        needs_url = free_list != "opencode_zen"
+        needs_key = free_list != "opencode_zen"
         if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name)
                 or not isinstance(provider, str) or not provider.strip()
-                or not isinstance(base_url, str) or not base_url.startswith("https://")
+                or free_list not in FREE_LISTS
+                or (needs_url and (not isinstance(base_url, str) or not base_url.startswith("https://")))
                 or not isinstance(model, str) or not model.strip()
-                or not isinstance(key_file, str) or not Path(key_file).is_absolute()
-                or expires is None
+                or (needs_key and (not isinstance(key_file, str) or not Path(key_file).is_absolute()))
+                or (raw.get("expires_at") is not None and expires is None)
+                or (score is not None and (not isinstance(score, int) or isinstance(score, bool)))
                 or "rate_limits" not in raw or "data_policy" not in raw
                 or name in seen):
             # Kept, so pick shows why it is skipped; never raised, never routed.
@@ -242,64 +282,169 @@ def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
             valid.append({"name": f"invalid#{index}", "model": str(raw.get("model") or ""), "invalid": "malformed entry"})
             continue
         seen.add(name)
+        admission = ("unindexed" if score is None else "no_reference" if reference is None
+                     else "below_index" if score < reference else None)
         valid.append({
-            "name": name, "provider": provider.strip(), "base_url": base_url,
-            "model": model.strip(), "key_file": Path(key_file).expanduser(), "expires_at": expires,
+            "name": name, "provider": provider.strip(), "free_list": free_list,
+            "base_url": base_url if needs_url else None, "model": model.strip(),
+            "key_file": Path(key_file).expanduser() if needs_key else None, "expires_at": expires,
+            "index_score": score, "admission": admission,
+            "start_tier": start_tier(score, scores) if admission is None and score is not None else 0,
         })
     return valid
 
 
-def qualify_temp_pool(worker: str, outcomes: list[dict[str, Any]] | None = None,
-                      record_file: Path | None = None) -> int:
-    records = load_records(record_file) if outcomes is None else outcomes
-    tier1_tasks = {"tempqual-tier1-add", "tempqual-tier1-even"}
-    tier2_tasks = {"tempqual-tier2-merge"}
-    passed_tier1: set[str] = set()
-    passed_tier2: set[str] = set()
-    for record in records:
-        if record.get("worker") != worker or record.get("ci_first_pass") != "pass":
-            continue
-        task = record.get("task")
-        if isinstance(task, str) and task in tier1_tasks:
-            passed_tier1.add(task)
-        elif isinstance(task, str) and task in tier2_tasks:
-            passed_tier2.add(task)
-    if len(passed_tier1) >= 2 and len(passed_tier2) >= 1:
-        return 2
-    if len(passed_tier1) >= 2:
-        return 1
-    return 0
+def temp_capability(entry: dict[str, Any], records: list[dict[str, Any]]) -> int:
+    """The index start tier moved by real outcomes (the Copilot rule; smoke runs and harness failures excluded)."""
+    base = entry.get("start_tier", 0)
+    if not base:
+        return 0
+    key = f"temp-{entry['name']}"
+    own = [r for r in records if r.get("worker") == key and not str(r.get("task", "")).startswith(SMOKE_PREFIX)]
+    return copilot_effective_capability(own, base, worker=key, model=entry["model"], sparse=base)
 
 
 def temp_models(outcomes: list[dict[str, Any]] | None = None) -> tuple[Model, ...]:
     records = load_records() if outcomes is None else outcomes
-    result: list[Model] = []
-    for entry in load_temp_pools():
-        key = f"temp-{entry['name']}"
-        result.append(Model(key, "opencode", entry["model"], key, qualify_temp_pool(key, records)))
-    return tuple(result)
+    return tuple(Model(f"temp-{entry['name']}", "opencode", entry["model"], f"temp-{entry['name']}",
+                       temp_capability(entry, records)) for entry in load_temp_pools())
 
 
 def all_models(outcomes: list[dict[str, Any]] | None = None) -> tuple[Model, ...]:
     return MODELS + temp_models(outcomes)
 
 
-def temp_pool_read(entry: dict[str, Any], now: datetime | None = None) -> Pool:
+def _read_key(entry: dict[str, Any]) -> str | None:
+    try:
+        key = entry["key_file"].read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError, AttributeError):
+        return None
+    return key or None
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would carry the Authorization header to another URL; refuse it."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, fp)
+
+
+def _http_get_json(url: str, headers: dict[str, str], timeout: float) -> Any:
+    if not url.startswith("https://"):
+        raise ValueError("free-list URL must be https")
+    # The Zen endpoint refuses urllib's default User-Agent (403); a named one is accepted.
+    request = urllib.request.Request(url, headers={"Accept": "application/json",
+                                                   "User-Agent": "jarvisos-worker-routing/1", **headers})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    with opener.open(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def list_source(entry: dict[str, Any]) -> str:
+    return entry["base_url"] if entry["free_list"] == "openai_models" else entry["free_list"]
+
+
+def fetch_free_ids(entry: dict[str, Any], opener: Callable[..., Any] | None = None) -> list[str]:
+    """Free model ids its source lists now. No prompt and no repository content; only `/models` of an
+    OpenAI-compatible base URL carries the key. Raises on any failure."""
+    get = opener or _http_get_json
+    kind = entry["free_list"]
+    if kind == "openai_models":
+        key = _read_key(entry)
+        if key is None:
+            raise OSError("no key")
+        document = get(entry["base_url"].rstrip("/") + "/models", {"Authorization": f"Bearer {key}"}, LIST_TIMEOUT)
+    else:
+        document = get(OPENROUTER_MODELS_URL if kind == "openrouter_public" else ZEN_MODELS_URL, {}, LIST_TIMEOUT)
+    data = document.get("data") if isinstance(document, dict) else None
+    if not isinstance(data, list):
+        raise ValueError("no model list")
+    ids = [item.get("id") for item in data if isinstance(item, dict) and isinstance(item.get("id"), str)]
+    suffix = "-free" if kind == "opencode_zen" else ":free"
+    return sorted(i for i in ids if i.endswith(suffix))
+
+
+def _load_lists() -> dict[str, Any]:
+    try:
+        document = json.loads(temp_pool_lists_file().read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
+def _write_lists(document: dict[str, Any]) -> None:
+    target = temp_pool_lists_file()
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=target.parent, prefix=".temp-pool-lists.",
+                                         delete=False) as handle:
+            json.dump(document, handle, indent=2, sort_keys=True)
+            name = handle.name
+        os.replace(name, target)
+    except OSError:
+        pass
+
+
+def listed_ids(entry: dict[str, Any], now: datetime, opener: Callable[..., Any] | None = None) -> list[str] | None:
+    """The source's free ids from a cache younger than LIST_TTL, refreshed when older; None when unreadable."""
+    source = list_source(entry)
+    with _lists_lock:
+        document = _load_lists()
+        cached = (document.get("sources") or {}).get(source) if isinstance(document.get("sources"), dict) else None
+        read_at = _parse_iso_zone(cached.get("read_at")) if isinstance(cached, dict) else None
+        if read_at is not None and timedelta(0) <= now - read_at < LIST_TTL and isinstance(cached.get("ids"), list):
+            return [i for i in cached["ids"] if isinstance(i, str)]
+        try:
+            ids = fetch_free_ids(entry, opener)
+        except Exception:  # noqa: BLE001 - an unreadable list only takes its pools out of routing
+            return None
+        sources = document.get("sources") if isinstance(document.get("sources"), dict) else {}
+        sources[source] = {"ids": ids, "read_at": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
+        document["sources"] = sources
+        _write_lists(document)
+        return ids
+
+
+def bridge_state(name: str) -> str | None:
+    bridge = _load_lists().get("bridge")
+    state = bridge.get(name) if isinstance(bridge, dict) else None
+    return state.get("state") if isinstance(state, dict) else None
+
+
+def set_bridge_state(name: str, state: str, now: datetime | None = None) -> None:
+    with _lists_lock:
+        document = _load_lists()
+        bridge = document.get("bridge") if isinstance(document.get("bridge"), dict) else {}
+        bridge[name] = {"state": state, "at": (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        document["bridge"] = bridge
+        _write_lists(document)
+
+
+def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
+                   opener: Callable[..., Any] | None = None) -> Pool:
     moment = now or datetime.now(UTC)
     name = f"temp-{entry['name']}"
     if entry.get("invalid"):
         return unreadable(name, "invalid")
     expires = entry["expires_at"]
-    if moment >= expires:
+    if expires is not None and moment >= expires:
         return unreadable(name, "expired")
-    try:
-        exists = entry["key_file"].is_file()
-    except OSError:
-        exists = False
-    if not exists:
-        return unreadable(name, "no_key")
-    return Pool(name, {"expires": 1.0}, 1.0, None, "live",
-                {"expires": expires})
+    if entry["admission"]:
+        return unreadable(name, entry["admission"])
+    if entry["key_file"] is not None:
+        try:
+            exists = entry["key_file"].is_file()
+        except OSError:
+            exists = False
+        if not exists:
+            return unreadable(name, "no_key")
+    ids = listed_ids(entry, moment, opener)
+    if ids is None:
+        return unreadable(name, "list_unreadable")
+    if entry["model"] not in ids:
+        return unreadable(name, "not_listed")
+    if bridge_state(name) == "suspect":
+        return unreadable(name, "bridge_suspect")
+    return Pool(name, {"free": 1.0}, 1.0, None, "live", {"expires": expires} if expires is not None else {})
 
 
 def _fraction(value: Any) -> float | None:
@@ -1413,12 +1558,15 @@ def candidate_measured_cost(candidate: Model, kind: str | None, outcomes: list[d
     return float(statistics.median(costs)), count
 
 
-def copilot_effective_capability(outcomes: list[dict[str, Any]] | None, base_capability: int = 1) -> int:
+def copilot_effective_capability(outcomes: list[dict[str, Any]] | None, base_capability: int = 1, *,
+                                 worker: str = "copilot-auto", model: str = "auto", sparse: int | None = None) -> int:
+    """A tier from recorded outcomes. Built for Copilot; temporary pools reuse it with their own worker and model,
+    and `sparse` (their index start tier) is kept while fewer than two tier-2 records exist."""
     if not outcomes:
         return base_capability
     copilot_records = [
         r for r in outcomes
-        if (r.get("worker") == "copilot-auto" or r.get("model") == "auto") and r.get("failure") != "harness"
+        if (r.get("worker") == worker or r.get("model") == model) and r.get("failure") != "harness"
     ]
     if not copilot_records:
         return base_capability
@@ -1443,6 +1591,8 @@ def copilot_effective_capability(outcomes: list[dict[str, Any]] | None, base_cap
         if isinstance(r.get("tier"), int) and not isinstance(r.get("tier"), bool) and r["tier"] >= 2
     ]
     if len(tier2_records) < 2:
+        if sparse is not None:
+            return sparse
         return 2 if (any(is_clean(r) for r in copilot_records) or len(tier2_records) == 1) else 1
 
     clean_count = sum(1 for r in tier2_records if is_clean(r))
@@ -1452,7 +1602,7 @@ def copilot_effective_capability(outcomes: list[dict[str, Any]] | None, base_cap
         return 1
 
     def _is_strong_actual_model(r: dict[str, Any]) -> bool:
-        act = r.get("actual_model")
+        act = r.get("actual_model") or (model if worker != "copilot-auto" else None)
         if not isinstance(act, str) or not act.strip():
             return False
         for model_name in act.split(","):
@@ -1542,7 +1692,7 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] | None
         eff_cap = copilot_effective_capability(outcomes, model.capability) if model.key == "copilot-auto" else model.capability
         if eff_cap == 0 and model.key.startswith("temp-"):
             pool = pools.get(model.pool) or unreadable(model.pool, "no_reading")
-            reason = pool.reason if pool.free is None else "unqualified"  # expired / no_key / invalid first
+            reason = pool.reason or "unadmitted"  # expired / invalid / unindexed / below_index ...
             skipped.append({"worker": model.key, "kind": model.kind, "model": model.model, "pool": model.pool,
                             "family": family(model), "capability": 0,
                             "free": None if pool.free is None else round(pool.free, 4),
@@ -1663,13 +1813,12 @@ def summary_line(pools: dict[str, Pool], outcomes: list[dict[str, Any]] | None =
             parts.append(f"{name} unavailable ({pool.reason or 'unreadable'})")
             continue
         if name.startswith("temp-"):
+            entry = next((e for e in load_temp_pools() if f"temp-{e['name']}" == name), None)
+            score = f", index {entry['index_score']}" if entry and entry.get("index_score") is not None else ""
             expires = pool.resets.get("expires")
-            hours = max(0.0, (expires - datetime.now(UTC)).total_seconds() / 3600) if expires is not None else 0.0
-            model = next((m for m in models if m.pool == name), None)
-            if model is not None and model.capability == 0:
-                parts.append(f"{name} da qualificare ({hours:.1f}h left)")
-            else:
-                parts.append(f"{name} 100% free ({hours:.1f}h left)")
+            left = (f", {max(0.0, (expires - datetime.now(UTC)).total_seconds() / 3600):.1f}h left"
+                    if expires is not None else "")
+            parts.append(f"{name} 100% free (listed{score}{left})")
             continue
         short = f" (5h {pct(pool.windows['5h'])})" if "5h" in pool.windows else ""
         low = " [below reserve]" if below_reserve(pool) else ""

@@ -21,6 +21,8 @@ MAX_TIMEOUT = 6 * 3600
 KILL_MARGIN = 60
 MAX_TASK_BYTES = 200 * 1024
 KEY_ENV = "TEMP_POOL_API_KEY"
+ZEN = "opencode_zen"
+ZEN_PROVIDER = "opencode"  # OpenCode's built-in Zen provider id
 
 
 class Refused(Exception):
@@ -78,22 +80,29 @@ def parse_expiry(value: Any) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def validate_pool(entry: dict[str, Any]) -> tuple[datetime, Path, str, str, str]:
-    expires = parse_expiry(entry.get("expires_at"))
-    if expires is None:
-        raise Refused("invalid_pool")
-    if datetime.now(UTC) >= expires:
-        raise Refused("pool_expired")
-    base_url = entry.get("base_url")
+def validate_pool(entry: dict[str, Any]) -> tuple[Path | None, str | None, str, str, str]:
+    """(key path, base URL, model, provider, free list). OpenCode's built-in Zen provider needs neither key nor URL."""
+    if entry.get("expires_at") is not None:
+        expires = parse_expiry(entry.get("expires_at"))
+        if expires is None:
+            raise Refused("invalid_pool")
+        if datetime.now(UTC) >= expires:
+            raise Refused("pool_expired")
+    free_list = entry.get("free_list")
+    if free_list not in ("openai_models", "openrouter_public", "opencode_zen"):
+        raise Refused("invalid_free_list")
     model = entry.get("model")
     provider = entry.get("provider")
-    key_file = entry.get("key_file")
-    if not isinstance(base_url, str) or not base_url.startswith("https://"):
-        raise Refused("invalid_base_url")
     if not isinstance(model, str) or not model.strip():
         raise Refused("invalid_model")
     if not isinstance(provider, str) or not provider.strip():
         raise Refused("invalid_provider")
+    if free_list == ZEN:
+        return None, None, model.strip(), provider.strip(), free_list
+    base_url = entry.get("base_url")
+    key_file = entry.get("key_file")
+    if not isinstance(base_url, str) or not base_url.startswith("https://"):
+        raise Refused("invalid_base_url")
     if not isinstance(key_file, str) or not Path(key_file).is_absolute():
         raise Refused("invalid_key_file")
     key_path = Path(key_file).expanduser()
@@ -103,7 +112,7 @@ def validate_pool(entry: dict[str, Any]) -> tuple[datetime, Path, str, str, str]
         raise Refused("key_missing")
     if key_path.resolve().is_relative_to(repo_root().resolve()):
         raise Refused("invalid_key_file", "inside repository")
-    return expires, key_path, base_url, model.strip(), provider.strip()
+    return key_path, base_url, model.strip(), provider.strip(), free_list
 
 
 def git(worktree: Path, *args: str, check: bool = True) -> str:
@@ -154,14 +163,15 @@ def read_task(path: Path) -> str:
 
 def evidence_dir() -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return control_dir().parent / "evidence" / f"opencode-worker-{stamp}"
+    # The pid keeps two runs started in the same second (parallel smoke runs) apart.
+    return control_dir().parent / "evidence" / f"opencode-worker-{stamp}-{os.getpid()}"
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def child_env(scratch: Path, key: str) -> dict[str, str]:
+def child_env(scratch: Path, key: str | None) -> dict[str, str]:
     """Home and config live in a scratch directory outside the control directory, so the child sees no evidence."""
     home = scratch / "home"
     config = scratch / "xdg-config"
@@ -176,7 +186,7 @@ def child_env(scratch: Path, key: str) -> dict[str, str]:
         "XDG_CONFIG_HOME": str(config),
         "XDG_DATA_HOME": str(data),
         "LANG": "C.UTF-8",
-        KEY_ENV: key,
+        **({KEY_ENV: key} if key is not None else {}),
     }
 
 
@@ -221,28 +231,34 @@ def opencode_binary() -> str:
     return str(Path(found).resolve())  # the sandbox binds the package, not the launcher symlink
 
 
-def build_config(scratch: Path, name: str, provider: str, base_url: str, model: str) -> Path:
-    """OpenCode 2.x config with only this provider. `--auto` approves every permission not explicitly denied, so
-    files outside the worktree, web fetches and session sharing are denied here."""
+def build_config(scratch: Path, name: str, provider: str, base_url: str | None, model: str) -> Path:
+    """OpenCode 2.x config with only this provider (none for Zen: the built-in provider, no key). `--auto` approves
+    every permission not explicitly denied, so files outside the worktree, web fetches and session sharing are
+    denied here."""
     config_dir = scratch / "xdg-config" / "opencode"
     config_dir.mkdir(parents=True, exist_ok=True)
-    document = {
+    document: dict[str, Any] = {
         "$schema": "https://opencode.ai/config.json",
         "autoupdate": False,
         "share": "disabled",
         "permission": {"external_directory": "deny", "webfetch": "deny"},
-        "provider": {
+    }
+    if base_url is not None:
+        document["provider"] = {
             re_safe(name): {
                 "npm": "@ai-sdk/openai-compatible",
                 "name": provider,
                 "options": {"baseURL": base_url, "apiKey": "{env:" + KEY_ENV + "}"},
                 "models": {model: {"name": model}},
             }
-        },
-    }
+        }
     path = config_dir / "opencode.json"
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
+
+
+def redact(text: str, key: str | None) -> str:
+    return text.replace(key, "[REDACTED]") if key else text
 
 
 def re_safe(value: str) -> str:
@@ -258,34 +274,34 @@ def changed_files(worktree: Path) -> list[str]:
     return [line[3:] for line in status.splitlines() if len(line) >= 4]
 
 
-def qualification_tasks() -> list[dict[str, str]]:
+def smoke_tasks() -> list[dict[str, str]]:
     base = repo_root() / "scripts" / "temp_pool_qualification"
     return [
-        {"id": "tempqual-tier1-add", "task": str(base / "tier1-add" / "task.md"),
+        {"id": "tempsmoke-tier1-add", "task": str(base / "tier1-add" / "task.md"),
          "check": str(base / "tier1-add" / "check.py"), "tier": "1"},
-        {"id": "tempqual-tier1-even", "task": str(base / "tier1-even" / "task.md"),
+        {"id": "tempsmoke-tier1-even", "task": str(base / "tier1-even" / "task.md"),
          "check": str(base / "tier1-even" / "check.py"), "tier": "1"},
-        {"id": "tempqual-tier2-merge", "task": str(base / "tier2-merge" / "task.md"),
+        {"id": "tempsmoke-tier2-merge", "task": str(base / "tier2-merge" / "task.md"),
          "check": str(base / "tier2-merge" / "check.py"), "tier": "2"},
     ]
 
 
-def execute_qualification(args: argparse.Namespace) -> int:
+def execute_smoke(args: argparse.Namespace) -> int:
     try:
         entry = find_pool(args.pool)
         validate_pool(entry)
     except Refused as refusal:
-        sys.stderr.write(f"qualify refused: {refusal.reason}\n")
+        sys.stderr.write(f"smoke refused: {refusal.reason}\n")
         return 2
 
     sys.path.insert(0, str(repo_root() / "scripts"))
     import worker_routing as routing
 
-    evidence_root = evidence_dir() / "qualification"
+    evidence_root = evidence_dir() / "smoke"
     evidence_root.mkdir(parents=True, exist_ok=True)
     base = repo_root()
     outcomes: list[dict[str, Any]] = []
-    for task in qualification_tasks():
+    for task in smoke_tasks():
         tempdir = Path(tempfile.mkdtemp(prefix="temp-pool-", dir=evidence_root))
         worktree = tempdir / "worktree"
         worktree.parent.mkdir(parents=True, exist_ok=True)
@@ -316,18 +332,18 @@ def execute_qualification(args: argparse.Namespace) -> int:
                            capture_output=True, text=True, check=False)
         outcomes.append(outcome)
         result_file = tempdir / "evidence" / "result.json"
+        # A run that did not finish is the bridge's failure (harness), never the model's; nothing here sets a tier.
+        failure = "harness" if outcome["run_status"] != "succeeded" else "none" if outcome["passed"] else "model"
         routing.record(task=task["id"], kind="tests", worker=f"temp-{args.pool}", tier=int(task["tier"]),
-                       ci_first_pass="pass" if outcome["passed"] else "fail",
+                       ci_first_pass="pass" if outcome["passed"] else "fail", failure=failure,
                        evidence=result_file if result_file.is_file() else None,
                        record_file=getattr(args, "record_file", None))
 
-    passed_tier1 = sum(1 for item in outcomes if item["task"].startswith("tempqual-tier1-") and item["passed"])
-    passed_tier2 = sum(1 for item in outcomes if item["task"].startswith("tempqual-tier2-") and item["passed"])
-    tier = 2 if passed_tier1 == 2 and passed_tier2 == 1 else 1 if passed_tier1 == 2 else 0
-    summary = evidence_root / "qualification.json"
-    write_json(summary, {"pool": args.pool, "tier": tier, "outcomes": outcomes})
+    bridge = "ok" if all(item["passed"] for item in outcomes) else "suspect"
+    routing.set_bridge_state(f"temp-{args.pool}", bridge)
+    write_json(evidence_root / "smoke.json", {"pool": args.pool, "bridge": bridge, "outcomes": outcomes})
     print(f"pool: temp-{args.pool}")
-    print(f"tier: {tier}")
+    print(f"bridge: {bridge}")
     return 0
 
 
@@ -349,13 +365,15 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
         if os.environ.get("JARVISOS_PACK_PATH"):
             raise Refused("private_pack_visible")
         entry = find_pool(args.pool)
-        _, key_path, base_url, model, provider = validate_pool(entry)
-        try:
-            key = key_path.read_text(encoding="utf-8").strip()
-        except (OSError, UnicodeDecodeError) as error:
-            raise Refused("key_unreadable") from error
-        if not key:
-            raise Refused("key_missing")
+        key_path, base_url, model, provider, free_list = validate_pool(entry)
+        key: str | None = None
+        if key_path is not None:
+            try:
+                key = key_path.read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeDecodeError) as error:
+                raise Refused("key_unreadable") from error
+            if not key:
+                raise Refused("key_missing")
         task = read_task(Path(args.task_file))
         start_head, _ = check_worktree(worktree)
         if not 0 < args.timeout <= MAX_TIMEOUT:
@@ -371,7 +389,8 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
             shutil.rmtree(scratch, ignore_errors=True)
             raise
         # --standalone: a private server in this environment, never the user's background service.
-        argv = sandbox + [binary, "run", "--standalone", "--model", f"{re_safe(args.pool)}/{model}",
+        model_ref = f"{ZEN_PROVIDER}/{model}" if free_list == ZEN else f"{re_safe(args.pool)}/{model}"
+        argv = sandbox + [binary, "run", "--standalone", "--model", model_ref,
                 "--format", "json", "--auto", task]
         result["model"] = model
         proc_started = datetime.now(UTC)
@@ -393,8 +412,8 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
                 stdout, stderr = proc.communicate()
                 result.update(status="timeout", reason=f"exceeded {args.timeout + KILL_MARGIN}s")
                 result["exit_code"] = None
-            (evidence / "transcript.json").write_text((stdout or "").replace(key, "[REDACTED]"), encoding="utf-8")
-            (evidence / "stderr.txt").write_text((stderr or "").replace(key, "[REDACTED]"), encoding="utf-8")
+            (evidence / "transcript.json").write_text(redact(stdout or "", key), encoding="utf-8")
+            (evidence / "stderr.txt").write_text(redact(stderr or "", key), encoding="utf-8")
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
         result["duration_seconds"] = round((datetime.now(UTC) - proc_started).total_seconds(), 3)
@@ -433,10 +452,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     run.add_argument("--evidence-dir")
     run.set_defaults(func=cmd_run)
-    qualify = sub.add_parser("qualify")
-    qualify.add_argument("--pool", required=True)
-    qualify.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
-    qualify.set_defaults(func=execute_qualification)
+    smoke = sub.add_parser("smoke")
+    smoke.add_argument("--pool", required=True)
+    smoke.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    smoke.set_defaults(func=execute_smoke)
     return parser
 
 

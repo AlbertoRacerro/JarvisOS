@@ -23,12 +23,14 @@ def temp_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Pa
     key = tmp_path / "pool.key"
     key.write_text("TEST_TEMP_POOL_SECRET", encoding="utf-8")
     pools = tmp_path / "temp-pools.json"
-    pools.write_text(json.dumps([{
+    pools.write_text(json.dumps({"reference": "luna", "scores": {"luna": 28}, "pools": [{
         "name": "testpool", "provider": "Test Public", "base_url": "https://example.invalid/v1",
-        "model": "test-model", "key_file": str(key),
-        "expires_at": "2099-01-01T00:00:00Z",
+        "model": "test-model", "key_file": str(key), "free_list": "openai_models", "index_score": 30,
         "rate_limits": "free", "data_policy": "public",
-    }]), encoding="utf-8")
+    }, {
+        "name": "zenpool", "provider": "OpenCode Zen", "model": "zen-model-free", "free_list": "opencode_zen",
+        "index_score": 33, "rate_limits": "free", "data_policy": "public",
+    }]}), encoding="utf-8")
     monkeypatch.setenv("TEMP_POOLS_FILE", str(pools))
     return pools, key
 
@@ -125,43 +127,86 @@ def test_run_refuses_pack_outside_repository_and_strips_environment(
     assert "worktree" in outside_result["reason"] or "linked" in outside_result["reason"]
 
 
-def test_qualify_records_three_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-                                       temp_pool: tuple[Path, Path],
-                                       no_sandbox: list[tuple[str, Path, Path]]) -> None:
-    capture_dir = tmp_path / "qualify-capture"
-    capture_dir.mkdir()
+def test_zen_pool_runs_built_in_provider_without_key(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, temp_pool: tuple[Path, Path],
+        linked_worktree: Path, no_sandbox: list[tuple[str, Path, Path]]) -> None:
+    capture = tmp_path / "child.json"
     fake_bin = tmp_path / "opencode"
     fake_bin.write_text(
         "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        f"json.dump({{'env': dict(os.environ), 'argv': sys.argv}}, open({str(capture)!r}, 'w'))\n",
+        encoding="utf-8",
+    )
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("JARVISOS_OPENCODE_BIN", str(fake_bin))
+    task = tmp_path / "task.md"
+    task.write_text("Do no harm.", encoding="utf-8")
+    evidence = tmp_path / "evidence"
+    args = ow.argparse.Namespace(pool="zenpool", task_file=str(task), worktree=str(linked_worktree),
+                                 timeout=30, evidence_dir=str(evidence))
+    _, result = ow.execute_run(args)
+    assert result["status"] == "succeeded"
+    child = json.loads(capture.read_text(encoding="utf-8"))
+    assert "TEMP_POOL_API_KEY" not in child["env"]
+    assert child["argv"][child["argv"].index("--model") + 1] == "opencode/zen-model-free"
+    config = json.loads((evidence / "opencode.json").read_text(encoding="utf-8"))
+    assert "provider" not in config and config["permission"]["external_directory"] == "deny"
+
+
+def _smoke_bin(tmp_path: Path, exit_code: int) -> Path:
+    fake_bin = tmp_path / f"opencode-{exit_code}"
+    fake_bin.write_text(
+        "#!/usr/bin/env python3\n"
         "import pathlib, sys\n"
-        f"capture = pathlib.Path({str(capture_dir)!r})\n"
         "task = ' '.join(sys.argv)\n"
         "if 'returns the sum' in task:\n"
         "    pathlib.Path('scratch.py').write_text('def add(a, b):\\n    return a + b\\n')\n"
         "elif 'True for even integers' in task:\n"
         "    pathlib.Path('scratch.py').write_text('def is_even(number):\\n    return number % 2 == 0\\n')\n"
-        "elif 'tier2-merge' in task:\n"
-        "    pass\n",
+        f"sys.exit({exit_code})\n",
         encoding="utf-8",
     )
     fake_bin.chmod(0o755)
-    monkeypatch.setenv("JARVISOS_OPENCODE_BIN", str(fake_bin))
+    return fake_bin
+
+
+def test_smoke_marks_the_bridge_and_never_a_tier(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                 temp_pool: tuple[Path, Path],
+                                                 no_sandbox: list[tuple[str, Path, Path]]) -> None:
+    sys.path.insert(0, str(SCRIPT.parent))
+    import worker_routing as routing
+
     record_file = tmp_path / "worker-outcomes.jsonl"
     args = ow.argparse.Namespace(pool="testpool", timeout=30, record_file=record_file)
-    assert ow.execute_qualification(args) == 0
+    monkeypatch.setenv("JARVISOS_OPENCODE_BIN", str(_smoke_bin(tmp_path, 1)))
+    assert ow.execute_smoke(args) == 0
     records = [json.loads(line) for line in record_file.read_text(encoding="utf-8").splitlines()]
     assert len(records) == 3
-    assert sum(record["ci_first_pass"] == "pass" for record in records) == 2
-    qualification = next((tmp_path / "continuity").parent.rglob("qualification.json"))
-    assert json.loads(qualification.read_text(encoding="utf-8"))["tier"] == 1
+    assert all(r["failure"] == "harness" and r["task"].startswith("tempsmoke-") for r in records)
+    assert routing.bridge_state("temp-testpool") == "suspect"
+    entry = next(e for e in routing.load_temp_pools() if e["name"] == "testpool")
+    assert routing.temp_capability(entry, records) == 1
     assert len(no_sandbox) == 3
     assert not any(worktree.exists() for _, worktree, _ in no_sandbox)
+
+    monkeypatch.setenv("JARVISOS_OPENCODE_BIN", str(_smoke_bin(tmp_path, 0)))
+    assert ow.execute_smoke(args) == 0
+    records = [json.loads(line) for line in record_file.read_text(encoding="utf-8").splitlines()]
+    assert [r["failure"] for r in records[3:]] == ["none", "none", "model"]  # the merge task is left undone
+    assert routing.bridge_state("temp-testpool") == "suspect"
+    two = ow.smoke_tasks()[:2]
+    monkeypatch.setattr(ow, "smoke_tasks", lambda: two)
+    assert ow.execute_smoke(args) == 0
+    assert routing.bridge_state("temp-testpool") == "ok"
+    records = [json.loads(line) for line in record_file.read_text(encoding="utf-8").splitlines()]
+    assert routing.temp_capability(entry, records) == 1
 
 
 def test_key_file_inside_repository_or_symlinked_is_refused(tmp_path: Path) -> None:
     inside = ow.repo_root() / "scripts" / "opencode_worker.py"
     entry = {"name": "p", "provider": "x", "base_url": "https://example.invalid/v1", "model": "m",
-             "expires_at": "2099-01-01T00:00:00Z", "key_file": str(inside)}
+             "free_list": "openai_models", "key_file": str(inside)}
     with pytest.raises(ow.Refused) as inside_refusal:
         ow.validate_pool(entry)
     assert inside_refusal.value.reason == "invalid_key_file"
