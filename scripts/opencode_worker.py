@@ -143,7 +143,7 @@ def check_worktree(worktree: Path) -> tuple[str, list[str]]:
     except OSError:
         raise Refused("outside_repository") from None
     head = git(worktree, "rev-parse", "HEAD").strip()
-    status = git(worktree, "status", "--porcelain", "--untracked-files=all").strip()
+    status = git(worktree, "status", "--porcelain", "--untracked-files=all")
     changed = [line[3:] for line in status.splitlines() if len(line) >= 4]
     return head, changed
 
@@ -266,9 +266,90 @@ def re_safe(value: str) -> str:
     return result.strip("-") or "temp"
 
 
+def parse_timestamp(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) / 1000.0 if value > 1e11 else float(value)
+    if isinstance(value, str):
+        val = value.strip()
+        if not val:
+            return None
+        try:
+            num = float(val)
+            return num / 1000.0 if num > 1e11 else num
+        except ValueError:
+            pass
+        try:
+            if val.endswith("Z"):
+                val = val[:-1] + "+00:00"
+            dt = datetime.fromisoformat(val)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return dt.timestamp()
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def compute_steps(transcript: str | Path | None) -> dict[str, Any]:
+    default = {"started": 0, "finished": 0, "max_gap_seconds": 0.0}
+    if transcript is None:
+        return default
+    if isinstance(transcript, Path):
+        try:
+            text = transcript.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return default
+    elif isinstance(transcript, str):
+        text = transcript
+    else:
+        return default
+
+    started = 0
+    finished = 0
+    timestamps: list[float] = []
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_type = event.get("type")
+        if event_type in ("step_start", "step-start"):
+            started += 1
+        elif event_type in ("step_finish", "step-finish"):
+            finished += 1
+        else:
+            continue
+        raw_ts = event.get("timestamp")
+        if raw_ts is None:
+            raw_ts = event.get("time")
+        ts = parse_timestamp(raw_ts)
+        if ts is not None:
+            timestamps.append(ts)
+
+    if len(timestamps) < 2:
+        max_gap = 0.0
+    else:
+        gaps = [timestamps[i] - timestamps[i - 1] for i in range(1, len(timestamps))]
+        max_gap = max(gaps) if gaps else 0.0
+
+    return {
+        "started": started,
+        "finished": finished,
+        "max_gap_seconds": round(max(0.0, max_gap), 3),
+    }
+
+
 def changed_files(worktree: Path) -> list[str]:
     try:
-        status = git(worktree, "status", "--porcelain", "--untracked-files=all").strip()
+        status = git(worktree, "status", "--porcelain", "--untracked-files=all")
     except Refused:
         return []
     return [line[3:] for line in status.splitlines() if len(line) >= 4]
@@ -355,6 +436,7 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
         "schema": SCHEMA, "pool": args.pool, "model": None, "status": "refused",
         "reason": None, "exit_code": None, "started_at": iso(started),
         "finished_at": None, "duration_seconds": 0, "changed_files": [],
+        "steps": {"started": 0, "finished": 0, "max_gap_seconds": 0.0},
     }
     try:
         evidence.mkdir(parents=True, exist_ok=True)
@@ -390,8 +472,8 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
             raise
         # --standalone: a private server in this environment, never the user's background service.
         model_ref = f"{ZEN_PROVIDER}/{model}" if free_list == ZEN else f"{re_safe(args.pool)}/{model}"
-        argv = sandbox + [binary, "run", "--standalone", "--model", model_ref,
-                "--format", "json", "--auto", task]
+        argv = sandbox + [binary, "run", "--standalone", "--print-logs", "--log-level", "info",
+                          "--model", model_ref, "--format", "json", "--auto", task]
         result["model"] = model
         proc_started = datetime.now(UTC)
         try:
@@ -414,6 +496,7 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
                 result["exit_code"] = None
             (evidence / "transcript.json").write_text(redact(stdout or "", key), encoding="utf-8")
             (evidence / "stderr.txt").write_text(redact(stderr or "", key), encoding="utf-8")
+            result["steps"] = compute_steps(stdout or "")
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
         result["duration_seconds"] = round((datetime.now(UTC) - proc_started).total_seconds(), 3)
