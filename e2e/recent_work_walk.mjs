@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Spec 335: real-Chromium walk of Coding → Runtime "Recent work" listing squash-merged pull requests.
+// Spec 336: the same walk proves "Up next" opens with Il percorso, the coordinator's plan in plain Italian.
 // Starts at `/` in a clean profile on an isolated data root and reads the repository's local target branch.
 //   (cd frontend && VITE_API_BASE_URL= npm run build)
 //   JARVISOS_PROOF_PYTHON=<backend venv python> node e2e/recent_work_walk.mjs <evidence-dir>
 import { createHash } from "node:crypto";
+import { deepEqual } from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { openSync } from "node:fs";
 import { createServer } from "node:net";
@@ -28,12 +30,28 @@ const assert = (ok, message) => { if (!ok) throw new Error(message); };
 await mkdir(evidence, { recursive: true });
 
 const dataRoot = await mkdtemp(join(tmpdir(), "jarvisos-335-data-"));
-const controlDir = join(dataRoot, "control");
+// The control root (relay_monitor.control_root() reads RELAY_CONTINUITY_DIR) stays inside the evidence
+// directory: an isolated temporary directory, never the real control directory.
+const controlDir = join(evidence, "control");
 const continuityDir = join(controlDir, "continuity");
 const relayRepo = join(dataRoot, "relay-repo");
 await mkdir(continuityDir, { recursive: true });
 await mkdir(join(relayRepo, ".agent-relay", "devctx"), { recursive: true });
 await mkdir(join(dataRoot, "host"), { recursive: true, mode: 0o700 });
+
+// Spec 336: a generic coordinator plan, written before the app starts; no private plan content.
+const plan = {
+  schema: "plan.v1",
+  updated_at: new Date().toISOString(),
+  goal: "Portare a termine il percorso di prova",
+  steps: [
+    { title: "Passo uno", state: "done", note: "Nota del passo uno", specs: ["335"] },
+    { title: "Passo due", state: "in_progress", specs: ["335"] },
+    { title: "Passo tre", state: "next", specs: [] },
+    { title: "Passo quattro", state: "later", specs: [] },
+  ],
+};
+await writeFile(join(continuityDir, "plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
 
 const env = {
   ...process.env,
@@ -82,12 +100,12 @@ const server = spawn(python, ["-m", "uvicorn", "app.main:app", "--host", "127.0.
 });
 
 const summary = {
-  spec: "335",
+  spec: "335, 336",
   head,
   dirty,
   browser: null,
   started_at: new Date().toISOString(),
-  data_root: "isolated temporary JARVISOS_DATA_ROOT + JARVIS_CONTROL_DIR + JARVIS_RELAY_REPO",
+  data_root: "isolated temporary JARVISOS_DATA_ROOT + JARVIS_RELAY_REPO; control root (plan.json) under the evidence dir",
   console_errors: [],
   page_errors: [],
   screenshots: [],
@@ -143,9 +161,32 @@ try {
   await shot("runtime-recent-work-squash-merges");
   summary.steps.push({ step: "recent_work_lists_squash_merges", status: "pass", ids, newest: dates[0], items: ids.length });
 
+  // 3. Spec 336: Up next opens with Il percorso — the plan steps in file order, Italian state labels,
+  //    the goal as plain text and the spec chip joined to the registry, before the STATUS rows.
+  const upNext = page.getByRole("region", { name: "Up next" });
+  const percorso = upNext.getByRole("region", { name: "Il percorso" });
+  await percorso.waitFor();
+  const planFirst = await upNext.evaluate((node) => {
+    const block = node.querySelector('[aria-label="Il percorso"]');
+    const header = node.querySelector("header");
+    return Boolean(block && header && header.nextElementSibling === block);
+  });
+  assert(planFirst, "Il percorso must sit right after the Up next header, before the STATUS rows");
+  assert((await percorso.innerText()).includes(plan.goal), "the goal is not shown as plain text");
+  const titles = await percorso.locator("ol > li .coding-plan-title").allTextContents();
+  deepEqual(titles, plan.steps.map((s) => s.title), `plan steps out of order: ${JSON.stringify(titles)}`);
+  const labels = await percorso.locator("ol > li > .coding-state").allTextContents();
+  deepEqual(labels, ["Fatto", "In corso", "Prossimo", "Dopo"], `wrong Italian state labels: ${JSON.stringify(labels)}`);
+  assert((await percorso.locator("ol > li").first().innerText()).includes("Nota del passo uno"), "the step note is missing");
+  const chip = await percorso.locator(".coding-plan-spec").first().innerText();
+  assert(chip.includes("335") && chip.includes("Merged"), `spec chip not joined to the registry: ${JSON.stringify(chip)}`);
+  await percorso.scrollIntoViewIfNeeded();
+  await shot("runtime-up-next-il-percorso");
+  summary.steps.push({ step: "up_next_shows_il_percorso", status: "pass", titles, labels });
+
   assert(summary.console_errors.length === 0, `console errors: ${JSON.stringify(summary.console_errors)}`);
   assert(summary.page_errors.length === 0, `page errors: ${JSON.stringify(summary.page_errors)}`);
-  summary.passed = summary.steps.length === 2 && summary.steps.every((s) => s.status === "pass");
+  summary.passed = summary.steps.length === 3 && summary.steps.every((s) => s.status === "pass");
   await context.close();
 } finally {
   await browser?.close();

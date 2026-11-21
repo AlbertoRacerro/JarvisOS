@@ -25,6 +25,8 @@ import {
   type CodingActionResult,
   type CodingContextPreview,
   type ControlRoom,
+  type ControlRoomPlan,
+  type ControlRoomPlanStep,
   type ControlRoomRecentItem,
   type ControlRoomUpcomingItem,
   type RepositoryTruthResult,
@@ -606,6 +608,7 @@ function RepositorySurface({ workspaceId, jarvis }: Readonly<{ workspaceId: stri
 
 const WARNING_TEXT: Record<string, string> = {
   local_target_ref_differs_from_remote: "Recent work and Up next read the local copy of the target branch, which differs from the remote commit shown above. Fetch the repository to refresh it; this page never fetches.",
+  plan_invalid: "The coordinator's plan file could not be read; Il percorso is hidden.",
   startup_snapshot_unavailable: "The process startup snapshot is unavailable, so runtime identity cannot be shown.",
   target_ref_invalid: "The target branch name is not a safe git ref."
 };
@@ -635,6 +638,25 @@ function specLabel(ids: readonly string[]): string {
 
 function StateBadge({ status }: Readonly<{ status: string | null }>) {
   return <span className="coding-state" data-state={status ?? "unknown"}>{status ? humanize(status) : "Not in registry"}</span>;
+}
+
+const PLAN_STATE_LABEL: Record<ControlRoomPlanStep["state"], string> = { done: "Fatto", in_progress: "In corso", next: "Prossimo", later: "Dopo" };
+
+function PlanPath({ plan }: Readonly<{ plan?: ControlRoomPlan }>) {
+  if (!plan || plan.status === "absent") return null;
+  if (plan.status === "invalid") return <p className="coding-control-note">Piano non leggibile.</p>;
+  return <section className="coding-plan" aria-label="Il percorso">
+    <h4>Il percorso</h4>
+    <p className="coding-plan-goal">{plan.goal}</p>
+    <ol className="coding-work-list coding-plan-steps">
+      {plan.steps.map((step, index) => <li key={index} className="coding-plan-step">
+        <span className="coding-state" data-state={step.state}>{PLAN_STATE_LABEL[step.state]}</span>
+        <span className="coding-plan-title">{step.title}</span>
+        {step.note ? <span className="coding-plan-note">{step.note}</span> : null}
+        {step.specs.map((spec) => <span key={spec.spec_id} className="coding-plan-spec"><span className="coding-work-id">{spec.spec_id}</span><span>{spec.title ?? "non nel registro"}</span>{spec.status !== null ? <StateBadge status={spec.status} /> : null}</span>)}
+      </li>)}
+    </ol>
+  </section>;
 }
 
 function RecentWorkRow({ item }: Readonly<{ item: ControlRoomRecentItem }>) {
@@ -746,6 +768,7 @@ function RuntimeSurface({ jarvis }: Readonly<{ jarvis?: ReactNode }>) {
       </section>
       <section className="coding-control-section" aria-label="Up next">
         <header><h3>Up next</h3><span>From STATUS.md at the same commit · authority first, then dependency readiness</span></header>
+        <PlanPath plan={room?.plan} />
         {upcoming?.status === "available" ? <>
           {upcoming.authorized.length ? <ol className="coding-work-list">{upcoming.authorized.map((item) => <UpcomingRow key={item.spec_id} item={item} />)}</ol> : <p className="coding-control-empty" role="status">No spec is authorized right now: STATUS.md has no ready, in-progress or in-review row. Planned rows below need a maintainer decision before work starts.</p>}
           <UpcomingGroup label="Planned · dependencies merged" note="Not yet authorized. Many planned rows are deferred, definition-only or trigger-gated; read the description before treating one as next." items={upcoming.planned_ready} />

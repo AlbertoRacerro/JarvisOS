@@ -56,11 +56,24 @@ export type ControlRoomUpcomingItem = Readonly<{
   implementation_prs: number[];
 }>;
 
+export type ControlRoomPlanStep = Readonly<{
+  title: string;
+  state: "done" | "in_progress" | "next" | "later";
+  note: string | null;
+  specs: ControlRoomSpecRef[];
+}>;
+
+export type ControlRoomPlan =
+  | Readonly<{ status: "absent" }>
+  | Readonly<{ status: "invalid" }>
+  | Readonly<{ status: "available"; goal: string; updated_at: string; steps: ControlRoomPlanStep[] }>;
+
 export type ControlRoom = Readonly<{
   repository: string;
   target_ref: string;
   observed_at: string;
   runtime: RuntimeTruth | null;
+  plan?: ControlRoomPlan;
   source: Readonly<{ git_ref: string; sha: string | null; status_path: string }>;
   recent_work: Readonly<{ status: "available" | "unavailable"; limit: number; items: ControlRoomRecentItem[] }>;
   upcoming: Readonly<{

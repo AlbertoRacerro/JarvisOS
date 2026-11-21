@@ -1,6 +1,6 @@
 # 336 — UP-NEXT-PLAN-1: Up next shows the coordinator's plan in plain Italian
 
-Status: ready
+Status: in_review
 Depends on: 335
 
 ## Goal
