@@ -624,6 +624,29 @@ def test_native_cli_truncation_keeps_its_real_executor_exit_status(tmp_path, exi
     assert report.outcome == "success"
 
 
+@pytest.mark.parametrize("truncated", [False, True])
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_native_cli_created_completed_timestamps_keep_exit_status(tmp_path, truncated, exit_code):
+    """Fixture shape copied from real agy CLI output.jsonl (2026-11-21): Created At / Completed At lines
+    precede 'Command exited with code N.' both with and without the truncation envelope."""
+    events = stream("gh pr checks 231")
+    prefix = (
+        "The tool's output was truncated due to being too long. You can find the full output in a file at "
+        "file:///tmp/native-proof/output.txt.\n\n"
+        "Here is a preview with the middle of the output truncated:\n"
+        if truncated else ""
+    )
+    events[2]["step_update"]["tool_info"]["output"] = (
+        f"{prefix}Created At: 2026-11-21T17:14:27+01:00\n"
+        f"Completed At: 2026-11-21T17:14:35+01:00\n"
+        f"Command exited with code {exit_code}.\n\nCommand output:\nAll checks were successful\n"
+    )
+    report = rc.classify_turn(write_native(tmp_path, events))
+    assert report.calls[0].done and not report.calls[0].pending
+    assert report.calls[0].exit_status == exit_code
+    assert report.outcome == "success"
+
+
 def _turn_with_commands(commands: list[tuple[str, str]]) -> list[dict]:
     """A native turn shaped like 20261107-095109-fc3bba: many finished foreground commands, some exiting non-zero."""
     events = [{"event": "init", "conversation_id": "native-test", "init": {"model": ra.MODEL}}]
