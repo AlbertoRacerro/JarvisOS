@@ -56,6 +56,7 @@ spawnSync("chmod", ["+x", join(fakeBin, "agent-relay"), join(fakeBin, "gh")]);
 
 const env = {
   ...process.env,
+  HOME: dataRoot,
   PYTHONPATH: backend,
   JARVISOS_DATA_ROOT: dataRoot,
   JARVIS_CONTROL_DIR: controlDir,
@@ -75,6 +76,10 @@ delete env.GH_TOKEN;
 delete env.GITHUB_TOKEN;
 delete env.JARVISOS_GITHUB_READ_TOKEN;
 delete env.JARVISOS_COPILOT_GH_TOKEN;
+delete env.JARVISOS_CLAUDE_CONFIG_DIR;
+delete env.CLAUDE_CONFIG_DIR;
+delete env.JARVISOS_CODEX_HOME;
+delete env.CODEX_HOME;
 
 await new Promise((ok, fail) => {
   const probe = createServer()

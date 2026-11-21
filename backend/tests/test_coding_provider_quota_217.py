@@ -5,6 +5,8 @@ import json
 import subprocess
 import sys
 import threading
+import urllib.error
+import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,17 @@ from app.modules.coding import runtime_routes
 from app.modules.coding.runtime_truth import CANONICAL_RUNTIME_REPOSITORY
 
 NOW = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def isolate_sandbox_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    sandbox_home = tmp_path / "clean_home"
+    sandbox_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HOME", str(sandbox_home))
+    monkeypatch.delenv("JARVISOS_CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("JARVISOS_CODEX_HOME", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
 
 
 def iso(value: datetime) -> str:
@@ -176,8 +189,8 @@ def test_missing_tools_are_unreadable_not_an_error(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("JARVISOS_CODEX_BIN", "/nonexistent/codex")
     monkeypatch.setenv("JARVISOS_GH_BIN", "/nonexistent/gh")
     readings = pq.read_all()
-    assert readings == {"relay": None, "agy": None, "codex": None, "copilot": None,
-                        "errors": {"relay": "not_found", "agy": "not_found", "codex": "not_found", "copilot": "not_found"}}
+    assert readings == {"claude": None, "agy": None, "codex": None, "copilot": None,
+                        "errors": {"claude": "relay_not_found", "agy": "not_found", "codex": "not_found", "copilot": "not_found"}}
     assert {p["reason"] for p in pq.normalize(readings, NOW)["providers"]} == {"relay_not_found", "agy_not_found", "codex_not_found", "copilot_not_found"}
 
 
@@ -411,9 +424,9 @@ def test_codex_usage_timeout_reaps_ephemeral_child(monkeypatch: pytest.MonkeyPat
 def test_status_sources_start_independently_and_preserve_partial_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     started = threading.Barrier(4)
 
-    def relay(*, refresh: bool = False) -> tuple[dict[str, Any], None]:
+    def claude(*, refresh: bool = False) -> tuple[dict[str, Any], None]:
         started.wait(timeout=5)
-        return {"agents": []}, None
+        return {"status": "ok", "windows": []}, None
 
     def agy() -> tuple[None, str]:
         started.wait(timeout=5)
@@ -428,12 +441,12 @@ def test_status_sources_start_independently_and_preserve_partial_failure(monkeyp
         return None, "timeout"
 
     monkeypatch.setattr(pq, "read_copilot_quota", copilot)
-    monkeypatch.setattr(pq, "read_relay_limits", relay)
+    monkeypatch.setattr(pq, "read_claude_limits", claude)
     monkeypatch.setattr(pq, "read_agy_quota", agy)
     monkeypatch.setattr(pq, "read_codex_limits", codex)
     result = pq.read_all()
-    assert result == {"relay": {"agents": []}, "agy": None, "codex": {"status": "ok", "windows": []}, "copilot": None,
-                      "errors": {"relay": None, "agy": "timeout", "codex": None, "copilot": "timeout"}}
+    assert result == {"claude": {"status": "ok", "windows": []}, "agy": None, "codex": {"status": "ok", "windows": []}, "copilot": None,
+                      "errors": {"claude": None, "agy": "timeout", "codex": None, "copilot": "timeout"}}
 
 
 @pytest.mark.parametrize(("bucket", "expected"), [
@@ -488,3 +501,285 @@ def test_copilot_cli_failure(monkeypatch: pytest.MonkeyPatch, error: str) -> Non
     data, failure = pq.read_copilot_quota()
     result = provider(pq.normalize({"copilot": data, "errors": {"copilot": failure}}, NOW), "copilot")
     assert result["status"] == "unavailable" and result["reason"] == f"copilot_{error}"
+
+
+# ---------------------------------------------------------------------------
+# Spec 340: Live Claude usage reader, Codex home resolution, plain reasons
+# ---------------------------------------------------------------------------
+
+
+def test_claude_live_reader_success_and_token_never_leaked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import time
+    secret_token = "sk-ant-oauth-very-secret-token-1234567890"
+    config_dir = tmp_path / "claude_config"
+    config_dir.mkdir()
+    cred_file = config_dir / ".credentials.json"
+    cred_file.write_text(json.dumps({
+        "claudeAiOauth": {
+            "accessToken": secret_token,
+            "expiresAt": (time.time() + 7200) * 1000,
+        }
+    }))
+    monkeypatch.setenv("JARVISOS_CLAUDE_CONFIG_DIR", str(config_dir))
+
+    fake_response = {
+        "five_hour": {"utilization": 42.5, "resets_at": "2026-10-24T17:00:00Z"},
+        "seven_day": {"utilization": 15.0, "resets_at": "2026-10-31T12:00:00Z"},
+        "seven_day_opus": {"utilization": 75.0, "resets_at": "2026-10-31T12:00:00Z"},
+    }
+
+    class FakeOpener:
+        def open(self, request: Any, timeout: float = 10.0) -> Any:
+            auth = request.headers.get("Authorization") or request.get_header("Authorization")
+            assert auth == f"Bearer {secret_token}"
+            beta = request.headers.get("Anthropic-beta") or request.get_header("Anthropic-beta")
+            assert beta == "oauth-2025-04-20"
+            import io
+            return io.BytesIO(json.dumps(fake_response).encode("utf-8"))
+
+    result, error = pq.read_claude_limits(opener=FakeOpener())
+    assert error is None
+    assert result is not None
+    assert result["status"] == "ok"
+    windows = result["windows"]
+    assert len(windows) == 3
+    assert [w["id"] for w in windows] == ["five_hour", "seven_day", "seven_day_opus"]
+    assert [w["used_percent"] for w in windows] == [42.5, 15.0, 75.0]
+
+    # Token must NEVER appear in result, payload, or serialized strings
+    result_dump = json.dumps(result)
+    assert secret_token not in result_dump
+    assert "sk-ant" not in result_dump
+
+    # Test through normalize
+    normalized = pq.normalize({"claude": result}, NOW)
+    claude_p = provider(normalized, "claude")
+    assert claude_p["status"] == "ok"
+    assert claude_p["source"] == "claude live"
+    kinds = [(w["kind"], w["used_percent"], w["remaining_percent"]) for w in claude_p["windows"]]
+    assert kinds == [("five_hour", 42.5, 57.5), ("weekly", 15.0, 85.0), ("frontier", 75.0, 25.0)]
+    norm_dump = json.dumps(normalized)
+    assert secret_token not in norm_dump
+
+
+@pytest.mark.parametrize("expires_at", [
+    (1000.0),  # epoch seconds far in the past
+    (1000.0 * 1000),  # epoch milliseconds far in the past
+])
+def test_claude_live_reader_expired_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, expires_at: float) -> None:
+    config_dir = tmp_path / "claude_config"
+    config_dir.mkdir()
+    (config_dir / ".credentials.json").write_text(json.dumps({
+        "claudeAiOauth": {
+            "accessToken": "sk-ant-expired-token",
+            "expiresAt": expires_at,
+        }
+    }))
+    monkeypatch.setenv("JARVISOS_CLAUDE_CONFIG_DIR", str(config_dir))
+    result, error = pq.read_claude_limits()
+    assert error == "session_expired"
+    assert result == {"status": "unavailable", "reason": "session_expired", "windows": []}
+    normalized = pq.normalize({"claude": result}, NOW)
+    assert provider(normalized, "claude")["status"] == "unavailable"
+    assert provider(normalized, "claude")["reason"] == "session_expired"
+
+
+@pytest.mark.parametrize("oauth_body", [
+    {},  # missing accessToken
+    {"accessToken": ""},  # empty accessToken
+    {"accessToken": "   "},  # whitespace accessToken
+])
+def test_claude_live_reader_missing_or_empty_access_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, oauth_body: dict[str, Any]) -> None:
+    config_dir = tmp_path / "claude_config"
+    config_dir.mkdir()
+    (config_dir / ".credentials.json").write_text(json.dumps({"claudeAiOauth": oauth_body}))
+    monkeypatch.setenv("JARVISOS_CLAUDE_CONFIG_DIR", str(config_dir))
+    result, error = pq.read_claude_limits()
+    assert error == "session_expired"
+    assert result == {"status": "unavailable", "reason": "session_expired", "windows": []}
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_claude_live_reader_http_auth_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status_code: int) -> None:
+    import urllib.error
+    config_dir = tmp_path / "claude_config"
+    config_dir.mkdir()
+    (config_dir / ".credentials.json").write_text(json.dumps({
+        "claudeAiOauth": {"accessToken": "sk-ant-test-token", "expiresAt": 4000000000 * 1000}
+    }))
+    monkeypatch.setenv("JARVISOS_CLAUDE_CONFIG_DIR", str(config_dir))
+
+    class AuthErrorOpener:
+        def open(self, request: Any, timeout: float = 10.0) -> Any:
+            raise urllib.error.HTTPError(request.full_url, status_code, "Auth Error", {}, None)
+
+    result, error = pq.read_claude_limits(opener=AuthErrorOpener())
+    assert error == "session_expired"
+    assert result == {"status": "unavailable", "reason": "session_expired", "windows": []}
+    normalized = pq.normalize({"claude": result}, NOW)
+    assert provider(normalized, "claude")["reason"] == "session_expired"
+
+
+def test_claude_live_reader_rate_limited(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import urllib.error
+    config_dir = tmp_path / "claude_config"
+    config_dir.mkdir()
+    (config_dir / ".credentials.json").write_text(json.dumps({
+        "claudeAiOauth": {"accessToken": "sk-ant-test-token", "expiresAt": 4000000000 * 1000}
+    }))
+    monkeypatch.setenv("JARVISOS_CLAUDE_CONFIG_DIR", str(config_dir))
+
+    class RateLimitOpener:
+        def open(self, request: Any, timeout: float = 10.0) -> Any:
+            raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", {}, None)
+
+    result, error = pq.read_claude_limits(opener=RateLimitOpener())
+    assert error == "rate_limited"
+    assert result == {"status": "unavailable", "reason": "rate_limited", "windows": []}
+    normalized = pq.normalize({"claude": result}, NOW)
+    assert provider(normalized, "claude")["reason"] == "rate_limited"
+
+
+@pytest.mark.parametrize("exc", [
+    urllib.error.URLError("Connection refused"),
+    TimeoutError("Request timed out"),
+    OSError("Network unreachable"),
+    urllib.error.HTTPError("https://api.anthropic.com/api/oauth/usage", 500, "Internal Server Error", {}, None),
+])
+def test_claude_live_reader_provider_unreachable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, exc: Exception) -> None:
+    config_dir = tmp_path / "claude_config"
+    config_dir.mkdir()
+    (config_dir / ".credentials.json").write_text(json.dumps({
+        "claudeAiOauth": {"accessToken": "sk-ant-test-token", "expiresAt": 4000000000 * 1000}
+    }))
+    monkeypatch.setenv("JARVISOS_CLAUDE_CONFIG_DIR", str(config_dir))
+
+    class UnreachableOpener:
+        def open(self, request: Any, timeout: float = 10.0) -> Any:
+            raise exc
+
+    result, error = pq.read_claude_limits(opener=UnreachableOpener())
+    assert error == "provider_unreachable"
+    assert result == {"status": "unavailable", "reason": "provider_unreachable", "windows": []}
+
+
+@pytest.mark.parametrize("bad_payload", [
+    b"not a valid json {{{",
+    json.dumps([]).encode("utf-8"),
+    json.dumps({"some_key": "no_windows"}).encode("utf-8"),
+    json.dumps({"five_hour": {"utilization": "invalid"}}).encode("utf-8"),
+])
+def test_claude_live_reader_invalid_response(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bad_payload: bytes) -> None:
+    config_dir = tmp_path / "claude_config"
+    config_dir.mkdir()
+    (config_dir / ".credentials.json").write_text(json.dumps({
+        "claudeAiOauth": {"accessToken": "sk-ant-test-token", "expiresAt": 4000000000 * 1000}
+    }))
+    monkeypatch.setenv("JARVISOS_CLAUDE_CONFIG_DIR", str(config_dir))
+
+    class BadResponseOpener:
+        def open(self, request: Any, timeout: float = 10.0) -> Any:
+            import io
+            return io.BytesIO(bad_payload)
+
+    result, error = pq.read_claude_limits(opener=BadResponseOpener())
+    assert error == "invalid_response"
+    assert result == {"status": "unavailable", "reason": "invalid_response", "windows": []}
+
+
+def test_claude_live_reader_redirect_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import urllib.error
+    import urllib.request
+    config_dir = tmp_path / "claude_config"
+    config_dir.mkdir()
+    (config_dir / ".credentials.json").write_text(json.dumps({
+        "claudeAiOauth": {"accessToken": "sk-ant-test-token", "expiresAt": 4000000000 * 1000}
+    }))
+    monkeypatch.setenv("JARVISOS_CLAUDE_CONFIG_DIR", str(config_dir))
+    handler = pq._NoRedirect()
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        handler.redirect_request(urllib.request.Request("https://api.anthropic.com/api/oauth/usage"), None, 302, "Found", {}, "https://evil.com")
+    assert exc_info.value.code == 302
+
+
+def test_claude_credentials_resolution_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # 1. JARVISOS_CLAUDE_CONFIG_DIR pointing to empty dir without credentials.json
+    empty_dir = tmp_path / "empty_claude"
+    empty_dir.mkdir()
+    monkeypatch.setenv("JARVISOS_CLAUDE_CONFIG_DIR", str(empty_dir))
+    result, error = pq.read_claude_limits()
+    assert error == "credentials_missing"
+    assert result["status"] == "unavailable" and result["reason"] == "credentials_missing"
+
+    # 2. CLAUDE_CONFIG_DIR pointing to valid credentials dir
+    monkeypatch.delenv("JARVISOS_CLAUDE_CONFIG_DIR")
+    valid_dir = tmp_path / "valid_claude"
+    valid_dir.mkdir()
+    (valid_dir / ".credentials.json").write_text(json.dumps({
+        "claudeAiOauth": {"accessToken": "token-123", "expiresAt": 4000000000 * 1000}
+    }))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(valid_dir))
+    class OkOpener:
+        def open(self, request: Any, timeout: float = 10.0) -> Any:
+            import io
+            return io.BytesIO(json.dumps({"five_hour": {"utilization": 10.0}}).encode("utf-8"))
+    result, error = pq.read_claude_limits(opener=OkOpener())
+    assert error is None and result["status"] == "ok"
+
+    # 3. Default sandbox path when env vars unset
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    sandbox_claude = tmp_path / "sandbox_home" / ".local" / "share" / "jarvisos-sandbox" / "state" / "claude"
+    sandbox_claude.mkdir(parents=True)
+    (sandbox_claude / ".credentials.json").write_text(json.dumps({
+        "claudeAiOauth": {"accessToken": "sandbox-token", "expiresAt": 4000000000 * 1000}
+    }))
+    monkeypatch.setenv("HOME", str(tmp_path / "sandbox_home"))
+    result, error = pq.read_claude_limits(opener=OkOpener())
+    assert error is None and result["status"] == "ok"
+
+    # 4. Fallback cleanly to read_relay_limits when unset and sandbox absent
+    clean_home = tmp_path / "clean_empty_home"
+    clean_home.mkdir()
+    monkeypatch.setenv("HOME", str(clean_home))
+    relay_called = []
+    def fake_relay(*, refresh: bool = False) -> tuple[dict[str, Any], None]:
+        relay_called.append(refresh)
+        return {"agents": [{"agent_key": "claude", "status": "ok", "as_of": iso(NOW), "windows": [{"id": "five_hour", "used_percent": 30}]}]}, None
+    monkeypatch.setattr(pq, "read_relay_limits", fake_relay)
+    result, error = pq.read_claude_limits(refresh=True)
+    assert relay_called == [True]
+    assert error is None and result["agent_key"] == "claude"
+
+
+def test_codex_home_environment_resolution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured_envs: list[dict[str, str]] = []
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        env = kwargs.get("env") or {}
+        captured_envs.append(dict(env))
+        raise OSError("test stop")
+
+    monkeypatch.setattr(pq.subprocess, "Popen", fake_popen)
+
+    # 1. JARVISOS_CODEX_HOME is passed
+    monkeypatch.setenv("JARVISOS_CODEX_HOME", str(tmp_path / "custom_codex"))
+    pq.read_codex_limits()
+    assert captured_envs[-1].get("CODEX_HOME") == str(tmp_path / "custom_codex")
+
+    # 2. CODEX_HOME is passed when JARVISOS_CODEX_HOME is unset
+    monkeypatch.delenv("JARVISOS_CODEX_HOME")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "standard_codex"))
+    pq.read_codex_limits()
+    assert captured_envs[-1].get("CODEX_HOME") == str(tmp_path / "standard_codex")
+
+    # 3. Sandbox codex directory passed when env vars unset
+    monkeypatch.delenv("CODEX_HOME")
+    sandbox_codex = tmp_path / "home_dir" / ".local" / "share" / "jarvisos-sandbox" / "state" / "codex"
+    sandbox_codex.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path / "home_dir"))
+    pq.read_codex_limits()
+    assert captured_envs[-1].get("CODEX_HOME") == str(sandbox_codex)
+
+    # 4. Neither configured nor sandbox present -> not injected
+    monkeypatch.setenv("HOME", str(tmp_path / "clean_home"))
+    pq.read_codex_limits()
+    assert "CODEX_HOME" not in captured_envs[-1]
