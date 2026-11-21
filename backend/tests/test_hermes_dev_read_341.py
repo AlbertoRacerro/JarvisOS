@@ -307,9 +307,9 @@ def test_op_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def test_op_supervisor_scrubs_secrets_and_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_snapshot = {
         "state": "running",
-        "mission": "Deploying at /home/thera/src/worktrees/k341impl",
+        "mission": "Deploying at /home/example/src/worktrees/k341impl",
         "home_path": str(Path.home() / "secret_dir"),
-        "key": "sk-1234567890abcdef1234567890abcdef",
+        "key": "sk-live-1234567890abcdef1234567890",
         "safe_value": 42,
     }
     monkeypatch.setattr(relay_monitor, "snapshot", lambda: fake_snapshot)
@@ -321,7 +321,7 @@ def test_op_supervisor_scrubs_secrets_and_paths(monkeypatch: pytest.MonkeyPatch)
     # Ensure raw home path is replaced
     assert str(Path.home()) not in json.dumps(res)
     # Ensure raw secret is scrubbed
-    assert "sk-1234567890abcdef1234567890abcdef" not in json.dumps(res)
+    assert "sk-live-1234567890abcdef1234567890" not in json.dumps(res)
     assert res["safe_value"] == 42
 
 
@@ -341,17 +341,17 @@ def test_op_directives_newest_first_and_superseded_filter(tmp_path: Path, monkey
             "ts": "2026-11-20T10:00:00Z",
             "kind": "directive",
             "status": "accepted",
-            "text": "Old directive with /home/thera/path",
-            "directive": {"path": "/home/thera/private/dir-1.md", "source": "relay"},
+            "text": "Old directive with /home/example/path",
+            "directive": {"path": "/home/example/private/dir-1.md", "source": "relay"},
         },
         {
             "id": "dir-2",
             "ts": "2026-11-20T12:00:00Z",
             "kind": "directive",
             "status": "accepted",
-            "text": "New active directive sk-1234567890abcdef1234567890",
+            "text": "New active directive sk-live-1234567890abcdef1234567890",
             "supersedes": ["dir-1"],
-            "directive": {"path": "/home/thera/private/dir-2.md", "source": "maintainer"},
+            "directive": {"path": "/home/example/private/dir-2.md", "source": "maintainer"},
         },
         {
             "id": "note-1",
@@ -382,8 +382,8 @@ def test_op_directives_newest_first_and_superseded_filter(tmp_path: Path, monkey
 
     # Verify path and secret scrubbing in text and omitted filesystem paths
     res_json = json.dumps(res)
-    assert "/home/thera" not in res_json
-    assert "sk-1234567890abcdef1234567890" not in res_json
+    assert "/home/example" not in res_json
+    assert "sk-live-1234567890abcdef1234567890" not in res_json
     assert "/private/dir-2.md" not in res_json
 
 
@@ -404,7 +404,7 @@ def test_op_quotas_and_free_pools_scrubbed(tmp_path: Path, monkeypatch: pytest.M
                 "status": "admitted",
                 "index_score": 45,
                 "api_key": "secret-zen-key-123",
-                "key_file": "/home/thera/.secrets/zen.key",
+                "key_file": "/home/example/.secrets/zen.key",
             },
         ],
     }
