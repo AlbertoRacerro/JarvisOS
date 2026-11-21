@@ -619,7 +619,7 @@ class Supervisor:
                     return False
             else:
                 until = parse_ts(cooldown.get("until"))
-                if until is not None and now < until:
+                if (until is not None and now < until) or (until is None and source != "manual"):
                     if source in ("limits", "message"):
                         counters = self.state["counters"]
                         if counters.get(f"reading_clear_{agent}", 0) == 0:

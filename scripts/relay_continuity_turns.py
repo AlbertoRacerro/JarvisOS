@@ -1194,6 +1194,9 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
     if agent == "hydrogen":
         allowed_models = relay_argon.HYDROGEN_MODELS
         expected_label = "Gemini 4 Hydrogen"
+    elif agent == "neon":
+        allowed_models = relay_argon.NEON_MODELS
+        expected_label = "Gemini 4 Neon"
     elif agent == "agy_opus":
         allowed_models = relay_argon.OPUS_MODELS
         expected_label = "Claude Opus"

@@ -29,9 +29,9 @@ relay_argon = load_sibling("relay_argon", "relay_argon.py")
 worker_routing = load_sibling("worker_routing", "worker_routing.py")
 
 SCHEMA = "relay-continuity.v1"
-AGENTS = ("claude", "argon", "agy_opus", "codex", "hydrogen")
-PREFERRED_AGENTS = ("claude", "argon", "agy_opus")
-NATIVE_AGENTS = ("argon", "agy_opus", "hydrogen")
+AGENTS = ("claude", "neon", "argon", "agy_opus", "codex", "hydrogen")
+PREFERRED_AGENTS = ("claude", "neon", "argon", "agy_opus")
+NATIVE_AGENTS = ("neon", "argon", "agy_opus", "hydrogen")
 PREFERRED = "claude"
 OUTCOMES = ("success", "quota", "spend_limit", "transient", "auth", "crash", "unknown")
 FAILURES = tuple(o for o in OUTCOMES if o != "success")
