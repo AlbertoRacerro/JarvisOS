@@ -24,6 +24,7 @@ from app.modules.engineering.operator_models import CapabilityRead, EvaluatorRea
 from app.modules.photobioreactor.pbr_evaluator import PbrDayNightEvaluator
 from app.modules.process_stack.correlations import InternalConvectionEvaluator, PipePressureDropEvaluator
 from app.modules.process_stack.dwsim import DwsimEvaluator
+from app.modules.process_stack.oxygen_tube import TubeOxygenBuildupEvaluator
 from app.modules.process_stack.properties import CoolPropPropertyEvaluator
 from app.modules.workspaces.service import get_workspace
 
@@ -41,6 +42,7 @@ def evaluator_registry() -> dict[str, EngineeringEvaluator]:
         ("openfoam_channel_v1", OpenFoamEvaluator, "cfd_solver", "OpenFOAM", "field_resolved"),
         ("photobioreactor.day_night", PbrDayNightEvaluator, "dynamic_simulator", "scikit-sundae", "reduced_order"),
         ("marine.rigid_body_waves", RigidBodyWavesEvaluator, "specialist", "marine_motion", "screening"),
+        ("bioprocess.tube_oxygen_buildup", TubeOxygenBuildupEvaluator, "specialist", "oxygen_tube", "screening"),
     )
     registry: dict[str, EngineeringEvaluator] = {}
     for evaluator_id, factory, kind, name, fidelity in factories:
