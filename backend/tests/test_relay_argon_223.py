@@ -483,6 +483,63 @@ def test_native_hydrogen_cli_and_runner(tmp_path, monkeypatch):
     assert rc.classify_turn(turn).outcome == "success"
 
 
+def test_neon_identity_and_quota_family(tmp_path, monkeypatch):
+    assert ra.model_for("neon", {}) == ra.NEON_MODEL
+    for level in ("low", "medium", "high", "xhigh"):
+        override = f"gemini-4-neon-{level}"
+        assert ra.model_for("neon", {"JARVISOS_AGY_NEON_MODEL": override}) == override
+    assert ra.model_for("neon", {"JARVISOS_AGY_NEON_MODEL": "gemini-pro-orchestrator-neon"}) == "gemini-pro-orchestrator-neon"
+    with pytest.raises(ra.Refused, match="model_not_neon"):
+        ra.model_for("neon", {"JARVISOS_AGY_NEON_MODEL": "gemini-4-argon-low"})
+
+    reading = [{"id": name, "remaining_fraction": 0.5} for name in ra.NEON_BUCKETS] + [
+        {"id": "gemini-argon-wtu-weekly", "remaining_fraction": 0.5},
+        {"id": "3p-5h", "remaining_fraction": 0.5},
+    ]
+    mock_probe(monkeypatch, reading)
+    assert {b["id"] for b in ra.read_quota("agy", agent="neon")} == ra.NEON_BUCKETS
+
+    events = stream()
+    events[0]["init"]["model"] = ra.NEON_MODEL
+    turn = write_native(tmp_path, events, meta={"model": ra.NEON_MODEL, "agent": "neon"})
+    (turn / "state.json").write_text(json.dumps({"agent_key": "neon"}))
+    report = rc.classify_turn(turn)
+    assert report.outcome == "success" and report.agent == "neon"
+    assert report.detail == "native neon result SUCCESS"
+
+    events[0]["init"]["model"] = ra.MODEL
+    (turn / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    assert rc.classify_turn(turn).outcome != "success"
+
+
+def test_native_neon_cli_and_runner(tmp_path, monkeypatch):
+    monkeypatch.setenv("JARVISOS_MISSION_PROFILE", "1")
+    monkeypatch.setattr(ra, "sandbox", lambda: True)
+    monkeypatch.setattr(ra, "prepare_login", lambda: None)
+    monkeypatch.setattr(ra, "subscription_settings", lambda: None)
+    monkeypatch.setattr(ra.shutil, "which", lambda _: "agy")
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if "/quota" in argv:
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"status": "SUCCESS", "buckets": [
+                {"id": "gemini-5h", "remaining_fraction": 0.5}, {"id": "gemini-weekly", "remaining_fraction": 0.5}]}))
+        events = stream()
+        events[0]["init"]["model"] = ra.NEON_MODEL
+        kwargs["stdout"].write("".join(json.dumps(event) + "\n" for event in events))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(ra.subprocess, "run", run)
+    sid, turn = ra.new_session(tmp_path, "bounded neon task", "neon")
+    assert ra.run(tmp_path, sid, "neon") == 0
+    meta = json.loads((turn / "native-result.json").read_text())
+    assert meta["agent"] == "neon" and meta["model"] == ra.NEON_MODEL
+    assert {b["id"] for b in meta["quota"]} == {"gemini-5h", "gemini-weekly"}
+    assert calls[1][calls[1].index("--model") + 1] == ra.NEON_MODEL
+    assert rc.classify_turn(turn).outcome == "success"
+
+
 def test_completed_missions_sticky_coordinator_without_a_new_state_store(tmp_path):
     root = tmp_path / "control"
     env = Env(tmp_path, [("claude", SUCCESS, "propose_done")] * 4 + [("argon", stream(), "propose_done")])

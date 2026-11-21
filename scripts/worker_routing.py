@@ -84,6 +84,7 @@ UNREADABLE = "worker quota: unreadable"
 COORDINATOR_AGENT_POOLS: dict[str, str] = {
     "claude": "claude",
     "codex": "codex",
+    "neon": "gemini",
     "argon": "argon",
     "hydrogen": "gemini",
     "agy_opus": "agy3p",

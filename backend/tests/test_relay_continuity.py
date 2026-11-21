@@ -574,15 +574,24 @@ def test_choose_hydrogen_fallback_and_headroom_order(tmp_path: Path) -> None:
     # When switching from codex, claude has headroom -> picks claude
     assert sup._choose("codex") == "claude"
 
-    # When claude is low (90% used), argon has headroom -> picks argon
+    # When claude is low (90% used), neon has headroom -> picks neon
     env.relay.readings["claude"] = reading("claude", 90, T0 + timedelta(days=5), T0)
-    assert sup._choose("claude") == "argon"
+    assert sup._choose("claude") == "neon"
 
-    # When argon is low (90% used), agy_opus has headroom -> picks agy_opus
+    # When neon is low (90% used), argon has headroom -> picks argon
     env.relay.argon_limits = lambda a: {
         "windows": [
-            {"id": "gemini-5h" if a != "agy_opus" else "3p-5h", "used_percent": 90 if a == "argon" else 30},
-            {"id": "gemini-weekly" if a != "agy_opus" else "3p-weekly", "used_percent": 90 if a == "argon" else 30, "resets_at": rc.iso(T0 + timedelta(hours=48))},
+            {"id": "gemini-5h" if a != "agy_opus" else "3p-5h", "used_percent": 90 if a == "neon" else 30},
+            {"id": "gemini-weekly" if a != "agy_opus" else "3p-weekly", "used_percent": 90 if a == "neon" else 30, "resets_at": rc.iso(T0 + timedelta(hours=48))},
+        ]
+    }
+    assert sup._choose("claude") == "argon"
+
+    # When argon is also low (90% used), agy_opus has headroom -> picks agy_opus
+    env.relay.argon_limits = lambda a: {
+        "windows": [
+            {"id": "gemini-5h" if a != "agy_opus" else "3p-5h", "used_percent": 90 if a in ("neon", "argon") else 30},
+            {"id": "gemini-weekly" if a != "agy_opus" else "3p-weekly", "used_percent": 90 if a in ("neon", "argon") else 30, "resets_at": rc.iso(T0 + timedelta(hours=48))},
         ]
     }
     assert sup._choose("claude") == "agy_opus"
@@ -590,8 +599,8 @@ def test_choose_hydrogen_fallback_and_headroom_order(tmp_path: Path) -> None:
     # When agy_opus is also low (90% used), codex has headroom -> picks codex
     env.relay.argon_limits = lambda a: {
         "windows": [
-            {"id": "gemini-5h" if a != "agy_opus" else "3p-5h", "used_percent": 90 if a in ("argon", "agy_opus") else 30},
-            {"id": "gemini-weekly" if a != "agy_opus" else "3p-weekly", "used_percent": 90 if a in ("argon", "agy_opus") else 30, "resets_at": rc.iso(T0 + timedelta(hours=48))},
+            {"id": "gemini-5h" if a != "agy_opus" else "3p-5h", "used_percent": 90 if a in ("neon", "argon", "agy_opus") else 30},
+            {"id": "gemini-weekly" if a != "agy_opus" else "3p-weekly", "used_percent": 90 if a in ("neon", "argon", "agy_opus") else 30, "resets_at": rc.iso(T0 + timedelta(hours=48))},
         ]
     }
     assert sup._choose("claude") == "codex"
@@ -604,6 +613,7 @@ def test_choose_hydrogen_fallback_and_headroom_order(tmp_path: Path) -> None:
     env.relay.readings["claude"] = reading("claude", 30, T0 + timedelta(days=5), T0)
     env.relay.readings["codex"] = reading("codex", 30, T0 + timedelta(days=5), T0)
     sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
+    sup.state["cooldowns"]["neon"] = {"until": rc.iso(T0 + timedelta(hours=1))}
     sup.state["cooldowns"]["argon"] = {"until": rc.iso(T0 + timedelta(hours=1))}
     sup.state["cooldowns"]["agy_opus"] = {"until": rc.iso(T0 + timedelta(hours=1))}
     sup.state["cooldowns"]["codex"] = {"until": rc.iso(T0 + timedelta(hours=1))}
@@ -671,8 +681,8 @@ def test_choose_hydrogen_spend_down_not_triggered_when_too_far_or_low_room(tmp_p
     }
     sup = env.supervisor()
     sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
-    # claude is unavailable; argon has room; hydrogen spend-down does NOT trigger, so argon is chosen
-    assert sup._choose("claude") == "argon"
+    # claude is unavailable; neon has room; hydrogen spend-down does NOT trigger, so neon is chosen
+    assert sup._choose("claude") == "neon"
     decisions = [text for kind, text in env.ledger if kind == "decision" and "switched coordinator" in text]
     assert not any("gemini_spend_down" in d for d in decisions)
 
@@ -688,9 +698,24 @@ def test_choose_hydrogen_spend_down_not_triggered_when_too_far_or_low_room(tmp_p
     }
     sup = env.supervisor()
     sup.state["cooldowns"]["claude"] = {"until": rc.iso(T0 + timedelta(hours=1))}
-    assert sup._choose("claude") == "argon"
+    assert sup._choose("claude") == "neon"
     decisions = [text for kind, text in env.ledger if kind == "decision" and "switched coordinator" in text]
     assert not any("gemini_spend_down" in d for d in decisions)
+
+
+def test_available_clears_limits_cooldown_with_null_until_but_keeps_manual(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    sup.state["cooldowns"]["neon"] = {"until": None, "source": "limits", "reason": "quota", "since": rc.iso(T0 - timedelta(hours=2))}
+    sup.state["cooldowns"]["argon"] = {"until": None, "source": "manual", "reason": "spend_limit", "since": rc.iso(T0 - timedelta(hours=2))}
+    env.relay.argon_limits = lambda a: {
+        "as_of": rc.iso(T0),
+        "windows": [{"id": "gemini-5h", "used_percent": 1}, {"id": "gemini-weekly", "used_percent": 1}],
+    }
+    assert sup.available("neon") is True
+    assert "neon" not in sup.state["cooldowns"]
+    assert sup.available("argon") is False
+    assert "argon" in sup.state["cooldowns"]
 
 
 def test_new_mission_never_seeds_on_hydrogen(tmp_path: Path) -> None:

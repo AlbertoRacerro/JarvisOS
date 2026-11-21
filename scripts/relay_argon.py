@@ -31,6 +31,10 @@ OPUS_BUCKETS = frozenset(("3p-5h", "3p-weekly"))
 HYDROGEN_MODEL = "gemini-4-hydrogen-medium"
 HYDROGEN_MODELS = frozenset(f"gemini-4-hydrogen-{level}" for level in ("low", "medium", "high"))
 HYDROGEN_BUCKETS = frozenset(("gemini-5h", "gemini-weekly"))
+NEON_MODEL = "gemini-4-neon-medium"
+NEON_MODELS = frozenset({*(f"gemini-4-neon-{level}" for level in ("low", "medium", "high", "xhigh")),
+                         "gemini-pro-orchestrator-neon"})
+NEON_BUCKETS = frozenset(("gemini-5h", "gemini-weekly"))
 
 
 def model_for(agent: str, env: Mapping[str, str]) -> str:
@@ -38,6 +42,11 @@ def model_for(agent: str, env: Mapping[str, str]) -> str:
         model = env.get("JARVISOS_AGY_HYDROGEN_MODEL", HYDROGEN_MODEL)
         if model not in HYDROGEN_MODELS:
             raise Refused("model_not_hydrogen", f"{model!r} is not a Gemini 4 Hydrogen model")
+        return model
+    if agent == "neon":
+        model = env.get("JARVISOS_AGY_NEON_MODEL", NEON_MODEL)
+        if model not in NEON_MODELS:
+            raise Refused("model_not_neon", f"{model!r} is not a Gemini 4 Neon model")
         return model
     if agent not in ("argon", "agy_opus"):
         raise Refused("agent_not_allowed")
@@ -179,8 +188,8 @@ def read_quota(binary: str, env: dict[str, str] | None = None, *, agent: str = "
         raise Refused("quota_unreadable") from exc
     if proc.returncode != 0 or not isinstance(data, dict) or data.get("status") != "SUCCESS":
         raise Refused("quota_unreadable")
-    if agent == "hydrogen":
-        wanted = HYDROGEN_BUCKETS
+    if agent in ("hydrogen", "neon"):
+        wanted = NEON_BUCKETS if agent == "neon" else HYDROGEN_BUCKETS
     elif agent == "agy_opus":
         wanted = OPUS_BUCKETS
     else:
@@ -368,7 +377,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--session", required=True)
-    parser.add_argument("--agent", choices=("argon", "agy_opus", "hydrogen"), default="argon")
+    parser.add_argument("--agent", choices=("argon", "agy_opus", "hydrogen", "neon"), default="argon")
     args = parser.parse_args()
     if not all(c in "0123456789-abcdef" for c in args.session) or len(args.session) != 22:
         raise SystemExit("invalid native session id")
