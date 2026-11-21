@@ -34,7 +34,7 @@ const data = { state: "ok", read_at: "2026-10-24T11:57:00Z", providers: [
 const html = render({ data });
 
 // Four provider columns, 5-hour and weekly rows, and a third row only for the pool that exists.
-for (const fragment of ["Claude", "Codex (ChatGPT)", "Antigravity", "GitHub Copilot", "refresh failed", 'aria-label="5-hour"', 'aria-label="Weekly"', 'aria-label="Frontier model"', "read 3 min ago"]) {
+for (const fragment of ["Claude", "Codex (ChatGPT)", "Antigravity", "GitHub Copilot", "refresh failed", 'aria-label="5-hour"', 'aria-label="Weekly"', 'aria-label="Frontier model"', "letto 3 min fa"]) {
   assert.ok(html.includes(fragment), `missing ${fragment}`);
 }
 assert.equal((html.match(/role="group"/g) ?? []).length, 6, "four rows plus the two AGY Claude source groups");
@@ -51,7 +51,7 @@ assert.equal((html.match(/class="coding-quota-value"/g) ?? []).length, 5, "an em
 // Exhausted, stale and missing are distinct and never shown as 0 %.
 assert.ok(html.includes('data-state="exhausted"') && html.includes(">Exhausted<"));
 assert.ok(html.includes('data-state="stale"') && html.includes("out of date"));
-assert.ok(html.includes("agy /quota unreadable"));
+assert.ok(html.includes("Quota agy non leggibile"));
 const agy = render({ data: { ...data, providers: [{ provider: "antigravity", label: "Antigravity", source: "agy /quota", status: "ok",
   windows: [win("five_hour", 0), win("weekly", 51), win("frontier", 51, { id: "argon-weekly", label: "Argon · weekly" })] }] } });
 assert.ok(agy.includes('aria-label="Frontier model"') && agy.includes('<span class="coding-quota-model">Argon</span>'));
@@ -61,7 +61,18 @@ assert.equal((html.match(/>0%</g) ?? []).length, 1, "only the really exhausted w
 
 const unauthenticated = render({ data: { ...data, providers: [{ provider: "claude", label: "Claude", source: "agent-relay limits",
   status: "unauthenticated", reason: "not_authenticated", windows: [] }] } });
-assert.ok(unauthenticated.includes("Not signed in"));
+assert.ok(unauthenticated.includes("Accesso non effettuato"));
+
+const expired = render({ data: { ...data, providers: [{ provider: "claude", label: "Claude", source: "claude live", status: "unavailable", reason: "session_expired", windows: [] }] } });
+assert.ok(expired.includes("Login scaduto"));
+const missingCreds = render({ data: { ...data, providers: [{ provider: "claude", label: "Claude", source: "claude live", status: "unavailable", reason: "credentials_missing", windows: [] }] } });
+assert.ok(missingCreds.includes("Credenziali assenti"));
+const twoHoursAgo = render({ data: { ...data, read_at: "2026-10-24T10:00:00Z" } });
+assert.ok(twoHoursAgo.includes("letto 2 h fa"));
+const threeDaysAgo = render({ data: { ...data, read_at: "2026-10-21T12:00:00Z" } });
+assert.ok(threeDaysAgo.includes("letto 3 giorni fa"));
+const justNow = render({ data: { ...data, read_at: "2026-10-24T12:00:00Z" } });
+assert.ok(justNow.includes("letto ora"));
 
 // The two AGY windows are visually in Claude's column but keep AGY source/freshness,
 // even when the separate Claude Code subscription is not signed in.

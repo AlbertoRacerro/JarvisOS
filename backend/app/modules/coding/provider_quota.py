@@ -23,6 +23,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -81,6 +83,148 @@ def _run(env_key: str, command: str, args: list[str]) -> tuple[str | None, str |
     return proc.stdout, None
 
 
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CLAUDE_READ_TIMEOUT_S = 10
+CLAUDE_MAX_RESPONSE_BYTES = 65536
+_CLAUDE_OPENER: Any = None
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so credentials are never forwarded to another location."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, fp)
+
+
+def _fetch_claude_usage(token: str, *, timeout: float = CLAUDE_READ_TIMEOUT_S, opener: Any = None) -> tuple[dict[str, Any] | None, str | None]:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "anthropic-beta": "oauth-2025-04-20",
+        "Content-Type": "application/json",
+        "User-Agent": "claude-code/0.1.0",
+    }
+    req = urllib.request.Request(CLAUDE_USAGE_URL, headers=headers)
+    active_opener = opener or _CLAUDE_OPENER
+    if active_opener is None:
+        active_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+
+    try:
+        if hasattr(active_opener, "open"):
+            resp = active_opener.open(req, timeout=timeout)
+        else:
+            resp = active_opener(req, timeout=timeout)
+        if isinstance(resp, dict):
+            return resp, None
+        with resp as response:
+            raw_data = response.read(CLAUDE_MAX_RESPONSE_BYTES)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return None, "session_expired"
+        if exc.code == 429:
+            return None, "rate_limited"
+        return None, "provider_unreachable"
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None, "provider_unreachable"
+
+    try:
+        text = raw_data.decode("utf-8") if isinstance(raw_data, (bytes, bytearray)) else str(raw_data)
+        data = json.loads(text)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, "invalid_response"
+
+    if not isinstance(data, dict):
+        return None, "invalid_response"
+    return data, None
+
+
+def _resolve_claude_credentials_path() -> tuple[Path | None, bool]:
+    """Returns (target_credentials_file, is_configured_or_sandbox)."""
+    env_dir = os.environ.get("JARVISOS_CLAUDE_CONFIG_DIR") or os.environ.get("CLAUDE_CONFIG_DIR")
+    if env_dir:
+        p = Path(env_dir)
+        target = p if p.is_file() else p / ".credentials.json"
+        return target, True
+    sandbox_cred = Path.home() / ".local" / "share" / "jarvisos-sandbox" / "state" / "claude" / ".credentials.json"
+    if sandbox_cred.is_file():
+        return sandbox_cred, True
+    return None, False
+
+
+def read_claude_limits(*, refresh: bool = False, opener: Any = None) -> tuple[dict[str, Any] | None, str | None]:
+    target, is_configured = _resolve_claude_credentials_path()
+    if not is_configured:
+        relay_data, error = read_relay_limits(refresh=refresh)
+        agents = relay_data.get("agents") if isinstance(relay_data, dict) else None
+        entry = next((a for a in agents if isinstance(a, dict) and a.get("agent_key") == "claude"), None) if isinstance(agents, list) else None
+        if entry is not None:
+            return entry, None
+        err = f"relay_{error}" if error in READ_ERRORS else (error or "credentials_missing")
+        return None, err
+
+    if target is None or not target.is_file():
+        return {"status": "unavailable", "reason": "credentials_missing", "windows": []}, "credentials_missing"
+
+    try:
+        raw_text = target.read_text(encoding="utf-8")
+        cred_data = json.loads(raw_text)
+    except (OSError, json.JSONDecodeError):
+        return {"status": "unavailable", "reason": "credentials_missing", "windows": []}, "credentials_missing"
+
+    if not isinstance(cred_data, dict):
+        return {"status": "unavailable", "reason": "credentials_missing", "windows": []}, "credentials_missing"
+
+    oauth = cred_data.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
+
+    token = oauth.get("accessToken")
+    if not isinstance(token, str) or not token.strip():
+        return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
+    token = token.strip()
+
+    expires_at = oauth.get("expiresAt")
+    if isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool):
+        exp_s = expires_at / 1000.0 if expires_at > 1e11 else float(expires_at)
+        if exp_s <= time.time():
+            return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
+
+    data, error = _fetch_claude_usage(token, opener=opener)
+    if error is not None or data is None:
+        err = error or "invalid_response"
+        return {"status": "unavailable", "reason": err, "windows": []}, err
+
+    windows: list[dict[str, Any]] = []
+    for key, block in data.items():
+        if not isinstance(block, dict):
+            continue
+        used = block.get("utilization")
+        if used is None:
+            used = block.get("used_percent")
+        if used is None or isinstance(used, bool) or not isinstance(used, (int, float)) or not 0 <= float(used) <= 100:
+            continue
+        resets_at = _ts(block.get("resets_at"))
+        label = None
+        if key in ("five_hour", "5h"):
+            label = "5-hour limit"
+        elif key in ("seven_day", "weekly"):
+            label = "Weekly limit"
+        elif "opus" in key.lower():
+            label = "Opus weekly"
+        windows.append({
+            "id": key,
+            "label": label,
+            "used_percent": float(used),
+            "resets_at": _iso(resets_at),
+        })
+
+    if not windows:
+        return {"status": "unavailable", "reason": "invalid_response", "windows": []}, "invalid_response"
+
+    order = {"five_hour": 0, "5h": 0, "seven_day": 1, "weekly": 1}
+    windows.sort(key=lambda w: order.get(str(w["id"]), 2))
+    return {"status": "ok", "as_of": _iso(datetime.now(UTC)), "windows": windows}, None
+
+
 def read_relay_limits(*, refresh: bool = False) -> tuple[dict[str, Any] | None, str | None]:
     """Prefer a fresh cached Claude reading and retain it if a refresh fails."""
     def read(force: bool) -> tuple[dict[str, Any] | None, str | None]:
@@ -134,10 +278,18 @@ def read_agy_quota() -> tuple[dict[str, Any] | None, str | None]:
 def read_codex_limits() -> tuple[dict[str, Any] | None, str | None]:
     """Ask the CLI for current account limits; never create a thread, run a turn or handle credentials."""
     binary = os.environ.get("JARVISOS_CODEX_BIN") or host_which("codex") or "codex"
+    env = os.environ.copy()
+    codex_home = os.environ.get("JARVISOS_CODEX_HOME") or os.environ.get("CODEX_HOME")
+    if not codex_home:
+        sandbox_codex = Path.home() / ".local" / "share" / "jarvisos-sandbox" / "state" / "codex"
+        if sandbox_codex.is_dir():
+            codex_home = str(sandbox_codex)
+    if codex_home:
+        env["CODEX_HOME"] = codex_home
     try:
         proc = subprocess.Popen([binary, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
-                                cwd=tempfile.gettempdir())
+                                cwd=tempfile.gettempdir(), env=env)
     except OSError:
         return None, "not_found"
     messages: queue.Queue[dict[str, Any] | None] = queue.Queue()
@@ -223,11 +375,11 @@ def read_codex_limits() -> tuple[dict[str, Any] | None, str | None]:
 def read_all(*, refresh: bool = False) -> dict[str, Any]:
     # Independent status sources share one bounded wait.
     with ThreadPoolExecutor(max_workers=4) as executor:
-        jobs = [executor.submit(read_relay_limits, refresh=refresh), executor.submit(read_agy_quota),
+        jobs = [executor.submit(read_claude_limits, refresh=refresh), executor.submit(read_agy_quota),
                 executor.submit(read_codex_limits), executor.submit(read_copilot_quota)]
-        (relay, relay_error), (agy, agy_error), (codex, codex_error), (copilot, copilot_error) = [job.result() for job in jobs]
-    return {"relay": relay, "agy": agy, "codex": codex, "copilot": copilot,
-            "errors": {"relay": relay_error, "agy": agy_error, "codex": codex_error, "copilot": copilot_error}}
+        (claude, claude_error), (agy, agy_error), (codex, codex_error), (copilot, copilot_error) = [job.result() for job in jobs]
+    return {"claude": claude, "agy": agy, "codex": codex, "copilot": copilot,
+            "errors": {"claude": claude_error, "agy": agy_error, "codex": codex_error, "copilot": copilot_error}}
 
 
 def _buckets(node: Any, depth: int = 0) -> list[dict[str, Any]]:
@@ -343,7 +495,7 @@ def normalize_agent(entry: Any, now: datetime) -> dict[str, Any]:
     if status in AUTH_STATUSES:
         return {"status": "unauthenticated", "reason": "not_authenticated", "windows": []}
     if status != "ok":
-        return {"status": "unavailable", "reason": _short(status) or "provider_error", "windows": []}
+        return {"status": "unavailable", "reason": _short(entry.get("reason")) or _short(status) or "provider_error", "windows": []}
     as_of = _ts(entry.get("as_of"))
     raw = entry.get("windows")
     windows = [w for w in (normalize_window(item, now, as_of) for item in raw) if w] if isinstance(raw, list) else []
@@ -387,12 +539,15 @@ def copilot_entry(reading: dict[str, Any], now: datetime) -> dict[str, Any]:
 
 
 READ_ERRORS = ("not_found", "timeout", "no_json")
-UNREADABLE = {"relay": "relay_limits_unreadable", "agy": "agy_quota_unreadable", "codex": "codex_limits_unreadable", "copilot": "copilot_quota_unreadable"}
+CLAUDE_ERRORS = {"session_expired", "credentials_missing", "rate_limited", "provider_unreachable", "invalid_response"}
+UNREADABLE = {"relay": "relay_limits_unreadable", "claude": "credentials_missing", "agy": "agy_quota_unreadable", "codex": "codex_limits_unreadable", "copilot": "copilot_quota_unreadable"}
 
 
 def _reason(source: str, error: Any) -> str:
     """``relay_not_found``, ``agy_timeout``…, or the generic unreadable reason when the cause is unknown."""
-    return f"{source}_{error}" if error in READ_ERRORS else UNREADABLE[source]
+    if error in CLAUDE_ERRORS or str(error).startswith("relay_"):
+        return str(error)
+    return f"{source}_{error}" if error in READ_ERRORS else UNREADABLE.get(source, "provider_error")
 
 
 def normalize(readings: dict[str, Any], now: datetime, *, read_at: datetime | None = None) -> dict[str, Any]:
@@ -419,9 +574,22 @@ def normalize(readings: dict[str, Any], now: datetime, *, read_at: datetime | No
             else:
                 body = {"status": "unavailable", "reason": _reason("copilot", errors.get("copilot")), "windows": []}
         else:
-            source = "agent-relay limits"
-            body = (normalize_agent(by_key.get(source_key), now) if isinstance(relay, dict)
-                    else {"status": "unavailable", "reason": _reason("relay", errors.get("relay")), "windows": []})
+            claude_entry = readings.get("claude")
+            if claude_entry is None and "relay" in readings and by_key.get(source_key):
+                source = "agent-relay limits"
+                body = normalize_agent(by_key.get(source_key), now)
+            elif isinstance(claude_entry, dict):
+                source = "agent-relay limits" if "agent_key" in claude_entry else "claude live"
+                body = normalize_agent(claude_entry, now)
+            else:
+                claude_err = errors.get("claude") or errors.get("relay")
+                if claude_err in CLAUDE_ERRORS:
+                    source = "claude live"
+                    body = {"status": "unavailable", "reason": claude_err, "windows": []}
+                else:
+                    source = "agent-relay limits"
+                    body = (normalize_agent(by_key.get(source_key), now) if isinstance(relay, dict)
+                            else {"status": "unavailable", "reason": _reason("relay", errors.get("relay") or errors.get("claude")), "windows": []})
         providers.append({"provider": key, "label": label, "source": source, **body})
     return {"state": "ok", "read_at": _iso(now), "providers": providers}
 

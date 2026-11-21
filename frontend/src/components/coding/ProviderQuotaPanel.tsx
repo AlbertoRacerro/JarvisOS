@@ -13,21 +13,35 @@ const RADIUS = 22;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 const REASONS: Record<string, string> = {
-  agy_quota_unreadable: "agy /quota unreadable",
-  relay_limits_unreadable: "agent-relay limits unreadable",
-  relay_not_found: "agent-relay not found",
-  relay_timeout: "agent-relay timed out",
-  relay_no_json: "agent-relay printed no reading",
-  agy_not_found: "agy not found",
-  agy_timeout: "agy /quota timed out",
-  agy_no_json: "agy /quota printed no reading",
-  no_reading: "No reading",
-  no_usage_windows: "No usage windows reported",
-  not_authenticated: "Not signed in",
-  codex_limits_unreadable: "Codex usage unavailable",
-  codex_not_found: "Codex not found",
-  codex_timeout: "Codex usage timed out",
-  codex_no_json: "Codex usage unavailable; check CLI sign-in",
+  session_expired: "Login scaduto",
+  credentials_missing: "Credenziali assenti",
+  not_authenticated: "Accesso non effettuato",
+  rate_limited: "Limite richieste superato",
+  provider_unreachable: "Servizio non raggiungibile",
+  invalid_response: "Risposta non leggibile",
+  agy_quota_unreadable: "Quota agy non leggibile",
+  relay_limits_unreadable: "Limiti agent-relay non leggibili",
+  relay_not_found: "agent-relay non trovato",
+  relay_timeout: "Timeout agent-relay",
+  relay_no_json: "Nessun output da agent-relay",
+  agy_not_found: "agy non trovato",
+  agy_timeout: "Timeout agy",
+  agy_no_json: "Nessun output da agy",
+  no_reading: "Nessuna lettura",
+  no_usage_windows: "Nessuna finestra di utilizzo",
+  codex_limits_unreadable: "Utilizzo Codex non disponibile",
+  codex_not_found: "Codex non trovato",
+  codex_timeout: "Timeout utilizzo Codex",
+  codex_no_json: "Utilizzo Codex non disponibile; verificare accesso",
+  copilot_quota_unreadable: "Quota Copilot non disponibile",
+  copilot_not_found: "gh non trovato",
+  copilot_timeout: "Timeout Copilot",
+  copilot_no_json: "Nessun output da Copilot",
+  cli_disabled: "CLI disabilitata",
+  bucket_missing: "Dati quota assenti",
+  no_entitlement: "Nessun abbonamento",
+  invalid_reading: "Lettura non valida",
+  provider_error: "Errore del provider",
 };
 
 function until(iso: string | null, now: Date): string | null {
@@ -42,7 +56,13 @@ function until(iso: string | null, now: Date): string | null {
 function age(iso: string | null | undefined, now: Date): string | null {
   if (!iso) return null;
   const minutes = Math.round((now.getTime() - new Date(iso).getTime()) / 60_000);
-  return Number.isFinite(minutes) ? (minutes < 1 ? "read just now" : `read ${minutes} min ago`) : null;
+  if (!Number.isFinite(minutes)) return null;
+  if (minutes < 1) return "letto ora";
+  if (minutes < 60) return `letto ${minutes} min fa`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `letto ${hours} h fa`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "letto 1 giorno fa" : `letto ${days} giorni fa`;
 }
 
 export function QuotaRing({ window, now, model }: Readonly<{ window: ProviderQuotaWindow; now: Date; model?: string | null }>) {
@@ -71,7 +91,7 @@ function Missing({ text, model }: Readonly<{ text: string; model?: string }>) {
 }
 
 function cell(provider: ProviderQuota, window: ProviderQuotaWindow | undefined, now: Date, model?: string) {
-  if (provider.status !== "ok") return <Missing text={REASONS[provider.reason ?? ""] ?? "Not available"} model={model} />;
+  if (provider.status !== "ok") return <Missing text={REASONS[provider.reason ?? ""] ?? "Non disponibile"} model={model} />;
   return window ? <QuotaRing window={window} now={now} model={model} /> : <Missing text="Not reported" model={model} />;
 }
 
@@ -104,7 +124,7 @@ export function ProviderQuotaView({ data, error, now = new Date(), refreshing = 
     {data ? <div className="coding-quota-grid" style={{ gridTemplateColumns: `max-content repeat(${providers.length}, minmax(0, 1fr))` }}>
       <span />
       {providers.map((p) => <strong key={p.provider} className="coding-quota-provider">{p.label}
-        {p.last_error ? <small>Last reading {age(p.as_of, now)?.replace(/^read /, "") ?? "at an unknown time"} — refresh failed</small>
+        {p.last_error ? <small>Last reading {age(p.as_of, now)?.replace(/^(?:read |letto )/, "") ?? "at an unknown time"} — refresh failed</small>
           : p.as_of ? <small title={`Usage observed at ${p.as_of}`}>{age(p.as_of, now)}</small> : null}
       </strong>)}
       {ROWS.map((row) => <div key={row.kind} className="coding-quota-row" role="group" aria-label={row.label}>
