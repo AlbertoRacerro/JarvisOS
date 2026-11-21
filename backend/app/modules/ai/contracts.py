@@ -141,6 +141,7 @@ class AIRequest(BaseModel):
     model_preference: AIModelId | None = None
     max_input_tokens: int | None = Field(default=None, ge=0)
     max_output_tokens: int | None = Field(default=None, ge=0)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     structured_output_schema: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     # PNG/JPEG data URLs for adapters whose model can see images; other adapters ignore them.

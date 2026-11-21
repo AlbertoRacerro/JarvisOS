@@ -192,7 +192,7 @@ function relativeTime(iso: string): string {
 
 function outcomeNotice(interaction: ThreadInteraction): string | null {
   if (interaction.flow_state === "partial_terminal") {
-    return interaction.terminal_reason === "output_length_limit"
+    return interaction.terminal_reason === "output_length_limit" || interaction.terminal_reason === "length"
       ? "This answer stopped at the output limit. You can ask Jarvis to continue."
       : "This answer ended before completion. You can try again or continue from the last visible text.";
   }

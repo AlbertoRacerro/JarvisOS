@@ -1030,3 +1030,86 @@ def test_hermes_revision_probe_accepts_pinned_revision_and_rejects_other(
 def test_hermes_enabled_toolsets_allowlist_is_unchanged() -> None:
     assert ENABLED_TOOLSETS == ["mcp-jarvis", "memory", "session_search"]
 
+
+def test_governed_inference_temperature_and_finish_reason() -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_runner(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return SimpleNamespace(status="success", response=SimpleNamespace(text="ok", finish_reason="length"))
+
+    envelope_gen = infer_envelope(_frame())
+    res_gen = run_governed_inference(envelope_gen, runner=fake_runner)
+    assert res_gen["status"] == "success"
+    assert res_gen["finish_reason"] == "length"
+    assert calls[-1]["temperature"] == 0.3
+
+    envelope_aux = infer_envelope(_frame() | {"task_kind": "delegation"})
+    res_aux = run_governed_inference(envelope_aux, runner=fake_runner)
+    assert res_aux["finish_reason"] == "length"
+    assert calls[-1]["temperature"] is None
+
+
+def test_worker_relay_forwards_length_and_default_budget() -> None:
+    import httpx
+
+    from app.modules.agents.hermes import worker_shim
+
+    worker = worker_shim.Worker()
+    try:
+        worker.session = {"hermes_session_id": "h1", "workspace_id": "w1"}
+        client = httpx.Client(base_url=worker.base_url, headers={"Authorization": f"Bearer {worker.token}"}, trust_env=False)
+
+        # Test 1: general turn defaults max_output_tokens to 2048 and forwards finish_reason == length
+        def answer_truncated() -> None:
+            for _ in range(50):
+                with worker.pending_lock:
+                    if worker.pending:
+                        req_id, q = next(iter(worker.pending.items()))
+                        q.put({"status": "success", "text": "truncated reply", "finish_reason": "length"})
+                        return
+                time.sleep(0.05)
+
+        t = threading.Thread(target=answer_truncated)
+        t.start()
+        resp = client.post("chat/completions", json={"messages": [{"role": "user", "content": "hello"}]})
+        t.join()
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["choices"][0]["finish_reason"] == "length"
+        assert body["choices"][0]["message"]["content"] == "truncated reply"
+
+        # Test 2: streaming mode with finish_reason == length
+        t = threading.Thread(target=answer_truncated)
+        t.start()
+        resp_stream = client.post("chat/completions", json={"messages": [{"role": "user", "content": "hello"}], "stream": True})
+        t.join()
+        assert resp_stream.status_code == 200
+        assert '"finish_reason": "length"' in resp_stream.text
+
+        # Test 3: tool calls override finish_reason
+        def answer_tool() -> None:
+            for _ in range(50):
+                with worker.pending_lock:
+                    if worker.pending:
+                        req_id, q = next(iter(worker.pending.items()))
+                        tool_call_text = json.dumps({"tool_calls": [{"name": "mcp__jarvis__jarvis_context_preview", "arguments": {}}]})
+                        q.put({"status": "success", "text": tool_call_text, "finish_reason": "length",
+                               "admitted_tools": ["mcp__jarvis__jarvis_context_preview"]})
+                        return
+                time.sleep(0.05)
+
+        t = threading.Thread(target=answer_tool)
+        t.start()
+        resp_tool = client.post("chat/completions", json={
+            "messages": [{"role": "user", "content": "inspect"}],
+            "tools": [{"type": "function", "function": {"name": "mcp__jarvis__jarvis_context_preview"}}],
+        })
+        t.join()
+        assert resp_tool.status_code == 200
+        body_tool = resp_tool.json()
+        assert body_tool["choices"][0]["finish_reason"] == "tool_calls"
+    finally:
+        worker.server.shutdown()
+
+

@@ -292,7 +292,12 @@ def run_governed_inference(
         return {"status": "refused"}
     if envelope.is_expired(datetime.now(UTC)) or (cancelled and envelope.cancellation_id and cancelled(envelope.cancellation_id)):
         return {"status": "cancelled"}
-    outcome = runner(**run_ai_task_kwargs(envelope, structured_output_schema=structured_output_schema))
+    temperature = 0.3 if envelope.task_kind == "general" else None
+    outcome = runner(**run_ai_task_kwargs(
+        envelope,
+        structured_output_schema=structured_output_schema,
+        temperature=temperature,
+    ))
     if on_outcome is not None:
         on_outcome(outcome)
     if envelope.is_expired(datetime.now(UTC)) or (cancelled and envelope.cancellation_id and cancelled(envelope.cancellation_id)):
@@ -300,6 +305,9 @@ def run_governed_inference(
     if outcome.status != "success" or outcome.response is None or outcome.response.text is None:
         return {"status": "refused"}
     result: dict[str, Any] = {"status": "success", "text": outcome.response.text}
+    finish_reason = getattr(outcome.response, "finish_reason", None)
+    if finish_reason is not None:
+        result["finish_reason"] = finish_reason
     if structured_output_schema is not None:
         try:
             branches = structured_output_schema["oneOf"][1]["properties"]["tool_calls"]["items"]["anyOf"]

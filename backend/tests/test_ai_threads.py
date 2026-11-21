@@ -178,6 +178,89 @@ def test_hermes_relay_verification_failure_terminalizes_reservation_and_rebinds_
     assert worker.last_error is None
 
 
+def test_hermes_interaction_captures_partial_terminal_and_refreshes_envelope() -> None:
+    workspace_id = "workspace-hermes-partial"
+    _bootstrap_workspace(workspace_id)
+    thread = create_thread(AIThreadCreate(workspace_id=workspace_id))
+    from app.modules.ai.token_flow_service import create_flow
+    relay_flow = create_flow(
+        task_kind="general",
+        requested_route_class="hermes:agent",
+        workspace_id=workspace_id,
+    )
+    relay_flow_id = str(relay_flow["id"])
+    with open_sqlite_connection() as connection:
+        connection.execute(
+            "UPDATE ai_flows SET state = 'partial_terminal', terminal_reason = 'output_length_limit' WHERE id = ?",
+            (relay_flow_id,),
+        )
+        connection.commit()
+
+    class SupervisorMock:
+        def __init__(self) -> None:
+            self.running = False
+            self.worker = None
+
+        def status(self) -> dict:
+            return {"state": "running" if self.running else "stopped", "worker_pid": 1234 if self.running else None}
+
+        def for_thread(self, _tid: str):
+            return self.worker
+
+        def lock_for(self, _tid: str):
+            return contextmanager(lambda: (yield))()
+
+        def schedule_idle_stop(self, _tid: str) -> None:
+            pass
+
+    sup = SupervisorMock()
+    captured_blocks: list[dict] = []
+
+    class WorkerMock:
+        session = None
+        live_grants: dict = {}
+
+        def _alive(self) -> bool:
+            return sup.running
+
+        def start(self) -> None:
+            sup.running = True
+
+        def _send(self, _frame: dict) -> None:
+            pass
+
+        def _await(self, _request_id: str, timeout: float = 30.0, **_kwargs) -> dict:
+            return {"type": "ack"}
+
+        def turn(self, *args, context_blocks: list[dict] | None = None, **kwargs) -> dict:
+            if context_blocks:
+                captured_blocks.extend(context_blocks)
+            return {
+                "status": "success", "completed": True,
+                "flow_id": relay_flow_id,
+                "final_response": "interrupted response",
+                "relay_flow_ids": [relay_flow_id],
+            }
+
+    sup.worker = WorkerMock()
+    availability = [{"route_class": "hermes:agent", "availability": {"runtime_reachable": True},
+                     "roles": [{"role_id": "isaac", "available": True}]}]
+    payload = AIThreadSubmit(request_id="hermes-partial-req", prompt="Tell me everything", route_class="hermes:agent")
+    interaction = submit_interaction(
+        workspace_id=workspace_id, thread_id=thread.id, payload=payload,
+        route_availability=availability,
+        app_state=SimpleNamespace(hermes_supervisor=sup),
+    ).interaction
+
+    assert interaction.persistence_state == "captured"
+    assert interaction.flow_state == "partial_terminal"
+    assert interaction.assistant_text == "interrupted response"
+
+    env_block = next(b for b in captured_blocks if b.get("source") == "jarvis:system-envelope")
+    assert "hermes: available" in env_block["content"]
+    assert "HERMES_WORKER_STOPPED" not in env_block["content"]
+
+
 def test_hermes_retrieval_grant_is_limited_to_submitted_exact_refs() -> None:
     payload = AIThreadSubmit(
         request_id="agent-grant-1", prompt="Search this selected record", route_class="hermes:agent",
@@ -419,6 +502,27 @@ def test_submit_persists_owner_derived_surface_and_exposes_thread_contract(monke
         row = connection.execute("SELECT brief_json FROM ai_thread_surface_context WHERE interaction_id = ?",
                                  (interaction.id,)).fetchone()
     assert json.loads(row["brief_json"])["surface"] == "bluecad"
+
+
+def test_surface_summary_omitted_when_surface_none() -> None:
+    workspace_id = "workspace-surface-none"
+    _bootstrap_workspace(workspace_id)
+    thread = create_thread(AIThreadCreate(workspace_id=workspace_id))
+    interaction = submit_interaction(
+        workspace_id=workspace_id,
+        thread_id=thread.id,
+        payload=AIThreadSubmit(request_id="surface-none-test", prompt="hello outside surface"),
+    ).interaction
+    assert interaction.surface_summary is None
+    with open_sqlite_connection() as connection:
+        row = connection.execute(
+            "SELECT summary, brief_json, digest FROM ai_thread_surface_context WHERE interaction_id = ?",
+            (interaction.id,),
+        ).fetchone()
+    assert row is not None
+    assert row["summary"] == ""
+    assert row["digest"] is not None
+    assert json.loads(row["brief_json"])["surface"] == "none"
 
 
 def test_schema_initialization_is_idempotent_and_thread_bounds_are_enforced() -> None:

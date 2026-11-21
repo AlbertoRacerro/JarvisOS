@@ -22,4 +22,7 @@ assert.match(sidecar, /submitRelayRun\(workspaceId, targetThread/);
 assert.match(api, /interactions\/.*\/escalation-draft/);
 assert.match(api, /interactions\/.*\/escalate/);
 assert.match(api, /readonly detail: string \| null/);
+assert.match(sidecar, /flow_state === "partial_terminal"/);
+assert.match(sidecar, /Continue answer/);
+assert.match(sidecar, /jarvis-bubble__notice/);
 console.log("159 Sidecar conversation UX source checks passed");

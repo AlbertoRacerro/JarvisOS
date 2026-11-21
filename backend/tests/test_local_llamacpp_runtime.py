@@ -93,6 +93,15 @@ def test_adapter_default_thinking_keeps_payload_unchanged(monkeypatch: pytest.Mo
     }
 
 
+def test_adapter_honors_sampling_temperature() -> None:
+    payload: dict[str, object] = {}
+    transport = httpx.MockTransport(lambda request: _capture_payload(request, payload))
+    LocalLlamaCppAdapter(client_factory=lambda: httpx.Client(transport=transport)).complete(
+        AIRequest(task_type=AITaskType.synthesis, prompt="hello", temperature=0.3)
+    )
+    assert payload["temperature"] == 0.3
+
+
 def test_runtime_config_thinking_file_env_and_invalid(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.modules.local_ai.runtime import llama_cpp as runtime_module
 

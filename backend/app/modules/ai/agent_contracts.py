@@ -266,6 +266,7 @@ def run_ai_task_kwargs(
     *,
     context_blocks: list[dict[str, object]] | None = None,
     structured_output_schema: dict[str, Any] | None = None,
+    temperature: float | None = None,
 ) -> dict[str, object]:
     """The only mapping of an envelope into Jarvis execution: ``run_ai_task(**kwargs)``.
 
@@ -286,6 +287,7 @@ def run_ai_task_kwargs(
         "workspace_id": envelope.workspace_id,
         "existing_flow_id": envelope.flow_id,
         "structured_output_schema": structured_output_schema,
+        "temperature": temperature,
     }
 
 
