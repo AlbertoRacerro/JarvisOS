@@ -1265,12 +1265,15 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
                     # DONE can be an asynchronous launch acknowledgement. Only the native executor's
                     # recorded exit status establishes that the foreground command actually ended.
                     output = info.get("output")
-                    # The native CLI can prepend this exact envelope when it truncates a long tool result.
+                    # The native CLI can prepend this exact envelope when it truncates a long tool result,
+                    # and newer CLI builds also prepend ISO-8601 Created At / Completed At lines.
                     # The exit status still precedes command stdout; never search arbitrary stdout for one.
                     truncation = (r"The tool's output was truncated due to being too long\. You can find the full "
                                   r"output in a file at file://[^\r\n]+\.\n\n"
                                   r"Here is a preview with the middle of the output truncated:\n")
-                    exit_match = re.match(rf"(?:{truncation})?Command exited with code (-?\d+)\.\n", output) if isinstance(output, str) else None
+                    iso_ts = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})"
+                    timestamps = rf"(?:Created At: {iso_ts}\nCompleted At: {iso_ts}\n)?"
+                    exit_match = re.match(rf"(?:{truncation})?{timestamps}Command exited with code (-?\d+)\.\n", output) if isinstance(output, str) else None
                     if exit_match is None:
                         call.done = False
                     else:
