@@ -344,7 +344,7 @@ class Worker:
                                  "messages": body.get("messages"), "model_candidate": body.get("model"),
                                  "tools": body.get("tools"),
                                  "allowed_tools": worker.active_turn_tools,
-                                 "max_output_tokens": body.get("max_completion_tokens", body.get("max_tokens"))})
+                                 "max_output_tokens": body.get("max_completion_tokens") or body.get("max_tokens") or (2048 if task_kind == "general" else None)})
                     try:
                         result = answer.get(timeout=180)
                     finally:
@@ -360,6 +360,9 @@ class Worker:
                         tools = [tool for tool in tools or [] if isinstance(tool, dict)
                                  and tool.get("function", {}).get("name") in permitted]
                     message = completion_message(result["text"], tools)
+                    finish_reason = "tool_calls" if "tool_calls" in message else (
+                        "length" if result.get("finish_reason") == "length" else "stop"
+                    )
                     if body.get("stream") is True:
                         delta = dict(message)
                         if "tool_calls" in delta:
@@ -371,7 +374,7 @@ class Worker:
                                           "delta": delta}]},
                             {"id": request_id, "object": "chat.completion.chunk", "model": "jarvis",
                              "choices": [{"index": 0,
-                                          "finish_reason": "tool_calls" if "tool_calls" in message else "stop",
+                                          "finish_reason": finish_reason,
                                           "delta": {}}]},
                         ]
                         encoded = ("".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
@@ -380,7 +383,7 @@ class Worker:
                     else:
                         payload = {"id": request_id, "object": "chat.completion", "model": "jarvis",
                                    "choices": [{"index": 0,
-                                                "finish_reason": "tool_calls" if "tool_calls" in message else "stop",
+                                                "finish_reason": finish_reason,
                                                 "message": message}]}
                         encoded = json.dumps(payload).encode()
                         content_type = "application/json"

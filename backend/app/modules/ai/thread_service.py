@@ -474,6 +474,19 @@ def _submit_hermes_interaction(
             blocks = list(context_blocks or [])
             agent_blocks = [b for b in blocks if b.get("source") == VISIBLE_PAGE_SOURCE] + [
                 b for b in blocks if b.get("source") != VISIBLE_PAGE_SOURCE]
+            workspace = get_workspace(workspace_id)
+            refreshed_envelope = _jarvis_system_envelope(
+                workspace_id=workspace_id,
+                workspace_name=workspace.name if workspace is not None else "Unknown",
+                app_state=app_state,
+                route_availability=route_availability,
+            )
+            for idx, b in enumerate(agent_blocks):
+                if b.get("source") == "jarvis:system-envelope":
+                    agent_blocks[idx] = {"source": "jarvis:system-envelope", "content": refreshed_envelope}
+                    break
+            else:
+                agent_blocks.append({"source": "jarvis:system-envelope", "content": refreshed_envelope})
             grant_text = _install_hermes_retrieval_grant(worker, payload, workspace_id, thread_id) or ""
             grant_text += _install_surface_grants(worker, workspace_id, thread_id,
                                                   payload.surface_context, surface_brief)
@@ -504,7 +517,7 @@ def _submit_hermes_interaction(
     from app.modules.ai.token_flow_service import get_flow, transition_flow_state
     try:
         relay_flow = get_flow(relay_flow_id)
-        if relay_flow.get("state") != "complete":
+        if relay_flow.get("state") not in {"complete", "partial_terminal"}:
             raise AIThreadConflictError("final Hermes relay flow is not complete")
         transition_flow_state(flow_id=reservation_flow_id, new_state="cancelled_terminal",
                               terminal_reason="agent_relayed")
@@ -818,9 +831,10 @@ def _derive_surface_brief(workspace_id: str, ref: Any) -> Any:
 
 def _save_surface_brief(interaction_id: str, brief: Any) -> None:
     with open_sqlite_connection() as connection:
+        summary_to_save = "" if getattr(brief, "surface", None) == "none" else (brief.summary or "")
         connection.execute("INSERT OR REPLACE INTO ai_thread_surface_context "
                            "(interaction_id, summary, digest, brief_json) VALUES (?, ?, ?, ?)",
-                           (interaction_id, brief.summary, brief.digest,
+                           (interaction_id, summary_to_save, brief.digest,
                             json.dumps(brief.model_dump(mode="json"), ensure_ascii=False)))
         connection.commit()
 
@@ -1177,6 +1191,7 @@ SELECT
     surface.summary AS surface_summary,
     surface.digest AS surface_digest,
     surface.technical_details AS technical_details,
+    surface.brief_json AS surface_brief_json,
     COALESCE(extras.image_count, 0) AS image_count,
     COALESCE(extras.images_unsupported, 0) AS images_unsupported
 FROM ai_thread_interactions AS interaction
@@ -1341,6 +1356,16 @@ def _interaction_from_row(
             role_id = None
     if is_hermes and (not role_id or role_id == "default"):
         role_id = "isaac"
+    surface_summary = row["surface_summary"] or None
+    if surface_summary in {"No engineering workspace surface is active.", "No active workspace surface"}:
+        surface_summary = None
+    if row["surface_brief_json"]:
+        try:
+            brief_data = json.loads(row["surface_brief_json"])
+            if brief_data.get("surface") == "none":
+                surface_summary = None
+        except Exception:
+            pass
     return AIThreadInteractionRead(
         provider_id=row["provider_id"],
         input_tokens=row["input_tokens"],
@@ -1374,7 +1399,7 @@ def _interaction_from_row(
         proposals_truncated=len(proposal_ids) > _MAX_PROPOSAL_IDS,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
-        surface_summary=row["surface_summary"],
+        surface_summary=surface_summary,
         surface_digest=row["surface_digest"],
         actions=actions,
         technical_details=row["technical_details"],
