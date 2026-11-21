@@ -270,9 +270,10 @@ def test_hermes_retrieval_grant_is_limited_to_submitted_exact_refs() -> None:
     instructions = thread_service._install_hermes_retrieval_grant(
         worker, payload, "workspace-a", "thread-a")
     assert instructions is not None and "allowed source_scope=['test-owner']" in instructions
-    assert len(worker.live_grants) == 2
+    assert len(worker.live_grants) == 3
     grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.retrieval_query")
     decision_grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.decide")
+    dev_read_grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.dev_read")
     assert grant.capability_id == "jarvis.retrieval_query"
     assert grant.scope.workspace_id == "workspace-a"
     assert grant.scope.jarvis_thread_id == "thread-a"
@@ -282,7 +283,11 @@ def test_hermes_retrieval_grant_is_limited_to_submitted_exact_refs() -> None:
     assert decision_grant.scope.jarvis_thread_id == grant.scope.jarvis_thread_id
     assert decision_grant.scope.object_refs == ()
     assert decision_grant.expires_at == grant.expires_at
+    assert dev_read_grant.scope.workspace_id == grant.scope.workspace_id
+    assert dev_read_grant.scope.jarvis_thread_id == grant.scope.jarvis_thread_id
+    assert dev_read_grant.expires_at == grant.expires_at
     assert "decision_grant_id=" in instructions
+    assert "dev_read_grant_id=" in instructions
 
 
 def test_hermes_retrieval_grant_without_refs_allows_workspace_navigation() -> None:
@@ -302,6 +307,9 @@ def test_hermes_retrieval_grant_without_refs_allows_workspace_navigation() -> No
     assert 0 < (grant.expires_at - grant.issued_at).total_seconds() <= 600
     decision_grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.decide")
     assert decision_grant.scope == type(grant.scope)(workspace_id="workspace-a", jarvis_thread_id="thread-a")
+    dev_read_grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.dev_read")
+    assert dev_read_grant.scope == type(grant.scope)(workspace_id="workspace-a", jarvis_thread_id="thread-a")
+    assert "dev_read_grant_id=" in instructions
     from app.modules.ai.retrieval_query import WORKSPACE_SCOPED_OWNERS
 
     assert f"{sorted(WORKSPACE_SCOPED_OWNERS)}" in instructions
