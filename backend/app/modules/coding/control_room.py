@@ -6,6 +6,7 @@ that same commit. Nothing here writes, fetches, or calls GitHub.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,6 +22,14 @@ STATUS_MAX_BYTES = 1_048_576
 MAX_WARNINGS = 32
 DESCRIPTION_MAX_CHARS = 280
 MAX_RANGE_SPAN = 9
+
+PLAN_SCHEMA = "plan.v1"
+PLAN_MAX_BYTES = 65_536
+PLAN_MAX_STEPS = 12
+PLAN_TEXT_MAX_CHARS = 160
+PLAN_NOTE_MAX_CHARS = 400
+PLAN_MAX_SPECS_PER_STEP = 8
+PLAN_STATES = ("done", "in_progress", "next", "later")
 
 STATUSES = ("planned", "blocked", "ready", "in_progress", "in_review", "merged", "cancelled")
 _AUTHORIZED_ORDER = ("in_review", "in_progress", "ready")
@@ -247,6 +256,61 @@ def _registry_entry(spec_id: str, registry: dict[str, RegistryRow]) -> dict[str,
     }
 
 
+def plan_projection(text: str | None, registry: dict[str, RegistryRow]) -> tuple[dict[str, object], list[str]]:
+    """The coordinator's plan (spec 336) joined to the registry: absent, invalid or available.
+
+    ``None`` means the plan file does not exist. Any shape or limit violation makes the plan
+    invalid; nothing is ever truncated. Pure: the caller owns reading the file.
+    """
+    if text is None:
+        return {"status": "absent"}, []
+    invalid: tuple[dict[str, object], list[str]] = ({"status": "invalid"}, ["plan_invalid"])
+    if len(text.encode("utf-8")) > PLAN_MAX_BYTES:
+        return invalid
+    try:
+        parsed = json.loads(text)
+    except (ValueError, RecursionError):
+        return invalid
+    if not isinstance(parsed, dict) or parsed.get("schema") != PLAN_SCHEMA:
+        return invalid
+    goal = parsed.get("goal")
+    updated_at = parsed.get("updated_at")
+    steps = parsed.get("steps")
+    if not isinstance(goal, str) or not goal.strip() or len(goal) > PLAN_TEXT_MAX_CHARS:
+        return invalid
+    if not isinstance(updated_at, str) or not updated_at.strip():
+        return invalid
+    if not isinstance(steps, list) or len(steps) > PLAN_MAX_STEPS:
+        return invalid
+    projected_steps: list[dict[str, object]] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            return invalid
+        title = step.get("title")
+        state = step.get("state")
+        note = step.get("note")
+        specs = step.get("specs")
+        if not isinstance(title, str) or not title.strip() or len(title) > PLAN_TEXT_MAX_CHARS:
+            return invalid
+        if state not in PLAN_STATES:
+            return invalid
+        if note is not None and (not isinstance(note, str) or len(note) > PLAN_NOTE_MAX_CHARS):
+            return invalid
+        if not isinstance(specs, list) or len(specs) > PLAN_MAX_SPECS_PER_STEP:
+            return invalid
+        if any(not isinstance(spec_id, str) or not spec_id for spec_id in specs):
+            return invalid
+        projected_steps.append(
+            {
+                "title": title,
+                "state": state,
+                "note": note,
+                "specs": [_registry_entry(spec_id, registry) for spec_id in specs],
+            }
+        )
+    return {"status": "available", "goal": goal, "updated_at": updated_at, "steps": projected_steps}, []
+
+
 def recent_work_items(log_text: str, registry: dict[str, RegistryRow]) -> tuple[list[dict[str, object]], list[str]]:
     items: list[dict[str, object]] = []
     warnings: list[str] = []
@@ -343,9 +407,12 @@ def _default_git(root: Path) -> GitRunner:
 class ControlRoomProjection:
     def __init__(self, root: Path | None = None, git: GitRunner | None = None) -> None:
         self._git = git or _default_git((root or rt.trusted_repository_root()).resolve())
+        # The registry parsed by the last project() call, for joins at the same ref (spec 336).
+        self.registry: dict[str, RegistryRow] = {}
 
     def project(self, target_ref: str) -> dict[str, object]:
         warnings: list[str] = []
+        self.registry = {}
         git_ref = f"refs/remotes/origin/{target_ref}"
         source: dict[str, object] = {"git_ref": git_ref, "sha": None, "status_path": STATUS_PATH}
         recent: dict[str, object] = {"status": "unavailable", "limit": RECENT_WORK_LIMIT, "items": []}
@@ -383,6 +450,7 @@ class ControlRoomProjection:
             warnings.append(f"status_unavailable:{exc.code}")
         else:
             registry, registry_warnings = parse_registry(status_text)
+            self.registry = registry
             warnings.extend(registry_warnings)
             if registry:
                 groups, queue_warnings = upcoming_queue(registry)

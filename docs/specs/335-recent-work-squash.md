@@ -1,6 +1,6 @@
 # 335 — RECENT-WORK-SQUASH-1: Recent work lists squash-merged pull requests
 
-Status: ready
+Status: merged
 Depends on: 164
 
 ## Goal

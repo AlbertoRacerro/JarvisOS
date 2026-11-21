@@ -24,6 +24,7 @@ def test_card_catalog_and_workspace_validation() -> None:
         "ht.internal_convection",
         "coolprop.pure_fluid_properties",
         "marine.rigid_body_waves",
+        "bioprocess.tube_oxygen_buildup",
     }
     for card in catalog["cards"]:
         assert card["title"] and card["formula"] and card["validity"] and card["source"]

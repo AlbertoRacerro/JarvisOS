@@ -136,6 +136,7 @@ are away. Operations manual: `docs/implementation/relay-continuity-runbook.md`.
   the fresh GitHub state, picks the highest-value authorized work, and drives it to a merged and reconciled result or to a
   durable checkpoint (a pushed branch or PR plus a ledger note). After an implementation PR merges its row stays `in_review` until the next PR that edits STATUS.md writes `merged`; no PR is opened only for that word; a PR that sets a dependent spec `in_review` writes `merged` for its done dependencies because the CI spec gate still requires it.
 - Every coordinator turn records a maintainer update with `python3 scripts/devctx.py note note --lane maintainer "Sto … . Prossimo: …"`: one or two plain Italian sentences about what the maintainer sees, naming a feature by its visible name or a spec by its subject, without ids, SHAs, paths or codenames.
+- The coordinator keeps `<control_root>/plan.json` (shown as "Il percorso" under Up next on the Runtime page) true when a directive's order or a step's state changes: plain Italian, no internal codes.
 - **Recovery packet.** Start every resumed or taken-over session with `python3 scripts/devctx.py recover`. It prints a
   freshness-checked picture of Git, GitHub, `docs/specs/STATUS.md`, worktrees and the local control ledger. Record what the code
   cannot show with `devctx.py note` (kinds include `question` and `blocker`) and `devctx.py directive`, not in chat

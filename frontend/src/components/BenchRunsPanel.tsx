@@ -25,6 +25,7 @@ const EVALUATOR_NAMES: Record<string, string> = {
   "fluids.pipe_pressure_drop": "Perdita di carico in tubo",
   "ht.internal_convection": "Convezione interna",
   "coolprop.pure_fluid_properties": "Proprietà di fluido puro",
+  "bioprocess.tube_oxygen_buildup": "Accumulo di ossigeno in tubo",
   "retrieval.eval": "Qualità del recupero documentale"
 };
 const RUN_STATUS_LABELS: Record<string, string> = { succeeded: "riuscita", failed: "fallita" };

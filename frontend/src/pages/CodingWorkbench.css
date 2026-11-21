@@ -172,6 +172,15 @@
   .coding-deps { max-width: 190px; }
 }
 
+/* Spec 336: the coordinator's plan (Il percorso) opens Up next, above the STATUS rows. */
+.coding-plan { display: flex; flex-direction: column; gap: 6px; }
+.coding-plan h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.coding-plan-goal { margin: 0; color: var(--color-text-secondary); font-size: 13px; overflow-wrap: anywhere; }
+.coding-plan-steps > li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 10px; }
+.coding-plan-title { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.coding-plan-note { color: var(--fusion-muted); font-size: 12px; overflow-wrap: anywhere; }
+.coding-plan-spec { display: inline-flex; align-items: center; gap: 6px; padding: 1px 7px; border: 1px solid var(--fusion-line); border-radius: 999px; background: var(--color-bg-subtle); font-size: 11px; }
+
 /* Spec 206: read-only Relay owner monitor in Coding → Runtime. */
 .coding-relay-monitor .coding-state:is([data-state="running"], [data-state="checkpointed"], [data-state="verified_complete"]) { border-color: var(--fusion-green); background: var(--fusion-green-soft); color: var(--fusion-green-deep); }
 .coding-relay-summary { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; font-size: 12px; }

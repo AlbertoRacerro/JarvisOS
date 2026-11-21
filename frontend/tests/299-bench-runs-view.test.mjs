@@ -29,6 +29,7 @@ assert.equal(CHECK_STATUS_LABELS.not_evaluated, "Non valutato");
 assert.equal(verdictOf("great"), "unchecked", "an unknown stored verdict reads as unchecked");
 assert.equal(evaluatorName("bluecad.fem"), "Struttura statica (FEM)");
 assert.equal(evaluatorName("bluecad.solid_code"), "Solido da codice (BlueCAD)");
+assert.equal(evaluatorName("bioprocess.tube_oxygen_buildup"), "Accumulo di ossigeno in tubo");
 assert.equal(evaluatorName("vendor.custom"), "vendor.custom", "unknown evaluator ids are shown as is");
 
 const empty = renderToStaticMarkup(React.createElement(BenchRunsList, { data: { runs: [], skipped: 0 }, selected: null, marked: [] }));
