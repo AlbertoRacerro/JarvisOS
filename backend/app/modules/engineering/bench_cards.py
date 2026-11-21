@@ -165,6 +165,22 @@ CARDS: tuple[BenchCard, ...] = (
             CardNumericField(name="gravity_m_s2", label="Accelerazione gravitazionale", unit="m/s2", default=9.80665),
         ),
     ),
+    BenchCard(
+        card_id="bioprocess.tube_oxygen_buildup",
+        evaluator_id="bioprocess.tube_oxygen_buildup",
+        title="Accumulo di ossigeno in tubo",
+        formula="C_out = C_in + R·L/u; L_max = u·(C_max − C_in)/R, con C = f·C_sat",
+        validity="Flusso a pistone, produzione di ossigeno costante, nessuno scambio gassoso nel tubo",
+        source="Molina Grima et al. 2001 / oxygen_tube",
+        fields=(
+            CardNumericField(name="velocity", label="Velocità", unit="m/s", default=0.5),
+            CardNumericField(name="oxygen_production_rate", label="Produzione di ossigeno", unit="mol/(m**3*s)", default=0.003),
+            CardNumericField(name="saturation_concentration", label="Concentrazione di saturazione", unit="mol/m**3", default=0.25),
+            CardNumericField(name="inlet_saturation_fraction", label="Frazione di saturazione in ingresso", unit="1", default=1.0),
+            CardNumericField(name="max_saturation_fraction", label="Frazione di saturazione massima", unit="1", default=3.0),
+            CardNumericField(name="length", label="Lunghezza", unit="m", default=50.0),
+        ),
+    ),
 )
 
 CARD_BY_ID = {card.card_id: card for card in CARDS}
