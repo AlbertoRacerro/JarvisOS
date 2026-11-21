@@ -150,6 +150,9 @@ def test_zen_pool_runs_built_in_provider_without_key(
     child = json.loads(capture.read_text(encoding="utf-8"))
     assert "TEMP_POOL_API_KEY" not in child["env"]
     assert child["argv"][child["argv"].index("--model") + 1] == "opencode/zen-model-free"
+    assert "--print-logs" in child["argv"]
+    log_level_idx = child["argv"].index("--log-level")
+    assert child["argv"][log_level_idx + 1] == "info"
     config = json.loads((evidence / "opencode.json").read_text(encoding="utf-8"))
     assert "provider" not in config and config["permission"]["external_directory"] == "deny"
 
@@ -274,3 +277,99 @@ def test_sandbox_child_cannot_see_home(tmp_path: Path, linked_worktree: Path) ->
         assert not set(listed.stdout.split()) & {p.name for p in private}
     finally:
         ow.shutil.rmtree(scratch, ignore_errors=True)
+
+
+def test_changed_files_preserves_first_line_leading_space(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Acceptance criterion 2: With a worktree whose first porcelain line is " M backend/x.py",
+    # changed_files returns "backend/x.py".
+    monkeypatch.setattr(ow, "git", lambda worktree, *args, **kwargs: " M backend/x.py\n?? untracked.txt\n")
+    assert ow.changed_files(tmp_path) == ["backend/x.py", "untracked.txt"]
+
+    monkeypatch.setattr(ow, "git", lambda worktree, *args, **kwargs: " M backend/x.py\n")
+    assert ow.changed_files(tmp_path) == ["backend/x.py"]
+
+    monkeypatch.setattr(ow, "git", lambda worktree, *args, **kwargs: "")
+    assert ow.changed_files(tmp_path) == []
+
+
+def test_compute_steps_acceptance_criteria() -> None:
+    # Acceptance criterion 3: A transcript with 3 step_start, 2 step_finish events and a 140 s gap gives
+    # steps == {"started": 3, "finished": 2, "max_gap_seconds": 140.0} (within rounding);
+    # an empty transcript gives zeros.
+
+    # 1. Epoch milliseconds format
+    ms_lines = [
+        json.dumps({"type": "step_start", "timestamp": 1795213871314}),
+        json.dumps({"type": "step_finish", "timestamp": 1795213881314}),   # +10s
+        json.dumps({"type": "step_start", "timestamp": 1795213891314}),    # +10s
+        json.dumps({"type": "step_start", "timestamp": 1795214031314}),    # +140s stall gap
+        json.dumps({"type": "step_finish", "timestamp": 1795214041314}),   # +10s
+    ]
+    assert ow.compute_steps("\n".join(ms_lines)) == {"started": 3, "finished": 2, "max_gap_seconds": 140.0}
+
+    # 2. ISO-8601 string format
+    iso_lines = [
+        json.dumps({"type": "step_start", "timestamp": "2026-11-20T10:00:00Z"}),
+        json.dumps({"type": "step_finish", "timestamp": "2026-11-20T10:00:10Z"}),   # +10s
+        json.dumps({"type": "step_start", "timestamp": "2026-11-20T10:00:20Z"}),    # +10s
+        json.dumps({"type": "step_start", "timestamp": "2026-11-20T10:02:40Z"}),    # +140s gap
+        json.dumps({"type": "step_finish", "timestamp": "2026-11-20T10:02:50Z"}),   # +10s
+    ]
+    assert ow.compute_steps("\n".join(iso_lines)) == {"started": 3, "finished": 2, "max_gap_seconds": 140.0}
+
+    # 3. Empty transcript and None
+    assert ow.compute_steps("") == {"started": 0, "finished": 0, "max_gap_seconds": 0.0}
+    assert ow.compute_steps(None) == {"started": 0, "finished": 0, "max_gap_seconds": 0.0}
+
+    # 4. Unparseable lines and other event types skipped
+    mixed_lines = [
+        "not a json line",
+        "{broken json",
+        json.dumps({"type": "tool_use", "timestamp": 1795213871314}),
+        json.dumps({"type": "step_start", "timestamp": 1795213871314}),
+        "   ",
+        json.dumps({"type": "text", "content": "hello"}),
+        json.dumps({"type": "step_finish", "timestamp": 1795214011314}),  # +140s gap
+    ]
+    assert ow.compute_steps("\n".join(mixed_lines)) == {"started": 1, "finished": 1, "max_gap_seconds": 140.0}
+
+
+def test_execute_run_records_steps_and_keeps_logs(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, temp_pool: tuple[Path, Path],
+        linked_worktree: Path, no_sandbox: list[tuple[str, Path, Path]]) -> None:
+    # Acceptance criteria 1 & 3 integration test
+    fake_bin = tmp_path / "opencode"
+    fake_bin.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stderr.write('info: OpenCode started, key is TEST_TEMP_POOL_SECRET\\n')\n"
+        "sys.stdout.write(json.dumps({'type': 'step_start', 'timestamp': 1795213871314}) + '\\n')\n"
+        "sys.stdout.write(json.dumps({'type': 'step_finish', 'timestamp': 1795213881314}) + '\\n')\n"
+        "sys.stdout.write(json.dumps({'type': 'step_start', 'timestamp': 1795213891314}) + '\\n')\n"
+        "sys.stdout.write(json.dumps({'type': 'step_start', 'timestamp': 1795214031314}) + '\\n')\n"
+        "sys.stdout.write(json.dumps({'type': 'step_finish', 'timestamp': 1795214041314}) + '\\n')\n"
+        "sys.stderr.write('info: step finished successfully\\n')\n"
+        "sys.exit(0)\n",
+        encoding="utf-8",
+    )
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("JARVISOS_OPENCODE_BIN", str(fake_bin))
+    task = tmp_path / "task.md"
+    task.write_text("Test task.", encoding="utf-8")
+    evidence = tmp_path / "evidence"
+    args = ow.argparse.Namespace(pool="testpool", task_file=str(task), worktree=str(linked_worktree),
+                                 timeout=30, evidence_dir=str(evidence))
+    _, result = ow.execute_run(args)
+    assert result["status"] == "succeeded"
+    assert result["steps"] == {"started": 3, "finished": 2, "max_gap_seconds": 140.0}
+
+    # Verify result.json on disk
+    result_disk = json.loads((evidence / "result.json").read_text(encoding="utf-8"))
+    assert result_disk["steps"] == {"started": 3, "finished": 2, "max_gap_seconds": 140.0}
+
+    # Verify OpenCode logs in stderr.txt with secret key redacted
+    stderr_content = (evidence / "stderr.txt").read_text(encoding="utf-8")
+    assert "info: OpenCode started, key is [REDACTED]" in stderr_content
+    assert "TEST_TEMP_POOL_SECRET" not in stderr_content
+    assert "info: step finished successfully" in stderr_content
+
