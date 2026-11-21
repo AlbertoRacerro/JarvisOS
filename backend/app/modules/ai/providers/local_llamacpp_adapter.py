@@ -151,7 +151,7 @@ class LocalLlamaCppAdapter:
             messages = [{"role": "user", "content": content}]
         else:
             messages = [message.model_dump() for message in request.messages]
-        payload = {
+        payload: dict[str, Any] = {
             "model": model_id,
             "messages": messages,
             "temperature": request.temperature if request.temperature is not None else 0,
