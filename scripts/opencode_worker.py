@@ -4,13 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import email.utils
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +27,84 @@ MAX_TASK_BYTES = 200 * 1024
 KEY_ENV = "TEMP_POOL_API_KEY"
 ZEN = "opencode_zen"
 ZEN_PROVIDER = "opencode"  # OpenCode's built-in Zen provider id
+MAX_THROTTLE_RETRIES = 3
+DEFAULT_RETRY_AFTER_SECONDS = 15.0
+MAX_RETRY_AFTER_SECONDS = 120.0
+
+_PAYMENT_402_RE = re.compile(
+    r"(?:\b(?:http(?:/\d(?:\.\d)?)?|status(?:_?code)?|code|error)\s*[\"']?\s*[:=]?\s*[\"']?402\b"
+    r"|\b402\s+payment\s+required\b"
+    r"|\bpayment[\s_-]+required\b"
+    r"|\binsufficient[\s_-]+(?:balance|funds|credits?)\b)",
+    re.IGNORECASE,
+)
+
+_SERVER_5XX_RE = re.compile(
+    r"\b(?:http(?:/\d(?:\.\d)?)?|status(?:_?code)?|code|error)\s*[\"']?\s*[:=]?\s*[\"']?50\d\b",
+    re.IGNORECASE,
+)
+
+_RATE_LIMIT_SIGNAL_RE = re.compile(
+    r"(?:\b(?:http(?:/\d(?:\.\d)?)?|status(?:_?code)?|code|error)\s*[\"']?\s*[:=]?\s*[\"']?429\b"
+    r"|\b429\s+too\s+many\s+requests\b"
+    r"|\btoo\s+many\s+requests\b"
+    r"|\brate[\s_-]*limit(?:ed|ing|s|_exceeded|_error|_reached)?\b"
+    r"|\bthrottl(?:e|ed|ing|er|es|ingexception)\b)",
+    re.IGNORECASE,
+)
+
+_RETRY_AFTER_JSON_MS_RE = re.compile(
+    r'["\']retry[-_]?after[-_]?ms["\']\s*:\s*["\']?(\d+(?:\.\d+)?)["\']?',
+    re.IGNORECASE,
+)
+
+_RETRY_AFTER_JSON_RE = re.compile(
+    r'["\']retry[-_]?after(?:[-_]?seconds?)?["\']\s*:\s*["\']?(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds?)?["\']?',
+    re.IGNORECASE,
+)
+
+_RETRY_AFTER_TEXT_RE = re.compile(
+    r"\bretry[-_\s]+after\s*(?:[:=]\s*|\s+in\s+|\s+)(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds?)?\b",
+    re.IGNORECASE,
+)
+
+_RETRY_AFTER_HTTP_DATE_RE = re.compile(
+    r"\bretry-after\s*:\s*([A-Za-z]{3},\s+\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+[A-Za-z0-9+-]+)",
+    re.IGNORECASE,
+)
+
+
+def _extract_retry_after(text: str) -> float | None:
+    if m := _RETRY_AFTER_JSON_MS_RE.search(text):
+        return float(m.group(1)) / 1000.0
+    if m := _RETRY_AFTER_JSON_RE.search(text):
+        return float(m.group(1))
+    if m := _RETRY_AFTER_TEXT_RE.search(text):
+        return float(m.group(1))
+    if m := _RETRY_AFTER_HTTP_DATE_RE.search(text):
+        try:
+            dt = email.utils.parsedate_to_datetime(m.group(1))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return max(0.0, round((dt.astimezone(UTC) - datetime.now(UTC)).total_seconds(), 3))
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def detect_rate_limit(stdout: str, stderr: str) -> tuple[bool, float | None]:
+    """Inspect stderr and stdout for HTTP 429 / rate-limit throttling and optional Retry-After seconds."""
+    combined = f"{stderr or ''}\n{stdout or ''}"
+    if not combined.strip():
+        return False, None
+    if _PAYMENT_402_RE.search(combined):
+        return False, None
+    retry_after = _extract_retry_after(combined)
+    if _RATE_LIMIT_SIGNAL_RE.search(combined):
+        return True, retry_after
+    if retry_after is not None and not _SERVER_5XX_RE.search(combined):
+        return True, retry_after
+    return False, None
 
 
 class Refused(Exception):
@@ -404,31 +486,40 @@ def execute_smoke(args: argparse.Namespace) -> int:
                                    env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONPATH": str(worktree)},
                                    capture_output=True, text=True, timeout=args.timeout, check=False)
             outcome = {"task": task["id"], "passed": run_result["status"] == "succeeded" and check.returncode == 0,
-                       "run_status": run_result["status"], "check_exit": check.returncode}
+                       "run_status": run_result["status"], "check_exit": check.returncode,
+                       "throttled": run_result["status"] == "throttled"}
         except (Refused, OSError, subprocess.TimeoutExpired) as error:
             outcome = {"task": task["id"], "passed": False, "run_status": "failed",
-                       "check_exit": getattr(error, "returncode", None)}
+                       "check_exit": getattr(error, "returncode", None), "throttled": False}
         finally:
             subprocess.run(["git", "-C", str(base), "worktree", "remove", "--force", str(worktree)],
                            capture_output=True, text=True, check=False)
         outcomes.append(outcome)
-        result_file = tempdir / "evidence" / "result.json"
-        # A run that did not finish is the bridge's failure (harness), never the model's; nothing here sets a tier.
-        failure = "harness" if outcome["run_status"] != "succeeded" else "none" if outcome["passed"] else "model"
-        routing.record(task=task["id"], kind="tests", worker=f"temp-{args.pool}", tier=int(task["tier"]),
-                       ci_first_pass="pass" if outcome["passed"] else "fail", failure=failure,
-                       evidence=result_file if result_file.is_file() else None,
-                       record_file=getattr(args, "record_file", None))
+        if not outcome["throttled"]:
+            result_file = tempdir / "evidence" / "result.json"
+            # A run that did not finish is the bridge's failure (harness), never the model's; nothing here sets a tier.
+            failure = "harness" if outcome["run_status"] != "succeeded" else "none" if outcome["passed"] else "model"
+            routing.record(task=task["id"], kind="tests", worker=f"temp-{args.pool}", tier=int(task["tier"]),
+                           ci_first_pass="pass" if outcome["passed"] else "fail", failure=failure,
+                           evidence=result_file if result_file.is_file() else None,
+                           record_file=getattr(args, "record_file", None))
 
-    bridge = "ok" if all(item["passed"] for item in outcomes) else "suspect"
-    routing.set_bridge_state(f"temp-{args.pool}", bridge)
+    if all(item["passed"] for item in outcomes):
+        bridge = "ok"
+        routing.set_bridge_state(f"temp-{args.pool}", bridge)
+    elif any(not item["passed"] and not item["throttled"] for item in outcomes):
+        bridge = "suspect"
+        routing.set_bridge_state(f"temp-{args.pool}", bridge)
+    else:
+        bridge = "throttled"
     write_json(evidence_root / "smoke.json", {"pool": args.pool, "bridge": bridge, "outcomes": outcomes})
     print(f"pool: temp-{args.pool}")
     print(f"bridge: {bridge}")
     return 0
 
 
-def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
+def execute_run(args: argparse.Namespace,
+                sleep: Callable[[float], None] | None = None) -> tuple[Path | None, dict[str, Any]]:
     started = datetime.now(UTC)
     worktree = Path(args.worktree).expanduser()
     evidence = Path(args.evidence_dir).expanduser() if args.evidence_dir else evidence_dir()
@@ -437,6 +528,7 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
         "reason": None, "exit_code": None, "started_at": iso(started),
         "finished_at": None, "duration_seconds": 0, "changed_files": [],
         "steps": {"started": 0, "finished": 0, "max_gap_seconds": 0.0},
+        "throttle_retries": 0, "retry_after_seconds": None,
     }
     try:
         evidence.mkdir(parents=True, exist_ok=True)
@@ -476,27 +568,54 @@ def execute_run(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any]]:
                           "--model", model_ref, "--format", "json", "--auto", task]
         result["model"] = model
         proc_started = datetime.now(UTC)
+        sleep_fn = sleep or time.sleep
+        attempt = 0
+        spawned = False
+        stdout = ""
+        stderr = ""
         try:
-            proc = subprocess.Popen(argv, cwd=worktree, env=env, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, start_new_session=True)
-        except OSError as error:
-            result.update(status="failed", reason=f"spawn_failed: {error}", exit_code=None)
-        else:
-            try:
-                stdout, stderr = proc.communicate(timeout=args.timeout + KILL_MARGIN)
-                result["exit_code"] = proc.returncode
-                if proc.returncode == 0:
-                    result["status"] = "succeeded"
-                else:
+            while True:
+                try:
+                    proc = subprocess.Popen(argv, cwd=worktree, env=env, stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE, text=True, start_new_session=True)
+                except OSError as error:
+                    result.update(status="failed", reason=f"spawn_failed: {error}", exit_code=None)
+                    break
+                spawned = True
+                try:
+                    elapsed = (datetime.now(UTC) - proc_started).total_seconds()
+                    comm_timeout = max(1.0, args.timeout - elapsed) + KILL_MARGIN
+                    stdout, stderr = proc.communicate(timeout=comm_timeout)
+                    result["exit_code"] = proc.returncode
+                    if proc.returncode == 0:
+                        result["status"] = "succeeded"
+                        result["reason"] = None
+                        break
+                    is_rate_limited, parsed_retry = detect_rate_limit(stdout or "", stderr or "")
+                    if is_rate_limited:
+                        raw_delay = parsed_retry if parsed_retry is not None else DEFAULT_RETRY_AFTER_SECONDS
+                        delay = min(MAX_RETRY_AFTER_SECONDS, max(1.0, float(raw_delay)))
+                        result["retry_after_seconds"] = delay
+                        remaining = args.timeout - (datetime.now(UTC) - proc_started).total_seconds()
+                        if attempt < MAX_THROTTLE_RETRIES and remaining > delay + 10:
+                            attempt += 1
+                            result["throttle_retries"] = attempt
+                            sleep_fn(delay)
+                            continue
+                        result.update(status="throttled", reason="rate_limited_429")
+                        break
                     result.update(status="failed", reason=f"exit_code_{proc.returncode}")
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                stdout, stderr = proc.communicate()
-                result.update(status="timeout", reason=f"exceeded {args.timeout + KILL_MARGIN}s")
-                result["exit_code"] = None
-            (evidence / "transcript.json").write_text(redact(stdout or "", key), encoding="utf-8")
-            (evidence / "stderr.txt").write_text(redact(stderr or "", key), encoding="utf-8")
-            result["steps"] = compute_steps(stdout or "")
+                    break
+                except subprocess.TimeoutExpired:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    stdout, stderr = proc.communicate()
+                    result.update(status="timeout", reason=f"exceeded {args.timeout + KILL_MARGIN}s")
+                    result["exit_code"] = None
+                    break
+            if spawned:
+                (evidence / "transcript.json").write_text(redact(stdout or "", key), encoding="utf-8")
+                (evidence / "stderr.txt").write_text(redact(stderr or "", key), encoding="utf-8")
+                result["steps"] = compute_steps(stdout or "")
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
         result["duration_seconds"] = round((datetime.now(UTC) - proc_started).total_seconds(), 3)
