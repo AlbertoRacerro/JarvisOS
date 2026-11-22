@@ -155,7 +155,7 @@ WITHHELD_TOOLS = frozenset({"skill_manage"})
 # Tool names Jarvis admits in a relayed request; mirrors supervisor.HERMES_TOOL_ALLOWLIST.
 ADMITTED_TOOLS = frozenset({"mcp__jarvis__jarvis_context_preview",
                             "mcp__jarvis__jarvis_retrieval_query", "mcp__jarvis__jarvis_decide",
-                            "mcp__jarvis__jarvis_dev_read",
+                            "mcp__jarvis__jarvis_dev_read", "mcp__jarvis__jarvis_repo_read",
                             "mcp__jarvis__jarvis_process_read", "mcp__jarvis__jarvis_process_act",
                             "mcp__jarvis__jarvis_bluecad_read", "mcp__jarvis__jarvis_bluecad_act",
                             "mcp__jarvis__jarvis_studio_read", "mcp__jarvis__jarvis_studio_act",
@@ -215,6 +215,7 @@ def pinned_config(base_url: str, token: str, python: str | None = None) -> dict[
             "env": {"JARVIS_HERMES_BROKER_URL": base_url + "/jarvis/tool",
                     "JARVIS_HERMES_BROKER_TOKEN": token},
             "tools": {"include": ["jarvis_context_preview", "jarvis_retrieval_query", "jarvis_decide",
+                                  "jarvis_dev_read", "jarvis_repo_read",
                                   "jarvis_process_read", "jarvis_process_act",
                                   "jarvis_bluecad_read", "jarvis_bluecad_act",
                                   "jarvis_studio_read", "jarvis_studio_act",
