@@ -1,6 +1,6 @@
 # 346 — QUOTA-PANEL-GRID-1: Full-grid provider quota panel with free models and read-only prepaid balances
 
-Status: ready
+Status: merged
 Depends on: 340
 
 ## Goal

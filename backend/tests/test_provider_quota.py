@@ -60,7 +60,7 @@ def test_free_models_parsing_and_secret_path_stripping(
                 "provider": "Nous",
                 "model": "nousresearch/hermes-3-llama-3.1-8b",
                 "key_file": str(secret_key),
-                "api_key": "sk-1234567890abcdef1234567890abcdef",
+                "api_key": "sk-live-1234567890abcdef1234567890",
                 "token": "tok_xyz987654321",
                 "base_url": "https://api.nous.invalid/v1",
                 "index_score": 42,
@@ -129,7 +129,7 @@ def test_free_models_parsing_and_secret_path_stripping(
         assert forbidden not in m1
     serialized = json.dumps(m1)
     assert "SUPER_SECRET_TOKEN" not in serialized
-    assert "sk-123456" not in serialized
+    assert "sk-live-123456" not in serialized
     assert str(tmp_path) not in serialized
 
     # 2. Zen pool (throttled by bridge state, live_dot limit kind)
@@ -163,8 +163,8 @@ def test_prepaid_balances_parsing_and_secret_path_stripping(
                 "provider": "deepseek",
                 "label": "DeepSeek Prepaid",
                 "balance_usd": 14.50,
-                "api_key": "sk-secret-paid-key-not-for-routing",
-                "key_file": "/home/user/.secrets/deepseek.key",
+                "api_key": "sk-test-secret-1234abcd",
+                "key_file": str(tmp_path / "deepseek.key"),
                 "status": "ok",
             },
             {
@@ -206,8 +206,8 @@ def test_prepaid_balances_parsing_and_secret_path_stripping(
     for forbidden in ("api_key", "key_file", ".secrets"):
         assert forbidden not in b1
     serialized = json.dumps(b1)
-    assert "sk-secret" not in serialized
-    assert "/home/user" not in serialized
+    assert "sk-test-secret" not in serialized
+    assert str(tmp_path) not in serialized
 
     b2 = balances[1]
     assert b2["provider"] == "zai"
