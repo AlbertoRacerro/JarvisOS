@@ -372,6 +372,286 @@ def read_codex_limits() -> tuple[dict[str, Any] | None, str | None]:
             proc.stdout.close()
 
 
+def _resolve_control_root() -> Path | None:
+    try:
+        return relay_monitor.control_root()
+    except Exception:
+        pass
+    env_dir = os.environ.get("RELAY_CONTINUITY_DIR")
+    if env_dir:
+        return Path(env_dir).expanduser()
+    return None
+
+
+def _resolve_temp_pools_path(control_dir: Path | None = None) -> Path | None:
+    override = os.environ.get("TEMP_POOLS_FILE")
+    if override:
+        p = Path(override).expanduser()
+        return p if p.is_file() else None
+    if control_dir is not None:
+        for c in (control_dir / "temp-pools.json", control_dir.parent / "temp-pools.json"):
+            if c.is_file():
+                return c
+        return None
+    root = _resolve_control_root()
+    if root is not None:
+        for c in (root / "temp-pools.json", root.parent / "temp-pools.json"):
+            if c.is_file():
+                return c
+    default_path = Path.home() / "jarvis-control" / "work" / "temp-pools.json"
+    if default_path.is_file():
+        return default_path
+    return None
+
+
+def _load_bridge_states(pools_path: Path | None) -> dict[str, str]:
+    if pools_path is None:
+        return {}
+    lists_file = pools_path.parent / "temp-pool-lists.json"
+    if not lists_file.is_file():
+        return {}
+    try:
+        data = json.loads(lists_file.read_text(encoding="utf-8"))
+        bridge = data.get("bridge")
+        if not isinstance(bridge, dict):
+            return {}
+        result: dict[str, str] = {}
+        for k, v in bridge.items():
+            if isinstance(k, str) and isinstance(v, dict):
+                st = v.get("state")
+                if isinstance(st, str):
+                    result[k] = st
+        return result
+    except Exception:
+        return {}
+
+
+def normalize_free_model(
+    raw: Any,
+    reference_score: float | None = None,
+    bridge_states: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    raw_id = raw.get("id") or raw.get("name")
+    pool_id = _short(str(raw_id)) if raw_id else None
+    if not pool_id:
+        return None
+
+    raw_label = raw.get("label") or raw.get("name") or raw.get("model") or pool_id
+    label = _short(str(raw_label)) or pool_id
+
+    raw_source = raw.get("source") or raw.get("provider") or raw.get("free_list") or "free"
+    source = _short(str(raw_source)) or "free"
+
+    raw_model = str(raw.get("model_id") or raw.get("model") or "")
+    model_id = ""
+    if raw_model and re.match(r"^[A-Za-z0-9_.&·()/: -]{1,80}$", raw_model):
+        try:
+            if not relay_monitor.observe().devctx.find_secret(raw_model):
+                model_id = raw_model
+        except Exception:
+            model_id = raw_model
+
+    score = raw.get("intelligence_index")
+    if score is None:
+        score = raw.get("index_score")
+    if score is None:
+        score = raw.get("score")
+    intelligence_index: int | None = None
+    if isinstance(score, (int, float)) and not isinstance(score, bool):
+        intelligence_index = int(round(float(score)))
+
+    bridge = bridge_states or {}
+    bridge_st = bridge.get(pool_id) or bridge.get(str(raw_id))
+    raw_status = str(raw.get("status") or "").lower()
+
+    rem = raw.get("remaining_percent")
+    if rem is None and raw.get("used_percent") is not None:
+        u = raw.get("used_percent")
+        if isinstance(u, (int, float)) and not isinstance(u, bool) and 0 <= u <= 100:
+            rem = 100.0 - float(u)
+
+    remaining_percent: float | None = None
+    if isinstance(rem, (int, float)) and not isinstance(rem, bool):
+        remaining_percent = round(max(0.0, min(100.0, float(rem))), 1)
+
+    limit_kind_raw = str(raw.get("limit_kind") or "").lower()
+    if limit_kind_raw in ("ring", "live_dot"):
+        limit_kind = limit_kind_raw
+    elif remaining_percent is not None:
+        limit_kind = "ring"
+    else:
+        limit_kind = "live_dot"
+
+    is_exhausted = (
+        raw.get("exhausted") is True
+        or raw_status == "exhausted"
+        or bridge_st == "exhausted"
+        or (remaining_percent is not None and remaining_percent <= 0.5)
+    )
+
+    is_throttled = (
+        raw.get("throttled") is True
+        or raw_status == "throttled"
+        or bridge_st in ("throttled", "suspect")
+        or raw.get("throttled_until") is not None
+    )
+
+    is_unqualified = (
+        raw.get("unqualified") is True
+        or raw_status == "unqualified"
+        or raw.get("admission") in ("below_index", "unindexed", "no_reference")
+        or (reference_score is not None and intelligence_index is not None and intelligence_index < reference_score)
+    )
+
+    if is_exhausted:
+        status = "exhausted"
+    elif is_throttled:
+        status = "throttled"
+    elif is_unqualified:
+        status = "unqualified"
+    elif raw_status in ("active", "exhausted", "throttled", "unqualified"):
+        status = raw_status
+    else:
+        status = "active"
+
+    return {
+        "id": pool_id,
+        "label": label,
+        "source": source,
+        "model_id": model_id,
+        "intelligence_index": intelligence_index,
+        "status": status,
+        "limit_kind": limit_kind,
+        "remaining_percent": remaining_percent,
+        "exhausted": bool(is_exhausted or status == "exhausted"),
+    }
+
+
+def read_free_models(control_dir: Path | None = None) -> list[dict[str, Any]]:
+    path = _resolve_temp_pools_path(control_dir)
+    if path is None or not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    pools = data if isinstance(data, list) else data.get("pools") if isinstance(data, dict) else None
+    if not isinstance(pools, list):
+        return []
+
+    ref_score = None
+    if isinstance(data, dict):
+        ref_name = data.get("reference")
+        scores = data.get("scores")
+        if isinstance(ref_name, str) and isinstance(scores, dict):
+            val = scores.get(ref_name)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                ref_score = float(val)
+
+    bridge_states = _load_bridge_states(path)
+    results: list[dict[str, Any]] = []
+    for raw in pools:
+        norm = normalize_free_model(raw, reference_score=ref_score, bridge_states=bridge_states)
+        if norm is not None:
+            results.append(norm)
+    return results
+
+
+def _resolve_prepaid_balances_path(control_dir: Path | None = None) -> Path | None:
+    override = os.environ.get("PREPAID_BALANCES_FILE")
+    if override:
+        p = Path(override).expanduser()
+        return p if p.is_file() else None
+    if control_dir is not None:
+        for c in (control_dir / "prepaid-balances.json", control_dir.parent / "prepaid-balances.json"):
+            if c.is_file():
+                return c
+        return None
+    root = _resolve_control_root()
+    if root is not None:
+        for c in (root / "prepaid-balances.json", root.parent / "prepaid-balances.json"):
+            if c.is_file():
+                return c
+    default_path = Path.home() / "jarvis-control" / "work" / "prepaid-balances.json"
+    if default_path.is_file():
+        return default_path
+    return None
+
+
+def normalize_prepaid_balance(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    provider_name = _short(str(raw.get("provider") or raw.get("name") or ""))
+    if not provider_name:
+        return None
+    raw_label = raw.get("label") or raw.get("provider") or provider_name
+    label = _short(str(raw_label)) or provider_name
+
+    b_usd = raw.get("balance_usd")
+    balance_usd: float | None = None
+    if isinstance(b_usd, (int, float)) and not isinstance(b_usd, bool):
+        balance_usd = round(float(b_usd), 2)
+
+    s_eur = raw.get("spent_eur")
+    spent_eur: float | None = None
+    if isinstance(s_eur, (int, float)) and not isinstance(s_eur, bool):
+        spent_eur = round(float(s_eur), 2)
+
+    c_eur = raw.get("cap_eur")
+    cap_eur: float | None = None
+    if isinstance(c_eur, (int, float)) and not isinstance(c_eur, bool):
+        cap_eur = round(float(c_eur), 2)
+
+    raw_status = str(raw.get("status") or "").lower()
+    status = "ok" if raw_status in ("ok", "active", "available") else "unavailable"
+    if not raw_status and (balance_usd is not None or spent_eur is not None or cap_eur is not None):
+        status = "ok"
+
+    raw_reason = raw.get("reason")
+    reason = _short(str(raw_reason)) if raw_reason else None
+
+    return {
+        "provider": provider_name,
+        "label": label,
+        "mode": "read_only",
+        "balance_usd": balance_usd,
+        "spent_eur": spent_eur,
+        "cap_eur": cap_eur,
+        "status": status,
+        "reason": reason,
+    }
+
+
+def read_prepaid_balances(control_dir: Path | None = None) -> list[dict[str, Any]]:
+    path = _resolve_prepaid_balances_path(control_dir)
+    if path is None or not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    entries = (
+        data
+        if isinstance(data, list)
+        else (data.get("balances") or data.get("accounts") or data.get("prepaid_balances"))
+        if isinstance(data, dict)
+        else None
+    )
+    if not isinstance(entries, list):
+        return []
+
+    results: list[dict[str, Any]] = []
+    for raw in entries:
+        norm = normalize_prepaid_balance(raw)
+        if norm is not None:
+            results.append(norm)
+    return results
+
+
 def read_all(*, refresh: bool = False) -> dict[str, Any]:
     # Independent status sources share one bounded wait.
     with ThreadPoolExecutor(max_workers=4) as executor:
@@ -591,7 +871,30 @@ def normalize(readings: dict[str, Any], now: datetime, *, read_at: datetime | No
                     body = (normalize_agent(by_key.get(source_key), now) if isinstance(relay, dict)
                             else {"status": "unavailable", "reason": _reason("relay", errors.get("relay") or errors.get("claude")), "windows": []})
         providers.append({"provider": key, "label": label, "source": source, **body})
-    return {"state": "ok", "read_at": _iso(now), "providers": providers}
+
+    raw_free = readings.get("free_models")
+    if raw_free is None:
+        free_models = read_free_models()
+    elif isinstance(raw_free, list):
+        free_models = [m for item in raw_free if (m := normalize_free_model(item)) is not None]
+    else:
+        free_models = []
+
+    raw_prepaid = readings.get("prepaid_balances")
+    if raw_prepaid is None:
+        prepaid_balances = read_prepaid_balances()
+    elif isinstance(raw_prepaid, list):
+        prepaid_balances = [b for item in raw_prepaid if (b := normalize_prepaid_balance(item)) is not None]
+    else:
+        prepaid_balances = []
+
+    return {
+        "state": "ok",
+        "read_at": _iso(now),
+        "providers": providers,
+        "free_models": free_models,
+        "prepaid_balances": prepaid_balances,
+    }
 
 
 class QuotaCache:

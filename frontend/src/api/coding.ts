@@ -280,11 +280,36 @@ export type ProviderQuota = Readonly<{
   windows: readonly ProviderQuotaWindow[];
 }>;
 
+export type FreeModelQuota = Readonly<{
+  id: string;
+  label: string;
+  source: string;
+  model_id: string;
+  intelligence_index: number | null;
+  status: "active" | "exhausted" | "throttled" | "unqualified";
+  limit_kind: "ring" | "live_dot";
+  remaining_percent: number | null;
+  exhausted: boolean;
+}>;
+
+export type PrepaidBalance = Readonly<{
+  provider: string;
+  label: string;
+  mode: "read_only";
+  balance_usd: number | null;
+  spent_eur: number | null;
+  cap_eur: number | null;
+  status: "ok" | "unavailable";
+  reason: string | null;
+}>;
+
 export type ProviderQuotas = Readonly<{
   state: "ok";
   read_at: string;
   next_read_at?: string;
   providers: readonly ProviderQuota[];
+  free_models?: readonly FreeModelQuota[];
+  prepaid_balances?: readonly PrepaidBalance[];
 }>;
 
 export function readProviderQuotas(repository = CODING_REPOSITORY, refresh = false): Promise<ProviderQuotas> {
