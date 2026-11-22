@@ -43,7 +43,7 @@ def test_query_scopes_owner_workspace_caps_and_stable_json(query_store) -> None:
                            allowed_refs=frozenset({("decision_fixture", "record", "decision")}), store=store)
     assert result["schema_version"] == "retrieval-query.v1"
     assert set(result) == {"schema_version", "query", "workspace_id", "source_scope", "evidence_role",
-                           "freshness", "bundle", "evidence"}
+                           "freshness", "bundle", "evidence", "truncated"}
     assert result["evidence_role"] == "reference_data_not_instructions"
     assert result["source_scope"] == ["decision_fixture"]
     assert all(item["source_ref"]["authority_owner"] == "decision_fixture" for item in result["evidence"])
@@ -143,4 +143,4 @@ def test_cli_json_shape_is_stable(query_store, monkeypatch: pytest.MonkeyPatch, 
     assert payload["schema_version"] == "retrieval-query.v1"
     assert payload["query"] == "pump"
     assert set(payload) == {"schema_version", "query", "workspace_id", "source_scope", "evidence_role",
-                            "freshness", "bundle", "evidence"}
+                            "freshness", "bundle", "evidence", "truncated"}

@@ -12,6 +12,7 @@ from app.modules.ai.retrieval_index import SQLiteIndexStore
 MAX_QUERY_CHARS = 2_000
 MAX_LIMIT = 32
 MAX_TOKEN_BUDGET = 8_192
+MAX_RETRIEVAL_RESULT_CHARS = 12_000
 SCHEMA_VERSION = "retrieval-query.v1"
 # Canonical owners indexed with a workspace identity and reread from their owner.
 # Repository documents have no workspace identity and are intentionally excluded.
@@ -48,15 +49,23 @@ def query_context(
     bundle = index.build_bundle(query, workspace_id=workspace_id, token_budget=token_budget,
                                 limit=limit, source_owners=owners, source_refs=allowed_refs)
     evidence = []
-    # Excerpts share the caller's token budget (about four characters per token).
-    remaining_chars = token_budget * 4
+    # Excerpts share the caller's token budget (about four characters per token), bounded by MAX_RETRIEVAL_RESULT_CHARS.
+    remaining_chars = min(token_budget * 4, MAX_RETRIEVAL_RESULT_CHARS)
+    truncated = any(m.outcome == "dropped_budget" for m in bundle.evidence_manifest)
     for item in bundle.items:
         resolution = index.resolve_authoritative(item.source_ref)
         valid = (resolution.state == "current" and resolution.content is not None
                  and resolution.current_content_digest == item.content_digest)
-        if not valid or remaining_chars <= 0:
+        if not valid:
             continue
-        excerpt = (resolution.content or "")[:min(2_000, remaining_chars)]
+        if remaining_chars <= 0:
+            truncated = True
+            break
+        content = resolution.content or ""
+        max_item_chars = min(2_000, remaining_chars)
+        excerpt = content[:max_item_chars]
+        if len(content) > max_item_chars:
+            truncated = True
         remaining_chars -= len(excerpt)
         evidence.append({
             "source_ref": item.source_ref.model_dump(mode="json"),
@@ -65,7 +74,7 @@ def query_context(
             "validation": "current",
             "excerpt": excerpt,
         })
-    return {
+    result: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "query": query,
         "workspace_id": workspace_id,
@@ -74,7 +83,19 @@ def query_context(
         "freshness": freshness.model_dump(mode="json"),
         "bundle": bundle.model_dump(mode="json"),
         "evidence": evidence,
+        "truncated": truncated,
     }
+    while evidence and len(json.dumps(result, ensure_ascii=False)) > MAX_RETRIEVAL_RESULT_CHARS:
+        result["truncated"] = True
+        last = evidence[-1]
+        overhead = len(json.dumps(result, ensure_ascii=False)) - MAX_RETRIEVAL_RESULT_CHARS
+        last_excerpt = str(last.get("excerpt") or "")
+        if len(last_excerpt) > overhead:
+            last["excerpt"] = last_excerpt[:-overhead]
+            break
+        else:
+            evidence.pop()
+    return result
 
 
 def _repository_root(value: str | None) -> Path | None:
