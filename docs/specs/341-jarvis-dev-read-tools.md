@@ -1,6 +1,6 @@
 # 341 — JARVIS-DEV-READ-TOOLS-1: Read-only development, supervisor, quota, and runtime tools for Jarvis chat
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal

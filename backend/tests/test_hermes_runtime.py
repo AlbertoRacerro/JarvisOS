@@ -161,7 +161,7 @@ def test_mcp_protocol_discloses_only_broker_tool() -> None:
     listed = _reply({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     assert initialized is not None and initialized["result"]["serverInfo"]["name"] == "jarvis"
     assert listed is not None and [tool["name"] for tool in listed["result"]["tools"]] == [
-        "jarvis_context_preview", "jarvis_retrieval_query", "jarvis_decide",
+        "jarvis_context_preview", "jarvis_retrieval_query", "jarvis_decide", "jarvis_dev_read",
         "jarvis_process_read", "jarvis_process_act", "jarvis_bluecad_read", "jarvis_bluecad_act",
         "jarvis_studio_read", "jarvis_studio_act", "jarvis_bench_read", "jarvis_bench_run"]
     for name in ("jarvis_process_read", "jarvis_bluecad_read", "jarvis_studio_read"):
@@ -869,7 +869,7 @@ def test_real_worker_turn_interrupt_relay(tmp_path: Path) -> None:
         assert not {"delegate_task", "skills_list", "skill_view"} & set(bound["tools"])
         assert set(bound["tools"]) <= {
             "mcp__jarvis__jarvis_context_preview", "mcp__jarvis__jarvis_retrieval_query",
-            "mcp__jarvis__jarvis_decide", "mcp__jarvis__jarvis_process_read",
+            "mcp__jarvis__jarvis_decide", "mcp__jarvis__jarvis_dev_read", "mcp__jarvis__jarvis_process_read",
             "mcp__jarvis__jarvis_process_act", "mcp__jarvis__jarvis_bluecad_read",
             "mcp__jarvis__jarvis_bluecad_act", "mcp__jarvis__jarvis_studio_read",
             "mcp__jarvis__jarvis_studio_act", "memory", "session_search",

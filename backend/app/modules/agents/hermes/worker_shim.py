@@ -155,6 +155,7 @@ WITHHELD_TOOLS = frozenset({"skill_manage"})
 # Tool names Jarvis admits in a relayed request; mirrors supervisor.HERMES_TOOL_ALLOWLIST.
 ADMITTED_TOOLS = frozenset({"mcp__jarvis__jarvis_context_preview",
                             "mcp__jarvis__jarvis_retrieval_query", "mcp__jarvis__jarvis_decide",
+                            "mcp__jarvis__jarvis_dev_read",
                             "mcp__jarvis__jarvis_process_read", "mcp__jarvis__jarvis_process_act",
                             "mcp__jarvis__jarvis_bluecad_read", "mcp__jarvis__jarvis_bluecad_act",
                             "mcp__jarvis__jarvis_studio_read", "mcp__jarvis__jarvis_studio_act",

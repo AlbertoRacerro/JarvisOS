@@ -43,6 +43,34 @@ _DECISION_TOOL = {
         }, "required": ["grant_id", "kind", "request"], "additionalProperties": False,
     },
 }
+_DEV_READ_TOOL = {
+    "name": "jarvis_dev_read",
+    "description": "Read JarvisOS development, supervisor, quota, and runtime health state using a live Jarvis capability grant.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "grant_id": {"type": "string", "maxLength": 128},
+            "op": {
+                "type": "string",
+                "enum": [
+                    "specs",
+                    "spec_text",
+                    "recent_work",
+                    "plan",
+                    "supervisor",
+                    "directives",
+                    "quotas",
+                    "runtime_health",
+                ],
+            },
+            "spec_id": {"type": "string", "maxLength": 16},
+            "status": {"type": "string", "maxLength": 32},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+        },
+        "required": ["grant_id", "op"],
+        "additionalProperties": False,
+    },
+}
 
 
 _QUANTITY = {"type": "object", "properties": {"value": {"type": "number"}, "unit": {"type": "string"}},
@@ -247,7 +275,7 @@ _BENCH_RUN_TOOL = {
         "additionalProperties": False,
     },
 }
-_TOOLS = [_TOOL, _RETRIEVAL_TOOL, _DECISION_TOOL, _PROCESS_READ_TOOL, _PROCESS_ACT_TOOL,
+_TOOLS = [_TOOL, _RETRIEVAL_TOOL, _DECISION_TOOL, _DEV_READ_TOOL, _PROCESS_READ_TOOL, _PROCESS_ACT_TOOL,
           _BLUECAD_READ_TOOL, _BLUECAD_ACT_TOOL, _STUDIO_READ_TOOL, _STUDIO_ACT_TOOL,
           _BENCH_READ_TOOL, _BENCH_RUN_TOOL]
 _NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL}
