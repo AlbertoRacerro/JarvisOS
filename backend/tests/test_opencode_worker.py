@@ -373,3 +373,193 @@ def test_execute_run_records_steps_and_keeps_logs(
     assert "TEST_TEMP_POOL_SECRET" not in stderr_content
     assert "info: step finished successfully" in stderr_content
 
+
+def test_detect_rate_limit_parses_429_retry_after_and_ignores_402_500() -> None:
+    assert ow.detect_rate_limit("", "Error: HTTP 429 Too Many Requests") == (True, None)
+    assert ow.detect_rate_limit("", "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 12\r\n") == (True, 12.0)
+    assert ow.detect_rate_limit("", "rate_limit_exceeded: retry-after: 30") == (True, 30.0)
+    assert ow.detect_rate_limit(
+        json.dumps({"type": "error", "error": {"code": 429, "message": "Rate limit exceeded", "retry_after": 12}}),
+        "",
+    ) == (True, 12.0)
+    assert ow.detect_rate_limit("RATE LIMIT EXCEEDED, retry after 20s", "") == (True, 20.0)
+    assert ow.detect_rate_limit("", "Request THROTTLED by upstream") == (True, None)
+
+    # Never treat 402 / insufficient balance / payment required or 500 as 429 throttling
+    assert ow.detect_rate_limit("", "HTTP 402 Payment Required") == (False, None)
+    assert ow.detect_rate_limit("", "Error: insufficient balance (retry-after: 10)") == (False, None)
+    assert ow.detect_rate_limit(
+        json.dumps({"type": "error", "error": {"code": 402, "message": "payment_required"}}),
+        "",
+    ) == (False, None)
+    assert ow.detect_rate_limit("", "HTTP 500 Internal Server Error") == (False, None)
+    assert ow.detect_rate_limit("", "SyntaxError: invalid syntax") == (False, None)
+    assert ow.detect_rate_limit("", "") == (False, None)
+
+
+def test_execute_run_retries_on_429_and_succeeds_on_second_attempt(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, temp_pool: tuple[Path, Path],
+        linked_worktree: Path, no_sandbox: list[tuple[str, Path, Path]]) -> None:
+    fake_bin = tmp_path / "opencode"
+    fake_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("JARVISOS_OPENCODE_BIN", str(fake_bin))
+
+    slept: list[float] = []
+    monkeypatch.setattr(ow.time, "sleep", lambda seconds: slept.append(seconds))
+
+    attempts = [
+        (1, "", "HTTP 429 Too Many Requests\nRetry-After: 12\n"),
+        (0, json.dumps({"type": "step_start", "timestamp": 1795213871314}) + "\n", "info: ok\n"),
+    ]
+    popen_calls = 0
+    real_popen = subprocess.Popen
+
+    class FakePopen:
+        def __init__(self, cmd: list[str], *args: object, **kwargs: object) -> None:
+            nonlocal popen_calls
+            idx = min(popen_calls, len(attempts) - 1)
+            popen_calls += 1
+            self.returncode, self._stdout, self._stderr = attempts[idx]
+            self.pid = 99999
+
+        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+            return self._stdout, self._stderr
+
+        def __enter__(self) -> FakePopen:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            pass
+
+    def popen_factory(cmd: list[str], *args: object, **kwargs: object) -> object:
+        if isinstance(cmd, list) and cmd and cmd[0] == "git":
+            return real_popen(cmd, *args, **kwargs)
+        return FakePopen(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(ow.subprocess, "Popen", popen_factory)
+
+    task = tmp_path / "task.md"
+    task.write_text("Retry after 429.", encoding="utf-8")
+    evidence = tmp_path / "evidence"
+    args = ow.argparse.Namespace(pool="testpool", task_file=str(task), worktree=str(linked_worktree),
+                                 timeout=60, evidence_dir=str(evidence))
+    _, result = ow.execute_run(args)
+    assert result["status"] == "succeeded"
+    assert result["reason"] is None
+    assert result["throttle_retries"] == 1
+    assert result["retry_after_seconds"] == 12.0
+    assert popen_calls == 2
+    assert slept == [12.0]
+
+    result_disk = json.loads((evidence / "result.json").read_text(encoding="utf-8"))
+    assert result_disk["throttle_retries"] == 1
+    assert result_disk["retry_after_seconds"] == 12.0
+
+
+def test_execute_run_exhausts_retries_or_timeout_budget_as_throttled(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, temp_pool: tuple[Path, Path],
+        linked_worktree: Path, no_sandbox: list[tuple[str, Path, Path]]) -> None:
+    fake_bin = tmp_path / "opencode"
+    fake_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("JARVISOS_OPENCODE_BIN", str(fake_bin))
+
+    slept: list[float] = []
+    monkeypatch.setattr(ow.time, "sleep", lambda seconds: slept.append(seconds))
+
+    popen_calls = 0
+    real_popen = subprocess.Popen
+    stderr_payload = "HTTP 429 Too Many Requests\nRetry-After: 500\n"
+
+    class Always429Popen:
+        def __init__(self, cmd: list[str], *args: object, **kwargs: object) -> None:
+            nonlocal popen_calls
+            popen_calls += 1
+            self.returncode = 1
+            self.pid = 99999
+
+        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+            return "", stderr_payload
+
+        def __enter__(self) -> Always429Popen:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            pass
+
+    def popen_factory(cmd: list[str], *args: object, **kwargs: object) -> object:
+        if isinstance(cmd, list) and cmd and cmd[0] == "git":
+            return real_popen(cmd, *args, **kwargs)
+        return Always429Popen(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(ow.subprocess, "Popen", popen_factory)
+
+    task = tmp_path / "task.md"
+    task.write_text("Always 429.", encoding="utf-8")
+
+    # 1. Exhaust MAX_THROTTLE_RETRIES (with retry_after clamped to MAX_RETRY_AFTER_SECONDS = 120.0)
+    evidence_exhausted = tmp_path / "evidence-exhausted"
+    args_exhausted = ow.argparse.Namespace(pool="testpool", task_file=str(task), worktree=str(linked_worktree),
+                                           timeout=600, evidence_dir=str(evidence_exhausted))
+    _, res_exhausted = ow.execute_run(args_exhausted)
+    assert res_exhausted["status"] == "throttled"
+    assert res_exhausted["reason"] == "rate_limited_429"
+    assert res_exhausted["throttle_retries"] == ow.MAX_THROTTLE_RETRIES
+    assert res_exhausted["retry_after_seconds"] == ow.MAX_RETRY_AFTER_SECONDS
+    assert popen_calls == ow.MAX_THROTTLE_RETRIES + 1
+    assert slept == [ow.MAX_RETRY_AFTER_SECONDS] * ow.MAX_THROTTLE_RETRIES
+    assert ow.cmd_run(args_exhausted) == 2
+
+    # 2. Insufficient remaining timeout budget (timeout=20 <= delay(15) + 10)
+    slept.clear()
+    popen_calls = 0
+    stderr_payload = "HTTP 429 Too Many Requests\n"
+    evidence_short = tmp_path / "evidence-short"
+    args_short = ow.argparse.Namespace(pool="testpool", task_file=str(task), worktree=str(linked_worktree),
+                                       timeout=20, evidence_dir=str(evidence_short))
+    _, res_short = ow.execute_run(args_short)
+    assert res_short["status"] == "throttled"
+    assert res_short["reason"] == "rate_limited_429"
+    assert res_short["throttle_retries"] == 0
+    assert res_short["retry_after_seconds"] == ow.DEFAULT_RETRY_AFTER_SECONDS
+    assert popen_calls == 1
+    assert slept == []
+
+
+def test_execute_smoke_does_not_penalize_bridge_or_model_on_throttled(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, temp_pool: tuple[Path, Path],
+        no_sandbox: list[tuple[str, Path, Path]]) -> None:
+    sys.path.insert(0, str(SCRIPT.parent))
+    import worker_routing as routing
+
+    routing.set_bridge_state("temp-testpool", "ok")
+    monkeypatch.setattr(ow.time, "sleep", lambda seconds: None)
+
+    throttled_bin = tmp_path / "opencode-429"
+    throttled_bin.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stderr.write('HTTP 429 Too Many Requests\\nRetry-After: 25\\n')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    throttled_bin.chmod(0o755)
+    monkeypatch.setenv("JARVISOS_OPENCODE_BIN", str(throttled_bin))
+
+    smoke_ev = tmp_path / "smoke-evidence"
+    monkeypatch.setattr(ow, "evidence_dir", lambda: smoke_ev)
+    record_file = tmp_path / "worker-outcomes.jsonl"
+    # timeout=30 <= 25 + 10, so each smoke task immediately finishes as throttled
+    args = ow.argparse.Namespace(pool="testpool", timeout=30, record_file=record_file)
+    assert ow.execute_smoke(args) == 0
+
+    # Bridge state must remain "ok" (never marked "suspect") and no harness/model failure recorded
+    assert routing.bridge_state("temp-testpool") == "ok"
+    assert not record_file.exists() or record_file.read_text(encoding="utf-8").strip() == ""
+    smoke_doc = json.loads((smoke_ev / "smoke" / "smoke.json").read_text(encoding="utf-8"))
+    assert smoke_doc["bridge"] == "throttled"
+    assert len(smoke_doc["outcomes"]) == 3
+    assert all(item["throttled"] is True and item["run_status"] == "throttled" for item in smoke_doc["outcomes"])
+
+
