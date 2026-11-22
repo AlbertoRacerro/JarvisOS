@@ -54,6 +54,11 @@ def _is_secret_like(name: str) -> bool:
     return False
 
 
+_LOCAL_PROVIDER_MODES = frozenset(
+    {"fake", "local", "local_llamacpp", "local_ollama", "ollama", "llamacpp"}
+)
+
+
 def _is_binary_file(file_path: Path) -> bool:
     try:
         with open(file_path, "rb") as f:
@@ -61,6 +66,28 @@ def _is_binary_file(file_path: Path) -> bool:
             return b"\x00" in chunk
     except OSError:
         return True
+
+
+def _path_has_forbidden_segment(rel_path: Path) -> bool:
+    for part in rel_path.parts:
+        if part in {".", ""}:
+            continue
+        if part == ".git" or _is_secret_like(part):
+            return True
+    return False
+
+
+def _safe_relative_walk_path(entry: Path, scope_root: Path) -> Path | None:
+    try:
+        resolved = entry.resolve()
+        if not resolved.is_relative_to(scope_root):
+            return None
+        rel = resolved.relative_to(scope_root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if _path_has_forbidden_segment(rel):
+        return None
+    return rel
 
 
 def _is_local_route(
@@ -82,11 +109,10 @@ def _is_local_route(
         from app.modules.ai.settings import get_ai_settings
 
         settings = get_ai_settings()
-        if settings.provider_mode in {"scaleway", "deepseek"}:
-            return False
+        provider_mode = str(getattr(settings, "provider_mode", "") or "").lower()
+        return provider_mode in _LOCAL_PROVIDER_MODES
     except Exception:
-        pass
-    return True
+        return False
 
 
 def _resolve_relative_path(
@@ -115,9 +141,13 @@ def _resolve_relative_path(
         return None, ""
     if not resolved.is_relative_to(scope_root):
         return None, ""
-    if _is_secret_like(resolved.name):
+    try:
+        rel = resolved.relative_to(scope_root)
+    except ValueError:
         return None, ""
-    rel_posix = resolved.relative_to(scope_root).as_posix()
+    if _path_has_forbidden_segment(rel):
+        return None, ""
+    rel_posix = rel.as_posix()
     if rel_posix == ".":
         rel_posix = ""
     return resolved, rel_posix
@@ -137,7 +167,7 @@ def _handle_list(
 
     all_files: list[str] = []
     if target_path.is_file():
-        if _is_binary_file(target_path) or _is_secret_like(target_path.name):
+        if _is_binary_file(target_path) or _safe_relative_walk_path(target_path, scope_root) is None:
             return None, "invalid_arguments"
         all_files.append(clean_rel)
     else:
@@ -147,21 +177,21 @@ def _handle_list(
                 if d not in _SKIP_DIR_NAMES
                 and not d.startswith(".")
                 and not _is_secret_like(d)
-                and (not (Path(root) / d).is_symlink() or (Path(root) / d).resolve().is_relative_to(scope_root))
+                and (
+                    not (Path(root) / d).is_symlink()
+                    or _safe_relative_walk_path(Path(root) / d, scope_root) is not None
+                )
             ]
             for file_name in files:
                 if file_name == ".git" or _is_secret_like(file_name):
                     continue
                 file_full = Path(root) / file_name
-                if file_full.is_symlink() and not file_full.resolve().is_relative_to(scope_root):
+                rel = _safe_relative_walk_path(file_full, scope_root)
+                if rel is None:
                     continue
                 if _is_binary_file(file_full):
                     continue
-                try:
-                    rel = file_full.resolve().relative_to(scope_root).as_posix()
-                    all_files.append(rel)
-                except (ValueError, OSError):
-                    continue
+                all_files.append(rel.as_posix())
 
     all_files.sort()
     sliced = all_files[:limit]
@@ -193,7 +223,7 @@ def _handle_search(
 
     candidate_files: list[tuple[Path, str]] = []
     if target_path.is_file():
-        if not _is_binary_file(target_path) and not _is_secret_like(target_path.name):
+        if not _is_binary_file(target_path) and _safe_relative_walk_path(target_path, scope_root) is not None:
             candidate_files.append((target_path, clean_rel))
     else:
         for root, dirs, files in os.walk(target_path, followlinks=False):
@@ -202,21 +232,21 @@ def _handle_search(
                 if d not in _SKIP_DIR_NAMES
                 and not d.startswith(".")
                 and not _is_secret_like(d)
-                and (not (Path(root) / d).is_symlink() or (Path(root) / d).resolve().is_relative_to(scope_root))
+                and (
+                    not (Path(root) / d).is_symlink()
+                    or _safe_relative_walk_path(Path(root) / d, scope_root) is not None
+                )
             ]
             for file_name in files:
                 if file_name == ".git" or _is_secret_like(file_name):
                     continue
                 file_full = Path(root) / file_name
-                if file_full.is_symlink() and not file_full.resolve().is_relative_to(scope_root):
+                rel = _safe_relative_walk_path(file_full, scope_root)
+                if rel is None:
                     continue
                 if _is_binary_file(file_full):
                     continue
-                try:
-                    rel = file_full.resolve().relative_to(scope_root).as_posix()
-                    candidate_files.append((file_full, rel))
-                except (ValueError, OSError):
-                    continue
+                candidate_files.append((file_full, rel.as_posix()))
 
     candidate_files.sort(key=lambda item: item[1])
     query_lower = query.lower()

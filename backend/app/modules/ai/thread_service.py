@@ -671,14 +671,22 @@ def _install_hermes_retrieval_grant(
         role_route = worker.route_for_role(role_id)
     elif hasattr(worker, "route_for_task") and callable(worker.route_for_task):
         role_route = worker.route_for_task("general")
-    if not role_route and payload.route_class:
+    if not role_route and payload.route_class and payload.route_class != "hermes:agent":
         role_route = payload.route_class
     if not role_route:
-        role_route = "local:llamacpp"
+        try:
+            from app.modules.ai.settings import get_ai_settings
+
+            role_route = get_ai_settings().hermes_role_routes.get(role_id)
+        except Exception:
+            role_route = None
+    repo_read_constraints: dict[str, str | int | float | bool] = (
+        {"route_class": role_route} if role_route else {}
+    )
     repo_read_grant = CapabilityGrantRef(
         grant_id=repo_read_grant_id, capability_id="jarvis.repo_read", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
-        constraints={"route_class": role_route},
+        constraints=repo_read_constraints,
         issued_at=now, expires_at=now + timedelta(minutes=10),
     )
     worker.live_grants[repo_read_grant_id] = repo_read_grant

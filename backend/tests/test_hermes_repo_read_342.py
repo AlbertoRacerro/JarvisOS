@@ -625,3 +625,126 @@ def test_prompt_advertisement_and_thread_instructions() -> None:
     # 3. _turn_tools includes mcp__jarvis__jarvis_repo_read
     tools = thread_service._turn_tools("workspace")
     assert "mcp__jarvis__jarvis_repo_read" in tools
+
+
+def test_containment_internal_symlinks_to_git_and_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "safe.txt").write_text("safe_marker_value\n", encoding="utf-8")
+    (repo / ".git").mkdir()
+    (repo / ".git" / "config").write_text("git_internal_marker\n", encoding="utf-8")
+    (repo / ".env").write_text("ENV_SECRET_MARKER=1\n", encoding="utf-8")
+
+    (repo / "exposed_git_cfg.txt").symlink_to(repo / ".git" / "config")
+    (repo / "exposed_git_dir").symlink_to(repo / ".git")
+    (repo / "exposed_env.txt").symlink_to(repo / ".env")
+    monkeypatch.setattr(relay_monitor, "relay_repo", lambda: repo)
+
+    # 1. Direct read via internal symlink to .git/config or .env is refused
+    for bad_link in ("exposed_git_cfg.txt", "exposed_env.txt", "exposed_git_dir/config"):
+        res_read, err_read = dispatch_repo_read_tool(_make_call({"op": "read", "path": bad_link}), "workspace-test", "err")
+        assert res_read is None
+        assert err_read == "invalid_arguments"
+
+    # 2. Direct list of symlinked .git dir is refused
+    res_list_git, err_list_git = dispatch_repo_read_tool(
+        _make_call({"op": "list", "path": "exposed_git_dir"}), "workspace-test", "err"
+    )
+    assert res_list_git is None
+    assert err_list_git == "invalid_arguments"
+
+    # 3. Root list excludes symlinks resolving into .git or secret files
+    res_list, _ = dispatch_repo_read_tool(_make_call({"op": "list"}), "workspace-test", "err")
+    assert res_list is not None
+    assert res_list["files"] == ["safe.txt"]
+
+    # 4. Root search does not read or leak content from symlinks resolving into .git or .env
+    res_search_env, _ = dispatch_repo_read_tool(
+        _make_call({"op": "search", "query": "ENV_SECRET_MARKER"}), "workspace-test", "err"
+    )
+    assert res_search_env is not None
+    assert res_search_env["count"] == 0
+
+    res_search_git, _ = dispatch_repo_read_tool(
+        _make_call({"op": "search", "query": "git_internal_marker"}), "workspace-test", "err"
+    )
+    assert res_search_git is not None
+    assert res_search_git["count"] == 0
+
+
+def test_is_local_route_fail_closed_when_route_missing_or_unlisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.modules.agents.hermes.repo_read_tool import _is_local_route
+    from app.modules.ai import settings as ai_settings
+
+    # Unspecified wrapper route is not blindly treated as local
+    assert _is_local_route("hermes:agent", None) is False
+
+    # Unlisted cloud provider_mode fails closed when candidate_route is None
+    monkeypatch.setattr(ai_settings, "get_ai_settings", lambda: SimpleNamespace(provider_mode="openrouter"))
+    assert _is_local_route(None, None) is False
+
+    # Exception reading settings fails closed
+    def _boom() -> Any:
+        raise RuntimeError("settings unavailable")
+
+    monkeypatch.setattr(ai_settings, "get_ai_settings", _boom)
+    assert _is_local_route(None, None) is False
+
+    # Allowlisted local/fake provider_mode succeeds when candidate_route is None
+    monkeypatch.setattr(ai_settings, "get_ai_settings", lambda: SimpleNamespace(provider_mode="fake"))
+    assert _is_local_route(None, None) is True
+
+
+def test_install_hermes_retrieval_grant_resolves_role_route_for_hermes_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.modules.ai import settings as ai_settings
+
+    pack_dir = tmp_path / "zephyr_pack"
+    pack_dir.mkdir()
+    (pack_dir / "jarvis_pack.toml").write_text('id = "pack_zephyr"\n', encoding="utf-8")
+    (pack_dir / "model.py").write_text("K = 42\n", encoding="utf-8")
+    monkeypatch.setenv(packs.PACK_PATH_ENV, str(pack_dir))
+
+    # 1. Local role route resolved from settings allows pack read on hermes:agent turn
+    monkeypatch.setattr(
+        ai_settings,
+        "get_ai_settings",
+        lambda: SimpleNamespace(hermes_role_routes={"isaac": "local:llamacpp"}),
+    )
+    payload = AIThreadSubmit(request_id="req-local", prompt="Read pack", route_class="hermes:agent")
+    worker = SimpleNamespace(live_grants={}, session=_SESSION)
+    thread_service._install_hermes_retrieval_grant(worker, payload, "workspace-test", "thread-test")
+    repo_grant = next(g for g in worker.live_grants.values() if g.capability_id == "jarvis.repo_read")
+    assert repo_grant.constraints.get("route_class") == "local:llamacpp"
+
+    res_ok, _ = dispatch_repo_read_tool(
+        _make_call({"op": "read", "scope": "pack", "path": "model.py"}, grant_id=repo_grant.grant_id),
+        "workspace-test",
+        "err",
+        grant=repo_grant,
+    )
+    assert res_ok is not None
+    assert res_ok["content"] == "K = 42"
+
+    # 2. Cloud role route resolved from settings blocks pack read on hermes:agent turn
+    monkeypatch.setattr(
+        ai_settings,
+        "get_ai_settings",
+        lambda: SimpleNamespace(hermes_role_routes={"isaac": "cloud:scaleway"}),
+    )
+    worker_cloud = SimpleNamespace(live_grants={}, session=_SESSION)
+    thread_service._install_hermes_retrieval_grant(worker_cloud, payload, "workspace-test", "thread-test")
+    cloud_grant = next(g for g in worker_cloud.live_grants.values() if g.capability_id == "jarvis.repo_read")
+    assert cloud_grant.constraints.get("route_class") == "cloud:scaleway"
+
+    res_blocked, err_blocked = dispatch_repo_read_tool(
+        _make_call({"op": "read", "scope": "pack", "path": "model.py"}, grant_id=cloud_grant.grant_id),
+        "workspace-test",
+        "err",
+        grant=cloud_grant,
+    )
+    assert res_blocked is None
+    assert err_blocked == "pack_cloud_egress_blocked"
