@@ -1,6 +1,6 @@
 # 342 — JARVIS-REPO-READ-TOOLS-1: Bounded read-only repository and private-pack code/doc read tools for Jarvis chat
 
-Status: ready
+Status: merged
 Depends on: 341
 
 ## Goal
