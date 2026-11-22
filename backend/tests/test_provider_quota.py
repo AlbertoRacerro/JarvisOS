@@ -48,7 +48,7 @@ def test_free_models_parsing_and_secret_path_stripping(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     secret_key = tmp_path / "secret.key"
-    secret_key.write_text("SUPER_SECRET_TOKEN_DO_NOT_LEAK", encoding="utf-8")
+    secret_key.write_text("API_KEY_PLACEHOLDER_12345", encoding="utf-8")
 
     pools_data = {
         "reference": "luna",
@@ -61,7 +61,7 @@ def test_free_models_parsing_and_secret_path_stripping(
                 "model": "nousresearch/hermes-3-llama-3.1-8b",
                 "key_file": str(secret_key),
                 "api_key": "sk-live-1234567890abcdef1234567890",
-                "token": "tok_xyz987654321",
+                "token": "API_KEY_PLACEHOLDER_12345a",
                 "base_url": "https://api.nous.invalid/v1",
                 "index_score": 42,
                 "remaining_percent": 85.4,
@@ -128,7 +128,7 @@ def test_free_models_parsing_and_secret_path_stripping(
     for forbidden in ("key_file", "api_key", "token", "base_url", "secret.key"):
         assert forbidden not in m1
     serialized = json.dumps(m1)
-    assert "SUPER_SECRET_TOKEN" not in serialized
+    assert "API_KEY_PLACEHOLDER" not in serialized
     assert "sk-live-123456" not in serialized
     assert str(tmp_path) not in serialized
 
