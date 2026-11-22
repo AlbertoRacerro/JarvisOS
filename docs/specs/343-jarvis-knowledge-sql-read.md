@@ -1,6 +1,6 @@
 # 343 — JARVIS-KNOWLEDGE-SQL-READ-1: Bounded read-only Second Brain, literature, and named SQL views for Jarvis chat
 
-Status: ready
+Status: merged (#257)
 Depends on: 342
 
 ## Goal
