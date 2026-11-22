@@ -67,7 +67,7 @@ def _is_local_route(
     route_class: str | None,
     grant: CapabilityGrantRef | None,
 ) -> bool:
-    candidate_route = route_class
+    candidate_route: Any = route_class
     if candidate_route is None and grant is not None:
         candidate_route = grant.constraints.get("route_class")
         if candidate_route is None:
@@ -90,7 +90,7 @@ def _is_local_route(
 
 
 def _resolve_relative_path(
-    raw_path: str | None,
+    raw_path: Any,
     scope_root: Path,
 ) -> tuple[Path | None, str]:
     if raw_path is None or raw_path == "" or raw_path == ".":
