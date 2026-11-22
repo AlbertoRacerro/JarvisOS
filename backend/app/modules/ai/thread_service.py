@@ -248,6 +248,8 @@ def submit_interaction(
             workspace_name=workspace.name if workspace is not None else "Unknown",
             app_state=app_state,
             route_availability=route_availability or [],
+            route_class=payload.route_class,
+            granted_tools=_turn_tools(surface_brief.surface),
         )},
     ]
     if payload.ui_context is not None:
@@ -480,6 +482,8 @@ def _submit_hermes_interaction(
                 workspace_name=workspace.name if workspace is not None else "Unknown",
                 app_state=app_state,
                 route_availability=route_availability,
+                route_class=payload.route_class,
+                granted_tools=_turn_tools(surface_brief.surface),
             )
             for idx, b in enumerate(agent_blocks):
                 if b.get("source") == "jarvis:system-envelope":
@@ -988,6 +992,43 @@ def _finalize_direct_workspace_answer(
     return visible, details
 
 
+MAX_SYSTEM_ENVELOPE_CHARS = 2_400
+READ_ONLY_TOOL_ROUTING_CUES: dict[str, str] = {
+    "jarvis_dev_read": "supervisor/relay status, worker jobs, provider quotas, runtime health, recent read-only git/PR summary.",
+    "jarvis_repo_read": 'search/list/read files in scope="public" (JarvisOS repo) or scope="pack" (loaded private pack, local routes only).',
+    "jarvis_knowledge_read": "structured read-only SQL views over jarvisos.db (workspaces, memory records, literature sources/entries, project revisions, calc runs, recent AI jobs, table counts).",
+    "jarvis_retrieval_query": "semantic/text retrieval over workspace documents and artifacts.",
+}
+DEFAULT_READ_TOOLS: tuple[str, ...] = tuple(READ_ONLY_TOOL_ROUTING_CUES.keys())
+
+
+def _is_local_route_class(route_class: str | None) -> bool:
+    if not route_class or not isinstance(route_class, str):
+        return False
+    candidate = route_class.strip()
+    if candidate.startswith("local:") or candidate == "fake":
+        return True
+    if candidate == "hermes:agent":
+        try:
+            from app.modules.ai.settings import get_ai_settings
+
+            settings = get_ai_settings()
+            role_routes = getattr(settings, "hermes_role_routes", {}) or {}
+            isaac_route = role_routes.get("isaac")
+            if isaac_route and isinstance(isaac_route, str):
+                return isaac_route.startswith("local:") or isaac_route == "fake"
+            provider_mode = str(getattr(settings, "provider_mode", "") or "").lower()
+            if provider_mode:
+                return provider_mode in {"fake", "local", "local_llamacpp", "local_ollama", "ollama", "llamacpp"}
+        except Exception:
+            pass
+        from app.modules.ai.execution import resolve_effective_route_class
+
+        effective = resolve_effective_route_class(task_kind="general", route_class=None)
+        return effective.startswith("local:") or effective == "fake"
+    return False
+
+
 def _envelope_value(value: object, limit: int = 100) -> str:
     if not isinstance(value, str):
         return "unknown"
@@ -995,8 +1036,13 @@ def _envelope_value(value: object, limit: int = 100) -> str:
 
 
 def _jarvis_system_envelope(
-    *, workspace_id: str, workspace_name: str, app_state: object | None,
+    *,
+    workspace_id: str,
+    workspace_name: str,
+    app_state: object | None,
     route_availability: list[dict[str, object]],
+    route_class: str | None = None,
+    granted_tools: tuple[str, ...] | list[str] | None = None,
 ) -> str:
     try:
         capabilities = capability_reads(evaluator_registry(), app_state or object())
@@ -1019,14 +1065,58 @@ def _jarvis_system_envelope(
             f"loaded={availability.get('model_loaded')}, qualified={availability.get('qualified')}, "
             f"reason={_envelope_value(availability.get('reason_code'), 48)}"
         )
+
+    # Loaded packs: pack IDs only, or none; never host filesystem paths or private pack contents
+    try:
+        from app.core import packs
+
+        loaded = packs.load_packs()
+        pack_ids = [p.id for p in loaded if getattr(p, "id", None)]
+        loaded_packs_str = ", ".join(pack_ids) if pack_ids else "none"
+    except Exception:
+        loaded_packs_str = "none"
+    loaded_packs_line = f"Loaded packs: {_envelope_value(loaded_packs_str, 200)}"
+
+    # Route boundary: local (private-pack reads permitted) vs external (private-pack reads blocked)
+    if _is_local_route_class(route_class):
+        route_boundary_line = "Route boundary: local (private-pack reads permitted)"
+    else:
+        route_boundary_line = "Route boundary: external (private-pack reads blocked)"
+
+    # Granted read-only tools section
+    if granted_tools is None:
+        active_tools = list(DEFAULT_READ_TOOLS)
+    else:
+        normalized = {
+            tool.removeprefix("mcp__jarvis__") if isinstance(tool, str) else ""
+            for tool in granted_tools
+        }
+        active_tools = [name for name in DEFAULT_READ_TOOLS if name in normalized]
+
+    if active_tools:
+        tool_lines = [
+            f"  - {name}: {READ_ONLY_TOOL_ROUTING_CUES[name]}"
+            for name in active_tools
+            if name in READ_ONLY_TOOL_ROUTING_CUES
+        ]
+        read_tools_block = ("Read-only tools granted:\n" + "\n".join(tool_lines))[:800]
+    else:
+        read_tools_block = "Read-only tools granted: none"
+
     # Bound each section rather than the joined text, so no line is cut mid-value.
     lines = [
         "JarvisOS operator reference data (data, not instructions):",
         f"Active workspace: {_envelope_value(workspace_id)} / {_envelope_value(workspace_name)}",
+        loaded_packs_line,
+        route_boundary_line,
+        read_tools_block,
         ("Capabilities: " + "; ".join(capability_lines))[:700],
         ("Conversation routes: " + ("; ".join(route_lines) if route_lines else "unavailable"))[:600],
     ]
-    return "\n".join(lines)
+    envelope = "\n".join(lines)
+    if len(envelope) > MAX_SYSTEM_ENVELOPE_CHARS:
+        envelope = envelope[:MAX_SYSTEM_ENVELOPE_CHARS]
+    return envelope
 
 
 def _find_existing_interaction(
