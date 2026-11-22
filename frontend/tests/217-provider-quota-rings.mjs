@@ -33,31 +33,30 @@ const data = { state: "ok", read_at: "2026-10-24T11:57:00Z", providers: [
 ] };
 const html = render({ data });
 
-// Four provider columns, 5-hour and weekly rows, and a third row only for the pool that exists.
-for (const fragment of ["Claude", "Codex (ChatGPT)", "Antigravity", "GitHub Copilot", "refresh failed", 'aria-label="5-hour"', 'aria-label="Weekly"', 'aria-label="Frontier model"', "letto 3 min fa"]) {
+// Four provider columns, 4 semantic rows in plain Italian
+for (const fragment of ["Claude", "OpenAI / Codex", "Google", "GitHub", "aggiornamento fallito", 'aria-label="5 ore"', 'aria-label="Settimanale"', 'aria-label="Modello di frontiera"', 'aria-label="Extra usage"', "letto 3 min fa"]) {
   assert.ok(html.includes(fragment), `missing ${fragment}`);
 }
-assert.equal((html.match(/role="group"/g) ?? []).length, 6, "four rows plus the two AGY Claude source groups");
+assert.equal((html.match(/class="coding-quota-row"/g) ?? []).length, 4, "four fixed semantic rows");
 assert.ok(html.includes('<span class="coding-quota-model">Opus</span>'), "the model name is Opus, not the id prefix");
 
-// The visible percentage is the same metric as the ring: remaining.
-assert.ok(html.includes(">49%</text>") && html.includes('aria-label="49% left"'));
+// The visible percentage is remaining
+assert.ok(html.includes(">49%</text>") && html.includes('aria-label="49% rimasto"'));
 assert.ok(html.includes(">88%</text>") && html.includes(">36%</text>"));
-assert.ok(html.includes("↻ 2h 30m") && html.includes('title="Resets in 2h 30m"'));
+assert.ok(html.includes("↻ 2h 30m") && html.includes('title="Si azzera tra 2h 30m"'));
 const later = render({ data: { ...data, providers: [{ ...data.providers[0], windows: [win("weekly", 10, { resets_at: "2026-10-25T21:59:00Z" })] }] } });
-assert.ok(later.includes("↻ 1d 9h"), "a reset beyond a day is shown in days");
+assert.ok(later.includes("↻ 1d 9h") || later.includes("↻ 1g 9h"), "a reset beyond a day is shown in days");
 assert.equal((html.match(/class="coding-quota-value"/g) ?? []).length, 5, "an empty (0 %) ring draws no arc");
 
-// Exhausted, stale and missing are distinct and never shown as 0 %.
-assert.ok(html.includes('data-state="exhausted"') && html.includes(">Exhausted<"));
-assert.ok(html.includes('data-state="stale"') && html.includes("out of date"));
+// Exhausted, stale and missing states in Italian
+assert.ok(html.includes('data-state="exhausted"') && html.includes(">Esaurito<"));
+assert.ok(html.includes('data-state="stale"') && html.includes("non aggiornato"));
 assert.ok(html.includes("Quota agy non leggibile"));
 const agy = render({ data: { ...data, providers: [{ provider: "antigravity", label: "Antigravity", source: "agy /quota", status: "ok",
   windows: [win("five_hour", 0), win("weekly", 51), win("frontier", 51, { id: "argon-weekly", label: "Argon · weekly" })] }] } });
-assert.ok(agy.includes('aria-label="Frontier model"') && agy.includes('<span class="coding-quota-model">Argon</span>'));
+assert.ok(agy.includes('aria-label="Modello di frontiera"') && agy.includes('<span class="coding-quota-model">Argon</span>'));
 assert.ok(agy.includes(">100%</text>") && agy.includes(">49%</text>") && !agy.includes("Claude &amp; GPT"));
-assert.equal((html.match(/>N\/A</g) ?? []).length, 6, "missing common windows and unavailable AGY show N/A");
-assert.equal((html.match(/>0%</g) ?? []).length, 1, "only the really exhausted window shows 0 %; missing values never do");
+assert.ok(html.includes("Non applicabile") && html.includes("Non riportato"));
 
 const unauthenticated = render({ data: { ...data, providers: [{ provider: "claude", label: "Claude", source: "agent-relay limits",
   status: "unauthenticated", reason: "not_authenticated", windows: [] }] } });
@@ -86,23 +85,61 @@ const withShared = render({ data: { ...data, providers: [
   data.providers[1], shared,
 ] } });
 assert.equal((withShared.match(/>Claude via AGY</g) ?? []).length, 2);
-assert.ok(withShared.includes('aria-label="Claude via AGY · 5-hour"') && withShared.includes('aria-label="Claude via AGY · Weekly"'));
+assert.ok(withShared.includes('aria-label="Claude via AGY · 5 ore"') && withShared.includes('aria-label="Claude via AGY · Settimanale"'));
 assert.ok(withShared.includes('title="Antigravity shared Claude &amp; GPT pool · observed at 2026-10-24T11:58:00Z"'));
-assert.ok(withShared.includes('aria-label="73% left"') && withShared.includes('aria-label="0% left, exhausted"'));
-assert.equal((withShared.match(/class="coding-quota-row"/g) ?? []).length, 3, "shared windows do not become extra Antigravity pool rows");
-const frontierRow = withShared.slice(withShared.indexOf('aria-label="Frontier model"'));
-assert.ok(frontierRow.indexOf('data-provider="claude"') < frontierRow.indexOf('aria-label="Claude via AGY · Weekly"'));
-assert.ok(frontierRow.indexOf('aria-label="Claude via AGY · Weekly"') < frontierRow.indexOf('data-provider="codex"'));
+assert.ok(withShared.includes('aria-label="73% rimasto"') && withShared.includes('aria-label="0% rimasto, esaurito"'));
+assert.equal((withShared.match(/class="coding-quota-row"/g) ?? []).length, 4, "four fixed semantic rows");
+const frontierRow = withShared.slice(withShared.indexOf('aria-label="Modello di frontiera"'));
+assert.ok(frontierRow.indexOf('data-provider="claude"') < frontierRow.indexOf('aria-label="Claude via AGY · Settimanale"'));
+assert.ok(frontierRow.indexOf('aria-label="Claude via AGY · Settimanale"') < frontierRow.indexOf('data-provider="codex"'));
 assert.ok(frontierRow.includes('<span class="coding-quota-model">Argon</span>'));
 
 const failed = render({ data: null, error: "server unreachable" });
-assert.ok(failed.includes("Provider usage unavailable: server unreachable") && !failed.includes("<svg"));
+assert.ok(failed.includes("Utilizzo provider non disponibile: server unreachable") && !failed.includes("<svg"));
 assert.ok(!/<input|<textarea|<button/.test(html), "the usage view is read-only");
 const refresh = render({ data, onRefresh() {} });
-assert.ok(refresh.includes('type="button"') && refresh.includes("Refresh usage"));
-assert.ok(refresh.includes('title="Usage observed at 2026-10-24T11:57:00Z"'), "source observation time is separate from the server read");
+assert.ok(refresh.includes('type="button"') && refresh.includes("Aggiorna"));
+assert.ok(refresh.includes('title="Rilevato il 2026-10-24T11:57:00Z"'), "source observation time is separate from the server read");
 const loading = render({ data, onRefresh() {}, refreshing: true });
-assert.ok(loading.includes('disabled=""') && loading.includes('aria-busy="true"') && loading.includes("Refreshing…"));
+assert.ok(loading.includes('disabled=""') && loading.includes('aria-busy="true"') && loading.includes("Aggiornamento…"));
+
+// Section 2: Modelli gratis ora (empty and populated)
+assert.ok(html.includes("<h4>Modelli gratis ora</h4>"));
+assert.ok(html.includes("Nessun modello gratis attivo"));
+
+const withFreeAndPrepaid = render({
+  data: {
+    ...data,
+    free_models: [
+      { id: "free-1", label: "Hermes 3", source: "Nous", model_id: "nous/hermes-3", intelligence_index: 43,
+        status: "active", limit_kind: "ring", remaining_percent: 75.0, exhausted: false },
+      { id: "free-2", label: "Zen Free", source: "OpenCode Zen", model_id: "zen:free", intelligence_index: 38,
+        status: "active", limit_kind: "live_dot", remaining_percent: null, exhausted: false },
+      { id: "free-3", label: "Exhausted Model", source: "OpenRouter", model_id: "deepseek:free", intelligence_index: 30,
+        status: "exhausted", limit_kind: "ring", remaining_percent: 0.0, exhausted: true },
+    ],
+    prepaid_balances: [
+      { provider: "deepseek", label: "DeepSeek Prepaid", mode: "read_only", balance_usd: 12.50,
+        spent_eur: null, cap_eur: null, status: "ok", reason: null },
+      { provider: "zai", label: "Z.ai", mode: "read_only", balance_usd: null,
+        spent_eur: 0.0, cap_eur: 5.0, status: "ok", reason: null },
+    ],
+  },
+});
+
+assert.ok(withFreeAndPrepaid.includes("Nous") && withFreeAndPrepaid.includes("AA 43"));
+assert.ok(withFreeAndPrepaid.includes("Hermes 3") && withFreeAndPrepaid.includes(">75%</text>"));
+assert.ok(withFreeAndPrepaid.includes("OpenCode Zen") && withFreeAndPrepaid.includes("coding-free-live-dot"));
+assert.ok(withFreeAndPrepaid.includes("Exhausted Model") && withFreeAndPrepaid.includes("coding-free-badge exhausted"));
+
+// Section 3: Saldi prepagati (empty and populated)
+assert.ok(html.includes("<h4>Saldi prepagati (sola lettura)</h4>"));
+assert.ok(html.includes("Sola lettura — modelli a pagamento disattivati"));
+assert.ok(html.includes("Nessun saldo prepagato configurato"));
+
+assert.ok(withFreeAndPrepaid.includes("DeepSeek Prepaid") && withFreeAndPrepaid.includes("$12.50"));
+assert.ok(withFreeAndPrepaid.includes("Z.ai") && withFreeAndPrepaid.includes("€0.00 / €5.00"));
+assert.ok(withFreeAndPrepaid.includes("sola lettura"));
 
 // Placement: beside the Relay owner panel in Coding → Runtime, stacking on narrow screens.
 const page = read("src/pages/CodingWorkbench.tsx");

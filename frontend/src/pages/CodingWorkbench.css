@@ -220,7 +220,47 @@
 .coding-quota-model { color: var(--fusion-text, currentColor); font-weight: 600; }
 .coding-quota-caption em { font-style: normal; color: var(--color-status-warning-text); }
 .coding-quota-na { display: grid; place-items: center; width: 56px; height: 56px; border: 1px dashed var(--fusion-line); border-radius: 50%; color: var(--fusion-muted); font-size: 12px; }
+.coding-quota-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fusion-line); }
 @media (prefers-reduced-motion: reduce) { .coding-quota-value { transition: none; } }
+
+/* Spec 346: Provider Quota Grid & sections */
+.coding-quota-body { display: flex; flex-direction: column; gap: 14px; }
+.coding-quota-section { display: flex; flex-direction: column; }
+.coding-quota-section-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
+.coding-quota-section-header h4 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fusion-text); }
+.coding-free-models-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.coding-free-card { border: 1px solid var(--fusion-line); border-radius: 5px; padding: 8px 10px; background: var(--fusion-panel); display: flex; flex-direction: column; gap: 4px; }
+.coding-free-card[data-status="exhausted"] { opacity: 0.75; }
+.coding-free-header { display: flex; justify-content: space-between; align-items: center; }
+.coding-free-source { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--fusion-muted); }
+.coding-free-score { font-size: 10px; font-weight: 600; padding: 1px 4px; border-radius: 3px; background: var(--fusion-line); color: var(--fusion-text); }
+.coding-free-body { display: flex; flex-direction: column; gap: 2px; }
+.coding-free-name { font-size: 12px; font-weight: 600; color: var(--fusion-text); overflow-wrap: anywhere; }
+.coding-free-model { font-size: 10px; color: var(--fusion-muted); overflow-wrap: anywhere; }
+.coding-free-indicator { display: flex; align-items: center; margin-top: 4px; }
+.coding-free-ring-wrap { display: flex; align-items: center; gap: 6px; }
+.coding-free-ring-svg { width: 28px; height: 28px; }
+.coding-free-ring-svg circle { stroke-width: 4; }
+.coding-free-ring-svg text { font-size: 9px; fill: currentColor; font-weight: 600; }
+.coding-free-ring-label { font-size: 10px; color: var(--fusion-muted); }
+.coding-free-live-wrap { display: flex; align-items: center; gap: 6px; }
+.coding-free-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fusion-green); box-shadow: 0 0 6px var(--fusion-green); }
+.coding-free-live-text { font-size: 11px; color: var(--fusion-green); font-weight: 500; }
+.coding-free-badge { font-size: 11px; font-weight: 600; }
+.coding-free-badge.exhausted { color: var(--color-status-danger-text); }
+.coding-free-badge.throttled { color: var(--color-status-warning-text); }
+.coding-free-badge.unqualified { color: var(--fusion-muted); }
+.coding-prepaid-caption { font-size: 11px; color: var(--fusion-muted); margin: 0; }
+.coding-prepaid-list { display: flex; flex-direction: column; gap: 6px; }
+.coding-prepaid-card { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border: 1px solid var(--fusion-line); border-radius: 4px; background: var(--fusion-panel); }
+.coding-prepaid-main { display: flex; align-items: center; gap: 8px; }
+.coding-prepaid-label { font-size: 12px; font-weight: 600; }
+.coding-prepaid-mode { font-size: 10px; color: var(--fusion-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.coding-prepaid-amount { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.coding-prepaid-balance { color: var(--fusion-text); }
+.coding-prepaid-spend { color: var(--fusion-text); }
+.coding-prepaid-unavailable { font-size: 11px; color: var(--fusion-muted); }
+.coding-prepaid-ok { font-size: 11px; color: var(--fusion-muted); }
 
 /* Spec 240 supervisor controls */
 .coding-relay-controls, .coding-relay-questions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-block: 0.75rem; }

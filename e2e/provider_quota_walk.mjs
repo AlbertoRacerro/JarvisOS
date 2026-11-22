@@ -37,6 +37,26 @@ await mkdir(join(relayRepo, ".agent-relay", "devctx"), { recursive: true });
 await mkdir(join(dataRoot, "host"), { recursive: true, mode: 0o700 });
 await mkdir(fakeBin, { recursive: true });
 
+await writeFile(join(controlDir, "temp-pools.json"), JSON.stringify([
+  {
+    id: "temp-sample-free",
+    label: "Sample Free Model",
+    source: "free-pool",
+    model_id: "sample/free-1",
+    intelligence_index: 62,
+    remaining_percent: 80,
+    limit_kind: "ring",
+    status: "ok",
+  },
+]));
+await writeFile(join(controlDir, "prepaid-balances.json"), JSON.stringify([
+  {
+    provider: "openrouter",
+    label: "OpenRouter",
+    balance_usd: 12.5,
+    status: "ok",
+  },
+]));
 await writeFile(join(fakeBin, "agent-relay"), `#!/bin/sh
 now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 five=$(date -u -d '2 hours' +%Y-%m-%dT%H:%M:%SZ)
@@ -159,40 +179,47 @@ try {
   await page.getByRole("navigation", { name: "Coding destinations" })
     .getByRole("link", { name: "Runtime", exact: true }).click();
 
-  const panel = page.getByRole("region", { name: "Provider usage" });
+  const panel = page.getByRole("region", { name: "Utilizzo provider" });
   await panel.waitFor();
   await shot("provider-usage-before-assertions");
-  await panel.locator(".coding-quota-provider").filter({ hasText: "GitHub Copilot" }).waitFor();
+  await panel.locator(".coding-quota-provider").filter({ hasText: "GitHub" }).waitFor();
   await check("four provider column headers", async () => {
     const headers = (await panel.locator(".coding-quota-provider").allTextContents()).map((text) => text.replace(/\s+/g, " ").trim());
-    for (const label of ["Claude", "Codex (ChatGPT)", "Antigravity", "GitHub Copilot"]) {
+    for (const label of ["Claude", "OpenAI / Codex", "Google", "GitHub"]) {
       assert(headers.some((header) => header.startsWith(label)), `missing provider header: ${label}`);
     }
   });
-  await check("Copilot shows 75% remaining ring", async () => {
-    await panel.getByRole("group", { name: "Monthly premium requests" })
-      .getByRole("img", { name: "75% left" }).waitFor();
+  await check("Copilot shows 75% remaining ring in Extra usage", async () => {
+    await panel.getByRole("group", { name: "Extra usage" })
+      .locator('[data-provider="copilot"]').getByRole("img", { name: "75% rimasto" }).waitFor();
   });
   await check("Claude shows both usage windows", async () => {
-    await panel.getByRole("group", { name: "5-hour" })
-      .locator('[data-provider="claude"]').getByRole("img", { name: "60% left" }).waitFor();
-    await panel.getByRole("group", { name: "Weekly" })
-      .locator('[data-provider="claude"]').getByRole("img", { name: "80% left" }).waitFor();
+    await panel.getByRole("group", { name: "5 ore" })
+      .locator('[data-provider="claude"]').getByRole("img", { name: "60% rimasto" }).waitFor();
+    await panel.getByRole("group", { name: "Settimanale" })
+      .locator('[data-provider="claude"]').getByRole("img", { name: "80% rimasto" }).waitFor();
+  });
+  await check("Modelli gratis ora and Saldi prepagati sections render", async () => {
+    await panel.getByRole("heading", { name: "Modelli gratis ora" }).waitFor();
+    await panel.getByText("Sample Free Model").waitFor();
+    await panel.getByRole("heading", { name: "Saldi prepagati (sola lettura)" }).waitFor();
+    await panel.getByText("OpenRouter").waitFor();
+    await panel.getByText("$12.50").waitFor();
   });
   await shot("provider-usage-initial");
 
-  const refresh = panel.getByRole("button", { name: /Refresh usage/ });
+  const refresh = panel.getByRole("button", { name: /Aggiorna/ });
   await refresh.click();
-  await panel.getByText(/refresh failed/).waitFor();
+  await panel.getByText(/aggiornamento fallito/).waitFor();
   await check("failed refresh preserves Copilot 75% reading", async () => {
-    await panel.getByRole("group", { name: "Monthly premium requests" })
-      .getByRole("img", { name: "75% left" }).waitFor();
-    await panel.getByText(/refresh failed/).waitFor();
+    await panel.getByRole("group", { name: "Extra usage" })
+      .locator('[data-provider="copilot"]').getByRole("img", { name: "75% rimasto" }).waitFor();
+    await panel.getByText(/aggiornamento fallito/).waitFor();
   });
   await shot("provider-usage-refresh-failed");
   assert(summary.console_errors.length === 0, `console errors: ${JSON.stringify(summary.console_errors)}`);
   assert(summary.page_errors.length === 0, `page errors: ${JSON.stringify(summary.page_errors)}`);
-  summary.passed = summary.checks.length === 4 && summary.checks.every((item) => item.status === "pass");
+  summary.passed = summary.checks.length === 5 && summary.checks.every((item) => item.status === "pass");
   await context.close();
 } finally {
   await browser?.close();
