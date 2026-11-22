@@ -1,0 +1,644 @@
+"""Tests for Spec 343 — JARVIS-KNOWLEDGE-SQL-READ-1 (Hermes knowledge_read read-only tool)."""
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from uuid import uuid4
+
+import pytest
+
+from app.core.database import initialize_database, open_sqlite_connection
+from app.modules.agents.hermes import broker_mcp, worker_shim
+from app.modules.agents.hermes.knowledge_read_tool import dispatch_knowledge_read_tool
+from app.modules.agents.hermes.supervisor import (
+    _HERMES_KNOWLEDGE_READ_CAPABILITY,
+    _TOOL_CAPABILITIES,
+    HERMES_TOOL_ALLOWLIST,
+    PRODUCTION_CAPABILITY_REGISTRY,
+    dispatch_tool,
+)
+from app.modules.ai import context_builder, thread_service
+from app.modules.ai.agent_contracts import (
+    AgentSessionRef,
+    CapabilityGrantRef,
+    CapabilityScope,
+    StructuredToolCall,
+)
+from app.modules.ai.thread_models import AIThreadSubmit
+
+_SESSION = AgentSessionRef(
+    jarvis_thread_id="thread-test",
+    hermes_session_id="hermes-session-test",
+    profile_id="isaac",
+    workspace_id="workspace-a",
+    generation=1,
+    upstream_revision="2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19",
+)
+
+
+def _make_call(
+    arguments: dict[str, Any],
+    capability_id: str = "jarvis.knowledge_read",
+    grant_id: str = "grant-knowledge-read",
+    workspace_id: str = "workspace-a",
+    thread_id: str = "thread-test",
+) -> StructuredToolCall:
+    now = datetime.now(UTC)
+    session = AgentSessionRef(
+        jarvis_thread_id=thread_id,
+        hermes_session_id="hermes-session-test",
+        profile_id="isaac",
+        workspace_id=workspace_id,
+        generation=1,
+        upstream_revision="2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19",
+    )
+    return StructuredToolCall(
+        call_id=str(uuid4()),
+        capability_id=capability_id,
+        grant_id=grant_id,
+        correlation_id="corr-1",
+        session_ref=session,
+        arguments=arguments,
+        requested_at=now,
+        deadline_at=now + timedelta(seconds=60),
+    )
+
+
+def _make_grant(
+    grant_id: str = "grant-knowledge-read",
+    capability_id: str = "jarvis.knowledge_read",
+    workspace_id: str = "workspace-a",
+    thread_id: str = "thread-test",
+    expired: bool = False,
+) -> CapabilityGrantRef:
+    now = datetime.now(UTC)
+    if expired:
+        issued = now - timedelta(minutes=10)
+        expires = now - timedelta(minutes=1)
+    else:
+        issued = now - timedelta(minutes=5)
+        expires = now + timedelta(minutes=10)
+    return CapabilityGrantRef(
+        grant_id=grant_id,
+        capability_id=capability_id,
+        issuer="jarvis_policy",
+        scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
+        issued_at=issued,
+        expires_at=expires,
+    )
+
+
+@pytest.fixture
+def isolated_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Set up an isolated SQLite database initialized with all schemas and seed test data."""
+    data_root = tmp_path / "jarvis_data"
+    data_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("JARVISOS_DATA_ROOT", str(data_root))
+    initialize_database()
+
+    with open_sqlite_connection() as conn:
+        now = "2026-11-22T05:00:00Z"
+
+        # Workspaces
+        conn.execute(
+            "INSERT INTO workspaces (id, name, slug, description, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 'active', ?, ?)",
+            ("workspace-a", "Workspace Alpha", "ws-alpha", "First workspace", now, now),
+        )
+        conn.execute(
+            "INSERT INTO workspaces (id, name, slug, description, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 'active', ?, ?)",
+            ("workspace-b", "Workspace Beta", "ws-beta", "Second workspace", now, now),
+        )
+
+        # Assumptions
+        conn.execute(
+            "INSERT INTO assumptions (id, workspace_id, statement, scope, confidence, status, source_ref, origin, created_at, updated_at, notes) "
+            "VALUES (?, ?, ?, ?, ?, 'accepted', 'ref-1', 'user', ?, ?, ?)",
+            ("assump-1", "workspace-a", "Atmospheric pressure is 101.3 kPa", "ambient", "high", now, now, "Standard ambient assumption"),
+        )
+        conn.execute(
+            "INSERT INTO assumptions (id, workspace_id, statement, scope, confidence, status, source_ref, origin, created_at, updated_at, notes) "
+            "VALUES (?, ?, ?, ?, ?, 'proposed', 'ref-2', 'user', ?, ?, ?)",
+            ("assump-2", "workspace-b", "Other workspace assumption", "ambient", "low", now, now, "Secret token " + "sk-" + "12345678901234567890"),
+        )
+
+        # Parameters
+        conn.execute(
+            "INSERT INTO parameters (id, workspace_id, name, symbol, value, unit, status, confidence, origin, created_at, updated_at, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'accepted', 0.95, 'user', ?, ?, ?)",
+            ("param-1", "workspace-a", "Biomass Yield", "Y_x", "0.45", "g/g", now, now, "Experimental yield"),
+        )
+
+        # Decisions
+        conn.execute(
+            "INSERT INTO decisions (id, workspace_id, title, decision_text, rationale, status, origin, created_at, updated_at, notes) "
+            "VALUES (?, ?, ?, ?, ?, 'accepted', 'user', ?, ?, ?)",
+            ("dec-1", "workspace-a", "Select PBR geometry", "Use annular photobioreactor", "Optimal light path", now, now, "Design decision note"),
+        )
+
+        # Literature sources & entries
+        conn.execute(
+            "INSERT INTO literature_sources (id, workspace_id, title, source_kind, state, published_year, citation, publisher, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'paper', 'accepted', 2024, 'Author et al., 2024', 'Nature Pub', ?, ?)",
+            ("src-1", "workspace-a", "Photobioreactor Kinetics Review", now, now),
+        )
+        conn.execute(
+            "INSERT INTO literature_entries (id, workspace_id, source_id, entry_kind, statement, value_number, unit, status, locator_kind, locator_start, locator_end, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'claim', 'Specific growth rate peaks at 30 deg C', NULL, NULL, 'accepted', 'page', 12, 14, ?, ?)",
+            ("entry-1", "workspace-a", "src-1", now, now),
+        )
+        conn.execute(
+            "INSERT INTO literature_entries (id, workspace_id, source_id, entry_kind, statement, value_number, unit, status, locator_kind, locator_start, locator_end, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'datum', NULL, 0.085, '1/h', 'accepted', 'line', 45, 46, ?, ?)",
+            ("entry-2", "workspace-a", "src-1", now, now),
+        )
+
+        # Project knowledge revisions & validations
+        conn.execute(
+            "INSERT INTO project_knowledge_revisions (id, workspace_id, parent_kind, state, change_set_digest, change_set_json, projected_state_digest, origin, created_at, accepted_at) "
+            "VALUES (?, ?, 'working', 'reconciled', 'dig-1', ?, 'proj-1', 'apply', ?, ?)",
+            ("rev-1", "workspace-a", json.dumps([{"op": "add_parameter", "id": "p-1"}, {"op": "set_requirement", "id": "r-1"}]), now, now),
+        )
+        # Requirement for validation
+        conn.execute(
+            "INSERT INTO requirements (id, workspace_id, statement, status, created_at, updated_at) "
+            "VALUES (?, ?, 'Biomass purity > 90%', 'active', ?, ?)",
+            ("req-1", "workspace-a", now, now),
+        )
+        conn.execute(
+            "INSERT INTO project_knowledge_validation (id, workspace_id, working_revision_id, requirement_id, requirement_updated_at, rule_version, validated_basis_digest, applicability_set_digest, validator_id, validator_version, outcome, reason_code, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 'scalar-v1', 'basis-1', 'app-1', 'val-1', '1', 'pass', 'criteria_met', ?)",
+            ("val-1", "workspace-a", "rev-1", "req-1", now, now),
+        )
+
+        # Calculation / simulation runs
+        conn.execute(
+            "INSERT INTO model_specs (id, workspace_id, title, engineering_question, created_at, updated_at) "
+            "VALUES ('spec-1', 'workspace-a', 'Heat Exchanger', 'Sizing', ?, ?)",
+            (now, now),
+        )
+        conn.execute(
+            "INSERT INTO model_versions (id, workspace_id, model_spec_id, version_label, created_at) "
+            "VALUES ('calc_model_v1', 'workspace-a', 'spec-1', 'v1', ?)",
+            (now,),
+        )
+        conn.execute(
+            "INSERT INTO simulation_runs (id, workspace_id, model_version_id, run_label, status, input_payload, output_payload, created_at, notes) "
+            "VALUES (?, ?, 'calc_model_v1', 'run_heat_exchanger', 'succeeded', ?, ?, ?, 'Calc run test')",
+            ("sim-1", "workspace-a", json.dumps({"temp_in": 300, "flow_rate": 10}), json.dumps({"heat_duty": 4500, "temp_out": 320}), now),
+        )
+
+        # AI threads, flows, and jobs
+        conn.execute(
+            "INSERT INTO ai_threads (id, workspace_id, title, created_at, last_activity_at) "
+            "VALUES (?, ?, 'Design thread', ?, ?)",
+            ("thread-test", "workspace-a", now, now),
+        )
+        conn.execute(
+            "INSERT INTO ai_flows (id, workspace_id, task_kind, state, created_at, updated_at, completed_at) "
+            "VALUES (?, ?, 'general', 'complete', ?, ?, ?)",
+            ("flow-1", "workspace-a", now, now, now),
+        )
+        conn.execute(
+            "INSERT INTO ai_jobs (id, created_at, status, task_kind, requested_route_class, selected_route_class, provider_id, model_id, route_reason_json, flow_id) "
+            "VALUES (?, ?, 'success', 'general', 'local:llamacpp', 'local:llamacpp', 'local_llamacpp', 'gemma-2-9b', '{}', ?)",
+            ("job-1", now, "flow-1"),
+        )
+
+        # Artifacts
+        conn.execute(
+            "INSERT INTO artifacts (id, workspace_id, filename, stored_path, artifact_type, mime_type, sha256, status, created_at, notes) "
+            "VALUES (?, ?, 'spec.pdf', '/tmp/spec.pdf', 'literature_source', 'application/pdf', 'sha-dummy', 'registered', ?, 'Doc artifact')",
+            ("art-1", "workspace-a", now),
+        )
+
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Registration and Schema Tests
+# ---------------------------------------------------------------------------
+
+
+def test_knowledge_read_tool_registered_in_allowlists_and_broker() -> None:
+    """Acceptance criterion 1: jarvis_knowledge_read is registered in all allowlists and schemas."""
+    # 1. broker_mcp._TOOLS contains jarvis_knowledge_read with strict JSON schema
+    knowledge_tool = next((t for t in broker_mcp._TOOLS if t["name"] == "jarvis_knowledge_read"), None)
+    assert knowledge_tool is not None
+    schema = knowledge_tool["inputSchema"]
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["grant_id", "view"]
+    assert set(schema["properties"]["view"]["enum"]) == {
+        "workspaces",
+        "memory_records",
+        "literature_sources",
+        "literature_entries",
+        "project_revisions",
+        "calc_runs",
+        "ai_jobs_recent",
+        "table_counts",
+    }
+    assert schema["properties"]["limit"]["minimum"] == 1
+    assert schema["properties"]["limit"]["maximum"] == 100
+
+    # 2. supervisor._TOOL_CAPABILITIES maps jarvis_knowledge_read -> jarvis.knowledge_read
+    assert _TOOL_CAPABILITIES.get("jarvis_knowledge_read") == "jarvis.knowledge_read"
+
+    # 3. supervisor.HERMES_TOOL_ALLOWLIST contains mcp__jarvis__jarvis_knowledge_read
+    assert "mcp__jarvis__jarvis_knowledge_read" in HERMES_TOOL_ALLOWLIST
+
+    # 4. PRODUCTION_CAPABILITY_REGISTRY has jarvis.knowledge_read registered with action_class="READ"
+    desc = next(
+        (c for c in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads") if c.capability_id == "jarvis.knowledge_read"),
+        None,
+    )
+    assert desc is not None
+    assert desc.action_class == "READ"
+    assert desc == _HERMES_KNOWLEDGE_READ_CAPABILITY
+
+    # 5. worker_shim.ADMITTED_TOOLS contains mcp__jarvis__jarvis_knowledge_read
+    assert "mcp__jarvis__jarvis_knowledge_read" in worker_shim.ADMITTED_TOOLS
+
+    # 6. context_builder.THREAD_AUTHORITY_INSTRUCTIONS mentions jarvis_knowledge_read
+    assert "jarvis_knowledge_read" in context_builder.THREAD_AUTHORITY_INSTRUCTIONS
+
+    # 7. thread_service._turn_tools includes mcp__jarvis__jarvis_knowledge_read
+    assert "mcp__jarvis__jarvis_knowledge_read" in thread_service._turn_tools("none")
+
+
+def test_hermes_thread_grants_knowledge_read() -> None:
+    """Acceptance criterion 1 & 5: turn prompt guidance advertises jarvis_knowledge_read with grant_id and views."""
+    worker = SimpleNamespace(live_grants={})
+    payload = AIThreadSubmit(request_id="req-grant", prompt="Inspect database", route_class="hermes:agent")
+    text = thread_service._install_hermes_retrieval_grant(worker, payload, "workspace-a", "thread-test")
+
+    assert text is not None
+    assert "knowledge_read_grant_id=" in text
+    assert "jarvis_knowledge_read views:" in text
+    assert "workspaces, memory_records, literature_sources" in text
+    assert "Use jarvis_knowledge_read to inspect" in text
+
+    k_grant = next((g for g in worker.live_grants.values() if g.capability_id == "jarvis.knowledge_read"), None)
+    assert k_grant is not None
+    assert k_grant.scope.workspace_id == "workspace-a"
+    assert k_grant.scope.jarvis_thread_id == "thread-test"
+
+
+# ---------------------------------------------------------------------------
+# Named Views Tests against Isolated Database
+# ---------------------------------------------------------------------------
+
+
+def test_view_workspaces(isolated_db) -> None:
+    """View 1: workspaces lists workspaces bounded by limit."""
+    call = _make_call({"grant_id": "g-1", "view": "workspaces", "limit": 10})
+    result, error = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+
+    assert error == "default_error"
+    assert result is not None
+    assert result["view"] == "workspaces"
+    assert result["count"] == 2
+    assert result["total"] == 2
+    assert result["truncated"] is False
+    ws_ids = [w["id"] for w in result["workspaces"]]
+    assert "workspace-a" in ws_ids
+    assert "workspace-b" in ws_ids
+    first = next(w for w in result["workspaces"] if w["id"] == "workspace-a")
+    assert first["name"] == "Workspace Alpha"
+    assert first["description"] == "First workspace"
+
+
+def test_view_memory_records(isolated_db) -> None:
+    """View 2: memory_records returns workspace-scoped assumptions, parameters, decisions with filters."""
+    # 1. Unfiltered in workspace-a (has 1 assumption, 1 parameter, 1 decision)
+    call = _make_call({"grant_id": "g-1", "view": "memory_records"})
+    result, error = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+
+    assert error == "default_error"
+    assert result is not None
+    assert result["view"] == "memory_records"
+    assert result["workspace_id"] == "workspace-a"
+    assert result["count"] == 3
+    assert result["total"] == 3
+    assert result["truncated"] is False
+
+    types = {r["record_type"] for r in result["memory_records"]}
+    assert types == {"assumption", "parameter", "decision"}
+
+    # 2. Filter by record_type='parameter'
+    call_param = _make_call({"grant_id": "g-1", "view": "memory_records", "record_type": "parameter"})
+    res_param, _ = dispatch_knowledge_read_tool(call_param, "workspace-a", "default_error")
+    assert res_param is not None
+    assert res_param["count"] == 1
+    assert res_param["memory_records"][0]["title"] == "Biomass Yield"
+    assert res_param["memory_records"][0]["confidence"] == 0.95
+    assert res_param["memory_records"][0]["tags"] == ["Y_x"]
+
+    # 3. Filter by status='accepted'
+    call_status = _make_call({"grant_id": "g-1", "view": "memory_records", "status": "accepted"})
+    res_status, _ = dispatch_knowledge_read_tool(call_status, "workspace-a", "default_error")
+    assert res_status is not None
+    assert res_status["count"] == 3
+
+    # 4. Filter by query substring
+    call_query = _make_call({"grant_id": "g-1", "view": "memory_records", "query": "photobioreactor"})
+    res_query, _ = dispatch_knowledge_read_tool(call_query, "workspace-a", "default_error")
+    assert res_query is not None
+    assert res_query["count"] == 1
+    assert res_query["memory_records"][0]["id"] == "dec-1"
+
+
+def test_view_literature_sources(isolated_db) -> None:
+    """View 3: literature_sources returns workspace sources with entry counts and query filter."""
+    call = _make_call({"grant_id": "g-1", "view": "literature_sources"})
+    result, error = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+
+    assert error == "default_error"
+    assert result is not None
+    assert result["view"] == "literature_sources"
+    assert result["count"] == 1
+    src = result["literature_sources"][0]
+    assert src["id"] == "src-1"
+    assert src["title"] == "Photobioreactor Kinetics Review"
+    assert src["year"] == 2024
+    assert src["source_type"] == "paper"
+    assert src["backing_state"] == "accepted"
+    assert src["entry_count"] == 2
+
+    # Query filter
+    call_q = _make_call({"grant_id": "g-1", "view": "literature_sources", "query": "Kinetics"})
+    res_q, _ = dispatch_knowledge_read_tool(call_q, "workspace-a", "default_error")
+    assert res_q is not None and res_q["count"] == 1
+
+    call_nomatch = _make_call({"grant_id": "g-1", "view": "literature_sources", "query": "NonExistent"})
+    res_nomatch, _ = dispatch_knowledge_read_tool(call_nomatch, "workspace-a", "default_error")
+    assert res_nomatch is not None and res_nomatch["count"] == 0
+
+
+def test_view_literature_entries(isolated_db) -> None:
+    """View 4: literature_entries returns workspace entries with locators and filters."""
+    call = _make_call({"grant_id": "g-1", "view": "literature_entries"})
+    result, error = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+
+    assert error == "default_error"
+    assert result is not None
+    assert result["view"] == "literature_entries"
+    assert result["count"] == 2
+    claim = next(e for e in result["literature_entries"] if e["id"] == "entry-1")
+    datum = next(e for e in result["literature_entries"] if e["id"] == "entry-2")
+
+    assert claim["entry_type"] == "claim"
+    assert "growth rate peaks" in claim["claim_text"]
+    assert claim["locator"] == "page:12-14"
+
+    assert datum["entry_type"] == "datum"
+    assert datum["value"] == 0.085
+    assert datum["unit"] == "1/h"
+    assert datum["locator"] == "line:45-46"
+
+    # Filters: source_id, status, query
+    call_src = _make_call({"grant_id": "g-1", "view": "literature_entries", "source_id": "src-1"})
+    res_src, _ = dispatch_knowledge_read_tool(call_src, "workspace-a", "default_error")
+    assert res_src is not None and res_src["count"] == 2
+
+    call_query = _make_call({"grant_id": "g-1", "view": "literature_entries", "query": "growth"})
+    res_query, _ = dispatch_knowledge_read_tool(call_query, "workspace-a", "default_error")
+    assert res_query is not None and res_query["count"] == 1
+
+
+def test_view_project_revisions(isolated_db) -> None:
+    """View 5: project_revisions returns revisions with revalidation summary."""
+    call = _make_call({"grant_id": "g-1", "view": "project_revisions"})
+    result, error = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+
+    assert error == "default_error"
+    assert result is not None
+    assert result["view"] == "project_revisions"
+    assert result["count"] == 1
+    rev = result["project_revisions"][0]
+    assert rev["id"] == "rev-1"
+    assert rev["status"] == "reconciled"
+    assert "operations" in rev["summary"]
+    assert rev["revalidation_summary"]["status"] == "pass"
+    assert rev["revalidation_summary"]["pass"] == 1
+    assert rev["revalidation_summary"]["total"] == 1
+
+
+def test_view_calc_runs(isolated_db) -> None:
+    """View 6: calc_runs returns simulation runs with input/output summaries."""
+    call = _make_call({"grant_id": "g-1", "view": "calc_runs"})
+    result, error = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+
+    assert error == "default_error"
+    assert result is not None
+    assert result["view"] == "calc_runs"
+    assert result["count"] == 1
+    run = result["calc_runs"][0]
+    assert run["id"] == "sim-1"
+    assert run["calculator_id"] == "calc_model_v1"
+    assert run["status"] == "succeeded"
+    assert "inputs:" in run["inputs_summary"]
+    assert "outputs:" in run["outputs_summary"]
+
+    # Calculator filter
+    call_filter = _make_call({"grant_id": "g-1", "view": "calc_runs", "calculator_id": "calc_model_v1"})
+    res_filter, _ = dispatch_knowledge_read_tool(call_filter, "workspace-a", "default_error")
+    assert res_filter is not None and res_filter["count"] == 1
+
+    call_nomatch = _make_call({"grant_id": "g-1", "view": "calc_runs", "calculator_id": "different_calc"})
+    res_nomatch, _ = dispatch_knowledge_read_tool(call_nomatch, "workspace-a", "default_error")
+    assert res_nomatch is not None and res_nomatch["count"] == 0
+
+
+def test_view_ai_jobs_recent(isolated_db) -> None:
+    """View 7: ai_jobs_recent returns jobs metadata without secrets or prompt bodies."""
+    call = _make_call({"grant_id": "g-1", "view": "ai_jobs_recent"})
+    result, error = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+
+    assert error == "default_error"
+    assert result is not None
+    assert result["view"] == "ai_jobs_recent"
+    assert result["count"] == 1
+    job = result["ai_jobs"][0]
+    assert job["id"] == "job-1"
+    assert job["task_type"] == "general"
+    assert job["route_class"] == "local:llamacpp"
+    assert job["provider_id"] == "local_llamacpp"
+    assert job["model"] == "gemma-2-9b"
+    assert job["status"] == "success"
+
+    # Verify no prompt, response, or secret bodies exist in output
+    job_str = json.dumps(job)
+    assert "prompt" not in job
+    assert "response" not in job
+    assert "route_reason" not in job_str
+
+
+def test_view_table_counts(isolated_db) -> None:
+    """View 8: table_counts returns exact domain counts for all 10 non-secret tables."""
+    call = _make_call({"grant_id": "g-1", "view": "table_counts"})
+    result, error = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+
+    assert error == "default_error"
+    assert result is not None
+    assert result["view"] == "table_counts"
+    assert result["workspace_id"] == "workspace-a"
+    counts = result["counts"]
+
+    expected_keys = {
+        "workspaces",
+        "memory_records",
+        "literature_sources",
+        "literature_entries",
+        "ai_threads",
+        "ai_jobs",
+        "calc_runs",
+        "artifacts",
+        "project_revisions",
+        "project_validations",
+    }
+    assert set(counts.keys()) == expected_keys
+
+    assert counts["workspaces"] == 2
+    assert counts["memory_records"] == 3  # 1 assumption + 1 parameter + 1 decision in workspace-a
+    assert counts["literature_sources"] == 1
+    assert counts["literature_entries"] == 2
+    assert counts["ai_threads"] == 1
+    assert counts["ai_jobs"] == 1
+    assert counts["calc_runs"] == 1
+    assert counts["artifacts"] == 1
+    assert counts["project_revisions"] == 1
+    assert counts["project_validations"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Workspace Scoping & Security Enforcement
+# ---------------------------------------------------------------------------
+
+
+def test_cross_workspace_query_refused(isolated_db) -> None:
+    """Acceptance criterion 4: cross-workspace query is refused when workspace_id differs from grant."""
+    # Attempting to read workspace-b memory records with a workspace-a grant
+    call = _make_call({"grant_id": "g-1", "view": "memory_records", "workspace_id": "workspace-b"})
+    result, error = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+
+    assert result is None
+    assert error == "cross_workspace_denied"
+
+    # workspaces view is the sole exception where listing all workspaces is permitted
+    call_ws = _make_call({"grant_id": "g-1", "view": "workspaces", "workspace_id": "workspace-b"})
+    res_ws, err_ws = dispatch_knowledge_read_tool(call_ws, "workspace-a", "default_error")
+    assert err_ws == "default_error"
+    assert res_ws is not None and res_ws["count"] == 1
+
+
+def test_unknown_view_refused(isolated_db) -> None:
+    """Acceptance criterion 3: unknown view returns structured error unknown_view."""
+    call = _make_call({"grant_id": "g-1", "view": "secrets_table"})
+    result, error = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+
+    assert result is None
+    assert error == "unknown_view"
+
+
+def test_invalid_arguments_refused(isolated_db) -> None:
+    """Invalid limits or extra unauthorized keys are rejected with invalid_arguments."""
+    # Limit out of bounds
+    call_limit = _make_call({"grant_id": "g-1", "view": "memory_records", "limit": 200})
+    res_limit, err_limit = dispatch_knowledge_read_tool(call_limit, "workspace-a", "default_error")
+    assert res_limit is None and err_limit == "invalid_arguments"
+
+    # Extra key
+    call_extra = _make_call({"grant_id": "g-1", "view": "memory_records", "inject": "DROP TABLE"})
+    res_extra, err_extra = dispatch_knowledge_read_tool(call_extra, "workspace-a", "default_error")
+    assert res_extra is None and err_extra == "invalid_arguments"
+
+
+def test_read_only_pragma_enforced(monkeypatch: pytest.MonkeyPatch, isolated_db) -> None:
+    """Acceptance criterion 3: PRAGMA query_only = ON is executed on the dispatch connection."""
+    from contextlib import contextmanager
+
+    from app.modules.agents.hermes import knowledge_read_tool
+
+    pragma_observed: list[int] = []
+    real_open = knowledge_read_tool.open_sqlite_connection
+
+    @contextmanager
+    def _spy_open(*args, **kwargs):
+        with real_open(*args, **kwargs) as conn:
+            yield conn
+            row = conn.execute("PRAGMA query_only").fetchone()
+            pragma_observed.append(int(row[0]) if row else 0)
+
+    monkeypatch.setattr(knowledge_read_tool, "open_sqlite_connection", _spy_open)
+    call = _make_call({"grant_id": "g-1", "view": "table_counts"})
+    result, _ = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+    assert result is not None
+    assert pragma_observed == [1]
+
+
+def test_secret_scrubbing(isolated_db) -> None:
+    """Acceptance criterion 4: secrets (sk-..., passwords, tokens) and paths are scrubbed."""
+    call = _make_call({"grant_id": "g-1", "view": "memory_records"}, workspace_id="workspace-b")
+    result, error = dispatch_knowledge_read_tool(call, "workspace-b", "default_error")
+
+    assert result is not None
+    record = result["memory_records"][0]
+    assert ("sk-" + "12345678901234567890") not in record["summary"]
+    assert "[REDACTED_SECRET]" in record["summary"]
+
+
+def test_payload_truncation(monkeypatch: pytest.MonkeyPatch, isolated_db) -> None:
+    """Large payloads exceeding 16,000 characters are capped and marked truncated=True."""
+    # Insert multiple long items in workspace-a
+    with open_sqlite_connection() as conn:
+        long_text = "Engineering analysis " * 15  # ~300 chars
+        now = "2026-11-22T05:00:00Z"
+        for i in range(100):
+            conn.execute(
+                "INSERT INTO assumptions (id, workspace_id, statement, scope, status, origin, created_at, updated_at, notes) "
+                "VALUES (?, 'workspace-a', ?, 'scope', 'accepted', 'user', ?, ?, ?)",
+                (f"assump-long-{i}", f"Statement {i} {long_text}", now, now, f"Notes {i} {long_text}"),
+            )
+        conn.commit()
+
+    call = _make_call({"grant_id": "g-1", "view": "memory_records", "limit": 100})
+    result, error = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+
+    assert result is not None
+    assert result["truncated"] is True
+    assert len(json.dumps(result, ensure_ascii=False)) <= 16_000
+
+
+# ---------------------------------------------------------------------------
+# Supervisor Integration Test
+# ---------------------------------------------------------------------------
+
+
+def test_supervisor_dispatch_tool_knowledge_read(isolated_db) -> None:
+    """Acceptance criterion 1: supervisor.dispatch_tool dispatches jarvis.knowledge_read with grant."""
+    grant = _make_grant(grant_id="grant-123", capability_id="jarvis.knowledge_read", workspace_id="workspace-a")
+    call = _make_call({"grant_id": "grant-123", "view": "table_counts"}, grant_id="grant-123")
+
+    tool_result = dispatch_tool(call, live_grants={"grant-123": grant})
+    assert tool_result.status == "succeeded"
+    assert tool_result.error_code is None
+    assert tool_result.capability_id == "jarvis.knowledge_read"
+    assert tool_result.result is not None
+    assert tool_result.result["view"] == "table_counts"
+    assert tool_result.result["counts"]["workspaces"] == 2
+
+
+def test_supervisor_dispatch_refuses_expired_grant(isolated_db) -> None:
+    """Supervisor refuses expired knowledge_read grant."""
+    grant = _make_grant(grant_id="grant-expired", capability_id="jarvis.knowledge_read", expired=True)
+    call = _make_call({"grant_id": "grant-expired", "view": "table_counts"}, grant_id="grant-expired")
+
+    tool_result = dispatch_tool(call, live_grants={"grant-expired": grant})
+    assert tool_result.status == "refused"
+    assert tool_result.error_code == "capability_denied"

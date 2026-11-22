@@ -91,6 +91,38 @@ _REPO_READ_TOOL = {
         "additionalProperties": False,
     },
 }
+_KNOWLEDGE_READ_TOOL = {
+    "name": "jarvis_knowledge_read",
+    "description": "Read structured workspace knowledge, literature, calculations, project revisions, and database views using a live Jarvis capability grant.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "grant_id": {"type": "string", "maxLength": 128},
+            "view": {
+                "type": "string",
+                "enum": [
+                    "workspaces",
+                    "memory_records",
+                    "literature_sources",
+                    "literature_entries",
+                    "project_revisions",
+                    "calc_runs",
+                    "ai_jobs_recent",
+                    "table_counts",
+                ],
+            },
+            "workspace_id": {"type": "string", "maxLength": 128},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            "status": {"type": "string", "maxLength": 64},
+            "record_type": {"type": "string", "maxLength": 64},
+            "source_id": {"type": "string", "maxLength": 128},
+            "calculator_id": {"type": "string", "maxLength": 128},
+            "query": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+        "required": ["grant_id", "view"],
+        "additionalProperties": False,
+    },
+}
 
 
 _QUANTITY = {"type": "object", "properties": {"value": {"type": "number"}, "unit": {"type": "string"}},
@@ -295,7 +327,8 @@ _BENCH_RUN_TOOL = {
         "additionalProperties": False,
     },
 }
-_TOOLS = [_TOOL, _RETRIEVAL_TOOL, _DECISION_TOOL, _DEV_READ_TOOL, _REPO_READ_TOOL, _PROCESS_READ_TOOL, _PROCESS_ACT_TOOL,
+_TOOLS = [_TOOL, _RETRIEVAL_TOOL, _DECISION_TOOL, _DEV_READ_TOOL, _REPO_READ_TOOL, _KNOWLEDGE_READ_TOOL,
+          _PROCESS_READ_TOOL, _PROCESS_ACT_TOOL,
           _BLUECAD_READ_TOOL, _BLUECAD_ACT_TOOL, _STUDIO_READ_TOOL, _STUDIO_ACT_TOOL,
           _BENCH_READ_TOOL, _BENCH_RUN_TOOL]
 _NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL}
