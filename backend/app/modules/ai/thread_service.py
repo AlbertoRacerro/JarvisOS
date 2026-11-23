@@ -472,10 +472,7 @@ def _submit_hermes_interaction(
         lock = pool.lock_for(thread_id)
         with lock:
             _ensure_hermes_thread_session(worker, thread_id=thread_id, workspace_id=workspace_id, role_id=payload.role_id)
-            # The page description leads the context so a long prompt cannot push it past the turn limit.
             blocks = list(context_blocks or [])
-            agent_blocks = [b for b in blocks if b.get("source") == VISIBLE_PAGE_SOURCE] + [
-                b for b in blocks if b.get("source") != VISIBLE_PAGE_SOURCE]
             workspace = get_workspace(workspace_id)
             refreshed_envelope = _jarvis_system_envelope(
                 workspace_id=workspace_id,
@@ -485,17 +482,30 @@ def _submit_hermes_interaction(
                 route_class=payload.route_class,
                 granted_tools=_turn_tools(surface_brief.surface),
             )
-            for idx, b in enumerate(agent_blocks):
-                if b.get("source") == "jarvis:system-envelope":
-                    agent_blocks[idx] = {"source": "jarvis:system-envelope", "content": refreshed_envelope}
-                    break
-            else:
-                agent_blocks.append({"source": "jarvis:system-envelope", "content": refreshed_envelope})
             grant_text = _install_hermes_retrieval_grant(worker, payload, workspace_id, thread_id) or ""
             grant_text += _install_surface_grants(worker, workspace_id, thread_id,
                                                   payload.surface_context, surface_brief)
+            if not grant_text:
+                for b in blocks:
+                    if b.get("source") == "jarvis:agent-grant" and b.get("content"):
+                        grant_text = str(b["content"])
+                        break
+
+            # Spec 344 review: jarvis:agent-grant first, then jarvis:system-envelope, then the rest
+            # so HermesSupervisor.turn's 16-block slicing and 12,000 char prompt cap never drop grant IDs.
+            agent_blocks: list[dict[str, Any]] = []
             if grant_text:
                 agent_blocks.append({"source": "jarvis:agent-grant", "content": grant_text})
+            agent_blocks.append({"source": "jarvis:system-envelope", "content": refreshed_envelope})
+
+            rest = [
+                b for b in blocks
+                if b.get("source") not in {"jarvis:agent-grant", "jarvis:system-envelope"}
+            ]
+            page_blocks = [b for b in rest if b.get("source") == VISIBLE_PAGE_SOURCE]
+            other_blocks = [b for b in rest if b.get("source") != VISIBLE_PAGE_SOURCE]
+            agent_blocks.extend(page_blocks + other_blocks)
+
             result = worker.turn(prompt, interaction_id=interaction_id, context_blocks=agent_blocks,
                                  allowed_tools=_turn_tools(surface_brief.surface),
                                  sheldon_mode=payload.sheldon_mode)
@@ -1066,16 +1076,23 @@ def _jarvis_system_envelope(
             f"reason={_envelope_value(availability.get('reason_code'), 48)}"
         )
 
-    # Loaded packs: pack IDs only, or none; never host filesystem paths or private pack contents
+    # Loaded packs: pack IDs only on local routes (or none); on external routes, never name packs.
     try:
         from app.core import packs
 
         loaded = packs.load_packs()
         pack_ids = [p.id for p in loaded if getattr(p, "id", None)]
-        loaded_packs_str = ", ".join(pack_ids) if pack_ids else "none"
     except Exception:
-        loaded_packs_str = "none"
-    loaded_packs_line = f"Loaded packs: {_envelope_value(loaded_packs_str, 200)}"
+        pack_ids = []
+
+    if _is_local_route_class(route_class):
+        loaded_packs_str = ", ".join(pack_ids) if pack_ids else "none"
+        loaded_packs_line = f"Loaded packs: {_envelope_value(loaded_packs_str, 200)}"
+    else:
+        if pack_ids:
+            loaded_packs_line = f"Loaded packs: {len(pack_ids)} private pack(s)"
+        else:
+            loaded_packs_line = "Loaded packs: none"
 
     # Route boundary: local (private-pack reads permitted) vs external (private-pack reads blocked)
     if _is_local_route_class(route_class):

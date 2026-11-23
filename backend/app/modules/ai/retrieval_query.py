@@ -92,7 +92,6 @@ def query_context(
         last_excerpt = str(last.get("excerpt") or "")
         if len(last_excerpt) > overhead:
             last["excerpt"] = last_excerpt[:-overhead]
-            break
         else:
             evidence.pop()
     return result
