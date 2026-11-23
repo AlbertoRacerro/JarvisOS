@@ -485,12 +485,6 @@ def _submit_hermes_interaction(
             grant_text = _install_hermes_retrieval_grant(worker, payload, workspace_id, thread_id) or ""
             grant_text += _install_surface_grants(worker, workspace_id, thread_id,
                                                   payload.surface_context, surface_brief)
-            if not grant_text:
-                for b in blocks:
-                    if b.get("source") == "jarvis:agent-grant" and b.get("content"):
-                        grant_text = str(b["content"])
-                        break
-
             # Spec 344 review: jarvis:agent-grant first, then jarvis:system-envelope, then the rest
             # so HermesSupervisor.turn's 16-block slicing and 12,000 char prompt cap never drop grant IDs.
             agent_blocks: list[dict[str, Any]] = []
