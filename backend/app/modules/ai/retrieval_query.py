@@ -7,11 +7,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from app.modules.ai.retrieval_contracts import ContextBundle, context_bundle_digest
 from app.modules.ai.retrieval_index import SQLiteIndexStore
 
 MAX_QUERY_CHARS = 2_000
 MAX_LIMIT = 32
 MAX_TOKEN_BUDGET = 8_192
+MAX_RETRIEVAL_RESULT_CHARS = 12_000
 SCHEMA_VERSION = "retrieval-query.v1"
 # Canonical owners indexed with a workspace identity and reread from their owner.
 # Repository documents have no workspace identity and are intentionally excluded.
@@ -48,15 +50,23 @@ def query_context(
     bundle = index.build_bundle(query, workspace_id=workspace_id, token_budget=token_budget,
                                 limit=limit, source_owners=owners, source_refs=allowed_refs)
     evidence = []
-    # Excerpts share the caller's token budget (about four characters per token).
-    remaining_chars = token_budget * 4
+    # Excerpts share the caller's token budget (about four characters per token), bounded by MAX_RETRIEVAL_RESULT_CHARS.
+    remaining_chars = min(token_budget * 4, MAX_RETRIEVAL_RESULT_CHARS)
+    truncated = any(m.outcome == "dropped_budget" for m in bundle.evidence_manifest)
     for item in bundle.items:
         resolution = index.resolve_authoritative(item.source_ref)
         valid = (resolution.state == "current" and resolution.content is not None
                  and resolution.current_content_digest == item.content_digest)
-        if not valid or remaining_chars <= 0:
+        if not valid:
             continue
-        excerpt = (resolution.content or "")[:min(2_000, remaining_chars)]
+        if remaining_chars <= 0:
+            truncated = True
+            break
+        content = resolution.content or ""
+        max_item_chars = min(2_000, remaining_chars)
+        excerpt = content[:max_item_chars]
+        if len(content) > max_item_chars:
+            truncated = True
         remaining_chars -= len(excerpt)
         evidence.append({
             "source_ref": item.source_ref.model_dump(mode="json"),
@@ -65,7 +75,7 @@ def query_context(
             "validation": "current",
             "excerpt": excerpt,
         })
-    return {
+    result: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "query": query,
         "workspace_id": workspace_id,
@@ -74,7 +84,57 @@ def query_context(
         "freshness": freshness.model_dump(mode="json"),
         "bundle": bundle.model_dump(mode="json"),
         "evidence": evidence,
+        "truncated": truncated,
     }
+    while evidence and len(json.dumps(result, ensure_ascii=False)) > MAX_RETRIEVAL_RESULT_CHARS:
+        result["truncated"] = True
+        last = evidence[-1]
+        overhead = len(json.dumps(result, ensure_ascii=False)) - MAX_RETRIEVAL_RESULT_CHARS
+        last_excerpt = str(last.get("excerpt") or "")
+        if len(last_excerpt) > overhead:
+            last["excerpt"] = last_excerpt[:-overhead]
+        else:
+            evidence.pop()
+    if len(json.dumps(result, ensure_ascii=False)) > MAX_RETRIEVAL_RESULT_CHARS:
+        items_list = list(bundle.items)
+        manifest_list = list(bundle.evidence_manifest)
+        bundle_modified = False
+        while len(json.dumps(result, ensure_ascii=False)) > MAX_RETRIEVAL_RESULT_CHARS:
+            non_included_idx = next(
+                (idx for idx in range(len(manifest_list) - 1, -1, -1) if manifest_list[idx].outcome != "included"),
+                None,
+            )
+            if non_included_idx is not None:
+                manifest_list.pop(non_included_idx)
+            elif items_list:
+                items_list.pop()
+                included_idx = next(
+                    (idx for idx in range(len(manifest_list) - 1, -1, -1) if manifest_list[idx].outcome == "included"),
+                    None,
+                )
+                if included_idx is not None:
+                    manifest_list.pop(included_idx)
+            else:
+                break
+            bundle_modified = True
+            result["truncated"] = True
+            trimmed_bundle = ContextBundle(
+                schema_version=bundle.schema_version,
+                bundle_id=bundle.bundle_id,
+                workspace_id=bundle.workspace_id,
+                items=tuple(items_list),
+                evidence_manifest=tuple(manifest_list),
+                token_estimate=sum(item.token_estimate for item in items_list),
+                token_budget=bundle.token_budget,
+                expansion_level=bundle.expansion_level,
+                index_revision=bundle.index_revision,
+                bundle_digest=context_bundle_digest(items_list),
+                created_at=bundle.created_at,
+            )
+            result["bundle"] = trimmed_bundle.model_dump(mode="json")
+        if bundle_modified:
+            ContextBundle.model_validate(result["bundle"])
+    return result
 
 
 def _repository_root(value: str | None) -> Path | None:

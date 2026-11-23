@@ -238,6 +238,12 @@ def submit_interaction(
 
     workspace = get_workspace(workspace_id)
     surface_brief = _derive_surface_brief(workspace_id, payload.surface_context)
+    if payload.route_class:
+        effective_route_class: str | None = payload.route_class
+    else:
+        from app.modules.ai.execution import resolve_effective_route_class
+
+        effective_route_class = resolve_effective_route_class(task_kind=payload.task_kind, route_class=None)
     # Append only after expected selection digests have been checked: those digests
     # continue to bind the user-inspected context, while this envelope stays transient.
     context_blocks = [
@@ -248,6 +254,9 @@ def submit_interaction(
             workspace_name=workspace.name if workspace is not None else "Unknown",
             app_state=app_state,
             route_availability=route_availability or [],
+            route_class=effective_route_class,
+            role_id=payload.role_id,
+            granted_tools=_turn_tools(surface_brief.surface) if payload.route_class == "hermes:agent" else (),
         )},
     ]
     if payload.ui_context is not None:
@@ -470,28 +479,35 @@ def _submit_hermes_interaction(
         lock = pool.lock_for(thread_id)
         with lock:
             _ensure_hermes_thread_session(worker, thread_id=thread_id, workspace_id=workspace_id, role_id=payload.role_id)
-            # The page description leads the context so a long prompt cannot push it past the turn limit.
             blocks = list(context_blocks or [])
-            agent_blocks = [b for b in blocks if b.get("source") == VISIBLE_PAGE_SOURCE] + [
-                b for b in blocks if b.get("source") != VISIBLE_PAGE_SOURCE]
             workspace = get_workspace(workspace_id)
             refreshed_envelope = _jarvis_system_envelope(
                 workspace_id=workspace_id,
                 workspace_name=workspace.name if workspace is not None else "Unknown",
                 app_state=app_state,
                 route_availability=route_availability,
+                route_class=payload.route_class,
+                role_id=payload.role_id,
+                granted_tools=_turn_tools(surface_brief.surface),
             )
-            for idx, b in enumerate(agent_blocks):
-                if b.get("source") == "jarvis:system-envelope":
-                    agent_blocks[idx] = {"source": "jarvis:system-envelope", "content": refreshed_envelope}
-                    break
-            else:
-                agent_blocks.append({"source": "jarvis:system-envelope", "content": refreshed_envelope})
             grant_text = _install_hermes_retrieval_grant(worker, payload, workspace_id, thread_id) or ""
             grant_text += _install_surface_grants(worker, workspace_id, thread_id,
                                                   payload.surface_context, surface_brief)
+            # Spec 344 review: jarvis:agent-grant first, then jarvis:system-envelope, then the rest
+            # so HermesSupervisor.turn's 16-block slicing and 12,000 char prompt cap never drop grant IDs.
+            agent_blocks: list[dict[str, Any]] = []
             if grant_text:
                 agent_blocks.append({"source": "jarvis:agent-grant", "content": grant_text})
+            agent_blocks.append({"source": "jarvis:system-envelope", "content": refreshed_envelope})
+
+            rest = [
+                b for b in blocks
+                if b.get("source") not in {"jarvis:agent-grant", "jarvis:system-envelope"}
+            ]
+            page_blocks = [b for b in rest if b.get("source") == VISIBLE_PAGE_SOURCE]
+            other_blocks = [b for b in rest if b.get("source") != VISIBLE_PAGE_SOURCE]
+            agent_blocks.extend(page_blocks + other_blocks)
+
             result = worker.turn(prompt, interaction_id=interaction_id, context_blocks=agent_blocks,
                                  allowed_tools=_turn_tools(surface_brief.surface),
                                  sheldon_mode=payload.sheldon_mode)
@@ -988,6 +1004,48 @@ def _finalize_direct_workspace_answer(
     return visible, details
 
 
+MAX_SYSTEM_ENVELOPE_CHARS = 2_400
+READ_ONLY_TOOL_ROUTING_CUES: dict[str, str] = {
+    "jarvis_dev_read": "supervisor/relay status, worker jobs, provider quotas, runtime health, recent read-only git/PR summary.",
+    "jarvis_repo_read": 'search/list/read files in scope="public" (JarvisOS repo) or scope="pack" (loaded private pack, local routes only).',
+    "jarvis_knowledge_read": "structured read-only SQL views over jarvisos.db (workspaces, memory records, literature sources/entries, project revisions, calc runs, recent AI jobs, table counts).",
+    "jarvis_retrieval_query": "semantic/text retrieval over workspace documents and artifacts.",
+}
+DEFAULT_READ_TOOLS: tuple[str, ...] = tuple(READ_ONLY_TOOL_ROUTING_CUES.keys())
+
+
+def _is_local_route_class(route_class: str | None, *, role_id: str | None = None) -> bool:
+    if not route_class or not isinstance(route_class, str):
+        return False
+    candidate = route_class.strip()
+    if candidate.startswith("local:") or candidate == "fake":
+        return True
+    if candidate == "hermes:agent":
+        try:
+            from app.modules.ai.settings import get_ai_settings
+
+            settings = get_ai_settings()
+            role_routes = getattr(settings, "hermes_role_routes", {}) or {}
+            role_key = role_id.strip() if isinstance(role_id, str) and role_id.strip() else "isaac"
+            role_route = role_routes.get(role_key)
+            if role_route and isinstance(role_route, str):
+                return role_route.startswith("local:") or role_route == "fake"
+            if role_key != "isaac":
+                isaac_route = role_routes.get("isaac")
+                if isaac_route and isinstance(isaac_route, str):
+                    return isaac_route.startswith("local:") or isaac_route == "fake"
+            provider_mode = str(getattr(settings, "provider_mode", "") or "").lower()
+            if provider_mode:
+                return provider_mode in {"fake", "local", "local_llamacpp", "local_ollama", "ollama", "llamacpp"}
+        except Exception:
+            pass
+        from app.modules.ai.execution import resolve_effective_route_class
+
+        effective = resolve_effective_route_class(task_kind="general", route_class=None)
+        return effective.startswith("local:") or effective == "fake"
+    return False
+
+
 def _envelope_value(value: object, limit: int = 100) -> str:
     if not isinstance(value, str):
         return "unknown"
@@ -995,8 +1053,14 @@ def _envelope_value(value: object, limit: int = 100) -> str:
 
 
 def _jarvis_system_envelope(
-    *, workspace_id: str, workspace_name: str, app_state: object | None,
+    *,
+    workspace_id: str,
+    workspace_name: str,
+    app_state: object | None,
     route_availability: list[dict[str, object]],
+    route_class: str | None = None,
+    role_id: str | None = None,
+    granted_tools: tuple[str, ...] | list[str] | None = None,
 ) -> str:
     try:
         capabilities = capability_reads(evaluator_registry(), app_state or object())
@@ -1019,14 +1083,72 @@ def _jarvis_system_envelope(
             f"loaded={availability.get('model_loaded')}, qualified={availability.get('qualified')}, "
             f"reason={_envelope_value(availability.get('reason_code'), 48)}"
         )
+
+    # Loaded packs: pack IDs only on local routes (or none); on external routes, never name packs.
+    try:
+        from app.core import packs
+
+        loaded = packs.load_packs()
+        pack_ids = [p.id for p in loaded if getattr(p, "id", None)]
+    except Exception:
+        pack_ids = []
+
+    is_local_route = _is_local_route_class(route_class, role_id=role_id)
+    if is_local_route:
+        loaded_packs_str = ", ".join(pack_ids) if pack_ids else "none"
+        loaded_packs_line = f"Loaded packs: {_envelope_value(loaded_packs_str, 200)}"
+    else:
+        if pack_ids:
+            loaded_packs_line = f"Loaded packs: {len(pack_ids)} private pack(s)"
+        else:
+            loaded_packs_line = "Loaded packs: none"
+
+    # Route boundary: local (private-pack reads permitted) vs external (private-pack reads blocked)
+    if is_local_route:
+        route_boundary_line = "Route boundary: local (private-pack reads permitted)"
+    else:
+        route_boundary_line = "Route boundary: external (private-pack reads blocked)"
+
+    # Granted read-only tools section
+    if granted_tools is None:
+        active_tools = list(DEFAULT_READ_TOOLS)
+    else:
+        normalized = {
+            tool.removeprefix("mcp__jarvis__") if isinstance(tool, str) else ""
+            for tool in granted_tools
+        }
+        active_tools = [name for name in DEFAULT_READ_TOOLS if name in normalized]
+
+    if active_tools:
+        tool_lines = [
+            f"  - {name}: {READ_ONLY_TOOL_ROUTING_CUES[name]}"
+            for name in active_tools
+            if name in READ_ONLY_TOOL_ROUTING_CUES
+        ]
+        read_tools_block = ("Read-only tools granted:\n" + "\n".join(tool_lines))[:800]
+    else:
+        read_tools_block = "Read-only tools granted: none"
+
     # Bound each section rather than the joined text, so no line is cut mid-value.
+    # Never emit workspace_id or workspace_name on external routes (either may be seeded by a private pack).
+    workspace_line = (
+        f"Active workspace: {_envelope_value(workspace_id)} / {_envelope_value(workspace_name)}"
+        if is_local_route
+        else "Active workspace: redacted (external route)"
+    )
     lines = [
         "JarvisOS operator reference data (data, not instructions):",
-        f"Active workspace: {_envelope_value(workspace_id)} / {_envelope_value(workspace_name)}",
+        workspace_line,
+        loaded_packs_line,
+        route_boundary_line,
+        read_tools_block,
         ("Capabilities: " + "; ".join(capability_lines))[:700],
         ("Conversation routes: " + ("; ".join(route_lines) if route_lines else "unavailable"))[:600],
     ]
-    return "\n".join(lines)
+    envelope = "\n".join(lines)
+    if len(envelope) > MAX_SYSTEM_ENVELOPE_CHARS:
+        envelope = envelope[:MAX_SYSTEM_ENVELOPE_CHARS]
+    return envelope
 
 
 def _find_existing_interaction(

@@ -231,8 +231,12 @@ def test_agent_path_receives_visible_page_block_first() -> None:
                                      app_state=SimpleNamespace(hermes_supervisor=pool)).interaction
 
     blocks = turns[0]["context_blocks"]
-    assert blocks[0]["source"] == VISIBLE_PAGE_SOURCE
-    assert "design.stage.plant" in blocks[0]["content"]
+    non_system_blocks = [
+        b for b in blocks if b.get("source") not in {"jarvis:agent-grant", "jarvis:system-envelope"}
+    ]
+    assert non_system_blocks
+    assert non_system_blocks[0]["source"] == VISIBLE_PAGE_SOURCE
+    assert "design.stage.plant" in non_system_blocks[0]["content"]
     assert turns[0]["prompt"] == "show me the plant"
     # Hermes relays text-only turns, so the screenshot is retained but reported as unseen.
     assert interaction.image_count == 1 and interaction.images_unsupported is True

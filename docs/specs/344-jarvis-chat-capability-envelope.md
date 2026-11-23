@@ -1,6 +1,6 @@
 # 344 — JARVIS-CHAT-CAPABILITY-ENVELOPE-1: Unified read-tool capability envelope, prompt guidance, and larger retrieval budget
 
-Status: ready
+Status: merged (#258)
 Depends on: 343
 
 ## Goal
@@ -49,7 +49,7 @@ Out of scope (binding non-goals):
 - `backend/app/modules/ai/retrieval_query.py`
 - `backend/tests/test_jarvis_capability_envelope_344.py` (new)
 - `backend/tests/test_ai_threads.py` (update only if literal envelope/budget assertions change)
-- `backend/tests/test_context_builder.py` (update only if literal budget constant assertions change)
+- `backend/tests/test_ai_context_builder.py` (update only if literal budget constant assertions change)
 
 ## Design constraints
 
@@ -63,12 +63,12 @@ Out of scope (binding non-goals):
 1. `_jarvis_system_envelope` includes active workspace, loaded pack IDs (or `none`), route boundary (`local` vs `external`), granted read-only tools with routing cues, capabilities, and conversation routes, bounded to `<= 2,400` chars and free of host paths or secrets.
 2. `THREAD_AUTHORITY_INSTRUCTIONS` clearly separates read-only inspection capability (available via granted tools) from write/execution authority (still human-governed).
 3. `DEFAULT_CONTEXT_BUDGET_CHARS == 48_000` and `MAX_CONTEXT_BLOCKS == 32`, with existing deterministic drop-priority behavior preserved.
-4. Existing `test_ai_threads.py`, `test_context_builder.py`, and `test_hermes_runtime.py` pass alongside new unit tests in `test_jarvis_capability_envelope_344.py`.
+4. Existing `test_ai_threads.py`, `test_ai_context_builder.py`, and `test_hermes_runtime.py` pass alongside new unit tests in `test_jarvis_capability_envelope_344.py`.
 
 ## Required tests
 
 - Offline unit tests in `backend/tests/test_jarvis_capability_envelope_344.py` verifying envelope contents with/without a fake pack, local vs external route boundary note, size bound (`<= 2,400` chars), absence of host paths/secrets, updated `THREAD_AUTHORITY_INSTRUCTIONS`, and new `48_000` / `32` context budget behavior.
-- Existing `test_ai_threads.py`, `test_context_builder.py`, and `test_hermes_runtime.py` pass without weakening security assertions.
+- Existing `test_ai_threads.py`, `test_ai_context_builder.py`, and `test_hermes_runtime.py` pass without weakening security assertions.
 
 ## Definition of done
 
