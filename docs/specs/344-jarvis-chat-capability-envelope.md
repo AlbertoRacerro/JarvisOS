@@ -1,6 +1,6 @@
 # 344 — JARVIS-CHAT-CAPABILITY-ENVELOPE-1: Unified read-tool capability envelope, prompt guidance, and larger retrieval budget
 
-Status: ready
+Status: merged (#258)
 Depends on: 343
 
 ## Goal
