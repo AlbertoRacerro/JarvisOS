@@ -82,10 +82,10 @@ def _scrub_string(val: str, home_str: str) -> str:
 def _scrub_value(val: Any, home_str: str) -> Any:
     if isinstance(val, str):
         capped = _cap_str(val)
-        scrubbed = _scrub_string(capped, home_str)
+        text = _scrub_string(capped, home_str)
         if len(val) > 300 or len(capped) >= 300:
-            scrubbed = _TAIL_SECRET_RE.sub("[REDACTED_SECRET]", scrubbed)
-        return scrubbed
+            text = _TAIL_SECRET_RE.sub("[REDACTED_SECRET]", text)
+        return text
     if isinstance(val, list):
         return [_scrub_value(item, home_str) for item in val]
     if isinstance(val, dict):
