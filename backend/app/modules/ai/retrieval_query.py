@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from app.modules.ai.retrieval_contracts import ContextBundle, context_bundle_digest
 from app.modules.ai.retrieval_index import SQLiteIndexStore
 
 MAX_QUERY_CHARS = 2_000
@@ -94,19 +95,45 @@ def query_context(
             last["excerpt"] = last_excerpt[:-overhead]
         else:
             evidence.pop()
-    bundle_dict = result.get("bundle")
-    if isinstance(bundle_dict, dict):
-        manifest = bundle_dict.get("evidence_manifest")
-        items = bundle_dict.get("items")
+    if len(json.dumps(result, ensure_ascii=False)) > MAX_RETRIEVAL_RESULT_CHARS:
+        items_list = list(bundle.items)
+        manifest_list = list(bundle.evidence_manifest)
+        bundle_modified = False
         while len(json.dumps(result, ensure_ascii=False)) > MAX_RETRIEVAL_RESULT_CHARS:
-            if isinstance(manifest, list) and manifest:
-                manifest.pop()
-                result["truncated"] = True
-            elif isinstance(items, list) and items:
-                items.pop()
-                result["truncated"] = True
+            non_included_idx = next(
+                (idx for idx in range(len(manifest_list) - 1, -1, -1) if manifest_list[idx].outcome != "included"),
+                None,
+            )
+            if non_included_idx is not None:
+                manifest_list.pop(non_included_idx)
+            elif items_list:
+                items_list.pop()
+                included_idx = next(
+                    (idx for idx in range(len(manifest_list) - 1, -1, -1) if manifest_list[idx].outcome == "included"),
+                    None,
+                )
+                if included_idx is not None:
+                    manifest_list.pop(included_idx)
             else:
                 break
+            bundle_modified = True
+            result["truncated"] = True
+            trimmed_bundle = ContextBundle(
+                schema_version=bundle.schema_version,
+                bundle_id=bundle.bundle_id,
+                workspace_id=bundle.workspace_id,
+                items=tuple(items_list),
+                evidence_manifest=tuple(manifest_list),
+                token_estimate=sum(item.token_estimate for item in items_list),
+                token_budget=bundle.token_budget,
+                expansion_level=bundle.expansion_level,
+                index_revision=bundle.index_revision,
+                bundle_digest=context_bundle_digest(items_list),
+                created_at=bundle.created_at,
+            )
+            result["bundle"] = trimmed_bundle.model_dump(mode="json")
+        if bundle_modified:
+            ContextBundle.model_validate(result["bundle"])
     return result
 
 

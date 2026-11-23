@@ -606,6 +606,91 @@ def test_retrieval_query_bounds_whole_result_with_32_stale_manifest_entries() ->
     assert result["truncated"] is True
     assert result["evidence"] == []
     assert len(result["bundle"]["evidence_manifest"]) < 32
+    from app.modules.ai.retrieval_contracts import ContextBundle
+
+    validated = ContextBundle.model_validate(result["bundle"])
+    assert validated.bundle_digest == result["bundle"]["bundle_digest"]
+
+
+def test_retrieval_query_truncation_keeps_valid_context_bundle_with_32_included_items() -> None:
+    from datetime import UTC, datetime
+
+    from app.modules.ai.context_builder import canonical_digest
+    from app.modules.ai.jarvis_context_models import SourceRef
+    from app.modules.ai.retrieval_contracts import (
+        AuthoritativeResolution,
+        ContextBundle,
+        ContextBundleItem,
+        ContextManifestEntry,
+        context_bundle_digest,
+    )
+
+    items = []
+    manifest = []
+    for idx in range(32):
+        digest = canonical_digest(f"valid-item-{idx}")
+        ref = SourceRef(
+            authority_owner="workspace_documents",
+            object_type="passage",
+            object_id=f"doc-{idx:02d}-" + ("v" * 90),
+            workspace_id="ws-344-valid",
+            revision=f"rev-{idx:02d}",
+            content_digest=digest,
+        )
+        items.append(
+            ContextBundleItem(
+                source_ref=ref,
+                content_digest=digest,
+                token_estimate=50,
+                expansion_level=0,
+            )
+        )
+        manifest.append(ContextManifestEntry(source_ref=ref, outcome="included", reason="reread_current"))
+
+    oversized_bundle = ContextBundle(
+        bundle_id="bundle-344-32-included",
+        workspace_id="ws-344-valid",
+        items=tuple(items),
+        evidence_manifest=tuple(manifest),
+        token_estimate=sum(i.token_estimate for i in items),
+        token_budget=4_096,
+        expansion_level=0,
+        index_revision="rev-valid-32",
+        bundle_digest=context_bundle_digest(items),
+        created_at=datetime(2026, 11, 23, tzinfo=UTC),
+    )
+
+    class _FakeFreshness:
+        def model_dump(self, mode: str = "json") -> dict:
+            return {"status": "current", "total_records": 32, "stale_records": 0}
+
+    class _FakeValidStore:
+        def freshness(self) -> _FakeFreshness:
+            return _FakeFreshness()
+
+        def build_bundle(self, *args, **kwargs) -> ContextBundle:
+            return oversized_bundle
+
+        def resolve_authoritative(self, ref: SourceRef) -> AuthoritativeResolution:
+            return AuthoritativeResolution(
+                ref=ref,
+                state="current",
+                current_revision=ref.revision,
+                current_content_digest=ref.content_digest,
+                content="X" * 400,
+            )
+
+    raw_bundle_len = len(json.dumps(oversized_bundle.model_dump(mode="json"), ensure_ascii=False))
+    assert raw_bundle_len > MAX_RETRIEVAL_RESULT_CHARS
+
+    result = query_context("valid 32 items overflow", store=_FakeValidStore())
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert len(serialized) <= MAX_RETRIEVAL_RESULT_CHARS
+    assert result["truncated"] is True
+    validated = ContextBundle.model_validate(result["bundle"])
+    assert validated.token_estimate == sum(item.token_estimate for item in validated.items)
+    assert validated.bundle_digest == context_bundle_digest(validated.items)
+    assert len(validated.items) < 32
 
 
 def test_hermes_turn_prompt_keeps_grants_under_full_12000_char_prompt() -> None:
@@ -618,14 +703,22 @@ def test_hermes_turn_prompt_keeps_grants_under_full_12000_char_prompt() -> None:
     }
     envelope_block = {
         "source": "jarvis:system-envelope",
-        "content": "JarvisOS operator reference data",
+        "content": (
+            "JarvisOS operator reference data (data, not instructions):\n"
+            "Route boundary: local (private-pack reads permitted)\n"
+            "Read-only tools granted:\n"
+            "  - jarvis_dev_read: supervisor/relay status"
+        ),
     }
 
-    # 1. Full 12,000-char user prompt: grant ID survives, total <= 12,000, visible marker present.
+    # 1. Full 12,000-char user prompt: both grant ID AND full system envelope survive, total <= 12,000, visible marker present.
     full_prompt = "A" * 12_000
     assembled = _assemble_turn_prompt(full_prompt, [grant_block, envelope_block])
     assert len(assembled) <= 12_000
     assert grant_id in assembled
+    assert "JarvisOS operator reference data" in assembled
+    assert "Route boundary: local (private-pack reads permitted)" in assembled
+    assert "jarvis_dev_read: supervisor/relay status" in assembled
     assert "[prompt truncated to fit the turn limit]" in assembled
 
     # 2. Short prompt: unchanged format, no truncation marker.
