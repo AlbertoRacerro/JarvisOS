@@ -42,17 +42,35 @@ _VIEW_LIMIT_BOUNDS = {
 }
 
 
+_ABSOLUTE_PATH_RE = re.compile(
+    r"(?<![\w:/~])/(?:[^\s,;\"'<>(){}\[\]/]+/)+[^\s,;\"'<>(){}\[\]/]+/*"
+)
+_WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\s,;\"'<>(){}\[\]]+")
+_KNOWN_SECRET_RE = re.compile(
+    r"(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,}|Bearer\s+[A-Za-z0-9_.-]+)"
+)
+_KV_SECRET_RE = re.compile(
+    r'(?i)(["\']?)([a-z0-9_.-]*(?:password|passwd|secret|token|api_key|api-key|apikey)[a-z0-9_.-]*)\1\s*([:=])\s*([^\s,;\"\'<>(){}\[\]]+|"[^"\r\n]+"|\'[^\'\r\n]+\')'
+)
+
+
+def _redact_kv_secret(match: re.Match[str]) -> str:
+    quote = match.group(1)
+    key = match.group(2)
+    delim = match.group(3)
+    if delim == "=":
+        return f"{quote}{key}{quote}=[REDACTED_SECRET]"
+    return f"{quote}{key}{quote}: [REDACTED_SECRET]"
+
+
 def _scrub_string(val: str, home_str: str) -> str:
     if home_str and home_str in val:
         val = val.replace(home_str, "~")
     val = re.sub(r"/home/[a-zA-Z0-9._-]+", "~", val)
-    val = re.sub(r"/(?:Users|root|var|etc|usr|tmp|opt|mnt)/[^\s,;\"']+", "[REDACTED_PATH]", val)
-    val = re.sub(r"[A-Za-z]:\\[^\s,;\"']+", "[REDACTED_PATH]", val)
-    val = re.sub(
-        r"(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,}|Bearer\s+[A-Za-z0-9_.-]+)",
-        "[REDACTED_SECRET]",
-        val,
-    )
+    val = _ABSOLUTE_PATH_RE.sub("[REDACTED_PATH]", val)
+    val = _WINDOWS_PATH_RE.sub("[REDACTED_PATH]", val)
+    val = _KNOWN_SECRET_RE.sub("[REDACTED_SECRET]", val)
+    val = _KV_SECRET_RE.sub(_redact_kv_secret, val)
     return val
 
 
@@ -78,20 +96,53 @@ def _cap_str(val: Any, max_len: int = 300) -> Any:
     return val
 
 
+def _cap_strings_recursive(obj: Any, max_len: int = 300) -> Any:
+    if isinstance(obj, str):
+        return obj[:max_len]
+    if isinstance(obj, list):
+        return [_cap_strings_recursive(item, max_len) for item in obj]
+    if isinstance(obj, dict):
+        return {k: _cap_strings_recursive(v, max_len) for k, v in obj.items()}
+    return obj
+
+
 def _enforce_payload_bounds(payload: dict[str, Any], items_key: str | None = None) -> dict[str, Any]:
-    serialized = json.dumps(payload, ensure_ascii=False)
-    if len(serialized) <= 16_000:
+    def _is_bounded(p: dict[str, Any]) -> bool:
+        return len(json.dumps(p, ensure_ascii=False)) <= 16_000 and len(json.dumps(p)) <= 16_000
+
+    if _is_bounded(payload):
         payload["truncated"] = bool(payload.get("truncated", False))
         return payload
 
     payload["truncated"] = True
     if items_key and isinstance(payload.get(items_key), list):
         items = list(payload[items_key])
-        while items and len(json.dumps(payload, ensure_ascii=False)) > 16_000:
+        while items and not _is_bounded(payload):
             items.pop()
             payload[items_key] = items
             payload["count"] = len(items)
-    return payload
+
+    if _is_bounded(payload):
+        return payload
+
+    payload = _cap_strings_recursive(payload, 300)
+    payload["truncated"] = True
+    if items_key and isinstance(payload.get(items_key), list):
+        payload["count"] = len(payload[items_key])
+
+    if _is_bounded(payload):
+        return payload
+
+    minimal: dict[str, Any] = {
+        "view": payload.get("view", ""),
+        "count": 0,
+        "truncated": True,
+    }
+    if "workspace_id" in payload:
+        minimal["workspace_id"] = payload["workspace_id"]
+    if items_key:
+        minimal[items_key] = []
+    return minimal
 
 
 def _handle_workspaces(connection: Any, raw_args: dict[str, Any]) -> dict[str, Any]:
@@ -857,7 +908,7 @@ def dispatch_knowledge_read_tool(
 
     home_str = str(Path.home())
 
-    with open_sqlite_connection() as connection:
+    with open_sqlite_connection(read_only=True) as connection:
         connection.execute("PRAGMA query_only = ON")
 
         if view == "workspaces":

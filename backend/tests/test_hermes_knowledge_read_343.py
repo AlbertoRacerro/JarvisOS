@@ -406,6 +406,14 @@ def test_view_literature_entries(isolated_db) -> None:
     res_src, _ = dispatch_knowledge_read_tool(call_src, "workspace-a", "default_error")
     assert res_src is not None and res_src["count"] == 2
 
+    call_status = _make_call({"grant_id": "g-1", "view": "literature_entries", "status": "accepted"})
+    res_status, _ = dispatch_knowledge_read_tool(call_status, "workspace-a", "default_error")
+    assert res_status is not None and res_status["count"] == 2
+
+    call_status_reject = _make_call({"grant_id": "g-1", "view": "literature_entries", "status": "rejected"})
+    res_status_reject, _ = dispatch_knowledge_read_tool(call_status_reject, "workspace-a", "default_error")
+    assert res_status_reject is not None and res_status_reject["count"] == 0
+
     call_query = _make_call({"grant_id": "g-1", "view": "literature_entries", "query": "growth"})
     res_query, _ = dispatch_knowledge_read_tool(call_query, "workspace-a", "default_error")
     assert res_query is not None and res_query["count"] == 1
@@ -580,6 +588,326 @@ def test_read_only_pragma_enforced(monkeypatch: pytest.MonkeyPatch, isolated_db)
     result, _ = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
     assert result is not None
     assert pragma_observed == [1]
+
+
+def test_read_only_connection_used_and_write_impossible(monkeypatch: pytest.MonkeyPatch, isolated_db) -> None:
+    """Finding 1: open_sqlite_connection(read_only=True) is used and write through tool connection is impossible."""
+    import sqlite3
+    from contextlib import contextmanager
+
+    from app.modules.agents.hermes import knowledge_read_tool
+
+    read_only_flags: list[bool] = []
+    write_errors: list[str] = []
+    real_open = knowledge_read_tool.open_sqlite_connection
+
+    @contextmanager
+    def _spy_open(*args, **kwargs):
+        read_only_flags.append(kwargs.get("read_only", False))
+        with real_open(*args, **kwargs) as conn:
+            try:
+                conn.execute("INSERT INTO workspaces (id, name, slug) VALUES ('leak', 'leak', 'leak')")
+            except sqlite3.OperationalError as exc:
+                write_errors.append(str(exc))
+            yield conn
+
+    monkeypatch.setattr(knowledge_read_tool, "open_sqlite_connection", _spy_open)
+    call = _make_call({"grant_id": "g-1", "view": "table_counts"})
+    result, _ = dispatch_knowledge_read_tool(call, "workspace-a", "default_error")
+    assert result is not None
+    assert read_only_flags == [True]
+    assert len(write_errors) == 1
+    assert "readonly" in write_errors[0].lower() or "read-only" in write_errors[0].lower()
+
+
+@pytest.mark.parametrize(
+    ("input_str", "expected_str"),
+    [
+        # Absolute host paths redacted
+        ("/srv/customer/secrets.txt", "[REDACTED_PATH]"),
+        ("/data/x/token.txt", "[REDACTED_PATH]"),
+        ("/var/log/audit.log", "[REDACTED_PATH]"),
+        ("/etc/shadow", "[REDACTED_PATH]"),
+        ("/opt/company/data.bin", "[REDACTED_PATH]"),
+        # /home/<user> keeps mapping to ~
+        ("/home/alice", "~"),
+        ("/home/bob/project/file.txt", "~/project/file.txt"),
+        # Non-mangling cases
+        ("https://example.org/a/b", "https://example.org/a/b"),
+        ("http://localhost:8000/api/v1", "http://localhost:8000/api/v1"),
+        ("Yield is 10 mg/L", "Yield is 10 mg/L"),
+        ("Rate is 5 g/m2/d", "Rate is 5 g/m2/d"),
+        ("Speed: 60 km/h", "Speed: 60 km/h"),
+        ("Calculation 10 / 20", "Calculation 10 / 20"),
+        ("Flag /single is not a full path", "Flag /single is not a full path"),
+        # key=value and key: value secrets
+        ("password=supersecret", "password=[REDACTED_SECRET]"),
+        ("password: supersecret", "password: [REDACTED_SECRET]"),
+        ("passwd=my_passwd", "passwd=[REDACTED_SECRET]"),
+        ("passwd: my_passwd", "passwd: [REDACTED_SECRET]"),
+        ("secret=topsecret", "secret=[REDACTED_SECRET]"),
+        ("secret: topsecret", "secret: [REDACTED_SECRET]"),
+        ("token=tok12345", "token=[REDACTED_SECRET]"),
+        ("token: tok12345", "token: [REDACTED_SECRET]"),
+        ("api_key=key98765", "api_key=[REDACTED_SECRET]"),
+        ("api_key: key98765", "api_key: [REDACTED_SECRET]"),
+        ("apikey=key98765", "apikey=[REDACTED_SECRET]"),
+        ("apikey: key98765", "apikey: [REDACTED_SECRET]"),
+        ("user_password=secret123", "user_password=[REDACTED_SECRET]"),
+        ('client_secret: "quoted_secret"', "client_secret: [REDACTED_SECRET]"),
+        ("AUTH_TOKEN=BearerXYZ", "AUTH_TOKEN=[REDACTED_SECRET]"),
+        ("my_api_key: 'single_quoted'", "my_api_key: [REDACTED_SECRET]"),
+        ("db_passwd: secretpass", "db_passwd: [REDACTED_SECRET]"),
+        # Non-secret key-value non-mangling
+        ("status=accepted", "status=accepted"),
+        ("status: accepted", "status: accepted"),
+        ("total: 10", "total: 10"),
+        ("count: 5", "count: 5"),
+    ],
+)
+def test_scrub_string_cases(input_str: str, expected_str: str) -> None:
+    from app.modules.agents.hermes.knowledge_read_tool import _scrub_string
+
+    assert _scrub_string(input_str, "") == expected_str
+
+
+def test_payload_bounds_oversized_non_list_field() -> None:
+    from app.modules.agents.hermes.knowledge_read_tool import _enforce_payload_bounds
+
+    # Oversized non-list field capped to 300 chars, payload bounded
+    payload = {
+        "view": "memory_records",
+        "workspace_id": "workspace-a",
+        "count": 1,
+        "memory_records": [{"id": "1", "title": "rec"}],
+        "oversized_notes": "X" * 20_000,
+    }
+    bounded = _enforce_payload_bounds(payload, "memory_records")
+    assert bounded["truncated"] is True
+    assert len(json.dumps(bounded)) <= 16_000
+    assert len(bounded["oversized_notes"]) == 300
+    assert bounded["count"] == 0
+    assert bounded["memory_records"] == []
+
+
+def test_payload_bounds_oversized_fallback_minimal() -> None:
+    from app.modules.agents.hermes.knowledge_read_tool import _enforce_payload_bounds
+
+    # When even capping strings to 300 chars leaves payload > 16000, minimal payload is returned
+    payload = {
+        "view": "memory_records",
+        "workspace_id": "workspace-a",
+        "count": 0,
+        "memory_records": [],
+    }
+    for i in range(100):
+        payload[f"huge_field_{i}"] = "Y" * 500
+
+    bounded = _enforce_payload_bounds(payload, "memory_records")
+    assert bounded["truncated"] is True
+    assert len(json.dumps(bounded)) <= 16_000
+    assert bounded["view"] == "memory_records"
+    assert bounded["count"] == 0
+    assert bounded["memory_records"] == []
+    assert "huge_field_0" not in bounded
+
+
+def test_empty_workspace_returns_empty_views(isolated_db) -> None:
+    """Finding 4: An empty workspace returns empty lists and zero counts for every view."""
+    now = "2026-11-22T05:00:00Z"
+    with open_sqlite_connection() as conn:
+        conn.execute(
+            "INSERT INTO workspaces (id, name, slug, description, status, created_at, updated_at) "
+            "VALUES ('workspace-empty', 'Empty Workspace', 'ws-empty', 'Workspace with zero data', 'active', ?, ?)",
+            (now, now),
+        )
+        conn.commit()
+
+    # 1. memory_records
+    call_mem = _make_call({"grant_id": "g-1", "view": "memory_records"}, workspace_id="workspace-empty")
+    res_mem, err_mem = dispatch_knowledge_read_tool(call_mem, "workspace-empty", "err")
+    assert err_mem == "err"
+    assert res_mem is not None
+    assert res_mem["count"] == 0
+    assert res_mem["total"] == 0
+    assert res_mem["memory_records"] == []
+
+    # 2. literature_sources
+    call_ls = _make_call({"grant_id": "g-1", "view": "literature_sources"}, workspace_id="workspace-empty")
+    res_ls, err_ls = dispatch_knowledge_read_tool(call_ls, "workspace-empty", "err")
+    assert err_ls == "err"
+    assert res_ls is not None
+    assert res_ls["count"] == 0
+    assert res_ls["total"] == 0
+    assert res_ls["literature_sources"] == []
+
+    # 3. literature_entries
+    call_le = _make_call({"grant_id": "g-1", "view": "literature_entries"}, workspace_id="workspace-empty")
+    res_le, err_le = dispatch_knowledge_read_tool(call_le, "workspace-empty", "err")
+    assert err_le == "err"
+    assert res_le is not None
+    assert res_le["count"] == 0
+    assert res_le["total"] == 0
+    assert res_le["literature_entries"] == []
+
+    # 4. project_revisions
+    call_pr = _make_call({"grant_id": "g-1", "view": "project_revisions"}, workspace_id="workspace-empty")
+    res_pr, err_pr = dispatch_knowledge_read_tool(call_pr, "workspace-empty", "err")
+    assert err_pr == "err"
+    assert res_pr is not None
+    assert res_pr["count"] == 0
+    assert res_pr["total"] == 0
+    assert res_pr["project_revisions"] == []
+
+    # 5. calc_runs
+    call_cr = _make_call({"grant_id": "g-1", "view": "calc_runs"}, workspace_id="workspace-empty")
+    res_cr, err_cr = dispatch_knowledge_read_tool(call_cr, "workspace-empty", "err")
+    assert err_cr == "err"
+    assert res_cr is not None
+    assert res_cr["count"] == 0
+    assert res_cr["total"] == 0
+    assert res_cr["calc_runs"] == []
+
+    # 6. ai_jobs_recent
+    call_aj = _make_call({"grant_id": "g-1", "view": "ai_jobs_recent"}, workspace_id="workspace-empty")
+    res_aj, err_aj = dispatch_knowledge_read_tool(call_aj, "workspace-empty", "err")
+    assert err_aj == "err"
+    assert res_aj is not None
+    assert res_aj["count"] == 0
+    assert res_aj["total"] == 0
+    assert res_aj["ai_jobs"] == []
+
+    # 7. table_counts
+    call_tc = _make_call({"grant_id": "g-1", "view": "table_counts"}, workspace_id="workspace-empty")
+    res_tc, err_tc = dispatch_knowledge_read_tool(call_tc, "workspace-empty", "err")
+    assert err_tc == "err"
+    assert res_tc is not None
+    counts = res_tc["counts"]
+    assert counts["memory_records"] == 0
+    assert counts["literature_sources"] == 0
+    assert counts["literature_entries"] == 0
+    assert counts["ai_threads"] == 0
+    assert counts["ai_jobs"] == 0
+    assert counts["calc_runs"] == 0
+    assert counts["artifacts"] == 0
+    assert counts["project_revisions"] == 0
+    assert counts["project_validations"] == 0
+
+    # 8. workspaces (scoped to nonexistent)
+    call_ws = _make_call(
+        {"grant_id": "g-1", "view": "workspaces", "workspace_id": "workspace-nonexistent"},
+        workspace_id="workspace-empty",
+    )
+    res_ws, err_ws = dispatch_knowledge_read_tool(call_ws, "workspace-empty", "err")
+    assert err_ws == "err"
+    assert res_ws is not None
+    assert res_ws["count"] == 0
+    assert res_ws["workspaces"] == []
+
+
+def test_no_absolute_host_path_in_any_view(isolated_db) -> None:
+    """Finding 4: No absolute host path appears in any view output when DB rows contain them."""
+    import re
+
+    now = "2026-11-22T05:00:00Z"
+    ws = "workspace-paths"
+    with open_sqlite_connection() as conn:
+        conn.execute(
+            "INSERT INTO workspaces (id, name, slug, description, status, created_at, updated_at) "
+            "VALUES (?, 'Path Test WS', 'ws-paths', 'Config at /etc/service/config.yaml', 'active', ?, ?)",
+            (ws, now, now),
+        )
+        conn.execute(
+            "INSERT INTO assumptions (id, workspace_id, statement, scope, confidence, status, source_ref, origin, created_at, updated_at, notes) "
+            "VALUES ('assump-path', ?, 'Data in /srv/customer/secrets.txt', 'ambient', 'high', 'accepted', 'ref', 'user', ?, ?, 'Token at /data/x/token.txt')",
+            (ws, now, now),
+        )
+        conn.execute(
+            "INSERT INTO literature_sources (id, workspace_id, title, source_kind, state, published_year, citation, publisher, created_at, updated_at) "
+            "VALUES ('src-path', ?, 'Paper at /opt/storage/report.pdf', 'paper', 'accepted', 2024, 'Archive: /var/data/archive.pdf', 'Pub', ?, ?)",
+            (ws, now, now),
+        )
+        conn.execute(
+            "INSERT INTO literature_entries (id, workspace_id, source_id, entry_kind, statement, value_number, unit, status, locator_kind, locator_start, locator_end, created_at, updated_at) "
+            "VALUES ('entry-path', ?, 'src-path', 'claim', 'Evidence from /srv/models/dataset.csv', NULL, NULL, 'accepted', 'section', 1, 10, ?, ?)",
+            (ws, now, now),
+        )
+        conn.execute(
+            "INSERT INTO project_knowledge_revisions (id, workspace_id, parent_kind, state, change_set_digest, change_set_json, projected_state_digest, origin, created_at, accepted_at) "
+            "VALUES ('rev-path', ?, 'working', 'reconciled', 'dig', ?, 'proj', 'Imported from /data/repo/project.git', ?, ?)",
+            (ws, json.dumps([{"file": "/etc/secrets/key.pem"}]), now, now),
+        )
+        conn.execute(
+            "INSERT INTO model_specs (id, workspace_id, title, engineering_question, created_at, updated_at) "
+            "VALUES ('spec-path', ?, 'Spec', 'Question', ?, ?)",
+            (ws, now, now),
+        )
+        conn.execute(
+            "INSERT INTO model_versions (id, workspace_id, model_spec_id, version_label, created_at) "
+            "VALUES ('calc-path', ?, 'spec-path', 'v1', ?)",
+            (ws, now),
+        )
+        conn.execute(
+            "INSERT INTO simulation_runs (id, workspace_id, model_version_id, run_label, status, input_payload, output_payload, created_at, notes) "
+            "VALUES ('sim-path', ?, 'calc-path', 'run-path', 'succeeded', ?, ?, ?, 'Run log at /var/log/sim.log')",
+            (ws, json.dumps({"input_file": "/srv/calc/input.dat"}), json.dumps({"output_file": "/srv/calc/output.dat"}), now),
+        )
+        conn.execute(
+            "INSERT INTO ai_flows (id, workspace_id, task_kind, state, created_at, updated_at, completed_at) "
+            "VALUES ('flow-path', ?, 'general', 'complete', ?, ?, ?)",
+            (ws, now, now, now),
+        )
+        conn.execute(
+            "INSERT INTO ai_jobs (id, created_at, status, task_kind, requested_route_class, selected_route_class, provider_id, model_id, route_reason_json, flow_id, error_type) "
+            "VALUES ('job-path', ?, 'success', 'general', 'local:test', 'local:test', 'local', 'model', '{}', 'flow-path', 'Error in /tmp/crash.log')",
+            (now,),
+        )
+        conn.commit()
+
+    raw_paths = [
+        "/srv/customer/secrets.txt",
+        "/data/x/token.txt",
+        "/opt/storage/report.pdf",
+        "/var/data/archive.pdf",
+        "/srv/models/dataset.csv",
+        "/etc/service/config.yaml",
+        "/data/repo/project.git",
+        "/etc/secrets/key.pem",
+        "/srv/calc/input.dat",
+        "/srv/calc/output.dat",
+        "/var/log/sim.log",
+        "/tmp/crash.log",
+    ]
+
+    all_views = [
+        "workspaces",
+        "memory_records",
+        "literature_sources",
+        "literature_entries",
+        "project_revisions",
+        "calc_runs",
+        "ai_jobs_recent",
+        "table_counts",
+    ]
+
+    for view in all_views:
+        args = {"grant_id": "g-1", "view": view}
+        if view == "workspaces":
+            args["workspace_id"] = ws
+        call = _make_call(args, workspace_id=ws)
+        result, error = dispatch_knowledge_read_tool(call, ws, "default_error")
+        assert error == "default_error"
+        assert result is not None
+        dumped = json.dumps(result)
+
+        # Assert no raw absolute host path appears anywhere in view output
+        for p in raw_paths:
+            assert p not in dumped, f"Raw host path {p} leaked in view {view} output!"
+
+        # Assert regex finds no host absolute paths
+        assert re.search(r"(?<![\w:/~])/(?:[^\s,;\"'<>(){}\[\]/]+/)+[^\s,;\"'<>(){}\[\]/]+", dumped) is None, (
+            f"Unredacted absolute path found in view {view}: {dumped}"
+        )
 
 
 def test_secret_scrubbing(isolated_db) -> None:
