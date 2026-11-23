@@ -42,6 +42,7 @@ _VIEW_LIMIT_BOUNDS = {
 }
 
 
+_FILE_URL_RE = re.compile(r"file://[^\s,;\"'<>(){}\[\]]+")
 _ABSOLUTE_PATH_RE = re.compile(
     r"(?<![\w:/~])/(?:[^\s,;\"'<>(){}\[\]/]+/)+[^\s,;\"'<>(){}\[\]/]+/*"
 )
@@ -50,7 +51,7 @@ _KNOWN_SECRET_RE = re.compile(
     r"(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,}|Bearer\s+[A-Za-z0-9_.-]+)"
 )
 _KV_SECRET_RE = re.compile(
-    r'(?i)(["\']?)([a-z0-9_.-]*(?:password|passwd|secret|token|api_key|api-key|apikey)[a-z0-9_.-]*)\1\s*([:=])\s*([^\s,;\"\'<>(){}\[\]]+|"[^"\r\n]+"|\'[^\'\r\n]+\')'
+    r'(?i)(["\']?)([a-z0-9_.-]{0,64}(?:password|passwd|secret|token|api_key|api-key|apikey)[a-z0-9_.-]{0,64})\1\s*([:=])\s*([^\s,;\"\'<>(){}\[\]]{1,256}|"[^"\r\n]+"|\'[^\'\r\n]+\')'
 )
 
 
@@ -64,6 +65,7 @@ def _redact_kv_secret(match: re.Match[str]) -> str:
 
 
 def _scrub_string(val: str, home_str: str) -> str:
+    val = _FILE_URL_RE.sub("[REDACTED_PATH]", val)
     if home_str and home_str in val:
         val = val.replace(home_str, "~")
     val = re.sub(r"/home/[a-zA-Z0-9._-]+", "~", val)
@@ -110,8 +112,8 @@ def _enforce_payload_bounds(payload: dict[str, Any], items_key: str | None = Non
     def _is_bounded(p: dict[str, Any]) -> bool:
         return len(json.dumps(p, ensure_ascii=False)) <= 16_000 and len(json.dumps(p)) <= 16_000
 
+    payload["truncated"] = bool(payload.get("truncated", False))
     if _is_bounded(payload):
-        payload["truncated"] = bool(payload.get("truncated", False))
         return payload
 
     payload["truncated"] = True

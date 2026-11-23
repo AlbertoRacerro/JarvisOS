@@ -629,6 +629,9 @@ def test_read_only_connection_used_and_write_impossible(monkeypatch: pytest.Monk
         ("/var/log/audit.log", "[REDACTED_PATH]"),
         ("/etc/shadow", "[REDACTED_PATH]"),
         ("/opt/company/data.bin", "[REDACTED_PATH]"),
+        # file:// URLs redacted
+        ("file:///srv/customer/secrets.txt", "[REDACTED_PATH]"),
+        ("file:///data/x/token.txt", "[REDACTED_PATH]"),
         # /home/<user> keeps mapping to ~
         ("/home/alice", "~"),
         ("/home/bob/project/file.txt", "~/project/file.txt"),
@@ -970,3 +973,53 @@ def test_supervisor_dispatch_refuses_expired_grant(isolated_db) -> None:
     tool_result = dispatch_tool(call, live_grants={"grant-expired": grant})
     assert tool_result.status == "refused"
     assert tool_result.error_code == "capability_denied"
+
+
+def test_file_url_path_scrubbed_and_https_preserved() -> None:
+    """Requirement 1: _scrub_string redacts file:// URL paths without touching http(s) URLs."""
+    from app.modules.agents.hermes.knowledge_read_tool import _scrub_string
+
+    scrubbed_file = _scrub_string("file:///srv/customer/secrets.txt", "")
+    assert "/srv/customer" not in scrubbed_file
+    assert scrubbed_file == "[REDACTED_PATH]"
+
+    scrubbed_https = _scrub_string("https://example.org/a/b", "")
+    assert scrubbed_https == "https://example.org/a/b"
+
+
+def test_payload_bounds_just_under_cap_without_truncated_key() -> None:
+    """Requirement 2: payload 15,990 chars without truncated key ends <= 16,000."""
+    from app.modules.agents.hermes.knowledge_read_tool import _enforce_payload_bounds
+
+    items = [{"id": f"item-{i:03d}", "data": "x" * 50} for i in range(250)]
+    payload = {"view": "workspaces", "count": len(items), "workspaces": items}
+    while len(json.dumps(payload)) > 15_990:
+        items.pop()
+        payload["count"] = len(items)
+    diff = 15_990 - len(json.dumps(payload))
+    payload["workspaces"][-1]["data"] += "x" * diff
+
+    assert "truncated" not in payload
+    assert len(json.dumps(payload)) == 15_990
+
+    bounded = _enforce_payload_bounds(payload, "workspaces")
+    assert "truncated" in bounded
+    assert bounded["truncated"] is True
+    assert len(json.dumps(bounded, ensure_ascii=False)) <= 16_000
+    assert len(json.dumps(bounded)) <= 16_000
+
+
+def test_kv_secret_re_superlinear_bounded() -> None:
+    """Requirement 3: 20,000-char non-matching key-like string scrubs in under 0.5 s."""
+    import time
+
+    from app.modules.agents.hermes.knowledge_read_tool import _scrub_string
+
+    non_matching = ("candidate_variable_name_without_keyword_" * 500)[:20_000]
+    t0 = time.perf_counter()
+    scrubbed = _scrub_string(non_matching, "")
+    duration = time.perf_counter() - t0
+
+    assert duration < 0.5, f"Scrubbing took {duration:.3f} s, expected < 0.5 s"
+    assert scrubbed == non_matching
+
