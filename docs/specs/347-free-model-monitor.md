@@ -16,7 +16,7 @@ Directive `L20261123225111-e7c1` (item 4): temporary free periods expire without
 - `scripts/worker_routing.py::load_temp_pools`, `fetch_free_ids`, `listed_ids`, `temp_pool_read`, and `FREE_LISTS` (`openai_models`, `openrouter_public`, `opencode_zen`) implement Spec 334 admission (`index_score >= reference`) and hourly liveness caching in `temp-pool-lists.json`.
 - `scripts/relay_continuity_roadmap.py::command_serve` runs the continuous supervisor loop inside `jarvis-sandbox` with `serve_store = Store(root / "serve")` and `Notifier(state, sender=sender, log=log)`.
 - `scripts/relay_continuity_notify.py::Notifier.send_text` posts plain-Italian messages to Slack via the configured bot/webhook with deduplication.
-- `backend/app/modules/coding/provider_quota.py::_read_temp_pools` surfaces admitted pools from `temp-pools.json` in the `"Modelli gratis ora"` UI section (Spec 346).
+- `backend/app/modules/coding/provider_quota.py::_resolve_temp_pools_path` locates `temp-pools.json` to surface admitted pools in the `"Modelli gratis ora"` UI section (Spec 346).
 
 ## Scope
 
