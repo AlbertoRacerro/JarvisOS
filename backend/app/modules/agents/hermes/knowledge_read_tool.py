@@ -53,6 +53,9 @@ _KNOWN_SECRET_RE = re.compile(
 _KV_SECRET_RE = re.compile(
     r'(?i)(["\']?)([a-z0-9_.-]{0,64}(?:password|passwd|secret|token|api_key|api-key|apikey)[a-z0-9_.-]*+)\1\s*([:=])\s*([^\s,;\"\'<>(){}\[\]]++|"[^"\r\n]+"|\'[^\'\r\n]+\')'
 )
+_TAIL_SECRET_RE = re.compile(
+    r'(?i)(?:(?:password|passwd|secret|token|api_key|api-key|apikey)[\w.-]*["\']?\s*[:=]\s*\S*|sk-[\w-]*|gh[pousr]_\w*|AIza[\w-]*|Bearer\s+\S*)$'
+)
 
 
 def _redact_kv_secret(match: re.Match[str]) -> str:
@@ -78,7 +81,11 @@ def _scrub_string(val: str, home_str: str) -> str:
 
 def _scrub_value(val: Any, home_str: str) -> Any:
     if isinstance(val, str):
-        return _scrub_string(_cap_str(val), home_str)
+        capped = _cap_str(val)
+        scrubbed = _scrub_string(capped, home_str)
+        if len(val) > 300 or len(capped) >= 300:
+            scrubbed = _TAIL_SECRET_RE.sub("[REDACTED_SECRET]", scrubbed)
+        return scrubbed
     if isinstance(val, list):
         return [_scrub_value(item, home_str) for item in val]
     if isinstance(val, dict):

@@ -1105,3 +1105,91 @@ def test_memory_record_with_1000_char_scope_tag_capped(isolated_db) -> None:
     assert rec_param["tags"][0] == long_symbol[:300]
 
 
+def test_scrub_value_redacts_tail_secret_fragment_at_cap() -> None:
+    """Secret fragments cut at the 300-char cap are replaced with [REDACTED_SECRET]; normal strings unchanged."""
+    from app.modules.agents.hermes.knowledge_read_tool import _scrub_value
+
+    # 1. password="..." straddling char 300
+    straddle_pw = ("A" * 285) + 'password="sensitive_secret_data"' + (" B" * 40)
+    scrubbed_pw = _scrub_value(straddle_pw, "")
+    assert "sensitive" not in scrubbed_pw
+    assert "[REDACTED_SECRET]" in scrubbed_pw
+    assert scrubbed_pw.endswith("[REDACTED_SECRET]")
+
+    # 2. sk- token straddling char 300
+    straddle_sk = ("C" * 290) + "sk-abcdef1234567890abcdef" + (" D" * 40)
+    scrubbed_sk = _scrub_value(straddle_sk, "")
+    assert "abcdef" not in scrubbed_sk
+    assert "[REDACTED_SECRET]" in scrubbed_sk
+    assert scrubbed_sk.endswith("[REDACTED_SECRET]")
+
+    # 3. Bearer and ghp_ fragments straddling char 300
+    straddle_bearer = ("E" * 292) + "Bearer auth_token_secret" + (" F" * 40)
+    scrubbed_bearer = _scrub_value(straddle_bearer, "")
+    assert "auth_token" not in scrubbed_bearer
+    assert "[REDACTED_SECRET]" in scrubbed_bearer
+
+    straddle_ghp = ("G" * 292) + "ghp_tokendata12345" + (" H" * 40)
+    scrubbed_ghp = _scrub_value(straddle_ghp, "")
+    assert "tokendata" not in scrubbed_ghp
+    assert "[REDACTED_SECRET]" in scrubbed_ghp
+
+    # 4. Normal 300-char string without secrets is unchanged
+    normal_300 = ("Standard engineering operating parameter without secrets. " * 8)[:300]
+    assert len(normal_300) == 300
+    assert _scrub_value(normal_300, "") == normal_300
+
+
+def test_view_memory_records_redacts_secret_fragment_at_field_cap(isolated_db) -> None:
+    """Real view test: memory_records with 400-char notes/statement straddling char 300 redacts secrets."""
+    now = "2026-11-22T05:00:00Z"
+    long_notes_pw = ("A" * 285) + 'password="sensitive_database_password_xyz"' + (" B" * 40)
+    long_notes_sk = ("C" * 290) + "sk-1234567890abcdef1234567890" + (" D" * 40)
+    normal_long_notes = ("Normal operating temperature condition for reactor. " * 10)[:400]
+
+    with open_sqlite_connection() as conn:
+        conn.execute(
+            "INSERT INTO assumptions (id, workspace_id, statement, scope, confidence, status, origin, created_at, updated_at, notes) "
+            "VALUES ('assump-frag-pw', 'workspace-a', 'Straddle password test', 'ambient', 'high', 'accepted', 'user', ?, ?, ?)",
+            (now, now, long_notes_pw),
+        )
+        conn.execute(
+            "INSERT INTO assumptions (id, workspace_id, statement, scope, confidence, status, origin, created_at, updated_at, notes) "
+            "VALUES ('assump-frag-sk', 'workspace-a', 'Straddle sk test', 'ambient', 'high', 'accepted', 'user', ?, ?, ?)",
+            (now, now, long_notes_sk),
+        )
+        conn.execute(
+            "INSERT INTO assumptions (id, workspace_id, statement, scope, confidence, status, origin, created_at, updated_at, notes) "
+            "VALUES ('assump-normal-300', 'workspace-a', 'Normal long notes test', 'ambient', 'high', 'accepted', 'user', ?, ?, ?)",
+            (now, now, normal_long_notes),
+        )
+        conn.commit()
+
+    # Query password straddle
+    call_pw = _make_call({"grant_id": "g-1", "view": "memory_records", "query": "Straddle password test"})
+    res_pw, err_pw = dispatch_knowledge_read_tool(call_pw, "workspace-a", "default_error")
+    assert err_pw == "default_error"
+    assert res_pw is not None and res_pw["count"] == 1
+    rec_pw = res_pw["memory_records"][0]
+    assert "sensitive" not in rec_pw["summary"]
+    assert "[REDACTED_SECRET]" in rec_pw["summary"]
+
+    # Query sk straddle
+    call_sk = _make_call({"grant_id": "g-1", "view": "memory_records", "query": "Straddle sk test"})
+    res_sk, err_sk = dispatch_knowledge_read_tool(call_sk, "workspace-a", "default_error")
+    assert err_sk == "default_error"
+    assert res_sk is not None and res_sk["count"] == 1
+    rec_sk = res_sk["memory_records"][0]
+    assert "123456" not in rec_sk["summary"]
+    assert "[REDACTED_SECRET]" in rec_sk["summary"]
+
+    # Query normal 300-char string without secrets is capped to 300 chars without mangling
+    call_normal = _make_call({"grant_id": "g-1", "view": "memory_records", "query": "Normal long notes test"})
+    res_normal, err_normal = dispatch_knowledge_read_tool(call_normal, "workspace-a", "default_error")
+    assert err_normal == "default_error"
+    assert res_normal is not None and res_normal["count"] == 1
+    rec_normal = res_normal["memory_records"][0]
+    assert rec_normal["summary"] == normal_long_notes[:300]
+
+
+
