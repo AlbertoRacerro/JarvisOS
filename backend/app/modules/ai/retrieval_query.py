@@ -94,6 +94,19 @@ def query_context(
             last["excerpt"] = last_excerpt[:-overhead]
         else:
             evidence.pop()
+    bundle_dict = result.get("bundle")
+    if isinstance(bundle_dict, dict):
+        manifest = bundle_dict.get("evidence_manifest")
+        items = bundle_dict.get("items")
+        while len(json.dumps(result, ensure_ascii=False)) > MAX_RETRIEVAL_RESULT_CHARS:
+            if isinstance(manifest, list) and manifest:
+                manifest.pop()
+                result["truncated"] = True
+            elif isinstance(items, list) and items:
+                items.pop()
+                result["truncated"] = True
+            else:
+                break
     return result
 
 

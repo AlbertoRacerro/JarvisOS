@@ -900,6 +900,7 @@ def test_thread_envelope_is_bounded_injection_safe_and_not_transcript_context(mo
                 "availability": {"runtime_reachable": True, "model_installed": True,
                                   "model_loaded": False, "qualified": "unknown"},
             }],
+            route_class="local:general",
         ),
     }
     prompt = assemble_prompt([block], "Ciao")

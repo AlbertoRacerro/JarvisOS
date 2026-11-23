@@ -244,12 +244,14 @@ def test_task_endpoint_external_route_respects_ai_settings_gate_before_provider_
 
 
 def test_task_endpoint_rejects_too_many_context_blocks(client: TestClient) -> None:
+    from app.modules.ai.context_builder import MAX_CONTEXT_BLOCKS
+
     response = client.post(
         "/ai/tasks/run",
         json={
             "prompt": "too many context blocks",
             "route_class": "local:fake",
-            "context_blocks": [{"content": str(index)} for index in range(21)],
+            "context_blocks": [{"content": str(index)} for index in range(MAX_CONTEXT_BLOCKS + 1)],
         },
     )
 
@@ -258,12 +260,14 @@ def test_task_endpoint_rejects_too_many_context_blocks(client: TestClient) -> No
 
 
 def test_task_endpoint_rejects_oversized_context_blocks(client: TestClient) -> None:
+    from app.modules.ai.context_builder import DEFAULT_CONTEXT_BUDGET_CHARS
+
     response = client.post(
         "/ai/tasks/run",
         json={
             "prompt": "too large context",
             "route_class": "local:fake",
-            "context_blocks": [{"content": "x" * 32_001}],
+            "context_blocks": [{"content": "x" * (DEFAULT_CONTEXT_BUDGET_CHARS + 1)}],
         },
     )
 

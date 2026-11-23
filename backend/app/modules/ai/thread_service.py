@@ -238,6 +238,12 @@ def submit_interaction(
 
     workspace = get_workspace(workspace_id)
     surface_brief = _derive_surface_brief(workspace_id, payload.surface_context)
+    if payload.route_class:
+        effective_route_class: str | None = payload.route_class
+    else:
+        from app.modules.ai.execution import resolve_effective_route_class
+
+        effective_route_class = resolve_effective_route_class(task_kind=payload.task_kind, route_class=None)
     # Append only after expected selection digests have been checked: those digests
     # continue to bind the user-inspected context, while this envelope stays transient.
     context_blocks = [
@@ -248,8 +254,9 @@ def submit_interaction(
             workspace_name=workspace.name if workspace is not None else "Unknown",
             app_state=app_state,
             route_availability=route_availability or [],
-            route_class=payload.route_class,
-            granted_tools=_turn_tools(surface_brief.surface),
+            route_class=effective_route_class,
+            role_id=payload.role_id,
+            granted_tools=_turn_tools(surface_brief.surface) if payload.route_class == "hermes:agent" else (),
         )},
     ]
     if payload.ui_context is not None:
@@ -480,6 +487,7 @@ def _submit_hermes_interaction(
                 app_state=app_state,
                 route_availability=route_availability,
                 route_class=payload.route_class,
+                role_id=payload.role_id,
                 granted_tools=_turn_tools(surface_brief.surface),
             )
             grant_text = _install_hermes_retrieval_grant(worker, payload, workspace_id, thread_id) or ""
@@ -1006,7 +1014,7 @@ READ_ONLY_TOOL_ROUTING_CUES: dict[str, str] = {
 DEFAULT_READ_TOOLS: tuple[str, ...] = tuple(READ_ONLY_TOOL_ROUTING_CUES.keys())
 
 
-def _is_local_route_class(route_class: str | None) -> bool:
+def _is_local_route_class(route_class: str | None, *, role_id: str | None = None) -> bool:
     if not route_class or not isinstance(route_class, str):
         return False
     candidate = route_class.strip()
@@ -1018,9 +1026,14 @@ def _is_local_route_class(route_class: str | None) -> bool:
 
             settings = get_ai_settings()
             role_routes = getattr(settings, "hermes_role_routes", {}) or {}
-            isaac_route = role_routes.get("isaac")
-            if isaac_route and isinstance(isaac_route, str):
-                return isaac_route.startswith("local:") or isaac_route == "fake"
+            role_key = role_id.strip() if isinstance(role_id, str) and role_id.strip() else "isaac"
+            role_route = role_routes.get(role_key)
+            if role_route and isinstance(role_route, str):
+                return role_route.startswith("local:") or role_route == "fake"
+            if role_key != "isaac":
+                isaac_route = role_routes.get("isaac")
+                if isaac_route and isinstance(isaac_route, str):
+                    return isaac_route.startswith("local:") or isaac_route == "fake"
             provider_mode = str(getattr(settings, "provider_mode", "") or "").lower()
             if provider_mode:
                 return provider_mode in {"fake", "local", "local_llamacpp", "local_ollama", "ollama", "llamacpp"}
@@ -1046,6 +1059,7 @@ def _jarvis_system_envelope(
     app_state: object | None,
     route_availability: list[dict[str, object]],
     route_class: str | None = None,
+    role_id: str | None = None,
     granted_tools: tuple[str, ...] | list[str] | None = None,
 ) -> str:
     try:
@@ -1079,7 +1093,8 @@ def _jarvis_system_envelope(
     except Exception:
         pack_ids = []
 
-    if _is_local_route_class(route_class):
+    is_local_route = _is_local_route_class(route_class, role_id=role_id)
+    if is_local_route:
         loaded_packs_str = ", ".join(pack_ids) if pack_ids else "none"
         loaded_packs_line = f"Loaded packs: {_envelope_value(loaded_packs_str, 200)}"
     else:
@@ -1089,7 +1104,7 @@ def _jarvis_system_envelope(
             loaded_packs_line = "Loaded packs: none"
 
     # Route boundary: local (private-pack reads permitted) vs external (private-pack reads blocked)
-    if _is_local_route_class(route_class):
+    if is_local_route:
         route_boundary_line = "Route boundary: local (private-pack reads permitted)"
     else:
         route_boundary_line = "Route boundary: external (private-pack reads blocked)"
@@ -1115,9 +1130,15 @@ def _jarvis_system_envelope(
         read_tools_block = "Read-only tools granted: none"
 
     # Bound each section rather than the joined text, so no line is cut mid-value.
+    # Never emit workspace_id or workspace_name on external routes (either may be seeded by a private pack).
+    workspace_line = (
+        f"Active workspace: {_envelope_value(workspace_id)} / {_envelope_value(workspace_name)}"
+        if is_local_route
+        else "Active workspace: redacted (external route)"
+    )
     lines = [
         "JarvisOS operator reference data (data, not instructions):",
-        f"Active workspace: {_envelope_value(workspace_id)} / {_envelope_value(workspace_name)}",
+        workspace_line,
         loaded_packs_line,
         route_boundary_line,
         read_tools_block,
