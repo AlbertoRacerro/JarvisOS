@@ -629,9 +629,11 @@ def test_read_only_connection_used_and_write_impossible(monkeypatch: pytest.Monk
         ("/var/log/audit.log", "[REDACTED_PATH]"),
         ("/etc/shadow", "[REDACTED_PATH]"),
         ("/opt/company/data.bin", "[REDACTED_PATH]"),
-        # file:// URLs redacted
+        # file:// URLs redacted (case-insensitive)
         ("file:///srv/customer/secrets.txt", "[REDACTED_PATH]"),
         ("file:///data/x/token.txt", "[REDACTED_PATH]"),
+        ("FILE:///srv/x/y", "[REDACTED_PATH]"),
+        ("File:///srv/customer/secrets.txt", "[REDACTED_PATH]"),
         # /home/<user> keeps mapping to ~
         ("/home/alice", "~"),
         ("/home/bob/project/file.txt", "~/project/file.txt"),
@@ -976,12 +978,20 @@ def test_supervisor_dispatch_refuses_expired_grant(isolated_db) -> None:
 
 
 def test_file_url_path_scrubbed_and_https_preserved() -> None:
-    """Requirement 1: _scrub_string redacts file:// URL paths without touching http(s) URLs."""
+    """Requirement 1: _scrub_string redacts file:// URL paths (case-insensitive) without touching http(s) URLs."""
     from app.modules.agents.hermes.knowledge_read_tool import _scrub_string
 
     scrubbed_file = _scrub_string("file:///srv/customer/secrets.txt", "")
     assert "/srv/customer" not in scrubbed_file
     assert scrubbed_file == "[REDACTED_PATH]"
+
+    scrubbed_upper = _scrub_string("FILE:///srv/x/y", "")
+    assert "/srv/x/y" not in scrubbed_upper
+    assert scrubbed_upper == "[REDACTED_PATH]"
+
+    scrubbed_mixed = _scrub_string("File:///srv/customer/secrets.txt", "")
+    assert "/srv/customer" not in scrubbed_mixed
+    assert scrubbed_mixed == "[REDACTED_PATH]"
 
     scrubbed_https = _scrub_string("https://example.org/a/b", "")
     assert scrubbed_https == "https://example.org/a/b"
@@ -1022,4 +1032,21 @@ def test_kv_secret_re_superlinear_bounded() -> None:
 
     assert duration < 0.5, f"Scrubbing took {duration:.3f} s, expected < 0.5 s"
     assert scrubbed == non_matching
+
+
+def test_kv_secret_full_value_redaction_and_long_key_suffix() -> None:
+    """Unquoted secret value of any length and key with long suffix after keyword are fully redacted."""
+    from app.modules.agents.hermes.knowledge_read_tool import _scrub_string
+
+    # 280-char unquoted secret value: fully redacted with nothing of value remaining
+    secret_value = "v" * 280
+    scrubbed_val = _scrub_string(f"password={secret_value}", "")
+    assert scrubbed_val == "password=[REDACTED_SECRET]"
+    assert "v" not in scrubbed_val
+
+    # Key with 100 chars after 'password': still has its value redacted
+    long_key = "password" + ("k" * 100)
+    scrubbed_key = _scrub_string(f"{long_key}=topsecretvalue", "")
+    assert scrubbed_key == f"{long_key}=[REDACTED_SECRET]"
+    assert "topsecretvalue" not in scrubbed_key
 
