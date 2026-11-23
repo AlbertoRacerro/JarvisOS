@@ -44,6 +44,7 @@ _SEED_CHARS = 60_000
 HERMES_TOOL_ALLOWLIST = frozenset({"mcp__jarvis__jarvis_context_preview",
                                   "mcp__jarvis__jarvis_retrieval_query", "mcp__jarvis__jarvis_decide",
                                   "mcp__jarvis__jarvis_dev_read", "mcp__jarvis__jarvis_repo_read",
+                                  "mcp__jarvis__jarvis_knowledge_read",
                                   "mcp__jarvis__jarvis_process_read", "mcp__jarvis__jarvis_process_act",
                                   "mcp__jarvis__jarvis_bluecad_read", "mcp__jarvis__jarvis_bluecad_act",
                                   "mcp__jarvis__jarvis_studio_read", "mcp__jarvis__jarvis_studio_act",
@@ -105,11 +106,16 @@ _HERMES_REPO_READ_CAPABILITY = JarvisCapabilityDescriptor(
     capability_id="jarvis.repo_read", route_id="ai-threads", action_class="READ",
     label="Read, search, or list files in the public JarvisOS repository or a private pack",
 )
+_HERMES_KNOWLEDGE_READ_CAPABILITY = JarvisCapabilityDescriptor(
+    capability_id="jarvis.knowledge_read", route_id="ai-threads", action_class="READ",
+    label="Read structured workspace knowledge, literature, calculations and database views",
+)
 _TOOL_CAPABILITIES = {
     "jarvis_retrieval_query": "jarvis.retrieval_query",
     "jarvis_decide": "jarvis.decide",
     "jarvis_dev_read": "jarvis.dev_read",
     "jarvis_repo_read": "jarvis.repo_read",
+    "jarvis_knowledge_read": "jarvis.knowledge_read",
     "jarvis_process_read": "jarvis.process_read",
     "jarvis_process_act": "jarvis.process_act",
     "jarvis_bluecad_read": "jarvis.bluecad_read",
@@ -123,7 +129,8 @@ for _descriptor in (_HERMES_PROCESS_READ_CAPABILITY, _HERMES_PROCESS_ACT_CAPABIL
                     _HERMES_BLUECAD_READ_CAPABILITY,
                     _HERMES_BLUECAD_ACT_CAPABILITY, _HERMES_STUDIO_READ_CAPABILITY,
                     _HERMES_STUDIO_ACT_CAPABILITY, _HERMES_BENCH_READ_CAPABILITY,
-                    _HERMES_DEV_READ_CAPABILITY, _HERMES_REPO_READ_CAPABILITY):
+                    _HERMES_DEV_READ_CAPABILITY, _HERMES_REPO_READ_CAPABILITY,
+                    _HERMES_KNOWLEDGE_READ_CAPABILITY):
     if _descriptor not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
         PRODUCTION_CAPABILITY_REGISTRY.register(_descriptor)
 if _HERMES_CONTEXT_CAPABILITY not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
@@ -434,6 +441,10 @@ def dispatch_tool(
                     from app.modules.agents.hermes.repo_read_tool import dispatch_repo_read_tool
 
                     result, error = dispatch_repo_read_tool(call, scope.workspace_id, error, grant=grant)
+                elif call.capability_id == "jarvis.knowledge_read":
+                    from app.modules.agents.hermes.knowledge_read_tool import dispatch_knowledge_read_tool
+
+                    result, error = dispatch_knowledge_read_tool(call, scope.workspace_id, error, grant=grant)
     return StructuredToolResult(
         call_id=call.call_id, capability_id=call.capability_id,
         status="succeeded" if result is not None else "refused",
