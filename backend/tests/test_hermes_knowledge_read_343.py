@@ -1116,6 +1116,21 @@ def test_scrub_value_redacts_tail_secret_fragment_at_cap() -> None:
     assert "[REDACTED_SECRET]" in scrubbed_pw
     assert scrubbed_pw.endswith("[REDACTED_SECRET]")
 
+    # Quoted multi-word secrets with spaces straddling char 300 (double and single quotes)
+    straddle_pw_spaces_dq = ("A" * 270) + 'password="ALPHA BETA GAMMA DELTA EPSILON"' + (" B" * 40)
+    scrubbed_dq = _scrub_value(straddle_pw_spaces_dq, "")
+    for word in ("ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON"):
+        assert word not in scrubbed_dq
+    assert "[REDACTED_SECRET]" in scrubbed_dq
+    assert scrubbed_dq.endswith("[REDACTED_SECRET]")
+
+    straddle_pw_spaces_sq = ("A" * 270) + "password='ALPHA BETA GAMMA DELTA EPSILON'" + (" B" * 40)
+    scrubbed_sq = _scrub_value(straddle_pw_spaces_sq, "")
+    for word in ("ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON"):
+        assert word not in scrubbed_sq
+    assert "[REDACTED_SECRET]" in scrubbed_sq
+    assert scrubbed_sq.endswith("[REDACTED_SECRET]")
+
     # 2. sk- token straddling char 300
     straddle_sk = ("C" * 290) + "sk-abcdef1234567890abcdef" + (" D" * 40)
     scrubbed_sk = _scrub_value(straddle_sk, "")
@@ -1145,6 +1160,8 @@ def test_view_memory_records_redacts_secret_fragment_at_field_cap(isolated_db) -
     now = "2026-11-22T05:00:00Z"
     long_notes_pw = ("A" * 285) + 'password="sensitive_database_password_xyz"' + (" B" * 40)
     long_notes_sk = ("C" * 290) + "sk-1234567890abcdef1234567890" + (" D" * 40)
+    long_notes_dq = ("A" * 270) + 'password="ALPHA BETA GAMMA DELTA"' + (" B" * 40)
+    long_notes_sq = ("A" * 270) + "password='ALPHA BETA GAMMA DELTA'" + (" B" * 40)
     normal_long_notes = ("Normal operating temperature condition for reactor. " * 10)[:400]
 
     with open_sqlite_connection() as conn:
@@ -1157,6 +1174,16 @@ def test_view_memory_records_redacts_secret_fragment_at_field_cap(isolated_db) -
             "INSERT INTO assumptions (id, workspace_id, statement, scope, confidence, status, origin, created_at, updated_at, notes) "
             "VALUES ('assump-frag-sk', 'workspace-a', 'Straddle sk test', 'ambient', 'high', 'accepted', 'user', ?, ?, ?)",
             (now, now, long_notes_sk),
+        )
+        conn.execute(
+            "INSERT INTO assumptions (id, workspace_id, statement, scope, confidence, status, origin, created_at, updated_at, notes) "
+            "VALUES ('assump-frag-dq', 'workspace-a', 'Straddle quoted spaces dq test', 'ambient', 'high', 'accepted', 'user', ?, ?, ?)",
+            (now, now, long_notes_dq),
+        )
+        conn.execute(
+            "INSERT INTO assumptions (id, workspace_id, statement, scope, confidence, status, origin, created_at, updated_at, notes) "
+            "VALUES ('assump-frag-sq', 'workspace-a', 'Straddle quoted spaces sq test', 'ambient', 'high', 'accepted', 'user', ?, ?, ?)",
+            (now, now, long_notes_sq),
         )
         conn.execute(
             "INSERT INTO assumptions (id, workspace_id, statement, scope, confidence, status, origin, created_at, updated_at, notes) "
@@ -1182,6 +1209,28 @@ def test_view_memory_records_redacts_secret_fragment_at_field_cap(isolated_db) -
     rec_sk = res_sk["memory_records"][0]
     assert "123456" not in rec_sk["summary"]
     assert "[REDACTED_SECRET]" in rec_sk["summary"]
+
+    # Query quoted multi-word secret with spaces straddling 300 cap (double quotes)
+    call_dq = _make_call({"grant_id": "g-1", "view": "memory_records", "query": "Straddle quoted spaces dq test"})
+    res_dq, err_dq = dispatch_knowledge_read_tool(call_dq, "workspace-a", "default_error")
+    assert err_dq == "default_error"
+    assert res_dq is not None and res_dq["count"] == 1
+    rec_dq = res_dq["memory_records"][0]
+    for word in ("ALPHA", "BETA", "GAMMA", "DEL"):
+        assert word not in rec_dq["summary"]
+    assert "[REDACTED_SECRET]" in rec_dq["summary"]
+    assert rec_dq["summary"].endswith("[REDACTED_SECRET]")
+
+    # Query quoted multi-word secret with spaces straddling 300 cap (single quotes)
+    call_sq = _make_call({"grant_id": "g-1", "view": "memory_records", "query": "Straddle quoted spaces sq test"})
+    res_sq, err_sq = dispatch_knowledge_read_tool(call_sq, "workspace-a", "default_error")
+    assert err_sq == "default_error"
+    assert res_sq is not None and res_sq["count"] == 1
+    rec_sq = res_sq["memory_records"][0]
+    for word in ("ALPHA", "BETA", "GAMMA", "DEL"):
+        assert word not in rec_sq["summary"]
+    assert "[REDACTED_SECRET]" in rec_sq["summary"]
+    assert rec_sq["summary"].endswith("[REDACTED_SECRET]")
 
     # Query normal 300-char string without secrets is capped to 300 chars without mangling
     call_normal = _make_call({"grant_id": "g-1", "view": "memory_records", "query": "Normal long notes test"})
