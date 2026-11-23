@@ -78,7 +78,7 @@ def _scrub_string(val: str, home_str: str) -> str:
 
 def _scrub_value(val: Any, home_str: str) -> Any:
     if isinstance(val, str):
-        return _scrub_string(val, home_str)
+        return _scrub_string(_cap_str(val), home_str)
     if isinstance(val, list):
         return [_scrub_value(item, home_str) for item in val]
     if isinstance(val, dict):
@@ -292,7 +292,7 @@ def _handle_memory_records(
     items = []
     for r in rows:
         tag_val = r["raw_tag"]
-        tags = [str(tag_val)] if tag_val is not None and str(tag_val).strip() else []
+        tags = [_cap_str(str(tag_val))] if tag_val is not None and str(tag_val).strip() else []
         items.append({
             "id": _cap_str(r["id"]),
             "record_type": _cap_str(r["record_type"]),

@@ -1050,3 +1050,58 @@ def test_kv_secret_full_value_redaction_and_long_key_suffix() -> None:
     assert scrubbed_key == f"{long_key}=[REDACTED_SECRET]"
     assert "topsecretvalue" not in scrubbed_key
 
+
+def test_scrub_value_repeated_password_keyword_finishes_under_half_second() -> None:
+    """Requirement 1 & 3: _scrub_value on 20,000 x 'password' finishes in < 0.5 s."""
+    import time
+
+    from app.modules.agents.hermes.knowledge_read_tool import _scrub_value
+
+    repeated_keywords = "password" * 20_000
+    t0 = time.perf_counter()
+    scrubbed = _scrub_value(repeated_keywords, "")
+    duration = time.perf_counter() - t0
+
+    assert duration < 0.5, f"_scrub_value took {duration:.3f} s, expected < 0.5 s"
+    assert len(scrubbed) <= 300
+    assert scrubbed == ("password" * 20_000)[:300]
+
+
+def test_memory_record_with_1000_char_scope_tag_capped(isolated_db) -> None:
+    """Requirement 1 & 3: A memory record with a 1,000-char scope/tag is returned capped at 300 chars."""
+    now = "2026-11-22T05:00:00Z"
+    long_scope = "tagscope_" + ("x" * 1000)
+    long_symbol = "paramtag_" + ("y" * 1000)
+
+    with open_sqlite_connection() as conn:
+        conn.execute(
+            "INSERT INTO assumptions (id, workspace_id, statement, scope, confidence, status, origin, created_at, updated_at) "
+            "VALUES ('assump-long-scope', 'workspace-a', 'Long scope tag test', ?, 'high', 'accepted', 'user', ?, ?)",
+            (long_scope, now, now),
+        )
+        conn.execute(
+            "INSERT INTO parameters (id, workspace_id, name, symbol, value, unit, status, confidence, origin, created_at, updated_at) "
+            "VALUES ('param-long-sym', 'workspace-a', 'Long symbol tag test', ?, '1.0', 'm', 'accepted', 0.9, 'user', ?, ?)",
+            (long_symbol, now, now),
+        )
+        conn.commit()
+
+    call_scope = _make_call({"grant_id": "g-1", "view": "memory_records", "query": "Long scope tag test"})
+    res_scope, _ = dispatch_knowledge_read_tool(call_scope, "workspace-a", "default_error")
+    assert res_scope is not None
+    assert res_scope["count"] == 1
+    rec_scope = res_scope["memory_records"][0]
+    assert len(rec_scope["tags"]) == 1
+    assert len(rec_scope["tags"][0]) == 300
+    assert rec_scope["tags"][0] == long_scope[:300]
+
+    call_param = _make_call({"grant_id": "g-1", "view": "memory_records", "query": "Long symbol tag test"})
+    res_param, _ = dispatch_knowledge_read_tool(call_param, "workspace-a", "default_error")
+    assert res_param is not None
+    assert res_param["count"] == 1
+    rec_param = res_param["memory_records"][0]
+    assert len(rec_param["tags"]) == 1
+    assert len(rec_param["tags"][0]) == 300
+    assert rec_param["tags"][0] == long_symbol[:300]
+
+
