@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -940,3 +941,110 @@ def test_retry_after_an_unsuccessful_native_turn_resumes_its_conversation(tmp_pa
     report.outcome = "success"
     sup._launch("argon", "[relay-continuity attempt {nonce}]\ntask", report)
     assert seen["resume"] is None  # a new task after success starts a fresh conversation
+
+
+# --- outer containment and nested sandbox prevention (spec 223 / fix/neon-coordinator-sandbox) ----
+
+
+@pytest.mark.parametrize("agent", ["neon", "hydrogen", "argon", "agy_opus"])
+def test_native_runner_no_nested_sandbox_flag(tmp_path, monkeypatch, agent):
+    monkeypatch.setenv("JARVISOS_MISSION_PROFILE", "1")
+    monkeypatch.setattr(ra, "sandbox", lambda: True)
+    monkeypatch.setattr(ra, "prepare_login", lambda: None)
+    monkeypatch.setattr(ra, "subscription_settings", lambda: None)
+    monkeypatch.setattr(ra.shutil, "which", lambda _: "agy")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if "/quota" in argv:
+            if agent in ("hydrogen", "neon"):
+                buckets = [{"id": "gemini-5h", "remaining_fraction": 0.5}, {"id": "gemini-weekly", "remaining_fraction": 0.5}]
+            elif agent == "agy_opus":
+                buckets = [{"id": "3p-5h", "remaining_fraction": 0.5}, {"id": "3p-weekly", "remaining_fraction": 0.5}]
+            else:
+                buckets = [
+                    {"id": "gemini-5h", "remaining_fraction": 0.5},
+                    {"id": "gemini-weekly", "remaining_fraction": 0.5},
+                    {"id": "gemini-argon-wtu-weekly", "remaining_fraction": 0.5},
+                ]
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"status": "SUCCESS", "buckets": buckets}))
+        model = ra.model_for(agent, os.environ)
+        events = stream()
+        events[0]["init"]["model"] = model
+        kwargs["stdout"].write("".join(json.dumps(event) + "\n" for event in events))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(ra.subprocess, "run", fake_run)
+    sid, turn = ra.new_session(tmp_path, f"bounded {agent} task", agent)
+    assert ra.run(tmp_path, sid, agent) == 0
+    assert len(calls) == 2
+    main_argv = calls[1]
+    assert "--sandbox" not in main_argv
+    assert "--mode" in main_argv and main_argv[main_argv.index("--mode") + 1] == "accept-edits"
+    assert "--dangerously-skip-permissions" in main_argv
+
+
+def test_prepare_resume_compaction_no_nested_sandbox(tmp_path, monkeypatch):
+    store = tmp_path / "store"
+    store.mkdir()
+    with (store / f"{CID}.db").open("wb") as handle:
+        handle.truncate(ra.RESUME_COMPACT_BYTES + 1)
+    _, turn = ra.new_session(tmp_path, "Task", resume=CID)
+    calls = []
+    monkeypatch.setattr(ra.subprocess, "run", lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0))
+    meta: dict = {}
+    got = ra.prepare_resume("agy", ra.MODEL, tmp_path, turn, meta, store=store)
+    assert got == CID
+    assert meta["resume"]["compacted"] is True
+    assert len(calls) == 1
+    assert "--sandbox" not in calls[0]
+    assert ["-p", "/compact"] == calls[0][1:3]
+
+
+@pytest.mark.parametrize(("sandbox_ok", "profile"), [
+    (False, "1"),
+    (False, None),
+    (False, "0"),
+    (True, None),
+    (True, "0"),
+    (True, "true"),
+])
+def test_outer_containment_fails_closed_without_mission_sandbox(tmp_path, monkeypatch, sandbox_ok, profile):
+    sid, turn = ra.new_session(tmp_path, "task")
+    monkeypatch.setattr(ra, "sandbox", lambda: sandbox_ok)
+    if profile is None:
+        monkeypatch.delenv("JARVISOS_MISSION_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("JARVISOS_MISSION_PROFILE", profile)
+    monkeypatch.setattr(ra.subprocess, "run", lambda *a, **kw: pytest.fail("must not call provider"))
+    assert ra.run(tmp_path, sid) == 1
+    data = json.loads((turn / "native-result.json").read_text())
+    assert data["reason"] == "not_mission_sandbox"
+    assert data["launched"] is False
+
+
+@pytest.mark.parametrize(("hostname", "mnt_c", "run_wsl", "expected"), [
+    ("jarvis-sandbox", False, False, True),
+    ("other-host", False, False, False),
+    ("jarvis-sandbox", True, False, False),
+    ("jarvis-sandbox", False, True, False),
+    ("jarvis-sandbox", True, True, False),
+    ("other-host", True, False, False),
+    ("other-host", False, True, False),
+    ("other-host", True, True, False),
+])
+def test_sandbox_containment_conditions(monkeypatch, hostname, mnt_c, run_wsl, expected):
+    monkeypatch.setattr(ra.socket, "gethostname", lambda: hostname)
+    real_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        s = str(self)
+        if s == "/mnt/c":
+            return mnt_c
+        if s == "/run/WSL":
+            return run_wsl
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    assert ra.sandbox() is expected

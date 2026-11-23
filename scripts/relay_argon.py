@@ -265,8 +265,9 @@ def prepare_resume(binary: str, model: str, repo: Path, turn: Path, metadata: di
     if size > RESUME_COMPACT_BYTES:
         try:
             with (turn / "compact.jsonl").open("w") as out, (turn / "compact-stderr.log").open("w") as err:
+                # No nested --sandbox: outer jarvis-sandbox container boundary is enforced.
                 done = subprocess.run([binary, "-p", "/compact", "--model", model, "--conversation", wanted,
-                                       "--output-format", "stream-json", "--sandbox", "--print-timeout",
+                                       "--output-format", "stream-json", "--print-timeout",
                                        f"{COMPACT_TIMEOUT}s"], cwd=repo, stdout=out, stderr=err,
                                       stdin=subprocess.DEVNULL, timeout=COMPACT_TIMEOUT + 30, check=False)
             record["compacted"] = done.returncode == 0
@@ -316,8 +317,13 @@ def run(repo: Path, session: str, agent: str = "argon") -> int:
             require_room(metadata["quota"])
             prompt = (turn / "prompt.md").read_text(encoding="utf-8")
             resume = prepare_resume(binary, model, repo, turn, metadata)
+            # Outer jarvis-sandbox container boundary is already enforced above (sandbox() +
+            # JARVISOS_MISSION_PROFILE=1), which provides the exact same containment boundary as
+            # claude and codex (no /mnt/c, no /run/WSL, .git/config, .git/hooks, and
+            # .agent-relay/permissions.toml read-only) while keeping .git writable and preserving
+            # the outer PID/UTS namespace for relay_jobs.py.
             argv = [binary, "-p", prompt, "--model", model, "--output-format", "stream-json", "--mode", "accept-edits", "--dangerously-skip-permissions",
-                    "--sandbox", "--print-timeout", f"{TURN_TIMEOUT}s", *(["--conversation", resume] if resume else [])]
+                    "--print-timeout", f"{TURN_TIMEOUT}s", *(["--conversation", resume] if resume else [])]
             metadata["model"] = model
             metadata["launched"] = True
             with (turn / "output.jsonl").open("w") as out, (turn / "stderr.log").open("w") as err:
