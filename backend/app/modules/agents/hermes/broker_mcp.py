@@ -93,7 +93,7 @@ _REPO_READ_TOOL = {
 }
 _KNOWLEDGE_READ_TOOL = {
     "name": "jarvis_knowledge_read",
-    "description": "Read structured workspace knowledge, literature, calculations, project revisions, and database views using a live Jarvis capability grant.",
+    "description": "Use for stored workspace facts, literature, and prior calculations. Prefer bench_run for new physics calculations and paper_search for public literature discovery.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -296,7 +296,7 @@ _STUDIO_ACT_TOOL = {
 }
 _BENCH_READ_TOOL = {
     "name": "jarvis_bench_read",
-    "description": "Read engineering bench evaluators, show a stored run, or compare two stored runs.",
+    "description": "Use to list evaluators or inspect and compare stored bench runs. Prefer bench_run to compute a new result.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -312,7 +312,7 @@ _BENCH_READ_TOOL = {
 }
 _BENCH_RUN_TOOL = {
     "name": "jarvis_bench_run",
-    "description": "Run an engineering evaluator on the bench into an isolated workspace run folder.",
+    "description": "Use to compute physics with a deterministic engineering evaluator. Prefer this over web search for calculations; use bench_read for existing runs.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -329,7 +329,7 @@ _BENCH_RUN_TOOL = {
 }
 _JARVIS_PAPER_SEARCH_TOOL = {
     "name": "jarvis_paper_search",
-    "description": "Search public scientific literature metadata via OpenAlex, Semantic Scholar, Europe PMC, and Crossref REST APIs.",
+    "description": "Use to discover public scientific papers by metadata. Prefer paper_pdf_read to inspect an identified open-access paper and bench_run for calculations.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -344,7 +344,7 @@ _JARVIS_PAPER_SEARCH_TOOL = {
 }
 _JARVIS_PATENT_READ_TOOL = {
     "name": "jarvis_patent_read",
-    "description": "Look up a public patent publication record by publication number via Google Patents and official registers.",
+    "description": "Use for a known public patent publication number. Prefer paper_search for scientific literature or browser_page_read for a general public page.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -357,7 +357,7 @@ _JARVIS_PATENT_READ_TOOL = {
 }
 _JARVIS_BROWSER_PAGE_TOOL = {
     "name": "jarvis_browser_page_read",
-    "description": "Read bounded plain text of a public HTTPS web page using headless Chromium.",
+    "description": "Use for text on a known public HTTPS page. Prefer paper_search for literature discovery and paper_pdf_read for open-access PDF text.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -371,7 +371,7 @@ _JARVIS_BROWSER_PAGE_TOOL = {
 }
 _JARVIS_PAPER_PDF_READ_TOOL = {
     "name": "jarvis_paper_pdf_read",
-    "description": "Fetch and read bounded text excerpts from an open-access scientific paper PDF by DOI via Unpaywall.",
+    "description": "Use to read excerpts of an identified open-access paper by DOI. Prefer paper_search to find papers and browser_page_read for ordinary web pages.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -408,7 +408,7 @@ _TURN_PLAN_FINDING = {
 }
 _TURN_PLAN_TOOL = {
     "name": "jarvis_turn_plan",
-    "description": "Create, update, and read bounded multi-step turn plans and intermediate findings.",
+    "description": "Use to save multi-step plans and sourced findings across tool calls. Prefer bench_run for computation and knowledge_read for stored facts.",
     "inputSchema": {
         "type": "object",
         "properties": {

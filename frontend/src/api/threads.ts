@@ -97,6 +97,7 @@ export type ThreadInteraction = {
   activity?: string | null;
   turn_plan?: TurnPlan | null;
   live_steps?: LiveStep[];
+  verification_summary?: { status: "passed" | "warnings"; warning_count: number; checks: { kind: string; severity: string; summary: string }[] } | null;
   surface_summary?: string | null;
   surface_digest?: string | null;
   actions?: ActionOutcome[];

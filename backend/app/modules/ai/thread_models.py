@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -170,6 +170,7 @@ class AIThreadInteractionRead(BaseModel):
     activity: str | None = None
     turn_plan: TurnPlanRead | None = None
     live_steps: list[LiveStepRead] = Field(default_factory=list)
+    verification_summary: dict[str, Any] | None = None
     surface_summary: str | None = None
     surface_digest: str | None = None
     # Bubu: screenshots attached to this turn; unsupported = the selected model never saw them.

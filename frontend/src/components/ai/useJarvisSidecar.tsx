@@ -1125,6 +1125,7 @@ export function useJarvisSidecar(
             technicalInfo={unsafeAssistantText ? interaction.assistant_text : undefined} />
           {notice ? <p className="jarvis-bubble__notice" role="status">{notice}</p> : null}
           {interaction.assistant_text_truncated ? <p className="jarvis-bubble__notice">This saved answer was shortened for storage.</p> : null}
+          {(interaction.verification_summary?.warning_count ?? 0) > 0 ? <span className="jarvis-verification-warning" role="status" title="Check the answer's units, magnitudes, and physical bounds">⚠ {interaction.verification_summary?.warning_count} verification warning{interaction.verification_summary?.warning_count === 1 ? "" : "s"}</span> : null}
           {interaction.proposal_count ? <p className="jarvis-bubble__proposals">{interaction.proposal_count}{interaction.proposals_truncated ? "+" : ""} proposal{interaction.proposal_count === 1 ? "" : "s"} recorded for your review — nothing was applied.</p> : null}
           {!running && hasProgress && (
             <details className="jarvis-turn-progress" data-testid="jarvis-turn-progress">
