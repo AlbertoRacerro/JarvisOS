@@ -366,6 +366,36 @@ def default_reachable(host: str = "github.com", port: int = 443, timeout: float 
     return result[0]
 
 
+def format_offline_window(start: datetime | None, end: datetime, *, tz: Any = None) -> tuple[str, str]:
+    """Format offline window as local/readable HH:MM (or YYYY-MM-DD HH:MM if spanning dates)."""
+    end_aware = end if end.tzinfo else end.replace(tzinfo=UTC)
+    if tz is None:
+        try:
+            tz = end.astimezone().tzinfo or UTC
+        except Exception:  # noqa: BLE001
+            tz = UTC
+    elif isinstance(tz, str):
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(tz)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        end_local = end_aware.astimezone(tz)
+    except Exception:  # noqa: BLE001
+        end_local = end_aware
+    if start is None:
+        return "ora sconosciuta", end_local.strftime("%H:%M")
+    start_aware = start if start.tzinfo else start.replace(tzinfo=UTC)
+    try:
+        start_local = start_aware.astimezone(tz)
+    except Exception:  # noqa: BLE001
+        start_local = start_aware
+    if start_local.date() == end_local.date():
+        return start_local.strftime("%H:%M"), end_local.strftime("%H:%M")
+    return start_local.strftime("%Y-%m-%d %H:%M"), end_local.strftime("%Y-%m-%d %H:%M")
+
+
 def _valid_percent(value: Any) -> bool:
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
             and (isinstance(value, int) or math.isfinite(value))
@@ -723,6 +753,17 @@ class Supervisor:
             return  # a manual cap stays until `release --clear-cooldown`; no reclassification shortens it
         if isinstance(existing, dict) and report.turn_id and existing.get("turn") == report.turn_id:
             return  # this turn's cooldown is already recorded: a restart re-deciding it neither extends nor backs off
+        is_network_like = (report.outcome in ("transient", "unknown", "timeout") or report.timed_out)
+        if self.state.get("network_outage", False) and is_network_like:
+            return
+        if is_network_like:
+            reachable_fn = getattr(self.host, "reachable", None) or default_reachable
+            try:
+                is_reachable = bool(reachable_fn())
+            except Exception:  # noqa: BLE001
+                is_reachable = False
+            if not is_reachable:
+                return
         caps = self.state["spend_caps"]
         earlier = caps.get(agent)
         if report.spend_cap and report.outcome == "quota" and isinstance(earlier, dict) \
@@ -1020,7 +1061,28 @@ class Supervisor:
             agent = self._choose(failed_agent)
             return (agent, prompt) if agent is not None else self._wait_or_hold(lambda _agent: prompt)
 
-        if counters["consecutive_failures"] >= self.limits.max_consecutive_failures:
+        is_network_like = (report.outcome in ("transient", "unknown", "timeout") or report.timed_out)
+        if is_network_like:
+            reachable_fn = getattr(self.host, "reachable", None) or default_reachable
+            try:
+                is_reachable = bool(reachable_fn())
+            except Exception:  # noqa: BLE001
+                is_reachable = False
+
+            if not is_reachable:
+                if not self.state.get("network_outage", False):
+                    self.state["network_outage"] = True
+                    self.record("finding", "relay-continuity: host offline mid-turn; waiting for network")
+                if not self.state.get("network_outage_since"):
+                    self.state["network_outage_since"] = iso(self.host.now())
+                self.host.log(f"turn ended with {report.outcome} while host offline; waiting without cooldown or strikes")
+                self.state["phase"] = "waiting"
+                self.save()
+                return "waiting"
+
+        from_outage = bool(self.state.get("network_outage", False)) and is_network_like
+
+        if not from_outage and counters["consecutive_failures"] >= self.limits.max_consecutive_failures:
             return self.hold("circuit_failures")
         settled: dict[str, dict[str, str]] = {}
         parked: list[ToolCall] = []
@@ -1037,10 +1099,10 @@ class Supervisor:
         # A network or auth blip is infrastructure, not the model: retry the SAME agent after a short backoff instead
         # of switching to another provider (maintainer directive L20261109091909-a4bb). Only a bounded run of them
         # (a real outage) falls through to the normal cooldown, which may switch.
-        retry_same = (report.outcome == "transient" and report.harness_cause in SAME_AGENT_CAUSES
+        retry_same = (not from_outage and report.outcome == "transient" and report.harness_cause in SAME_AGENT_CAUSES
                       and failed_agent not in cleared
                       and counters.get(f"transient_{failed_agent}", 0) < self.limits.same_agent_retries)
-        if not retry_same and report.outcome in ("quota", "spend_limit", "transient", "auth") and failed_agent not in cleared:
+        if not from_outage and not retry_same and report.outcome in ("quota", "spend_limit", "transient", "auth") and failed_agent not in cleared:
             # A provider failure makes only that provider unavailable, until its reset or a backed-off retry.
             self.set_cooldown(failed_agent, report)
 
@@ -1526,12 +1588,32 @@ class Supervisor:
         if not reachable:
             if not self.state.get("network_outage", False):
                 self.state["network_outage"] = True
+                self.state["network_outage_since"] = iso(self.host.now())
                 self.record("finding", "relay-continuity: pre-launch probe failed (github.com:443 unreachable); waiting for network")
             self.host.log("pre-launch network probe failed (github.com:443 unreachable); waiting")
             self.state["phase"] = "waiting"
             self.save()
             return "waiting"
-        self.state["network_outage"] = False
+        if self.state.get("network_outage", False):
+            ended_at = self.host.now()
+            start_iso = self.state.get("network_outage_since")
+            start_dt = parse_ts(start_iso)
+            start_str, end_str = format_offline_window(start_dt, ended_at)
+            notice_text = f"Ero offline da {start_str} a {end_str}, riprendo."
+            self.state["network_outage"] = False
+            self.state["network_outage_since"] = None
+            try:
+                self.notifier.send_text(
+                    f"offline_resume|{start_iso or 'unknown'}|{iso(ended_at)}",
+                    notice_text,
+                    ended_at,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.host.log(f"notify: offline resume error {type(exc).__name__}")
+            self.save()
+            self.host.log(f"network restored ({notice_text})")
+        else:
+            self.state["network_outage"] = False
         return None
 
     def _launch(self, agent: str, prompt: str, previous: TurnReport) -> TurnReport | str:
@@ -1761,14 +1843,22 @@ class Supervisor:
         self.state["chain"] = (self.state.get("chain") or []) + [session_id]
         # Counted once per launched attempt. Provider failures are bounded by their cooldowns instead.
         counters = self.state["counters"]
-        if retry_agent and not pending.get("strike_counted"):
+        is_offline = False
+        if report.outcome in ("transient", "unknown", "timeout") or report.timed_out:
+            reachable_fn = getattr(self.host, "reachable", None) or default_reachable
+            try:
+                is_offline = not bool(reachable_fn())
+            except Exception:  # noqa: BLE001
+                is_offline = True
+        if retry_agent and not pending.get("strike_counted") and not is_offline:
             counters[f"transient_{retry_agent}"] = counters.get(f"transient_{retry_agent}", 0) + 1
             pending["strike_counted"] = True
         # Only an unbroken run of crash/unknown turns counts: any other outcome ends the streak.
         # A turn cut by our own time limit still counts here: this is the loop guard (eight unbroken one-hour cuts
         # is a real problem), not a capability verdict; `harness_cause` in the journal keeps the two apart.
-        counters["consecutive_failures"] = (counters["consecutive_failures"] + 1
-                                            if report.outcome in ("crash", "unknown") else 0)
+        if not is_offline:
+            counters["consecutive_failures"] = (counters["consecutive_failures"] + 1
+                                                if report.outcome in ("crash", "unknown") else 0)
         coord_tokens = (report.usage["total_tokens"]
                         if isinstance(report.usage, dict)
                         and isinstance(report.usage.get("total_tokens"), int)
