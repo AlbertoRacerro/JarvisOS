@@ -1,6 +1,6 @@
 # 368 — HERMES-LOCAL-TURN-BUDGET-1: Small local prompts, speed-derived turn deadlines, clean worker recovery and announce-only turn detection
 
-Status: ready
+Status: in_review
 Depends on: 352, 362, 366
 
 ## Goal
