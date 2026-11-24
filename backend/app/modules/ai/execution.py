@@ -17,6 +17,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
 
 from app.core.database import open_sqlite_connection
@@ -939,6 +940,7 @@ def run_ai_task(
     workspace_id: str | None = None,
     existing_flow_id: str | None = None,
     images: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> AiTaskOutcome:
     started = time.perf_counter()
     adapters = adapters if adapters is not None else _default_adapters()
@@ -1308,7 +1310,7 @@ def run_ai_task(
             max_output_tokens=attempt_max,
             temperature=temperature,
             structured_output_schema=structured_output_schema,
-            metadata={"context_digest": context_digest, "selected_route_class": selected_route_class},
+            metadata={**(metadata or {}), "context_digest": context_digest, "selected_route_class": selected_route_class},
             images=list(images or []),
         )
         try:

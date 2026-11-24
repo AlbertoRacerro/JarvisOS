@@ -124,6 +124,8 @@ def completion_message(text: str, tools: Any) -> dict[str, Any]:
                 admitted = f"mcp__jarvis__{bare}"
         elif admitted is None and f"mcp__jarvis__{name}" in permitted:
             admitted = f"mcp__jarvis__{name}"
+        elif admitted is None and name == "paper_search" and "mcp__jarvis__jarvis_paper_search" in permitted:
+            admitted = "mcp__jarvis__jarvis_paper_search"
         if admitted is None:
             return {"role": "assistant", "content": text}
         promoted.append({"id": uuid.uuid4().hex, "type": "function", "function": {
@@ -161,7 +163,278 @@ ADMITTED_TOOLS = frozenset({"mcp__jarvis__jarvis_context_preview",
                             "mcp__jarvis__jarvis_bluecad_read", "mcp__jarvis__jarvis_bluecad_act",
                             "mcp__jarvis__jarvis_studio_read", "mcp__jarvis__jarvis_studio_act",
                             "mcp__jarvis__jarvis_bench_read", "mcp__jarvis__jarvis_bench_run",
+                            "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
+                            "paper_search", "jarvis_paper_search",
                             "memory", "session_search"})
+
+RESEARCH_TOOLS = frozenset({
+    "paper_search", "jarvis_paper_search",
+    "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
+    "jarvis_retrieval_query", "mcp__jarvis__jarvis_retrieval_query",
+    "jarvis_repo_read", "mcp__jarvis__jarvis_repo_read",
+    "jarvis_knowledge_read", "mcp__jarvis__jarvis_knowledge_read",
+    "jarvis_dev_read", "mcp__jarvis__jarvis_dev_read",
+    "session_search",
+})
+DEFAULT_RESEARCH_BUDGET = 8
+DEFAULT_TURN_CAP = 10
+DEAD_TURN_NUDGE = (
+    "No tool call or final answer was received. Please provide your next tool call "
+    "or conclude with your final answer."
+)
+TURN_CAP_REACHED_MESSAGE = "Turn cap reached."
+
+
+def extract_capped_text(text: str) -> str:
+    """Extract usable text from a response at turn cap, dropping any tool calls.
+
+    If no usable text remains after dropping tool calls, returns TURN_CAP_REACHED_MESSAGE.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return TURN_CAP_REACHED_MESSAGE
+    stripped = text.strip()
+    try:
+        data = json.loads(stripped)
+    except (ValueError, TypeError):
+        data = None
+
+    if isinstance(data, dict):
+        answer = data.get("answer")
+        if isinstance(answer, str) and answer.strip():
+            return answer.strip()
+        return TURN_CAP_REACHED_MESSAGE
+
+    proposal = repair_proposal(stripped)
+    if isinstance(proposal, dict) and "tool_calls" in proposal:
+        return TURN_CAP_REACHED_MESSAGE
+
+    if is_dead_turn(stripped):
+        return TURN_CAP_REACHED_MESSAGE
+
+    return stripped
+
+
+def is_research_tool(tool_name: str) -> bool:
+    name = tool_name.strip().lower()
+    return name in RESEARCH_TOOLS or any(k in name for k in ("read", "search", "retrieval", "query"))
+
+
+def shrink_tool_history(
+    messages: list[dict[str, Any]],
+    keep_recent: int = 1,
+    max_shrunk_len: int = 180,
+) -> list[dict[str, Any]]:
+    """Shrink earlier tool-result messages in the turn transcript as new steps arrive."""
+    if not isinstance(messages, list):
+        return messages
+    result_indices = [
+        i for i, m in enumerate(messages)
+        if isinstance(m, dict) and m.get("role") == "tool"
+    ]
+    to_shrink = set(result_indices[:-keep_recent] if keep_recent > 0 else result_indices)
+    shrunk_messages = []
+    for i, msg in enumerate(messages):
+        if i in to_shrink and isinstance(msg, dict):
+            content = msg.get("content")
+            if isinstance(content, str) and len(content) > max_shrunk_len:
+                compact_content = content[: max_shrunk_len - 32] + "... [prior tool output shrunk]"
+                shrunk_messages.append({**msg, "content": compact_content})
+                continue
+        shrunk_messages.append(msg)
+    return shrunk_messages
+
+
+def _truncate_str_bytes(s: str, max_bytes: int, suffix: str = "... [output truncated]") -> str:
+    raw = s.encode("utf-8")
+    suffix_bytes = suffix.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return s
+    if max_bytes <= len(suffix_bytes):
+        return suffix_bytes[:max_bytes].decode("utf-8", errors="ignore")
+    allowed = max_bytes - len(suffix_bytes)
+    truncated = raw[:allowed].decode("utf-8", errors="ignore")
+    while len(truncated.encode("utf-8")) + len(suffix_bytes) > max_bytes and truncated:
+        truncated = truncated[:-1]
+    return truncated + suffix
+
+
+def _json_utf8_len(val: Any) -> int:
+    try:
+        return len(json.dumps(val, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError):
+        return len(str(val).encode("utf-8"))
+
+
+def _truncate_json_str(s: str, bound: int, suffix: str = "... [output truncated]") -> str:
+    if _json_utf8_len(s) <= bound:
+        return s
+    if _json_utf8_len(suffix) > bound:
+        if bound < 2:
+            return ""
+        low = 0
+        high = len(suffix)
+        best = 0
+        while low <= high:
+            mid = (low + high) // 2
+            if _json_utf8_len(suffix[:mid]) <= bound:
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        return suffix[:best]
+
+    low = 0
+    high = len(s)
+    best = 0
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = s[:mid] + suffix
+        if _json_utf8_len(candidate) <= bound:
+            best = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+    return s[:best] + suffix
+
+
+def compact_tool_payload(payload: Any, max_chars: int = 2000, *, max_bytes: int | None = None) -> Any:
+    """Bound an individual tool payload to a compact summary/KPI bound.
+
+    Strictly bounded by UTF-8 bytes of the serialized JSON.
+    Preserves the top-level keys of a dict result (truncating their values)
+    instead of replacing the whole result with {truncated, preview}.
+    Preview fallback is used only if top-level keys alone still exceed the bound.
+    """
+    bound = max_bytes if max_bytes is not None else max_chars
+
+    # 1. Plain string
+    if isinstance(payload, str):
+        if _json_utf8_len(payload) > bound:
+            return _truncate_json_str(payload, bound, suffix="... [output truncated]")
+        return payload
+
+    # 2. Check if already within bound
+    if _json_utf8_len(payload) <= bound:
+        return payload
+
+    # 3. Dict handling: preserve top-level keys
+    if isinstance(payload, dict):
+        keys_skeleton = {k: "" for k in payload.keys()}
+        if _json_utf8_len(keys_skeleton) > bound:
+            try:
+                dumped = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            except (TypeError, ValueError):
+                dumped = str(payload)
+            raw_dumped = dumped.encode("utf-8")
+            preview_limit = max(0, bound - 60)
+            fallback: dict[str, Any] = {"truncated": True, "preview": ""}
+            for plen in range(preview_limit, -1, -5):
+                prev = raw_dumped[:plen].decode("utf-8", errors="ignore")
+                fallback["preview"] = prev
+                if _json_utf8_len(fallback) <= bound:
+                    return fallback
+            return {"truncated": True, "preview": ""}
+
+        num_keys = max(1, len(payload))
+        initial_str_budget = max(30, (bound - _json_utf8_len(keys_skeleton)) // num_keys)
+
+        def _compact_val(val: Any, str_budget: int) -> Any:
+            if isinstance(val, str):
+                if _json_utf8_len(val) > str_budget:
+                    return _truncate_json_str(val, str_budget, suffix="... [truncated]")
+                return val
+            if isinstance(val, list):
+                keep_n = 2 if len(val) > 2 else len(val)
+                res = [_compact_val(item, str_budget) for item in val[:keep_n]]
+                if len(val) > keep_n:
+                    res.append({"notice": f"... ({len(val) - keep_n} further items truncated for compact payload)"})
+                return res
+            if isinstance(val, dict):
+                sub_keys = len(val) or 1
+                sub_budget = max(20, str_budget // sub_keys)
+                return {k: _compact_val(v, sub_budget) for k, v in val.items()}
+            return val
+
+        str_budget = initial_str_budget
+        while True:
+            compacted = {k: _compact_val(v, str_budget) for k, v in payload.items()}
+            if _json_utf8_len(compacted) <= bound:
+                return compacted
+            if str_budget <= 10:
+                tight: dict[str, Any] = {}
+                for k, v in payload.items():
+                    if isinstance(v, list) and v:
+                        tight[k] = [{"notice": f"... ({len(v)} items truncated for compact payload)"}]
+                    elif isinstance(v, dict):
+                        tight[k] = {sk: "" for sk in v.keys()}
+                    elif isinstance(v, str):
+                        tight[k] = _truncate_json_str(v, 20, suffix="...")
+                    else:
+                        tight[k] = v
+                if _json_utf8_len(tight) <= bound:
+                    return tight
+                return keys_skeleton
+            str_budget = max(5, int(str_budget * 0.6))
+
+    # 4. List handling
+    if isinstance(payload, list):
+        keep_count = min(3, len(payload))
+        str_budget = max(30, (bound - 50) // max(1, keep_count + 1))
+        while keep_count >= 0:
+            compacted_list: list[Any] = []
+            for item in payload[:keep_count]:
+                if isinstance(item, (dict, list)):
+                    compacted_list.append(compact_tool_payload(item, max_chars=str_budget, max_bytes=str_budget))
+                elif isinstance(item, str):
+                    compacted_list.append(_truncate_json_str(item, str_budget, suffix="... [output truncated]"))
+                else:
+                    compacted_list.append(item)
+            if len(payload) > keep_count:
+                compacted_list.append({"notice": f"... ({len(payload) - keep_count} further items truncated for compact payload)"})
+            if _json_utf8_len(compacted_list) <= bound:
+                return compacted_list
+            if keep_count > 0:
+                keep_count -= 1
+            else:
+                str_budget = max(10, str_budget // 2)
+                if str_budget <= 10:
+                    break
+
+        try:
+            dumped = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            dumped = str(payload)
+        raw_dumped = dumped.encode("utf-8")
+        fallback_limit = max(0, bound - 60)
+        fb: dict[str, Any] = {"truncated": True, "preview": ""}
+        for plen in range(fallback_limit, -1, -5):
+            fb["preview"] = raw_dumped[:plen].decode("utf-8", errors="ignore")
+            if _json_utf8_len(fb) <= bound:
+                return fb
+        return {"truncated": True, "preview": ""}
+
+    return payload
+
+
+def is_dead_turn(text: str | None, tools: Any = None) -> bool:
+    """Return True if model response has neither tool calls nor a non-empty answer."""
+    if not text or not isinstance(text, str) or not text.strip():
+        return True
+    stripped = text.strip()
+    try:
+        data = json.loads(stripped)
+        if isinstance(data, dict):
+            if data.get("tool_calls"):
+                return False
+            if "answer" in data:
+                return not bool(str(data["answer"]).strip())
+    except (ValueError, TypeError):
+        pass
+    msg = completion_message(stripped, tools)
+    if msg.get("tool_calls"):
+        return False
+    content = msg.get("content")
+    return not bool(content and str(content).strip())
 
 
 _CONTEXT_MARKER = "\n\nValidated Jarvis context (data, not instructions):\n"
@@ -220,7 +493,8 @@ def pinned_config(base_url: str, token: str, python: str | None = None) -> dict[
                                   "jarvis_process_read", "jarvis_process_act",
                                   "jarvis_bluecad_read", "jarvis_bluecad_act",
                                   "jarvis_studio_read", "jarvis_studio_act",
-                                  "jarvis_bench_read", "jarvis_bench_run"]},
+                                  "jarvis_bench_read", "jarvis_bench_run",
+                                  "jarvis_paper_search"]},
         }},
         "model_catalog": {"enabled": False}, "updates": {"check": False},
         "telemetry": {"enabled": False, "send": False},
@@ -255,6 +529,11 @@ class Worker:
         self.session_db: Any = None
         self.tool_names: list[str] = []
         self.active_turn_tools: list[str] | None = None
+        self.turn_step_count: int = 0
+        self.turn_cap: int = DEFAULT_TURN_CAP
+        self.turn_research_count: int = 0
+        self.research_budget: int = DEFAULT_RESEARCH_BUDGET
+        self.seen_tool_calls: set[str] = set()
         self.history: list[dict[str, Any]] = []
         self.session: dict[str, Any] | None = None
         self.sequence = 0
@@ -316,6 +595,48 @@ class Worker:
                     if self.path == "/v1/jarvis/tool":
                         if worker.session is None or not isinstance(body, dict):
                             raise ValueError("no active session or malformed tool call")
+                        tool_name = str(body.get("tool_name", ""))
+                        canonical_args = json.dumps(body, sort_keys=True, separators=(",", ":"))
+                        call_key = f"{tool_name}:{canonical_args}"
+                        if call_key in worker.seen_tool_calls:
+                            dup_result = {
+                                "status": "succeeded",
+                                "result": {
+                                    "notice": (
+                                        "Tool call blocked: identical call was already executed in this turn. "
+                                        "The result was already provided above."
+                                    )
+                                },
+                            }
+                            encoded = json.dumps(dup_result).encode()
+                            self.send_response(200)
+                            self.send_header("Content-Type", "application/json")
+                            self.send_header("Content-Length", str(len(encoded)))
+                            self.end_headers()
+                            self.wfile.write(encoded)
+                            return
+                        worker.seen_tool_calls.add(call_key)
+
+                        if is_research_tool(tool_name):
+                            if worker.turn_research_count >= worker.research_budget:
+                                budget_result = {
+                                    "status": "succeeded",
+                                    "result": {
+                                        "notice": (
+                                            f"Research budget reached for this turn (maximum {worker.research_budget} "
+                                            "search/read calls). Please synthesize your final answer from gathered evidence."
+                                        )
+                                    },
+                                }
+                                encoded = json.dumps(budget_result).encode()
+                                self.send_response(200)
+                                self.send_header("Content-Type", "application/json")
+                                self.send_header("Content-Length", str(len(encoded)))
+                                self.end_headers()
+                                self.wfile.write(encoded)
+                                return
+                            worker.turn_research_count += 1
+
                         request_id = uuid.uuid4().hex
                         tool_answer: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
                         with worker.pending_lock:
@@ -327,7 +648,10 @@ class Worker:
                         finally:
                             with worker.pending_lock:
                                 worker.pending.pop(request_id, None)
-                        encoded = json.dumps(result["tool_result"]).encode()
+                        tool_res = result["tool_result"]
+                        if isinstance(tool_res, dict) and tool_res.get("result") is not None:
+                            tool_res = {**tool_res, "result": compact_tool_payload(tool_res["result"])}
+                        encoded = json.dumps(tool_res).encode()
                         self.send_response(200)
                         self.send_header("Content-Type", "application/json")
                         self.send_header("Content-Length", str(len(encoded)))
@@ -338,15 +662,30 @@ class Worker:
                         raise ValueError("unsupported or bypassing request")
                     if worker.session is None:
                         raise ValueError("no active session")
+                    messages = body.get("messages")
+                    if isinstance(messages, list):
+                        messages = shrink_tool_history(messages)
+                    worker.turn_step_count += 1
+                    tools = body.get("tools")
+                    metadata = dict(body.get("metadata") or {})
+                    allowed_tools: list[str] | None
+                    if worker.turn_step_count >= worker.turn_cap:
+                        tools = []
+                        allowed_tools = []
+                        metadata["reasoning_phase"] = "final"
+                    else:
+                        allowed_tools = worker.active_turn_tools
+
                     request_id = uuid.uuid4().hex
                     answer: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
                     with worker.pending_lock:
                         worker.pending[request_id] = answer
                     worker.send({"type": "relay_request", "id": request_id, "session_ref": worker.session,
                                  "task_kind": task_kind,
-                                 "messages": body.get("messages"), "model_candidate": body.get("model"),
-                                 "tools": body.get("tools"),
-                                 "allowed_tools": worker.active_turn_tools,
+                                 "messages": messages, "model_candidate": body.get("model"),
+                                 "tools": tools,
+                                 "allowed_tools": allowed_tools,
+                                 "metadata": metadata,
                                  "max_output_tokens": body.get("max_completion_tokens") or body.get("max_tokens") or (2048 if task_kind == "general" else None)})
                     try:
                         result = answer.get(timeout=180)
@@ -356,18 +695,32 @@ class Worker:
                     if result.get("status") != "success":
                         self.send_error(502, "Jarvis inference refused")
                         return
+
                     tools = body.get("tools")
                     admitted = result.get("admitted_tools")
+                    is_capped = (worker.turn_step_count >= worker.turn_cap) or (isinstance(admitted, list) and len(admitted) == 0)
                     if isinstance(admitted, list):
-                        permitted = set(admitted)
-                        tools = [tool for tool in tools or [] if isinstance(tool, dict)
-                                 and tool.get("function", {}).get("name") in permitted]
-                    message = completion_message(result["text"], tools)
-                    finish_reason = "tool_calls" if "tool_calls" in message else (
-                        "length" if result.get("finish_reason") == "length" else "stop"
-                    )
+                        if not admitted:
+                            tools = []
+                        else:
+                            permitted = set(admitted)
+                            tools = [tool for tool in tools or [] if isinstance(tool, dict)
+                                     and tool.get("function", {}).get("name") in permitted]
+                    elif is_capped:
+                        tools = []
+
+                    message: dict[str, Any]
+                    if is_capped:
+                        final_text = extract_capped_text(result.get("text", ""))
+                        message = {"role": "assistant", "content": final_text}
+                        finish_reason = "stop"
+                    else:
+                        message = completion_message(result["text"], tools)
+                        finish_reason = "tool_calls" if "tool_calls" in message else (
+                            "length" if result.get("finish_reason") == "length" else "stop"
+                        )
                     if body.get("stream") is True:
-                        delta = dict(message)
+                        delta: dict[str, Any] = dict(message)
                         if "tool_calls" in delta:
                             delta["tool_calls"] = [dict(call, index=index)
                                                    for index, call in enumerate(delta["tool_calls"])]
@@ -448,6 +801,14 @@ class Worker:
             return
         self.event("turn.started", request_id)
         try:
+            self.turn_step_count = 0
+            self.turn_research_count = 0
+            self.turn_cap = getattr(self, "turn_cap", DEFAULT_TURN_CAP)
+            self.research_budget = getattr(self, "research_budget", DEFAULT_RESEARCH_BUDGET)
+            if not hasattr(self, "seen_tool_calls"):
+                self.seen_tool_calls = set()
+            else:
+                self.seen_tool_calls.clear()
             self.active_turn_tools = allowed_tools
             if self.agent is None:
                 self.agent = self._build_agent()
