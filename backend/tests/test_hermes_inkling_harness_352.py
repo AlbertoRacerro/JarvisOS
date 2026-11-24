@@ -16,53 +16,42 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.database import initialize_database
-from app.modules.agents.hermes import broker_mcp, supervisor, worker_shim
+from app.modules.agents.hermes import broker_mcp, worker_shim
 from app.modules.agents.hermes.paper_search_tool import (
     CROSSREF_SEARCH_URL,
-    DEFAULT_LIMIT,
     EUROPE_PMC_SEARCH_URL,
-    MAX_ABSTRACT_CHARS,
-    MAX_QUERY_CHARS,
     MAX_RESPONSE_BYTES,
     _DenyRedirects,
     dispatch_paper_search_tool,
     execute_paper_search,
-    override_paper_search_opener,
     search_crossref,
     search_europe_pmc,
 )
 from app.modules.agents.hermes.supervisor import (
+    _TOOL_CAPABILITIES,
     DEAD_TURN_NUDGE,
-    DEFAULT_RESEARCH_BUDGET,
-    DEFAULT_TURN_CAP,
     ENGINEERING_METHODOLOGY_RULES,
     HERMES_TOOL_ALLOWLIST,
     PRODUCTION_CAPABILITY_REGISTRY,
-    RESEARCH_TOOLS,
     UPSTREAM_REVISION,
     HermesSupervisor,
-    _HERMES_PAPER_SEARCH_CAPABILITY,
-    _TOOL_CAPABILITIES,
     _assemble_turn_prompt,
     compact_tool_payload,
-    dispatch_tool,
     infer_envelope,
     is_dead_turn,
     is_research_tool,
     run_governed_inference,
     shrink_tool_history,
 )
-from app.modules.ai import context_builder, thread_service
-from app.modules.ai.execution import AiTaskOutcome
+from app.modules.ai import thread_service
 from app.modules.ai.agent_contracts import (
     AgentSessionRef,
     CapabilityGrantRef,
     CapabilityScope,
     InferenceEnvelope,
     StructuredToolCall,
-    StructuredToolResult,
 )
+from app.modules.ai.execution import AiTaskOutcome
 
 NOW = datetime.now(UTC)
 SESSION = AgentSessionRef(
@@ -244,7 +233,7 @@ def test_identical_tool_call_blocking_within_turn(monkeypatch: pytest.MonkeyPatc
 
     supervisor_inst._handle_tool(frame1)
     assert len(sent_frames) == 1
-    res1 = sent_frames[0]["tool_result"]
+    assert sent_frames[0]["tool_result"]["status"] == "succeeded"
 
     supervisor_inst._handle_tool(frame2)
     assert len(sent_frames) == 2
@@ -398,8 +387,6 @@ def test_forced_final_answer_at_turn_cap() -> None:
     supervisor_inst.turn_cap = 2
     supervisor_inst.turn_step_count = 1  # Next step will hit turn_cap
 
-    captured_envelopes: list[InferenceEnvelope] = []
-
     def mock_runner(**kwargs: Any) -> AiTaskOutcome:
         return AiTaskOutcome(
             flow_id="flow-cap", status="success", ledger_id="l-cap",
@@ -546,8 +533,8 @@ def test_paper_search_egress_sanitization_blocks_secrets_and_private_pack() -> N
 
 def test_paper_search_registration_in_all_catalogs_and_allowlists() -> None:
     """Acceptance criterion 1 & 4: registered in broker_mcp, supervisor, worker_shim, thread_service."""
-    # 1. broker_mcp._TOOLS contains paper_search
-    tool_entry = next((t for t in broker_mcp._TOOLS if t["name"] == "paper_search"), None)
+    # 1. broker_mcp._TOOLS contains jarvis_paper_search
+    tool_entry = next((t for t in broker_mcp._TOOLS if t["name"] == "jarvis_paper_search"), None)
     assert tool_entry is not None
     assert tool_entry["inputSchema"]["required"] == ["grant_id", "query"]
 
@@ -569,4 +556,68 @@ def test_paper_search_registration_in_all_catalogs_and_allowlists() -> None:
     assert "paper_search" in worker_shim.ADMITTED_TOOLS
 
     # 6. thread_service._turn_tools
-    assert "mcp__jarvis__paper_search" in thread_service._turn_tools("none")
+    assert "mcp__jarvis__jarvis_paper_search" in thread_service._turn_tools("none")
+    assert "mcp__jarvis__paper_search" not in thread_service._turn_tools("none")
+
+
+def test_compact_tool_payload_strict_recursive_bound() -> None:
+    """Requirement 4: deeply nested large dict payload is strictly bounded to <= max_chars serialized bytes."""
+    # 1. Moderately nested structure that compacts via list truncation and string shortening
+    nested = {
+        "items": [
+            {"nested_key": f"value_{i}" * 50, "extra": "a" * 500}
+            for i in range(10)
+        ]
+    }
+    compacted = compact_tool_payload(nested, max_chars=1000)
+    serialized = json.dumps(compacted, separators=(",", ":"))
+    assert len(serialized) <= 1000
+    assert len(serialized.encode("utf-8")) <= 1000
+
+    # 2. Deeply nested structure with massive payloads that exceeds max_chars even after recursive shortening
+    deep: dict[str, Any] = {"level0": {}}
+    cursor = deep["level0"]
+    for lvl in range(1, 15):
+        cursor[f"level{lvl}"] = {
+            "title": "large_title_" * 20,
+            "data": ["long_entry_" * 30 for _ in range(10)],
+            "metadata": {"blob": "z" * 1000},
+        }
+        cursor = cursor[f"level{lvl}"]
+
+    max_chars = 400
+    result = compact_tool_payload(deep, max_chars=max_chars)
+    result_bytes = json.dumps(result, separators=(",", ":")).encode("utf-8")
+    result_str = json.dumps(result, separators=(",", ":"))
+
+    assert len(result_bytes) <= max_chars
+    assert len(result_str) <= max_chars
+    assert isinstance(result, dict)
+    assert result.get("truncated") is True
+    assert "preview" in result
+
+
+def test_infer_envelope_metadata_whitelisting() -> None:
+    """Requirement 2: infer_envelope only whitelists reasoning_phase in {'analysis', 'final', 'routing'}."""
+    frame = {
+        "id": "frame-meta",
+        "session_ref": SESSION.model_dump(mode="json"),
+        "messages": [{"role": "user", "content": "Analyze options"}],
+        "metadata": {
+            "arbitrary_client_key": "untrusted_value",
+            "context_digest": "spoofed_digest",
+            "reasoning_phase": "analysis",
+        },
+    }
+    envelope = infer_envelope(frame)
+    assert envelope.metadata == {"reasoning_phase": "analysis"}
+
+    # Whitelist accepts "final" and "routing"
+    for phase in ("final", "routing"):
+        frame["metadata"] = {"reasoning_phase": phase}
+        assert infer_envelope(frame).metadata == {"reasoning_phase": phase}
+
+    # Rejects unauthorized reasoning_phase values and arbitrary keys
+    frame["metadata"] = {"reasoning_phase": "unauthorized_phase", "other_key": 123}
+    assert infer_envelope(frame).metadata == {}
+

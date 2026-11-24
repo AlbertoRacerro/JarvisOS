@@ -327,21 +327,6 @@ _BENCH_RUN_TOOL = {
         "additionalProperties": False,
     },
 }
-_PAPER_SEARCH_TOOL = {
-    "name": "paper_search",
-    "description": "Search public scientific literature metadata via Europe PMC and Crossref REST APIs.",
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "grant_id": {"type": "string", "maxLength": 128},
-            "query": {"type": "string", "minLength": 1, "maxLength": 300},
-            "source": {"type": "string", "enum": ["all", "europe_pmc", "crossref"]},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 20},
-        },
-        "required": ["grant_id", "query"],
-        "additionalProperties": False,
-    },
-}
 _JARVIS_PAPER_SEARCH_TOOL = {
     "name": "jarvis_paper_search",
     "description": "Search public scientific literature metadata via Europe PMC and Crossref REST APIs.",

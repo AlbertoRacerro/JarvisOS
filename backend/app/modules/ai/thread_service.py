@@ -894,7 +894,7 @@ def _turn_tools(surface: str) -> list[str]:
     general = ["mcp__jarvis__jarvis_context_preview", "mcp__jarvis__jarvis_retrieval_query",
                "mcp__jarvis__jarvis_decide", "mcp__jarvis__jarvis_dev_read", "mcp__jarvis__jarvis_repo_read",
                "mcp__jarvis__jarvis_knowledge_read",
-               "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
+               "mcp__jarvis__jarvis_paper_search",
                "memory", "session_search"]
     if surface in {"process", "bluecad", "studio"}:
         general.extend([f"mcp__jarvis__jarvis_{surface}_read", f"mcp__jarvis__jarvis_{surface}_act"])

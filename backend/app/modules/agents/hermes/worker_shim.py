@@ -218,19 +218,49 @@ def compact_tool_payload(payload: Any, max_chars: int = 2000) -> Any:
     """Bound an individual tool payload to a compact summary/KPI bound."""
     if isinstance(payload, str):
         if len(payload) > max_chars:
-            return payload[: max_chars - 30] + "... [output truncated]"
+            return payload[: max(0, max_chars - 30)] + "... [output truncated]"
         return payload
-    if isinstance(payload, dict):
-        dumped = json.dumps(payload, separators=(",", ":"))
+
+    str_limit = min(400, max(30, (max_chars - 150) // 6)) if max_chars < 2000 else 400
+
+    def _compact_recursive(val: Any) -> Any:
+        if isinstance(val, str):
+            if len(val) > str_limit:
+                return val[:str_limit] + "... [truncated]"
+            return val
+        if isinstance(val, list):
+            res = [_compact_recursive(item) for item in val[:3]]
+            if len(val) > 3:
+                res.append({"notice": f"... ({len(val) - 3} further items truncated for compact payload)"})
+            return res
+        if isinstance(val, dict):
+            return {k: _compact_recursive(v) for k, v in val.items()}
+        return val
+
+    if isinstance(payload, (dict, list)):
+        try:
+            dumped = json.dumps(payload, separators=(",", ":"))
+        except (TypeError, ValueError):
+            dumped = str(payload)
         if len(dumped) <= max_chars:
             return payload
-        compacted = dict(payload)
-        for k, v in compacted.items():
-            if isinstance(v, list) and len(v) > 3:
-                compacted[k] = v[:3] + [{"notice": f"... ({len(v) - 3} further items truncated for compact payload)"}]
-            elif isinstance(v, str) and len(v) > 400:
-                compacted[k] = v[:400] + "... [truncated]"
-        return compacted
+        compacted = _compact_recursive(payload)
+        try:
+            dumped_compacted = json.dumps(compacted, separators=(",", ":"))
+        except (TypeError, ValueError):
+            dumped_compacted = str(compacted)
+        if len(dumped_compacted) <= max_chars and len(dumped_compacted.encode("utf-8")) <= max_chars:
+            return compacted
+        preview_limit = max(0, max_chars - 60)
+        fallback: dict[str, Any] = {"truncated": True, "preview": dumped_compacted[:preview_limit]}
+        while (
+            len(json.dumps(fallback, separators=(",", ":"))) > max_chars
+            or len(json.dumps(fallback, separators=(",", ":")).encode("utf-8")) > max_chars
+        ) and preview_limit > 0:
+            preview_limit = max(0, preview_limit - 10)
+            fallback["preview"] = dumped_compacted[:preview_limit]
+        return fallback
+
     return payload
 
 
@@ -466,7 +496,9 @@ class Worker:
                         finally:
                             with worker.pending_lock:
                                 worker.pending.pop(request_id, None)
-                        tool_res = compact_tool_payload(result["tool_result"])
+                        tool_res = result["tool_result"]
+                        if isinstance(tool_res, dict) and tool_res.get("result") is not None:
+                            tool_res = {**tool_res, "result": compact_tool_payload(tool_res["result"])}
                         encoded = json.dumps(tool_res).encode()
                         self.send_response(200)
                         self.send_header("Content-Type", "application/json")
@@ -511,29 +543,6 @@ class Worker:
                         self.send_error(502, "Jarvis inference refused")
                         return
 
-                    if is_dead_turn(result.get("text"), tools):
-                        nudge_messages = list(messages or [])
-                        nudge_messages.append({"role": "user", "content": DEAD_TURN_NUDGE})
-                        nudge_id = uuid.uuid4().hex
-                        nudge_answer: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
-                        with worker.pending_lock:
-                            worker.pending[nudge_id] = nudge_answer
-                        worker.send({"type": "relay_request", "id": nudge_id, "session_ref": worker.session,
-                                     "task_kind": task_kind,
-                                     "messages": nudge_messages, "model_candidate": body.get("model"),
-                                     "tools": tools,
-                                     "allowed_tools": allowed_tools,
-                                     "metadata": metadata,
-                                     "max_output_tokens": body.get("max_completion_tokens") or body.get("max_tokens") or (2048 if task_kind == "general" else None)})
-                        try:
-                            nudged_result = nudge_answer.get(timeout=180)
-                            if nudged_result.get("status") == "success":
-                                result = nudged_result
-                        except queue.Empty:
-                            pass
-                        finally:
-                            with worker.pending_lock:
-                                worker.pending.pop(nudge_id, None)
                     tools = body.get("tools")
                     admitted = result.get("admitted_tools")
                     if isinstance(admitted, list):
