@@ -180,7 +180,7 @@ def _parse_claude_usage_windows(data: dict[str, Any]) -> list[dict[str, Any]]:
     return windows
 
 
-def _attempt_claude_refresh(target: Path, *, opener: Any = None) -> tuple[dict[str, Any] | None, str | None]:
+def _attempt_claude_refresh(target: Path, *, opener: Any = None, now: datetime | None = None) -> tuple[dict[str, Any] | None, str | None]:
     """Attempt a bounded refresh through `agent-relay --json limits --refresh` with CLAUDE_CONFIG_DIR set to target's parent."""
     config_dir = str(target.parent)
     sub_env = os.environ.copy()
@@ -202,6 +202,7 @@ def _attempt_claude_refresh(target: Path, *, opener: Any = None) -> tuple[dict[s
     except (subprocess.TimeoutExpired, OSError):
         stdout = None
 
+    now_dt = now or datetime.now(UTC)
     if stdout:
         doc = _json_document(stdout)
         if isinstance(doc, dict):
@@ -211,7 +212,26 @@ def _attempt_claude_refresh(target: Path, *, opener: Any = None) -> tuple[dict[s
                 if claude_entry is not None and claude_entry.get("status") == "ok":
                     raw_windows = claude_entry.get("windows")
                     if isinstance(raw_windows, list) and len(raw_windows) > 0:
-                        return claude_entry, None
+                        as_of_raw = claude_entry.get("as_of") or claude_entry.get("timestamp")
+                        as_of_dt = _ts(as_of_raw)
+                        # Enforce freshness: reject stale relay snapshots (older than 1h / 3600s, or missing as_of)
+                        if as_of_dt is not None:
+                            age_s = (now_dt - as_of_dt).total_seconds()
+                            if -86400 <= age_s <= 3600:
+                                sanitized = {
+                                    "status": "ok",
+                                    "as_of": _iso(as_of_dt),
+                                    "windows": [
+                                        {
+                                            k: w[k] for k in ("id", "label", "used_percent", "resets_at", "status", "stale")
+                                            if k in w
+                                        } for w in raw_windows if isinstance(w, dict)
+                                    ],
+                                }
+                                for optional_field in ("source", "reason", "agent_key", "label"):
+                                    if optional_field in claude_entry:
+                                        sanitized[optional_field] = claude_entry[optional_field]
+                                return sanitized, None
 
     # Re-read target and retry _fetch_claude_usage once if token was refreshed on disk
     try:
@@ -232,21 +252,22 @@ def _attempt_claude_refresh(target: Path, *, opener: Any = None) -> tuple[dict[s
                         if error is None and isinstance(data, dict):
                             windows = _parse_claude_usage_windows(data)
                             if windows:
-                                return {"status": "ok", "as_of": _iso(datetime.now(UTC)), "windows": windows}, None
+                                return {"status": "ok", "as_of": _iso(now_dt), "windows": windows}, None
     except Exception:
         pass
 
     return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
 
 
-def read_claude_limits(*, refresh: bool = False, opener: Any = None) -> tuple[dict[str, Any] | None, str | None]:
+def read_claude_limits(*, refresh: bool = False, opener: Any = None, now: datetime | None = None) -> tuple[dict[str, Any] | None, str | None]:
     target, is_configured = _resolve_claude_credentials_path()
     if not is_configured:
         relay_data, error = read_relay_limits(refresh=refresh)
         agents = relay_data.get("agents") if isinstance(relay_data, dict) else None
         entry = next((a for a in agents if isinstance(a, dict) and a.get("agent_key") == "claude"), None) if isinstance(agents, list) else None
         if entry is not None:
-            return entry, None
+            sanitized = {k: v for k, v in entry.items() if k in ("status", "windows", "as_of", "source", "reason", "agent_key", "label")}
+            return sanitized, None
         err = f"relay_{error}" if error in READ_ERRORS else (error or "credentials_missing")
         return None, err
 
@@ -281,13 +302,13 @@ def read_claude_limits(*, refresh: bool = False, opener: Any = None) -> tuple[di
 
     if is_expired:
         if has_refresh:
-            return _attempt_claude_refresh(target, opener=opener)
+            return _attempt_claude_refresh(target, opener=opener, now=now)
         return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
 
     data, error = _fetch_claude_usage(token_str, opener=opener)
     if error == "session_expired":
         if has_refresh:
-            return _attempt_claude_refresh(target, opener=opener)
+            return _attempt_claude_refresh(target, opener=opener, now=now)
         return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
 
     if error is not None or data is None:
@@ -298,7 +319,8 @@ def read_claude_limits(*, refresh: bool = False, opener: Any = None) -> tuple[di
     if not windows:
         return {"status": "unavailable", "reason": "invalid_response", "windows": []}, "invalid_response"
 
-    return {"status": "ok", "as_of": _iso(datetime.now(UTC)), "windows": windows}, None
+    now_dt = now or datetime.now(UTC)
+    return {"status": "ok", "as_of": _iso(now_dt), "windows": windows}, None
 
 
 def read_relay_limits(*, refresh: bool = False) -> tuple[dict[str, Any] | None, str | None]:
@@ -734,19 +756,35 @@ def _verify_free_pool_liveness_and_quality(
     if not model_id:
         return False
     pool_name = str(raw.get("name") or raw.get("id") or "")
-    source_name = str(raw.get("source") or raw.get("provider") or raw.get("free_list") or "")
 
     sources = lists_doc.get("sources")
     if not isinstance(sources, dict) or not sources:
         return False
 
+    candidate_keys: list[str] = []
+    fl = raw.get("free_list")
+    bu = raw.get("base_url")
+    if fl == "openai_models" and bu:
+        candidate_keys.extend([str(bu), str(bu).rstrip("/")])
+    elif fl:
+        candidate_keys.append(str(fl))
+    else:
+        src_prop = raw.get("source")
+        if src_prop:
+            candidate_keys.append(str(src_prop))
+        prov_prop = raw.get("provider")
+        if prov_prop and str(prov_prop) not in candidate_keys:
+            candidate_keys.append(str(prov_prop))
+        if bu and str(bu) not in candidate_keys:
+            candidate_keys.extend([str(bu), str(bu).rstrip("/")])
+        if "free" not in candidate_keys:
+            candidate_keys.append("free")
+
     matching_source: dict[str, Any] | None = None
-    for src_v in sources.values():
-        if isinstance(src_v, dict) and model_id in src_v.get("ids", []):
-            matching_source = src_v
+    for k in candidate_keys:
+        if k in sources and isinstance(sources[k], dict):
+            matching_source = sources[k]
             break
-    if matching_source is None and source_name in sources and isinstance(sources[source_name], dict):
-        matching_source = sources[source_name]
 
     if matching_source is None:
         return False
@@ -761,26 +799,37 @@ def _verify_free_pool_liveness_and_quality(
     if not (-60 <= (now - src_read_at).total_seconds() <= 3600):
         return False
 
-    # 4. Zero price check where published: prompt and completion must both be 0
-    pricing = (
-        raw.get("pricing")
-        or matching_source.get("pricing", {}).get(model_id)
-        or matching_source.get("prices", {}).get(model_id)
-        or lists_doc.get("pricing", {}).get(model_id)
-        or lists_doc.get("prices", {}).get(model_id)
-    )
-    if pricing is not None:
-        if not isinstance(pricing, dict):
+    def _is_zero(val: Any) -> bool:
+        if isinstance(val, bool) or val is None:
             return False
-        p = pricing.get("prompt") if "prompt" in pricing else pricing.get("prompt_price")
-        c = pricing.get("completion") if "completion" in pricing else pricing.get("completion_price")
-        def _is_zero(val: Any) -> bool:
-            if isinstance(val, bool) or val is None:
-                return False
-            try:
-                return float(val) == 0.0
-            except (ValueError, TypeError):
-                return False
+        try:
+            return float(val) == 0.0
+        except (ValueError, TypeError):
+            return False
+
+    # 4. Zero price check where published: source's published pricing is authoritative when present.
+    # If the source publishes a nonzero price, reject immediately regardless of any local claim.
+    source_pricing = None
+    for pricing_dict in (matching_source.get("pricing"), matching_source.get("prices"), lists_doc.get("pricing"), lists_doc.get("prices")):
+        if isinstance(pricing_dict, dict) and model_id in pricing_dict:
+            source_pricing = pricing_dict[model_id]
+            break
+
+    if source_pricing is not None:
+        if not isinstance(source_pricing, dict):
+            return False
+        p = source_pricing.get("prompt") if "prompt" in source_pricing else source_pricing.get("prompt_price")
+        c = source_pricing.get("completion") if "completion" in source_pricing else source_pricing.get("completion_price")
+        if not _is_zero(p) or not _is_zero(c):
+            return False
+
+    # Also check local pool pricing claim if present
+    pool_pricing = raw.get("pricing")
+    if pool_pricing is not None:
+        if not isinstance(pool_pricing, dict):
+            return False
+        p = pool_pricing.get("prompt") if "prompt" in pool_pricing else pool_pricing.get("prompt_price")
+        c = pool_pricing.get("completion") if "completion" in pool_pricing else pool_pricing.get("completion_price")
         if not _is_zero(p) or not _is_zero(c):
             return False
 
@@ -792,7 +841,7 @@ def _verify_free_pool_liveness_and_quality(
         candidates.append(raw["probe"])
     if raw.get("live_status") and raw.get("live_ok_at"):
         candidates.append({"status": raw["live_status"], "at": raw["live_ok_at"]})
-    for d in (lists_doc.get("probes"), lists_doc.get("live_probes"), matching_source.get("probes"), lists_doc.get("bridge")):
+    for d in (lists_doc.get("probes"), lists_doc.get("live_probes"), matching_source.get("probes")):
         if isinstance(d, dict):
             for k in (model_id, pool_name, f"temp-{pool_name}"):
                 val = d.get(k)
@@ -809,12 +858,10 @@ def _verify_free_pool_liveness_and_quality(
         ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
         proof_dt = _ts(ts_raw)
         is_fresh = proof_dt is not None and (-60 <= (now - proof_dt).total_seconds() <= 3600)
-        if p_code in (404, "404") or p_status in ("404", "not_found"):
-            if proof_dt is None or is_fresh:
-                return False
-        if p_code in (402, "402") or p_status in ("402", "payment_required", "payment_response"):
-            if proof_dt is None or is_fresh:
-                return False
+        if (p_code in (404, "404") or p_status in ("404", "not_found")) and (proof_dt is None or is_fresh):
+            return False
+        if (p_code in (402, "402") or p_status in ("402", "payment_required", "payment_response")) and (proof_dt is None or is_fresh):
+            return False
 
     # Find the most recent fresh OK proof
     newest_ok_dt: datetime | None = None
@@ -826,7 +873,11 @@ def _verify_free_pool_liveness_and_quality(
             "404", "not_found", "402", "payment_required", "payment_response", "error", "timeout", "failed", "unusable"
         ):
             continue
-        if p_status not in ("ok", "success", "active", "throttled", "exhausted"):
+        # Reject active, throttled, exhausted as live-response proof
+        if p_status in ("active", "throttled", "exhausted"):
+            continue
+        is_ok = (p_code in (200, "200")) or (p_status in ("ok", "success", "succeeded"))
+        if not is_ok:
             continue
         ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
         proof_dt = _ts(ts_raw)

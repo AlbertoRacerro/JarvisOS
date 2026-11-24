@@ -477,26 +477,36 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
     source = list_source(entry)
     source_data = (doc.get("sources") or {}).get(source) or {}
 
-    # Zero price check
-    pricing = (
-        entry.get("pricing")
-        or source_data.get("pricing", {}).get(entry["model"])
-        or source_data.get("prices", {}).get(entry["model"])
-        or doc.get("pricing", {}).get(entry["model"])
-        or doc.get("prices", {}).get(entry["model"])
-    )
-    if pricing is not None:
-        if not isinstance(pricing, dict):
+    # Zero price check: source's published pricing is authoritative when present.
+    # If the source publishes a nonzero price, reject immediately regardless of any local claim.
+    def _is_zero(val: Any) -> bool:
+        if isinstance(val, bool) or val is None:
+            return False
+        try:
+            return float(val) == 0.0
+        except (ValueError, TypeError):
+            return False
+
+    source_pricing = None
+    for pricing_dict in (source_data.get("pricing"), source_data.get("prices"), doc.get("pricing"), doc.get("prices")):
+        if isinstance(pricing_dict, dict) and entry["model"] in pricing_dict:
+            source_pricing = pricing_dict[entry["model"]]
+            break
+
+    if source_pricing is not None:
+        if not isinstance(source_pricing, dict):
             return unreadable(name, "nonzero_price")
-        p = pricing.get("prompt") if "prompt" in pricing else pricing.get("prompt_price")
-        c = pricing.get("completion") if "completion" in pricing else pricing.get("completion_price")
-        def _is_zero(val: Any) -> bool:
-            if isinstance(val, bool) or val is None:
-                return False
-            try:
-                return float(val) == 0.0
-            except (ValueError, TypeError):
-                return False
+        p = source_pricing.get("prompt") if "prompt" in source_pricing else source_pricing.get("prompt_price")
+        c = source_pricing.get("completion") if "completion" in source_pricing else source_pricing.get("completion_price")
+        if not _is_zero(p) or not _is_zero(c):
+            return unreadable(name, "nonzero_price")
+
+    pool_pricing = entry.get("pricing")
+    if pool_pricing is not None:
+        if not isinstance(pool_pricing, dict):
+            return unreadable(name, "nonzero_price")
+        p = pool_pricing.get("prompt") if "prompt" in pool_pricing else pool_pricing.get("prompt_price")
+        c = pool_pricing.get("completion") if "completion" in pool_pricing else pool_pricing.get("completion_price")
         if not _is_zero(p) or not _is_zero(c):
             return unreadable(name, "nonzero_price")
 
@@ -508,7 +518,7 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
         candidates.append(entry["probe"])
     if entry.get("live_status") and entry.get("live_ok_at"):
         candidates.append({"status": entry["live_status"], "at": entry["live_ok_at"]})
-    for d in (doc.get("probes"), doc.get("live_probes"), source_data.get("probes"), doc.get("bridge")):
+    for d in (doc.get("probes"), doc.get("live_probes"), source_data.get("probes")):
         if isinstance(d, dict):
             for k in (entry["model"], entry["name"], name):
                 val = d.get(k)
@@ -525,12 +535,10 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
         ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
         proof_dt = _parse_iso_zone(ts_raw)
         is_fresh = proof_dt is not None and (-60 <= (moment - proof_dt).total_seconds() <= 3600)
-        if p_code in (404, "404") or p_status in ("404", "not_found"):
-            if proof_dt is None or is_fresh:
-                return unreadable(name, "probe_404")
-        if p_code in (402, "402") or p_status in ("402", "payment_required", "payment_response"):
-            if proof_dt is None or is_fresh:
-                return unreadable(name, "payment_required")
+        if (p_code in (404, "404") or p_status in ("404", "not_found")) and (proof_dt is None or is_fresh):
+            return unreadable(name, "probe_404")
+        if (p_code in (402, "402") or p_status in ("402", "payment_required", "payment_response")) and (proof_dt is None or is_fresh):
+            return unreadable(name, "payment_required")
 
     # Find the newest fresh OK proof
     newest_ok_dt: datetime | None = None
@@ -546,7 +554,11 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
             continue
         if p_code in (404, 402, "404", "402") or p_status in ("404", "not_found", "402", "payment_required", "payment_response"):
             continue
-        if p_status not in ("ok", "success", "active", "throttled", "exhausted"):
+        # Reject active, throttled, exhausted as live-response proof
+        if p_status in ("active", "throttled", "exhausted"):
+            continue
+        is_ok = (p_code in (200, "200")) or (p_status in ("ok", "success", "succeeded"))
+        if not is_ok:
             continue
         ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
         proof_dt = _parse_iso_zone(ts_raw)

@@ -23,14 +23,18 @@ def temp_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Pa
     key = tmp_path / "pool.key"
     key.write_text("TEST_TEMP_POOL_SECRET", encoding="utf-8")
     pools = tmp_path / "temp-pools.json"
-    pools.write_text(json.dumps({"reference": "luna", "scores": {"luna": 28}, "pools": [{
-        "name": "testpool", "provider": "Test Public", "base_url": "https://example.invalid/v1",
-        "model": "test-model", "key_file": str(key), "free_list": "openai_models", "index_score": 30,
-        "rate_limits": "free", "data_policy": "public",
-    }, {
-        "name": "zenpool", "provider": "OpenCode Zen", "model": "zen-model-free", "free_list": "opencode_zen",
-        "index_score": 33, "rate_limits": "free", "data_policy": "public",
-    }]}), encoding="utf-8")
+    pools.write_text(json.dumps({
+        "reference": "luna", "scores": {"luna": 28},
+        "coding_reference": "luna", "coding_scores": {"luna": 28},
+        "pools": [{
+            "name": "testpool", "provider": "Test Public", "base_url": "https://example.invalid/v1",
+            "model": "test-model", "key_file": str(key), "free_list": "openai_models", "index_score": 30,
+            "coding_index": 30, "rate_limits": "free", "data_policy": "public",
+        }, {
+            "name": "zenpool", "provider": "OpenCode Zen", "model": "zen-model-free", "free_list": "opencode_zen",
+            "index_score": 33, "coding_index": 33, "rate_limits": "free", "data_policy": "public",
+        }],
+    }), encoding="utf-8")
     monkeypatch.setenv("TEMP_POOLS_FILE", str(pools))
     return pools, key
 

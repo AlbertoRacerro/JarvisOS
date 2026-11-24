@@ -2071,3 +2071,59 @@ def test_free_list_read_refuses_plain_http_and_redirects() -> None:
     request = wr.urllib.request.Request("https://example.invalid/models", headers={"Authorization": "Bearer k"})
     with pytest.raises(wr.urllib.error.HTTPError):
         wr._NoRedirect().redirect_request(request, None, 302, "Found", {}, "https://elsewhere.invalid/")
+
+
+def test_nonzero_source_price_disqualifies_pool_even_if_pool_claims_price_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key = tmp_path / "pool.key"
+    key.write_text("secret", encoding="utf-8")
+    target = _temp_file(tmp_path, [_pool("a", key, pricing={"prompt": 0, "completion": 0})])
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
+    now = datetime(2026, 11, 20, 10, 0, tzinfo=UTC)
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    lists_file = tmp_path / "temp-pool-lists.json"
+    lists_file.write_text(json.dumps({
+        "sources": {
+            "https://example.invalid/v1": {
+                "ids": ["a:free"],
+                "read_at": now_str,
+                "pricing": {"a:free": {"prompt": 0.002, "completion": 0.002}},
+            }
+        },
+        "probes": {"a:free": {"status": "ok", "live_ok_at": now_str}},
+    }), encoding="utf-8")
+    entry = wr.load_temp_pools()[0]
+    res = wr.temp_pool_read(entry, now, opener=_refuse)
+    assert res.free is None
+    assert res.reason == "nonzero_price"
+
+
+def test_active_throttled_exhausted_alone_do_not_satisfy_live_response_proof(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key = tmp_path / "pool.key"
+    key.write_text("secret", encoding="utf-8")
+    target = _temp_file(tmp_path, [
+        _pool("active_pool", key, live_status="active", live_ok_at="2026-11-20T10:00:00Z"),
+        _pool("throttled_pool", key, live_status="throttled", live_ok_at="2026-11-20T10:00:00Z"),
+        _pool("exhausted_pool", key, live_status="exhausted", live_ok_at="2026-11-20T10:00:00Z"),
+    ])
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
+    now = datetime(2026, 11, 20, 10, 0, tzinfo=UTC)
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    lists_file = tmp_path / "temp-pool-lists.json"
+    lists_file.write_text(json.dumps({
+        "sources": {
+            "https://example.invalid/v1": {
+                "ids": ["active_pool:free", "throttled_pool:free", "exhausted_pool:free"],
+                "read_at": now_str,
+            }
+        },
+        "probes": {
+            "active_pool:free": {"status": "active", "live_ok_at": now_str},
+            "throttled_pool:free": {"status": "throttled", "live_ok_at": now_str},
+            "exhausted_pool:free": {"status": "exhausted", "live_ok_at": now_str},
+        },
+    }), encoding="utf-8")
+    entries = wr.load_temp_pools()
+    for e in entries:
+        res = wr.temp_pool_read(e, now, opener=_refuse)
+        assert res.free is None
+        assert res.reason == "missing_proof"

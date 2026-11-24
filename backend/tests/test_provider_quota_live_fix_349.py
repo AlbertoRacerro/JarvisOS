@@ -1,6 +1,7 @@
 """Spec 349: Offline unit tests for Claude live refresh, Codex resilience, and live-verified free models."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -10,9 +11,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import scripts.worker_routing as wr
 
 from app.modules.coding import provider_quota as pq
+
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "worker_routing.py"
+SPEC = importlib.util.spec_from_file_location("worker_routing_under_test", SCRIPT)
+assert SPEC and SPEC.loader
+wr = importlib.util.module_from_spec(SPEC)
+sys.modules["worker_routing_under_test"] = wr
+SPEC.loader.exec_module(wr)
 
 NOW = datetime(2026, 11, 24, 10, 0, tzinfo=UTC)
 
@@ -930,3 +937,256 @@ def test_free_model_proof_precedence_and_temp_prefix(
     # 3. Newer ok beats older error
     p_rec = wr.temp_pool_read(entries[2], now=NOW)
     assert p_rec.free == 1.0 and p_rec.reason is None
+
+
+def test_claude_refresh_rejects_stale_relay_entry_and_fails_session_expired(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_dir = tmp_path / "claude_state"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    cred_file = config_dir / ".credentials.json"
+    expired_epoch = int((NOW - timedelta(days=5)).timestamp())
+    cred_file.write_text(
+        json.dumps({
+            "claudeAiOauth": {
+                "accessToken": "expired-access-token-12345",
+                "refreshToken": "valid-refresh-token-67890",
+                "expiresAt": expired_epoch,
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("JARVISOS_CLAUDE_CONFIG_DIR", str(config_dir))
+
+    # agent-relay returns a stale 2020 snapshot
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        payload = {
+            "agents": [
+                {
+                    "agent_key": "claude",
+                    "status": "ok",
+                    "as_of": "2020-01-01T00:00:00Z",
+                    "windows": [
+                        {"id": "5h", "label": "5-hour limit", "used_percent": 10.0, "resets_at": "2020-01-01T05:00:00Z"}
+                    ],
+                }
+            ]
+        }
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+
+    res, err = pq.read_claude_limits(refresh=True, now=NOW)
+    assert err == "session_expired"
+    assert isinstance(res, dict)
+    assert res["status"] == "unavailable"
+    assert res["reason"] == "session_expired"
+
+
+def test_claude_refresh_sanitizes_relay_output_stripping_tokens_and_secrets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_dir = tmp_path / "claude_state"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    cred_file = config_dir / ".credentials.json"
+    expired_epoch = int((NOW - timedelta(days=5)).timestamp())
+    cred_file.write_text(
+        json.dumps({
+            "claudeAiOauth": {
+                "accessToken": "expired-access-token-12345",
+                "refreshToken": "valid-refresh-token-67890",
+                "expiresAt": expired_epoch,
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("JARVISOS_CLAUDE_CONFIG_DIR", str(config_dir))
+
+    now_str = NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        payload = {
+            "agents": [
+                {
+                    "agent_key": "claude",
+                    "status": "ok",
+                    "as_of": now_str,
+                    "token": "leak-token-12345",
+                    "access_token": "leak-access-token-67890",
+                    "refreshToken": "leak-refresh-token",
+                    "api_key": "leak-key",
+                    "headers": {"Authorization": "Bearer leak-secret"},
+                    "windows": [
+                        {"id": "5h", "label": "5-hour limit", "used_percent": 25.0, "resets_at": now_str, "secret_field": "leak-window"}
+                    ],
+                }
+            ]
+        }
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+
+    res, err = pq.read_claude_limits(refresh=True, now=NOW)
+    assert err is None
+    assert isinstance(res, dict)
+    assert res["status"] == "ok"
+    assert res["as_of"] == now_str
+    # Whitelist verification: only explicit schema fields allowed
+    assert "token" not in res
+    assert "access_token" not in res
+    assert "refreshToken" not in res
+    assert "api_key" not in res
+    assert "headers" not in res
+    assert "secret_field" not in res["windows"][0]
+    serialized = json.dumps(res)
+    assert "leak-" not in serialized
+
+
+def test_free_model_disqualified_when_source_publishes_nonzero_price_even_if_pool_claims_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("secret-token", encoding="utf-8")
+    now_str = NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    pool = {
+        "name": "pool-claims-zero",
+        "provider": "TestProvider",
+        "model": "model/published-nonzero:free",
+        "key_file": str(key_file),
+        "free_list": "openai_models",
+        "base_url": "https://api.test.invalid/v1",
+        "index_score": 40,
+        "coding_index": 45,
+        "rate_limits": "free",
+        "data_policy": "public",
+        "pricing": {"prompt": 0, "completion": "0"},  # pool locally claims zero
+        "live_probe": {"status": "ok", "live_ok_at": now_str},
+    }
+
+    lists_doc = {
+        "sources": {
+            "https://api.test.invalid/v1": {
+                "ids": ["model/published-nonzero:free"],
+                "read_at": now_str,
+                "pricing": {
+                    "model/published-nonzero:free": {"prompt": "0.002", "completion": "0.002"}  # source publishes nonzero
+                },
+            }
+        },
+        "probes": {
+            "model/published-nonzero:free": {"status": "ok", "live_ok_at": now_str},
+        },
+    }
+
+    pools_file, _ = _setup_free_pools_fixture(tmp_path, [pool], lists_doc)
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
+
+    # Authoritative source pricing rejects the pool from panel and router
+    assert pq.read_free_models(tmp_path, now=NOW) == []
+    entries = wr.load_temp_pools(pools_file)
+    p = wr.temp_pool_read(entries[0], now=NOW)
+    assert p.free is None
+    assert p.reason == "nonzero_price"
+
+
+def test_free_model_excluded_when_unrelated_source_lists_model_id_but_own_source_does_not(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("secret-token", encoding="utf-8")
+    now_str = NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Pool is configured with source pool-a
+    pool = {
+        "name": "pool-a",
+        "provider": "ProviderA",
+        "model": "model/shared:free",
+        "key_file": str(key_file),
+        "free_list": "openai_models",
+        "base_url": "https://api.pool-a.invalid/v1",
+        "index_score": 40,
+        "coding_index": 45,
+        "rate_limits": "free",
+        "data_policy": "public",
+        "pricing": {"prompt": 0, "completion": 0},
+        "live_probe": {"status": "ok", "live_ok_at": now_str},
+    }
+
+    # lists_doc has pool-a (which does NOT list model/shared:free)
+    # and pool-b (an unrelated source which DOES list model/shared:free)
+    lists_doc = {
+        "sources": {
+            "https://api.pool-a.invalid/v1": {
+                "ids": ["other/model:free"],
+                "read_at": now_str,
+            },
+            "https://api.pool-b.invalid/v1": {
+                "ids": ["model/shared:free"],
+                "read_at": now_str,
+            },
+        },
+        "probes": {
+            "model/shared:free": {"status": "ok", "live_ok_at": now_str},
+        },
+    }
+
+    pools_file, _ = _setup_free_pools_fixture(tmp_path, [pool], lists_doc)
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
+
+    # Must be excluded from free_models because pool-a does not list model/shared:free
+    assert pq.read_free_models(tmp_path, now=NOW) == []
+
+
+def test_active_throttled_exhausted_alone_do_not_satisfy_live_response_proof(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("secret-token", encoding="utf-8")
+    now_str = NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    pools = [
+        {
+            "name": f"pool-{status}",
+            "provider": "TestProvider",
+            "model": f"model/{status}:free",
+            "key_file": str(key_file),
+            "free_list": "openai_models",
+            "base_url": "https://api.test.invalid/v1",
+            "index_score": 40,
+            "coding_index": 45,
+            "rate_limits": "free",
+            "data_policy": "public",
+            "pricing": {"prompt": 0, "completion": 0},
+            "live_status": status,
+            "live_ok_at": now_str,
+        }
+        for status in ("active", "throttled", "exhausted")
+    ]
+
+    lists_doc = {
+        "sources": {
+            "https://api.test.invalid/v1": {
+                "ids": [f"model/{s}:free" for s in ("active", "throttled", "exhausted")],
+                "read_at": now_str,
+            }
+        },
+        "probes": {
+            f"model/{s}:free": {"status": s, "live_ok_at": now_str}
+            for s in ("active", "throttled", "exhausted")
+        },
+    }
+
+    pools_file, _ = _setup_free_pools_fixture(tmp_path, pools, lists_doc)
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
+
+    # None admitted to quota panel
+    assert pq.read_free_models(tmp_path, now=NOW) == []
+
+    # Worker router excludes each with missing_proof
+    entries = wr.load_temp_pools(pools_file)
+    assert len(entries) == 3
+    for entry in entries:
+        p = wr.temp_pool_read(entry, now=NOW)
+        assert p.free is None
+        assert p.reason == "missing_proof"
