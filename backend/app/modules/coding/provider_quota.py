@@ -800,21 +800,20 @@ def _verify_free_pool_liveness_and_quality(
         except (ValueError, TypeError):
             return False
 
-    # 4. Zero price check where published: source's published pricing is authoritative when present.
-    # If the source publishes a nonzero price, reject immediately regardless of any local claim.
+    # 4. Zero price check: must require sources[<source>]["pricing"][<id>] with both prices zero.
+    # Absent pricing for the id -> exclude (fail closed).
     source_pricing = None
     for pricing_dict in (matching_source.get("pricing"), matching_source.get("prices"), lists_doc.get("pricing"), lists_doc.get("prices")):
         if isinstance(pricing_dict, dict) and model_id in pricing_dict:
             source_pricing = pricing_dict[model_id]
             break
 
-    if source_pricing is not None:
-        if not isinstance(source_pricing, dict):
-            return False
-        p = source_pricing.get("prompt") if "prompt" in source_pricing else source_pricing.get("prompt_price")
-        c = source_pricing.get("completion") if "completion" in source_pricing else source_pricing.get("completion_price")
-        if not _is_zero(p) or not _is_zero(c):
-            return False
+    if source_pricing is None or not isinstance(source_pricing, dict):
+        return False
+    p = source_pricing.get("prompt") if "prompt" in source_pricing else source_pricing.get("prompt_price")
+    c = source_pricing.get("completion") if "completion" in source_pricing else source_pricing.get("completion_price")
+    if not _is_zero(p) or not _is_zero(c):
+        return False
 
     # Also check local pool pricing claim if present
     pool_pricing = raw.get("pricing")
@@ -826,23 +825,23 @@ def _verify_free_pool_liveness_and_quality(
         if not _is_zero(p) or not _is_zero(c):
             return False
 
-    # 5. Bounded recent free-only response proof exists and is fresh
+    # 5. Bounded recent free-only response proof exists and is fresh: only the producer's probes record is accepted
     candidates: list[dict[str, Any]] = []
-    for d in (lists_doc.get("probes"), lists_doc.get("live_probes"), matching_source.get("probes")):
-        if isinstance(d, dict):
-            for k in (model_id, pool_name, f"temp-{pool_name}"):
-                val = d.get(k)
-                if isinstance(val, dict):
-                    candidates.append(val)
+    probes_map = lists_doc.get("probes")
+    if isinstance(probes_map, dict):
+        for k in (model_id, pool_name, f"temp-{pool_name}"):
+            val = probes_map.get(k)
+            if isinstance(val, dict):
+                candidates.append(val)
 
     if not candidates:
         return False
 
     # Fail closed immediately if ANY candidate proof reports 404 or 402 with fresh or missing timestamp
     for proof in candidates:
-        p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
-        p_code = proof.get("status_code") or proof.get("code")
-        ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+        p_status = str(proof.get("status") or "").lower()
+        p_code = proof.get("code")
+        ts_raw = proof.get("at")
         proof_dt = _ts(ts_raw)
         is_fresh = proof_dt is not None and (-60 <= (now - proof_dt).total_seconds() <= 3600)
         if (p_code in (404, "404") or p_status in ("404", "not_found")) and (proof_dt is None or is_fresh):
@@ -854,8 +853,8 @@ def _verify_free_pool_liveness_and_quality(
     newest_ok_dt: datetime | None = None
     has_fresh_ok = False
     for proof in candidates:
-        p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
-        p_code = proof.get("status_code") or proof.get("code")
+        p_status = str(proof.get("status") or "").lower()
+        p_code = proof.get("code")
         if p_code in (404, 402, 500, 502, 503, 504) or p_status in (
             "404", "not_found", "402", "payment_required", "payment_response", "error", "timeout", "failed", "unusable"
         ):
@@ -863,10 +862,10 @@ def _verify_free_pool_liveness_and_quality(
         # Reject active, throttled, exhausted as live-response proof
         if p_status in ("active", "throttled", "exhausted"):
             continue
-        is_ok = (p_code in (200, "200")) or (p_status in ("ok", "success", "succeeded"))
+        is_ok = p_code in (200, "200") and proof.get("answered") is True and p_status in ("ok", "success", "succeeded")
         if not is_ok:
             continue
-        ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+        ts_raw = proof.get("at")
         proof_dt = _ts(ts_raw)
         if proof_dt is not None and (-60 <= (now - proof_dt).total_seconds() <= 3600):
             has_fresh_ok = True
@@ -878,10 +877,10 @@ def _verify_free_pool_liveness_and_quality(
 
     # Check if any error/unusable proof beats the newest OK proof
     for proof in candidates:
-        p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
-        p_code = proof.get("status_code") or proof.get("code")
+        p_status = str(proof.get("status") or "").lower()
+        p_code = proof.get("code")
         if p_code in (500, 502, 503, 504) or p_status in ("error", "timeout", "failed", "unusable"):
-            ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+            ts_raw = proof.get("at")
             proof_dt = _ts(ts_raw)
             if proof_dt is None or newest_ok_dt is None or proof_dt >= newest_ok_dt:
                 return False

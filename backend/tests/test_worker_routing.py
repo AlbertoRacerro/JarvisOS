@@ -1939,9 +1939,10 @@ def _pool(name: str, key: Path, score: int | None = 43, coding_score: int | None
 
 def _fresh_lists(tmp_path: Path, ids: list[str], now: datetime, source: str = "https://example.invalid/v1") -> None:
     now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    probes = {i: {"status": "ok", "live_ok_at": now_str} for i in ids}
+    pricing = {i: {"prompt": 0, "completion": 0} for i in ids}
+    probes = {i: {"status": "ok", "code": 200, "answered": True, "at": now_str} for i in ids}
     (tmp_path / "temp-pool-lists.json").write_text(json.dumps({
-        "sources": {source: {"ids": ids, "read_at": now_str}},
+        "sources": {source: {"ids": ids, "pricing": pricing, "read_at": now_str}},
         "probes": probes,
     }), encoding="utf-8")
 
@@ -2004,7 +2005,7 @@ def test_temporary_pool_liveness_follows_the_free_list(monkeypatch: pytest.Monke
     def opener(url: str, headers: dict[str, str], timeout: float) -> object:
         seen.append((url, headers))
         if url.endswith("/models"):
-            return {"data": [{"id": "a:free"}, {"id": "a"}, {"id": "paid-model"}]}
+            return {"data": [{"id": "a:free", "pricing": {"prompt": 0, "completion": 0}}, {"id": "a"}, {"id": "paid-model"}]}
         return {"choices": [{"message": {"content": "OK"}}]}
 
     assert wr.temp_pool_read(entries[0], now, opener=opener).free == 1.0
@@ -2020,6 +2021,8 @@ def test_temporary_pool_liveness_follows_the_free_list(monkeypatch: pytest.Monke
     cache = json.loads((tmp_path / "temp-pool-lists.json").read_text(encoding="utf-8"))
     assert cache["sources"]["https://example.invalid/v1"]["ids"] == ["a:free"]
     assert cache["probes"]["a:free"]["status"] == "ok"
+    assert cache["probes"]["a:free"]["code"] == 200
+    assert cache["probes"]["a:free"]["answered"] is True
     assert "secret" not in (tmp_path / "temp-pool-lists.json").read_text(encoding="utf-8")
     assert wr.temp_pool_read(entries[0], now + timedelta(minutes=30), opener=_refuse).free == 1.0  # cached
     key.unlink()
@@ -2051,7 +2054,7 @@ def test_temporary_pool_malformed_and_zen_entries(monkeypatch: pytest.MonkeyPatc
         seen.append(url)
         if url.endswith("/models"):
             assert headers == {}
-            return {"data": [{"id": "some-model-free"}, {"id": "some-model"}]}
+            return {"data": [{"id": "some-model-free", "pricing": {"prompt": 0, "completion": 0}}, {"id": "some-model"}]}
         assert "Authorization" not in headers
         return {"choices": [{"message": {"content": "OK"}}]}
 
@@ -2106,7 +2109,7 @@ def test_nonzero_source_price_disqualifies_pool_even_if_pool_claims_price_zero(m
                 "pricing": {"a:free": {"prompt": 0.002, "completion": 0.002}},
             }
         },
-        "probes": {"a:free": {"status": "ok", "live_ok_at": now_str}},
+        "probes": {"a:free": {"status": "ok", "code": 200, "answered": True, "at": now_str}},
     }), encoding="utf-8")
     entry = wr.load_temp_pools()[0]
     res = wr.temp_pool_read(entry, now, opener=_refuse)
@@ -2131,12 +2134,17 @@ def test_active_throttled_exhausted_alone_do_not_satisfy_live_response_proof(mon
             "https://example.invalid/v1": {
                 "ids": ["active_pool:free", "throttled_pool:free", "exhausted_pool:free"],
                 "read_at": now_str,
+                "pricing": {
+                    "active_pool:free": {"prompt": 0, "completion": 0},
+                    "throttled_pool:free": {"prompt": 0, "completion": 0},
+                    "exhausted_pool:free": {"prompt": 0, "completion": 0},
+                },
             }
         },
         "probes": {
-            "active_pool:free": {"status": "active", "live_ok_at": now_str},
-            "throttled_pool:free": {"status": "throttled", "live_ok_at": now_str},
-            "exhausted_pool:free": {"status": "exhausted", "live_ok_at": now_str},
+            "active_pool:free": {"status": "active", "at": now_str},
+            "throttled_pool:free": {"status": "throttled", "at": now_str},
+            "exhausted_pool:free": {"status": "exhausted", "at": now_str},
         },
     }), encoding="utf-8")
     entries = wr.load_temp_pools()

@@ -116,21 +116,31 @@ def test_free_models_parsing_and_secret_path_stripping(
             "sources": {
                 "https://api.nous.invalid/v1": {
                     "ids": ["nousresearch/hermes-3-llama-3.1-8b", "low-model"],
+                    "pricing": {
+                        "nousresearch/hermes-3-llama-3.1-8b": {"prompt": 0, "completion": 0},
+                        "low-model": {"prompt": 0, "completion": 0},
+                    },
                     "read_at": now_str,
                 },
                 "opencode_zen": {
                     "ids": ["zen-free"],
+                    "pricing": {
+                        "zen-free": {"prompt": 0, "completion": 0},
+                    },
                     "read_at": now_str,
                 },
                 "openrouter_public": {
                     "ids": ["deepseek/deepseek-chat:free"],
+                    "pricing": {
+                        "deepseek/deepseek-chat:free": {"prompt": 0, "completion": 0},
+                    },
                     "read_at": now_str,
                 },
             },
             "probes": {
-                "high-pool": {"status": "ok", "live_ok_at": now_str},
-                "zen-pool": {"status": "ok", "live_ok_at": now_str},
-                "exhausted-pool": {"status": "ok", "live_ok_at": now_str},
+                "high-pool": {"status": "ok", "code": 200, "answered": True, "at": now_str},
+                "zen-pool": {"status": "ok", "code": 200, "answered": True, "at": now_str},
+                "exhausted-pool": {"status": "ok", "code": 200, "answered": True, "at": now_str},
             },
             "bridge": {
                 "zen-pool": {"state": "throttled", "at": now_str},

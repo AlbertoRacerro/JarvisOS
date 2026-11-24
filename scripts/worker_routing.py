@@ -452,41 +452,47 @@ def probe_pool_model(
             if isinstance(res, dict) and "status" in res:
                 if "at" not in res:
                     res["at"] = now_str
+                if "answered" not in res:
+                    res["answered"] = False
+                else:
+                    res["answered"] = bool(res["answered"])
                 return res
             if isinstance(res, dict) and "choices" in res:
                 choices = res.get("choices")
                 msg = choices[0].get("message", {}).get("content", "") if choices and isinstance(choices, list) and isinstance(choices[0], dict) else ""
-                if str(msg).strip():
-                    return {"status": "ok", "code": 200, "at": now_str}
-                return {"status": "error", "code": 200, "at": now_str}
+                answered = bool(str(msg).strip())
+                if answered:
+                    return {"status": "ok", "code": 200, "answered": True, "at": now_str}
+                return {"status": "error", "code": 200, "answered": False, "at": now_str}
             if isinstance(res, tuple) and len(res) == 2:
                 code, data = res
                 if code == 200 and isinstance(data, dict):
                     choices = data.get("choices")
                     msg = choices[0].get("message", {}).get("content", "") if choices and isinstance(choices, list) and isinstance(choices[0], dict) else ""
-                    if str(msg).strip():
-                        return {"status": "ok", "code": 200, "at": now_str}
-                    return {"status": "error", "code": 200, "at": now_str}
+                    answered = bool(str(msg).strip())
+                    if answered:
+                        return {"status": "ok", "code": 200, "answered": True, "at": now_str}
+                    return {"status": "error", "code": 200, "answered": False, "at": now_str}
                 if code == 404:
-                    return {"status": "404", "code": 404, "at": now_str}
+                    return {"status": "404", "code": 404, "answered": False, "at": now_str}
                 if code == 402:
-                    return {"status": "402", "code": 402, "at": now_str}
+                    return {"status": "402", "code": 402, "answered": False, "at": now_str}
                 if code in (408, 504):
-                    return {"status": "timeout", "code": code, "at": now_str}
-                return {"status": "error", "code": code, "at": now_str}
-            return {"status": "error", "code": 200, "at": now_str}
+                    return {"status": "timeout", "code": code, "answered": False, "at": now_str}
+                return {"status": "error", "code": code, "answered": False, "at": now_str}
+            return {"status": "error", "code": 200, "answered": False, "at": now_str}
         except urllib.error.HTTPError as err:
             if err.code == 404:
-                return {"status": "404", "code": 404, "at": now_str}
+                return {"status": "404", "code": 404, "answered": False, "at": now_str}
             if err.code == 402:
-                return {"status": "402", "code": 402, "at": now_str}
+                return {"status": "402", "code": 402, "answered": False, "at": now_str}
             if err.code in (408, 504):
-                return {"status": "timeout", "code": err.code, "at": now_str}
-            return {"status": "error", "code": err.code, "at": now_str}
+                return {"status": "timeout", "code": err.code, "answered": False, "at": now_str}
+            return {"status": "error", "code": err.code, "answered": False, "at": now_str}
         except TimeoutError:
-            return {"status": "timeout", "code": 408, "at": now_str}
+            return {"status": "timeout", "code": 408, "answered": False, "at": now_str}
         except Exception:
-            return {"status": "error", "code": None, "at": now_str}
+            return {"status": "error", "code": None, "answered": False, "at": now_str}
 
     if opener is not None:
         try:
@@ -497,52 +503,58 @@ def probe_pool_model(
             if isinstance(raw_resp, dict) and "choices" in raw_resp:
                 choices = raw_resp.get("choices")
                 msg = choices[0].get("message", {}).get("content", "") if choices and isinstance(choices, list) and isinstance(choices[0], dict) else ""
-                if str(msg).strip():
-                    return {"status": "ok", "code": 200, "at": now_str}
-                return {"status": "error", "code": 200, "at": now_str}
+                answered = bool(str(msg).strip())
+                if answered:
+                    return {"status": "ok", "code": 200, "answered": True, "at": now_str}
+                return {"status": "error", "code": 200, "answered": False, "at": now_str}
             if isinstance(raw_resp, dict) and "status" in raw_resp:
                 if "at" not in raw_resp:
                     raw_resp["at"] = now_str
+                if "answered" not in raw_resp:
+                    raw_resp["answered"] = False
+                else:
+                    raw_resp["answered"] = bool(raw_resp["answered"])
                 return raw_resp
-            return {"status": "error", "code": 200, "at": now_str}
+            return {"status": "error", "code": 200, "answered": False, "at": now_str}
         except urllib.error.HTTPError as err:
             if err.code == 404:
-                return {"status": "404", "code": 404, "at": now_str}
+                return {"status": "404", "code": 404, "answered": False, "at": now_str}
             if err.code == 402:
-                return {"status": "402", "code": 402, "at": now_str}
+                return {"status": "402", "code": 402, "answered": False, "at": now_str}
             if err.code in (408, 504):
-                return {"status": "timeout", "code": err.code, "at": now_str}
-            return {"status": "error", "code": err.code, "at": now_str}
+                return {"status": "timeout", "code": err.code, "answered": False, "at": now_str}
+            return {"status": "error", "code": err.code, "answered": False, "at": now_str}
         except TimeoutError:
-            return {"status": "timeout", "code": 408, "at": now_str}
+            return {"status": "timeout", "code": 408, "answered": False, "at": now_str}
         except Exception:
-            return {"status": "error", "code": None, "at": now_str}
+            return {"status": "error", "code": None, "answered": False, "at": now_str}
 
     try:
         code, resp = _http_post_json(url, headers, payload, timeout)
         if code == 200 and isinstance(resp, dict):
             choices = resp.get("choices")
             msg = choices[0].get("message", {}).get("content", "") if choices and isinstance(choices, list) and isinstance(choices[0], dict) else ""
-            if str(msg).strip():
-                return {"status": "ok", "code": 200, "at": now_str}
-            return {"status": "error", "code": 200, "at": now_str}
-        return {"status": "error", "code": code, "at": now_str}
+            answered = bool(str(msg).strip())
+            if answered:
+                return {"status": "ok", "code": 200, "answered": True, "at": now_str}
+            return {"status": "error", "code": 200, "answered": False, "at": now_str}
+        return {"status": "error", "code": code, "answered": False, "at": now_str}
     except urllib.error.HTTPError as err:
         if err.code == 404:
-            return {"status": "404", "code": 404, "at": now_str}
+            return {"status": "404", "code": 404, "answered": False, "at": now_str}
         if err.code == 402:
-            return {"status": "402", "code": 402, "at": now_str}
+            return {"status": "402", "code": 402, "answered": False, "at": now_str}
         if err.code in (408, 504):
-            return {"status": "timeout", "code": err.code, "at": now_str}
-        return {"status": "error", "code": err.code, "at": now_str}
+            return {"status": "timeout", "code": err.code, "answered": False, "at": now_str}
+        return {"status": "error", "code": err.code, "answered": False, "at": now_str}
     except TimeoutError:
-        return {"status": "timeout", "code": 408, "at": now_str}
+        return {"status": "timeout", "code": 408, "answered": False, "at": now_str}
     except urllib.error.URLError as err:
         if isinstance(getattr(err, "reason", None), TimeoutError):
-            return {"status": "timeout", "code": 408, "at": now_str}
-        return {"status": "error", "code": None, "at": now_str}
+            return {"status": "timeout", "code": 408, "answered": False, "at": now_str}
+        return {"status": "error", "code": None, "answered": False, "at": now_str}
     except Exception:
-        return {"status": "error", "code": None, "at": now_str}
+        return {"status": "error", "code": None, "answered": False, "at": now_str}
 
 
 class FreeIds(list[str]):
@@ -592,13 +604,10 @@ def fetch_free_ids(entry: dict[str, Any], opener: Callable[..., Any] | None = No
             prompt_p = item.get("prompt_price")
             comp_p = item.get("completion_price")
 
-        is_nonzero = False
         if prompt_p is not None or comp_p is not None:
             pricing_map[mid] = {"prompt": prompt_p, "completion": comp_p}
-            if (prompt_p is not None and not _is_zero(prompt_p)) or (comp_p is not None and not _is_zero(comp_p)):
-                is_nonzero = True
 
-        if mid.endswith(suffix) and not is_nonzero:
+        if mid.endswith(suffix) and _is_zero(prompt_p) and _is_zero(comp_p):
             free_ids.append(mid)
 
     return FreeIds(sorted(free_ids), pricing_map)
@@ -663,11 +672,10 @@ def listed_ids(entry: dict[str, Any], now: datetime, opener: Callable[..., Any] 
             if not (mid.endswith(":free") or mid.endswith("-free")):
                 continue
             pr = pricing.get(mid)
-            if pr is not None:
-                p_prompt = pr.get("prompt")
-                p_comp = pr.get("completion")
-                if not _is_zero(p_prompt) or not _is_zero(p_comp):
-                    continue
+            if not isinstance(pr, dict):
+                continue
+            if not _is_zero(pr.get("prompt")) or not _is_zero(pr.get("completion")):
+                continue
             pool_pr = pool_entry.get("pricing")
             if isinstance(pool_pr, dict):
                 p_prompt = pool_pr.get("prompt")
@@ -730,21 +738,20 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
     source = list_source(entry)
     source_data = (doc.get("sources") or {}).get(source) or {}
 
-    # Zero price check: source's published pricing is authoritative when present.
-    # If the source publishes a nonzero price, reject immediately regardless of any local claim.
+    # Zero price check: must require sources[<source>]["pricing"][<id>] with both prices zero.
+    # Absent pricing for the id -> exclude (fail closed).
     source_pricing = None
     for pricing_dict in (source_data.get("pricing"), source_data.get("prices"), doc.get("pricing"), doc.get("prices")):
         if isinstance(pricing_dict, dict) and entry["model"] in pricing_dict:
             source_pricing = pricing_dict[entry["model"]]
             break
 
-    if source_pricing is not None:
-        if not isinstance(source_pricing, dict):
-            return unreadable(name, "nonzero_price")
-        p = source_pricing.get("prompt") if "prompt" in source_pricing else source_pricing.get("prompt_price")
-        c = source_pricing.get("completion") if "completion" in source_pricing else source_pricing.get("completion_price")
-        if not _is_zero(p) or not _is_zero(c):
-            return unreadable(name, "nonzero_price")
+    if source_pricing is None or not isinstance(source_pricing, dict):
+        return unreadable(name, "nonzero_price")
+    p = source_pricing.get("prompt") if "prompt" in source_pricing else source_pricing.get("prompt_price")
+    c = source_pricing.get("completion") if "completion" in source_pricing else source_pricing.get("completion_price")
+    if not _is_zero(p) or not _is_zero(c):
+        return unreadable(name, "nonzero_price")
 
     pool_pricing = entry.get("pricing")
     if pool_pricing is not None:
@@ -755,23 +762,22 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
         if not _is_zero(p) or not _is_zero(c):
             return unreadable(name, "nonzero_price")
 
-    # Response proof check
+    # Response proof check: only the producer's probes record is accepted
+    probes_map = doc.get("probes")
     candidates: list[dict[str, Any]] = []
-    for d in (doc.get("probes"), doc.get("live_probes"), source_data.get("probes")):
-        if isinstance(d, dict):
-            for k in (entry["model"], entry["name"], name):
-                val = d.get(k)
-                if isinstance(val, dict):
-                    candidates.append(val)
+    if isinstance(probes_map, dict):
+        for k in (entry.get("model"), entry.get("name"), name):
+            if k and isinstance(probes_map.get(k), dict):
+                candidates.append(probes_map[k])
 
     if not candidates:
         return unreadable(name, "missing_proof")
 
     # If ANY fresh/recent candidate proof reports 404 or 402, fail closed immediately.
     for proof in candidates:
-        p_status = str(proof.get("status") or proof.get("live_status") or proof.get("state") or "").lower()
-        p_code = proof.get("code") or proof.get("status_code")
-        ts_raw = proof.get("at") or proof.get("live_ok_at") or proof.get("timestamp") or proof.get("read_at")
+        p_status = str(proof.get("status") or "").lower()
+        p_code = proof.get("code")
+        ts_raw = proof.get("at")
         proof_dt = _parse_iso_zone(ts_raw)
         is_fresh = proof_dt is not None and (-60 <= (moment - proof_dt).total_seconds() <= 3600)
         if (p_code in (404, "404") or p_status in ("404", "not_found")) and (proof_dt is None or is_fresh):
@@ -786,8 +792,8 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
     has_error_proof: str | None = None
 
     for proof in candidates:
-        p_status = str(proof.get("status") or proof.get("live_status") or proof.get("state") or "").lower()
-        p_code = proof.get("code") or proof.get("status_code")
+        p_status = str(proof.get("status") or "").lower()
+        p_code = proof.get("code")
         if p_code in (500, 502, 503, 504) or p_status in ("error", "timeout", "failed", "unusable"):
             has_error_proof = p_status or "unusable"
             continue
@@ -796,12 +802,10 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
         # Reject active, throttled, exhausted as live-response proof
         if p_status in ("active", "throttled", "exhausted"):
             continue
-        is_ok = (p_code in (200, "200") and p_status not in ("error", "failed", "timeout", "unusable")) or (
-            p_status in ("ok", "success", "succeeded") and (p_code in (200, "200") or p_code is None)
-        )
+        is_ok = p_code in (200, "200") and proof.get("answered") is True and p_status in ("ok", "success", "succeeded")
         if not is_ok:
             continue
-        ts_raw = proof.get("at") or proof.get("live_ok_at") or proof.get("timestamp") or proof.get("read_at")
+        ts_raw = proof.get("at")
         proof_dt = _parse_iso_zone(ts_raw)
         if proof_dt is None or not (-60 <= (moment - proof_dt).total_seconds() <= 3600):
             has_stale_ok = True
@@ -819,10 +823,10 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
 
     # Check if any error proof beats newest_ok_dt
     for proof in candidates:
-        p_status = str(proof.get("status") or proof.get("live_status") or proof.get("state") or "").lower()
-        p_code = proof.get("code") or proof.get("status_code")
+        p_status = str(proof.get("status") or "").lower()
+        p_code = proof.get("code")
         if p_code in (500, 502, 503, 504) or p_status in ("error", "timeout", "failed", "unusable"):
-            ts_raw = proof.get("at") or proof.get("live_ok_at") or proof.get("timestamp") or proof.get("read_at")
+            ts_raw = proof.get("at")
             proof_dt = _parse_iso_zone(ts_raw)
             if proof_dt is None or newest_ok_dt is None or proof_dt >= newest_ok_dt:
                 err_reason = p_status if p_status in ("timeout", "error", "unusable") else "unusable"

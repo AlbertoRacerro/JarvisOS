@@ -461,11 +461,12 @@ def test_free_model_admitted_when_all_three_criteria_pass(
         "sources": {
             "https://api.test.invalid/v1": {
                 "ids": ["model/good:free"],
+                "pricing": {"model/good:free": {"prompt": 0, "completion": 0}},
                 "read_at": now_str,
             }
         },
         "probes": {
-            "model/good:free": {"status": "ok", "live_ok_at": now_str},
+            "model/good:free": {"status": "ok", "code": 200, "answered": True, "at": now_str},
         },
     }
 
@@ -516,11 +517,12 @@ def test_free_model_omitted_when_probe_is_404(
         "sources": {
             "https://api.nous.invalid/v1": {
                 "ids": ["nous/ended:free"],
+                "pricing": {"nous/ended:free": {"prompt": 0, "completion": 0}},
                 "read_at": now_str,
             }
         },
         "probes": {
-            "nous/ended:free": {"status": "404", "status_code": 404, "live_ok_at": now_str},
+            "nous/ended:free": {"status": "404", "code": 404, "at": now_str},
         },
     }
 
@@ -564,11 +566,12 @@ def test_free_model_omitted_when_price_is_nonzero(
         "sources": {
             "https://api.openrouter.invalid/v1": {
                 "ids": ["paid/model:free"],
+                "pricing": {"paid/model:free": {"prompt": 0, "completion": 0}},
                 "read_at": now_str,
             }
         },
         "probes": {
-            "paid/model:free": {"status": "ok", "live_ok_at": now_str},
+            "paid/model:free": {"status": "ok", "code": 200, "answered": True, "at": now_str},
         },
     }
 
@@ -623,11 +626,15 @@ def test_free_model_omitted_when_proof_is_stale_or_missing(
         "sources": {
             "https://api.test.invalid/v1": {
                 "ids": ["model/stale:free", "model/noproof:free"],
+                "pricing": {
+                    "model/stale:free": {"prompt": 0, "completion": 0},
+                    "model/noproof:free": {"prompt": 0, "completion": 0},
+                },
                 "read_at": now_str,
             }
         },
         "probes": {
-            "model/stale:free": {"status": "ok", "live_ok_at": stale_str},
+            "model/stale:free": {"status": "ok", "code": 200, "answered": True, "at": stale_str},
         },
     }
 
@@ -670,11 +677,12 @@ def test_future_expires_at_alone_is_never_proof(
         "sources": {
             "https://api.nous.invalid/v1": {
                 "ids": ["nous/ended-early:free"],
+                "pricing": {"nous/ended-early:free": {"prompt": 0, "completion": 0}},
                 "read_at": now_str,
             }
         },
         "probes": {
-            "nous/ended-early:free": {"status": "404", "status_code": 404, "live_ok_at": now_str},
+            "nous/ended-early:free": {"status": "404", "code": 404, "at": now_str},
         },
     }
 
@@ -741,13 +749,18 @@ def test_free_model_omitted_when_below_index_or_coding_threshold(
         "sources": {
             "https://api.test.invalid/v1": {
                 "ids": ["model/low-idx:free", "model/low-code:free", "model/no-code:free"],
+                "pricing": {
+                    "model/low-idx:free": {"prompt": 0, "completion": 0},
+                    "model/low-code:free": {"prompt": 0, "completion": 0},
+                    "model/no-code:free": {"prompt": 0, "completion": 0},
+                },
                 "read_at": now_str,
             }
         },
         "probes": {
-            "model/low-idx:free": {"status": "ok", "live_ok_at": now_str},
-            "model/low-code:free": {"status": "ok", "live_ok_at": now_str},
-            "model/no-code:free": {"status": "ok", "live_ok_at": now_str},
+            "model/low-idx:free": {"status": "ok", "code": 200, "answered": True, "at": now_str},
+            "model/low-code:free": {"status": "ok", "code": 200, "answered": True, "at": now_str},
+            "model/no-code:free": {"status": "ok", "code": 200, "answered": True, "at": now_str},
         },
     }
 
@@ -823,11 +836,12 @@ def test_missing_coding_scores_fails_closed_in_panel_and_router(
         "sources": {
             "https://api.test.invalid/v1": {
                 "ids": ["model/good:free"],
+                "pricing": {"model/good:free": {"prompt": 0, "completion": 0}},
                 "read_at": now_str,
             }
         },
         "probes": {
-            "model/good:free": {"status": "ok", "live_ok_at": now_str},
+            "model/good:free": {"status": "ok", "code": 200, "answered": True, "at": now_str},
         },
     }
     lists_file = tmp_path / "temp-pool-lists.json"
@@ -905,15 +919,20 @@ def test_free_model_proof_precedence_and_temp_prefix(
         "sources": {
             "https://api.test.invalid/v1": {
                 "ids": ["model/temp-404:free", "model/newer-err:free", "model/recovered:free"],
+                "pricing": {
+                    "model/temp-404:free": {"prompt": 0, "completion": 0},
+                    "model/newer-err:free": {"prompt": 0, "completion": 0},
+                    "model/recovered:free": {"prompt": 0, "completion": 0},
+                },
                 "read_at": now_str,
             }
         },
         "probes": {
-            "temp-pool-temp-404": {"status": "404", "status_code": 404, "live_ok_at": now_str},
-            "pool-newer-error": {"status": "ok", "live_ok_at": older_str},
-            "model/newer-err:free": {"status": "error", "at": now_str},
-            "model/recovered:free": {"status": "error", "at": older_str},
-            "temp-pool-recovered": {"status": "ok", "code": 200, "at": now_str},
+            "temp-pool-temp-404": {"status": "404", "code": 404, "at": now_str},
+            "pool-newer-error": {"status": "ok", "code": 200, "answered": True, "at": older_str},
+            "model/newer-err:free": {"status": "error", "code": 500, "at": now_str},
+            "model/recovered:free": {"status": "error", "code": 500, "at": older_str},
+            "temp-pool-recovered": {"status": "ok", "code": 200, "answered": True, "at": now_str},
         },
     }
 
@@ -1077,7 +1096,7 @@ def test_free_model_disqualified_when_source_publishes_nonzero_price_even_if_poo
             }
         },
         "probes": {
-            "model/published-nonzero:free": {"status": "ok", "live_ok_at": now_str},
+            "model/published-nonzero:free": {"status": "ok", "code": 200, "answered": True, "at": now_str},
         },
     }
 
@@ -1121,15 +1140,17 @@ def test_free_model_excluded_when_unrelated_source_lists_model_id_but_own_source
         "sources": {
             "https://api.pool-a.invalid/v1": {
                 "ids": ["other/model:free"],
+                "pricing": {"other/model:free": {"prompt": 0, "completion": 0}},
                 "read_at": now_str,
             },
             "https://api.pool-b.invalid/v1": {
                 "ids": ["model/shared:free"],
+                "pricing": {"model/shared:free": {"prompt": 0, "completion": 0}},
                 "read_at": now_str,
             },
         },
         "probes": {
-            "model/shared:free": {"status": "ok", "live_ok_at": now_str},
+            "model/shared:free": {"status": "ok", "code": 200, "answered": True, "at": now_str},
         },
     }
 
@@ -1170,11 +1191,12 @@ def test_active_throttled_exhausted_alone_do_not_satisfy_live_response_proof(
         "sources": {
             "https://api.test.invalid/v1": {
                 "ids": [f"model/{s}:free" for s in ("active", "throttled", "exhausted")],
+                "pricing": {f"model/{s}:free": {"prompt": 0, "completion": 0} for s in ("active", "throttled", "exhausted")},
                 "read_at": now_str,
             }
         },
         "probes": {
-            f"model/{s}:free": {"status": s, "live_ok_at": now_str}
+            f"model/{s}:free": {"status": s, "at": now_str}
             for s in ("active", "throttled", "exhausted")
         },
     }
@@ -1288,16 +1310,17 @@ def test_live_status_alone_rejected_cached_fresh_200_accepted_and_errors_rejecte
         "sources": {
             "https://api.test.invalid/v1": {
                 "ids": [p["model"] for p in pools],
+                "pricing": {p["model"]: {"prompt": 0, "completion": 0} for p in pools},
                 "read_at": now_str,
             }
         },
         "probes": {
             # Note: pool-claim-only has NO probe in lists_doc
-            "model/fresh200:free": {"status": "ok", "code": 200, "at": now_str},
+            "model/fresh200:free": {"status": "ok", "code": 200, "answered": True, "at": now_str},
             "model/err404:free": {"status": "404", "code": 404, "at": now_str},
             "model/err402:free": {"status": "402", "code": 402, "at": now_str},
             "model/timeout:free": {"status": "timeout", "code": 408, "at": now_str},
-            "model/stale:free": {"status": "ok", "code": 200, "at": stale_str},
+            "model/stale:free": {"status": "ok", "code": 200, "answered": True, "at": stale_str},
         },
     }
 
@@ -1379,7 +1402,7 @@ def test_bounded_probe_producer_behavior_on_refresh(
 
     def mock_opener(url: str, headers: dict[str, str], *args: Any) -> Any:
         assert url.endswith("/models")
-        return {"data": [{"id": "model/probed:free"}]}
+        return {"data": [{"id": "model/probed:free", "pricing": {"prompt": 0, "completion": 0}}]}
 
     entries = wr.load_temp_pools(pools_file)
     p = wr.temp_pool_read(entries[0], now=NOW, opener=mock_opener, prober=mock_prober)
@@ -1402,6 +1425,7 @@ def test_bounded_probe_producer_behavior_on_refresh(
     probe = cache["probes"]["model/probed:free"]
     assert probe["status"] == "ok"
     assert probe["code"] == 200
+    assert probe["answered"] is True
     assert probe["at"] == NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -1428,19 +1452,22 @@ def test_pool_without_free_list_not_shown_even_if_free_source_lists_model_id(
         "sources": {
             "free": {
                 "ids": ["model/nofreelist:free"],
+                "pricing": {"model/nofreelist:free": {"prompt": 0, "completion": 0}},
                 "read_at": now_str,
             },
             "TestProvider": {
                 "ids": ["model/nofreelist:free"],
+                "pricing": {"model/nofreelist:free": {"prompt": 0, "completion": 0}},
                 "read_at": now_str,
             },
             "https://api.test.invalid/v1": {
                 "ids": ["model/nofreelist:free"],
+                "pricing": {"model/nofreelist:free": {"prompt": 0, "completion": 0}},
                 "read_at": now_str,
             },
         },
         "probes": {
-            "model/nofreelist:free": {"status": "ok", "code": 200, "at": now_str},
+            "model/nofreelist:free": {"status": "ok", "code": 200, "answered": True, "at": now_str},
         },
     }
 
@@ -1449,3 +1476,204 @@ def test_pool_without_free_list_not_shown_even_if_free_source_lists_model_id(
 
     # Must be excluded (fail closed)
     assert pq.read_free_models(tmp_path, now=NOW) == []
+
+
+def test_models_fixture_without_pricing_not_admitted_by_router_or_panel_explicit_zero_admitted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("secret-token", encoding="utf-8")
+
+    pool_unpriced = {
+        "name": "pool-unpriced",
+        "provider": "TestProvider",
+        "model": "model/unpriced:free",
+        "key_file": str(key_file),
+        "free_list": "openai_models",
+        "base_url": "https://api.test.invalid/v1",
+        "index_score": 40,
+        "coding_index": 45,
+        "rate_limits": "free",
+        "data_policy": "public",
+        "pricing": {"prompt": 0, "completion": 0},
+    }
+    pool_zero = {
+        "name": "pool-zero",
+        "provider": "TestProvider",
+        "model": "model/zero:free",
+        "key_file": str(key_file),
+        "free_list": "openai_models",
+        "base_url": "https://api.test.invalid/v1",
+        "index_score": 40,
+        "coding_index": 45,
+        "rate_limits": "free",
+        "data_policy": "public",
+        "pricing": {"prompt": 0, "completion": 0},
+    }
+    pools_file = tmp_path / "temp-pools.json"
+    pools_file.write_text(json.dumps({
+        "reference": "luna",
+        "scores": {"luna": 28},
+        "coding_reference": "luna",
+        "coding_scores": {"luna": 35},
+        "pools": [pool_unpriced, pool_zero],
+    }), encoding="utf-8")
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
+
+    # /models fixture: unpriced:free has NO pricing; zero:free has explicit zero; other is priced
+    def fake_opener(url: str, headers: dict[str, str], *args: Any) -> Any:
+        if url.endswith("/models"):
+            return {
+                "data": [
+                    {
+                        "id": "model/unpriced:free",
+                    },
+                    {
+                        "id": "model/zero:free",
+                        "pricing": {"prompt": 0, "completion": "0"},
+                    },
+                    {
+                        "id": "model/paid",
+                        "pricing": {"prompt": "0.002", "completion": "0.002"},
+                    },
+                ]
+            }
+        return {"choices": [{"message": {"content": "OK"}}]}
+
+    entries = wr.load_temp_pools(pools_file)
+
+    # 1. Router checks: unpriced:free not admitted; zero:free admitted with fresh probe
+    p_unpriced = wr.temp_pool_read(entries[0], now=NOW, opener=fake_opener)
+    assert p_unpriced.free is None
+    assert p_unpriced.reason in ("not_listed", "nonzero_price")
+
+    p_zero = wr.temp_pool_read(entries[1], now=NOW, opener=fake_opener)
+    assert p_zero.free == 1.0
+    assert p_zero.reason is None
+
+    # Check cache state in temp-pool-lists.json
+    cache = json.loads((tmp_path / "temp-pool-lists.json").read_text(encoding="utf-8"))
+    source_entry = cache["sources"]["https://api.test.invalid/v1"]
+    assert "model/unpriced:free" not in source_entry["ids"]
+    assert "model/unpriced:free" not in source_entry.get("pricing", {})
+    assert "model/zero:free" in source_entry["ids"]
+    assert source_entry["pricing"]["model/zero:free"] == {"prompt": 0, "completion": "0"}
+
+    # 2. Quota panel check: unpriced:free excluded, zero:free admitted
+    admitted = pq.read_free_models(tmp_path, now=NOW)
+    assert len(admitted) == 1
+    assert admitted[0]["id"] == "pool-zero"
+    assert admitted[0]["model_id"] == "model/zero:free"
+
+
+def test_probe_acceptance_requires_code_200_and_answered_true(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("secret-token", encoding="utf-8")
+    now_str = NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def make_pool(name: str, model_id: str) -> dict[str, Any]:
+        return {
+            "name": name,
+            "provider": "TestProvider",
+            "model": model_id,
+            "key_file": str(key_file),
+            "free_list": "openai_models",
+            "base_url": "https://api.test.invalid/v1",
+            "index_score": 40,
+            "coding_index": 45,
+            "rate_limits": "free",
+            "data_policy": "public",
+            "pricing": {"prompt": 0, "completion": 0},
+        }
+
+    pools = [
+        make_pool("pool-no-code", "model/no-code:free"),
+        make_pool("pool-no-answered", "model/no-answered:free"),
+        make_pool("pool-answered-false", "model/answered-false:free"),
+        make_pool("pool-answered-true", "model/answered-true:free"),
+    ]
+
+    lists_doc = {
+        "sources": {
+            "https://api.test.invalid/v1": {
+                "ids": [p["model"] for p in pools],
+                "pricing": {p["model"]: {"prompt": 0, "completion": 0} for p in pools},
+                "read_at": now_str,
+            }
+        },
+        "probes": {
+            # {"status":"ok","at":fresh} rejected
+            "model/no-code:free": {"status": "ok", "at": now_str},
+            # {"status":"ok","code":200,"at":fresh} without answered rejected
+            "model/no-answered:free": {"status": "ok", "code": 200, "at": now_str},
+            # answered: false rejected
+            "model/answered-false:free": {"status": "ok", "code": 200, "answered": False, "at": now_str},
+            # {"status":"ok","code":200,"answered":true,"at":fresh} accepted
+            "model/answered-true:free": {"status": "ok", "code": 200, "answered": True, "at": now_str},
+        },
+    }
+
+    pools_file, _ = _setup_free_pools_fixture(tmp_path, pools, lists_doc)
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
+
+    # Router checks
+    entries = wr.load_temp_pools(pools_file)
+    p_no_code = wr.temp_pool_read(entries[0], now=NOW)
+    assert p_no_code.free is None and p_no_code.reason == "missing_proof"
+
+    p_no_ans = wr.temp_pool_read(entries[1], now=NOW)
+    assert p_no_ans.free is None and p_no_ans.reason == "missing_proof"
+
+    p_ans_false = wr.temp_pool_read(entries[2], now=NOW)
+    assert p_ans_false.free is None and p_ans_false.reason == "missing_proof"
+
+    p_ans_true = wr.temp_pool_read(entries[3], now=NOW)
+    assert p_ans_true.free == 1.0 and p_ans_true.reason is None
+
+    # Quota panel checks: only answered:true is admitted
+    admitted = pq.read_free_models(tmp_path, now=NOW)
+    assert len(admitted) == 1
+    assert admitted[0]["id"] == "pool-answered-true"
+
+
+def test_probe_producer_writes_answered_flag(tmp_path: Path) -> None:
+    now = datetime(2026, 11, 24, 12, 0, tzinfo=UTC)
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("token", encoding="utf-8")
+    entry = {
+        "name": "test-pool",
+        "provider": "TestProvider",
+        "base_url": "https://api.test.invalid/v1",
+        "free_list": "openai_models",
+        "key_file": key_file,
+    }
+
+    # 1. Non-empty answer writes answered: True and status: ok
+    def ok_opener(*args: Any, **kwargs: Any) -> Any:
+        return {"choices": [{"message": {"content": "OK, I am ready."}}]}
+
+    probe_ok = wr.probe_pool_model(entry, "model/test:free", now, opener=ok_opener)
+    assert probe_ok["status"] == "ok"
+    assert probe_ok["code"] == 200
+    assert probe_ok["answered"] is True
+
+    # 2. Empty answer writes answered: False and status: error
+    def empty_opener(*args: Any, **kwargs: Any) -> Any:
+        return {"choices": [{"message": {"content": "   "}}]}
+
+    probe_empty = wr.probe_pool_model(entry, "model/test:free", now, opener=empty_opener)
+    assert probe_empty["status"] == "error"
+    assert probe_empty["code"] == 200
+    assert probe_empty["answered"] is False
+
+    # 3. 404 HTTP error writes answered: False
+    def err_404_opener(*args: Any, **kwargs: Any) -> Any:
+        import urllib.error
+        raise urllib.error.HTTPError("https://api.test.invalid/v1", 404, "Not Found", {}, None)
+
+    probe_404 = wr.probe_pool_model(entry, "model/test:free", now, opener=err_404_opener)
+    assert probe_404["status"] == "404"
+    assert probe_404["code"] == 404
+    assert probe_404["answered"] is False
