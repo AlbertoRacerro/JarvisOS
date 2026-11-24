@@ -203,10 +203,10 @@ def test_compact_relay_proposal_executes_turn_plan(monkeypatch: pytest.MonkeyPat
                                            "arguments": {"op": "read_plan"}}]})
     def runner(**kwargs: Any) -> Any:
         payload = json.loads(kwargs["user_prompt"].removesuffix(RELAY_TOOL_PROTOCOL))
-        assert payload["tools"][0]["name"] == tool["function"]["name"]
-        assert payload["tools"][0]["parameters"] == hermes_supervisor_module.compact_tool_schemas([tool])[0]["function"]["parameters"]
+        compact = hermes_supervisor_module.compact_tool_schemas([tool])[0]["function"]
+        assert payload["tools"] == [{"name": compact["name"], "description": compact["description"]}]
         branches = kwargs["structured_output_schema"]["oneOf"][1]["properties"]["tool_calls"]["items"]["anyOf"]
-        assert branches[0]["properties"]["arguments"] == payload["tools"][0]["parameters"]
+        assert branches[0]["properties"]["arguments"] == compact["parameters"]
         assert "description" not in json.dumps(branches[0]["properties"]["arguments"])
         return SimpleNamespace(status="success", response=SimpleNamespace(text=proposal, finish_reason="stop"),
                                flow_id=None)
@@ -220,6 +220,7 @@ def test_compact_relay_proposal_executes_turn_plan(monkeypatch: pytest.MonkeyPat
     assert relay["status"] == "success", relay
     message = completion_message(relay["text"], [tool])
     call = message["tool_calls"][0]["function"]
+    assert json.loads(call["arguments"]) == {"op": "read_plan"}
     supervisor._handle_tool({"id": "call-1", "session_ref": SESSION.model_dump(mode="json"),
                              "arguments": {"tool_name": call["name"], **json.loads(call["arguments"])}})
     assert sent[-1]["tool_result"]["status"] == "succeeded"

@@ -60,13 +60,18 @@ def test_first_step_uses_real_broker_schemas_size_guard(surface: str) -> None:
              "tools": compact, "allowed_tools": names}
     envelope = infer_envelope(frame, route_class="local:llamacpp")
     payload = json.loads(envelope.prompt.removesuffix(RELAY_TOOL_PROTOCOL))
-    assert payload["tools"] == [tool["function"] for tool in compact]
+    assert payload["tools"] == [{key: tool["function"][key] for key in ("name", "description")
+                                if key in tool["function"]} for tool in compact]
     cloud_envelope = infer_envelope(frame, route_class="external:cheap")
     cloud_payload = json.loads(cloud_envelope.prompt.removesuffix(RELAY_TOOL_PROTOCOL))
     assert cloud_payload["tools"] == compact
     assert len(envelope.prompt) < len(json.dumps({"messages": frame["messages"], "tools": compact},
                                                    separators=(",", ":")) + RELAY_TOOL_PROTOCOL)
-    assert len(tool_response_schema(compact)["oneOf"][1]["properties"]["tool_calls"]["items"]["anyOf"]) == len(names)
+    branches = tool_response_schema(compact)["oneOf"][1]["properties"]["tool_calls"]["items"]["anyOf"]
+    assert len(branches) == len(names)
+    for branch, tool in zip(branches, compact, strict=True):
+        assert branch["properties"]["name"] == {"const": tool["function"]["name"]}
+        assert branch["properties"]["arguments"] == tool["function"]["parameters"]
     assert all("description" not in prop for tool in compact
                for prop in tool["function"]["parameters"].get("properties", {}).values())
 

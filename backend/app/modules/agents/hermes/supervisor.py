@@ -450,7 +450,8 @@ def infer_envelope(frame: dict[str, Any], *, deadline_seconds: int = 120,
         envelope_id=str(uuid4()), correlation_id=str(frame["id"]),
         task_kind=str(frame.get("task_kind", "general")),
         workspace_id=ref.workspace_id,
-        prompt=json.dumps({"messages": messages, "tools": ([tool["function"] for tool in tools]
+        prompt=json.dumps({"messages": messages, "tools": ([{key: tool["function"][key] for key in ("name", "description")
+                                                         if key in tool["function"]} for tool in tools]
                                                         if route_class and route_class.startswith("local:") else tools)},
                           ensure_ascii=False, separators=separators) + RELAY_TOOL_PROTOCOL
                if tools else json.dumps(messages, ensure_ascii=False, separators=separators),
