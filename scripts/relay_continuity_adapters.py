@@ -50,6 +50,10 @@ class RunResult:
     timed_out: bool = False
 
 
+class CatalogRefused(OSError):
+    """A catalog preflight refused a launch before any provider turn began."""
+
+
 class RelayAdapter:
     def __init__(self, repo: Path, binary: str = "agent-relay", env: dict[str, str] | None = None,
                  turn_wall: float = Limits.turn_wall, clock: Callable[[], float] = time.monotonic,
@@ -63,6 +67,8 @@ class RelayAdapter:
         self.killpg = killpg
         self._outputs: dict[int, tuple[Any, Any]] = {}
         self._argon_leases: dict[int, Any] = {}
+        self._resolved_models: dict[int, str] = {}
+        self._model_launches: dict[int, tuple[str | None, str | None]] = {}
 
     def conversation_store(self) -> Path:
         return relay_argon.conversation_store()
@@ -74,7 +80,18 @@ class RelayAdapter:
             data = json.loads(proc.stdout)
         except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
             return None
-        return {a.get("agent_key"): a for a in data.get("agents", []) if isinstance(a, dict)}
+        found = {a.get("agent_key"): a for a in data.get("agents", []) if isinstance(a, dict)}
+        if relay_argon.account_models.enabled({**os.environ, **(self.env or {})}):
+            # Relay discovery is a bundled alias list, not account entitlement evidence.
+            found.pop("claude", None)
+            binary = shutil.which("codex")
+            try:
+                if binary is None:
+                    raise relay_argon.account_models.Refused("catalog_unavailable")
+                relay_argon.account_models.resolve("coordinator_codex", binary, {**os.environ, **(self.env or {})})
+            except relay_argon.account_models.Refused:
+                found.pop("codex", None)
+        return found
 
     def argon_limits(self, agent: str = "argon") -> dict[str, Any] | None:
         # The selected native family owns its quota cache. Probe results never authorize a turn:
@@ -89,7 +106,11 @@ class RelayAdapter:
             if binary is None:
                 return None
             env = {**os.environ, **(self.env or {})}
-            relay_argon.model_for(agent, env)
+            if relay_argon.account_models.enabled(env):
+                relay_argon.prepare_login()
+                relay_argon.resolved_model_for(agent, binary, env)
+            else:
+                relay_argon.model_for(agent, env)
             reading = relay_argon.read_quota(binary, env, agent=agent)
             result = {"as_of": iso(now_utc()),
                       "windows": [{"id": b.get("id"), "used_percent": 100 * (1 - b["remaining_fraction"]),
@@ -103,11 +124,24 @@ class RelayAdapter:
         return result
 
     def start(self, agent: str, parent: str | None, task: str, turns: int,
-              resume: str | None = None) -> subprocess.Popen:
+              resume: str | None = None, resume_model: str | None = None) -> subprocess.Popen:
         # A mission's first task has no parent: Relay opens a new session for it.
         lease = None
         env = {**os.environ, **self.env} if self.env else dict(os.environ)
+        resolved_model = None
         if agent in NATIVE_AGENTS:
+            if relay_argon.account_models.enabled(env):
+                binary = shutil.which("agy")
+                if binary is None:
+                    raise CatalogRefused("catalog_unavailable")
+                try:
+                    relay_argon.prepare_login()
+                    relay_argon.subscription_settings()
+                    if resume is not None and (not isinstance(resume_model, str) or not resume_model.strip()):
+                        raise relay_argon.Refused("resume_model_missing")
+                    resolved_model = relay_argon.resolved_model_for(agent, binary, env, exact=resume_model)
+                except relay_argon.Refused as exc:
+                    raise CatalogRefused(str(exc)) from exc
             lease_path = self.repo / COORDINATOR_LEASE
             lease_path.parent.mkdir(parents=True, exist_ok=True)
             lease = lease_path.open("a+")
@@ -118,14 +152,39 @@ class RelayAdapter:
                 raise
             env["JARVISOS_ARGON_LEASE_FD"] = str(lease.fileno())
             try:
-                session, _ = relay_argon.new_session(self.repo, task, agent, resume=resume)
+                session, _ = relay_argon.new_session(self.repo, task, agent, resume=resume,
+                                                     resume_model=resume_model, selected_model=resolved_model)
             except OSError:
                 lease.close()
                 raise
             args = [sys.executable, str(Path(relay_argon.__file__)), "--repo", str(self.repo), "--session", session, "--agent", agent]
         else:
+            if relay_argon.account_models.enabled(env):
+                if agent != "codex":
+                    raise CatalogRefused("catalog_unavailable")
+                binary = shutil.which("codex")
+                if binary is None:
+                    raise CatalogRefused("catalog_unavailable")
+                if parent:
+                    try:
+                        previous = json.loads((self.sessions_dir() / parent / "selected-model.json").read_text())
+                        if not isinstance(previous, dict):
+                            raise CatalogRefused("resume_model_missing")
+                        candidate_model = previous.get("model")
+                        if not isinstance(candidate_model, str) or not candidate_model.strip():
+                            raise CatalogRefused("resume_model_missing")
+                        resume_model = candidate_model
+                    except (OSError, ValueError, KeyError, TypeError) as exc:
+                        raise CatalogRefused("resume_model_missing") from exc
+                try:
+                    resolved_model = relay_argon.account_models.resolve(
+                        "coordinator_codex", binary, env, exact=resume_model)
+                except relay_argon.account_models.Refused as exc:
+                    raise CatalogRefused(exc.reason) from exc
             args = [self.binary, "--json", "run", agent, *(["--continue", parent] if parent else []), "-t", task,
                     "-n", str(turns), "-y", "--repo", str(self.repo)]
+            if resolved_model is not None:
+                args.extend(("--model", resolved_model))
         # stdin is closed: `codex exec` otherwise waits on an inherited open stdin (spec 201 readiness). Output
         # goes to anonymous files, not pipes: a process the turn detached may keep an inherited descriptor open
         # for hours, and the run ends when Relay exits, not when every holder of its output has closed it.
@@ -141,6 +200,10 @@ class RelayAdapter:
                 lease.close()
             raise
         self._outputs[id(proc)] = (out, err)
+        if resolved_model is not None and agent not in NATIVE_AGENTS:
+            self._resolved_models[id(proc)] = resolved_model
+            marker = re.search(r"\[relay-continuity (?:attempt|resume) (rc-[0-9TZ]+-[0-9a-f]+)\]", task)
+            self._model_launches[id(proc)] = (marker.group(1) if marker else None, parent)
         if lease:
             self._argon_leases[id(proc)] = lease
         return proc
@@ -238,6 +301,33 @@ class RelayAdapter:
             errors = [str(data.get(k)) for k in ("run_error", "error", "stop_reason") if data.get(k)]
         except (json.JSONDecodeError, TypeError, AttributeError):
             pass
+
+        selected = self._resolved_models.pop(id(proc), None)
+        launch_nonce, launch_parent = self._model_launches.pop(id(proc), (None, None))
+        if selected is not None and (not isinstance(session_id, str)
+                                     or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session_id)):
+            return RunResult(None, getattr(proc, "returncode", None), False, "model_record_failed")
+        if selected is not None:
+            try:
+                session = self.sessions_dir() / session_id
+                if launch_parent is not None and session_id != launch_parent:
+                    raise ValueError("resume_session_mismatch")
+                if launch_nonce is None:
+                    raise ValueError("launch_nonce_missing")
+                marker = re.compile(r"\[relay-continuity (?:attempt|resume) (rc-[0-9TZ]+-[0-9a-f]+)\]")
+                own_turns = [p for p in (session / "turns").glob("turn-*/prompt.md")
+                             if task_marker(p.read_text(encoding="utf-8", errors="replace"), marker) == launch_nonce]
+                if len(own_turns) != 1:
+                    raise ValueError("launch_nonce_mismatch")
+                target = session / "selected-model.json"
+                if launch_parent is not None:
+                    if json.loads(target.read_text(encoding="utf-8")) != {"model": selected}:
+                        raise ValueError("resume_model_mismatch")
+                else:
+                    with target.open("x", encoding="utf-8") as handle:
+                        handle.write(json.dumps({"model": selected}) + "\n")
+            except (OSError, ValueError):
+                return RunResult(session_id, getattr(proc, "returncode", None), False, "model_record_failed")
 
         if timed_out:
             wall_diag = f"turn wall limit ({int(wall_limit)}s) exceeded"

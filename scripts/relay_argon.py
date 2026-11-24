@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import importlib.util
 import json
 import math
 import os
@@ -17,10 +18,19 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+_RESOLVER_SPEC = importlib.util.spec_from_file_location(
+    "account_model_resolution", Path(__file__).resolve().parent / "account_model_resolution.py")
+assert _RESOLVER_SPEC and _RESOLVER_SPEC.loader
+account_models = sys.modules.get("account_model_resolution") or importlib.util.module_from_spec(_RESOLVER_SPEC)
+if "account_model_resolution" not in sys.modules:
+    sys.modules["account_model_resolution"] = account_models
+    _RESOLVER_SPEC.loader.exec_module(account_models)
 
 MODEL = "gemini-4-argon-low"
 MODELS = frozenset(f"gemini-4-argon-{level}" for level in ("low", "medium", "high"))
@@ -54,6 +64,22 @@ def model_for(agent: str, env: Mapping[str, str]) -> str:
     if model not in (OPUS_MODELS if agent == "agy_opus" else MODELS):
         raise Refused("model_not_allowed")
     return model
+
+
+def resolved_model_for(agent: str, binary: str, env: dict[str, str], *, exact: str | None = None) -> str:
+    """Select a catalog-proven ID for a native coordinator role and effort."""
+    names = {"argon": "JARVISOS_AGY_ARGON_MODEL", "hydrogen": "JARVISOS_AGY_HYDROGEN_MODEL",
+             "neon": "JARVISOS_AGY_NEON_MODEL", "agy_opus": "JARVISOS_AGY_OPUS_MODEL"}
+    if agent not in names:
+        raise Refused("agent_not_allowed")
+    override = env.get(names[agent])
+    if exact is not None and override is not None and exact != override:
+        raise Refused("model_override_conflict")
+    pin = exact if exact is not None else override
+    try:
+        return account_models.resolve(f"coordinator_{agent}", binary, env, exact=pin)
+    except account_models.Refused as exc:
+        raise Refused(exc.reason) from exc
 
 
 QUOTA_TIMEOUT = 45
@@ -177,7 +203,8 @@ def buckets(node: Any, depth: int = 0) -> list[dict[str, Any]]:
 def read_quota(binary: str, env: dict[str, str] | None = None, *, agent: str = "argon") -> list[dict[str, Any]]:
     if not sandbox():
         raise Refused("not_sandbox")
-    model_for(agent, os.environ if env is None else env)
+    if agent not in ("argon", "hydrogen", "neon", "agy_opus"):
+        raise Refused("agent_not_allowed")
     prepare_login()
     subscription_settings()
     try:
@@ -210,12 +237,16 @@ def require_room(reading: list[dict[str, Any]]) -> None:
         raise Refused("quota_exhausted")
 
 
-def new_session(repo: Path, task: str, agent: str = "argon", resume: str | None = None) -> tuple[str, Path]:
+def new_session(repo: Path, task: str, agent: str = "argon", resume: str | None = None,
+                resume_model: str | None = None, selected_model: str | None = None) -> tuple[str, Path]:
     sid = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
     turn = repo / ".agent-relay/sessions" / sid / "turns/turn-001"
     turn.mkdir(parents=True)
+    if selected_model is not None:
+        (turn / "selected-model.json").write_text(json.dumps({"model": selected_model}) + "\n", encoding="utf-8")
     if resume is not None and CONVERSATION_RE.fullmatch(resume):
-        (turn / "resume.json").write_text(json.dumps({"conversation": resume}) + "\n", encoding="utf-8")
+        record = {"conversation": resume, **({"model": resume_model} if resume_model is not None else {})}
+        (turn / "resume.json").write_text(json.dumps(record) + "\n", encoding="utf-8")
         task = ("## Resumed\nThis continues your previous conversation on this work, which was interrupted (the "
                 "turn time limit, a network or provider error, or a failed attempt). Your earlier context and "
                 "scratch files are still available. First check what is already done (git status, git log, the PR, "
@@ -301,10 +332,34 @@ def run(repo: Path, session: str, agent: str = "argon") -> int:
         try:
             if not sandbox() or os.environ.get("JARVISOS_MISSION_PROFILE") != "1":
                 raise Refused("not_mission_sandbox")
-            model = model_for(agent, os.environ)
             binary = shutil.which("agy")
             if binary is None:
                 raise Refused("agy_missing")
+            if account_models.enabled(dict(os.environ)):
+                # The catalog read needs the native login; the default path keeps its old order.
+                prepare_login()
+                subscription_settings()
+                try:
+                    selected = json.loads((turn / "selected-model.json").read_text(encoding="utf-8"))["model"]
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    raise Refused("selected_model_missing") from exc
+                if not isinstance(selected, str) or not selected.strip():
+                    raise Refused("selected_model_missing")
+                resume_record = turn / "resume.json"
+                resume_model = None
+                if resume_record.exists():
+                    try:
+                        resume_model = json.loads(resume_record.read_text(encoding="utf-8"))["model"]
+                    except (OSError, ValueError, KeyError, TypeError) as exc:
+                        raise Refused("resume_model_missing") from exc
+                    if not isinstance(resume_model, str) or not resume_model.strip():
+                        raise Refused("resume_model_missing")
+                if resume_model is not None and resume_model != selected:
+                    raise Refused("resume_model_changed")
+                model = resolved_model_for(agent, binary, dict(os.environ), exact=selected)
+                metadata["catalog_verified"] = True
+            else:
+                model = model_for(agent, os.environ)
             lease_path = repo / ".agent-relay/locks/coordinator.lease"
             lease_path.parent.mkdir(parents=True, exist_ok=True)
             inherited = os.environ.get("JARVISOS_ARGON_LEASE_FD")

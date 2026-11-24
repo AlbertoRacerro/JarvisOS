@@ -87,6 +87,7 @@ from relay_continuity_notify import (  # noqa: E402
 
 load_sibling("relay_continuity_adapters", "relay_continuity_adapters.py")
 from relay_continuity_adapters import (  # noqa: E402
+    CatalogRefused,
     RelayAdapter,
     fingerprint,
     live_conflicts,
@@ -1662,6 +1663,7 @@ class Supervisor:
         # A native agent retried after its own unsuccessful turn resumes that agy conversation (its full context and
         # scratch artifacts, which the retained stream does not carry); a new task or another agent starts fresh.
         resume = None
+        resume_model = None
         if agent in NATIVE_AGENTS and previous is not None and previous.agent == agent \
                 and previous.outcome != "success" and previous.turn_id:
             try:
@@ -1674,6 +1676,15 @@ class Supervisor:
                         self.host.log(f"native conversation {candidate} oversize ({size} bytes); starting fresh context")
                     else:
                         resume = candidate
+                        if relay_argon.account_models.enabled(dict(os.environ)):
+                            try:
+                                prior = json.loads((self.host.relay.sessions_dir() / session_id / "turns" /
+                                                    turn_name / "native-result.json").read_text(encoding="utf-8"))
+                                if (isinstance(prior, dict) and prior.get("catalog_verified") is True
+                                        and isinstance(prior.get("model"), str) and prior["model"].strip()):
+                                    resume_model = prior["model"]
+                            except (OSError, ValueError, AttributeError):
+                                resume_model = None
             except OSError:
                 self.host.log("native conversation store missing; starting fresh context")
             except Exception:  # noqa: BLE001 - resuming is an optimisation; the turn launches fresh without it
@@ -1737,7 +1748,19 @@ class Supervisor:
             launch_journal.update(session_journal)
         self.store.journal(launch_journal)
         try:
-            proc = self.host.relay.start(agent, parent, text, self.turns, **({"resume": resume} if resume else {}))
+            launch_options = {"resume": resume} if resume else {}
+            if resume and relay_argon.account_models.enabled(dict(os.environ)):
+                launch_options["resume_model"] = resume_model
+            proc = self.host.relay.start(agent, parent, text, self.turns, **launch_options)
+        except CatalogRefused as exc:
+            # Preflight rejected this account before a turn existed. Settle the intent and
+            # let the normal provider cooldown/selection path try another eligible agent.
+            self.state["pending"] = None
+            if prior_wait is not None:
+                self.state["wait"] = prior_wait
+            self.store.journal({"event": "settle", "nonce": nonce, "session": None, "outcome": "not_started"})
+            self.save()
+            return TurnReport(outcome="quota", agent=agent, detail=str(exc), terminal=True)
         except OSError:
             # Relay could not be executed at all: nothing started, so the attempt settles as not started.
             self.state["pending"] = None

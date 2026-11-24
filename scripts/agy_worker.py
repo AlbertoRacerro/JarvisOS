@@ -87,13 +87,32 @@ def model_ids() -> dict[str, str]:
             "argon": os.environ.get("JARVISOS_AGY_ARGON_MODEL", ARGON_MODEL), **FIXED_MODELS}
 
 
-def resolve_model(requested: str, coordinator_fallback: bool = False) -> tuple[str, str]:
+def resolve_model(requested: str, coordinator_fallback: bool = False, *, exact: str | None = None) -> tuple[str, str]:
     """(alias, model id) for an allowlisted model, else a typed refusal. Nothing outside the list reaches agy.
     `coordinator_fallback` is accepted for old launch lines; spec 255 made Argon a normal worker."""
     ids = model_ids()
     alias = next((a for a, mid in ids.items() if requested in (a, mid)), None)
+    if alias is None and relay_argon.account_models.enabled(dict(os.environ)):
+        matching = [name.removeprefix("worker_") for name, role in relay_argon.account_models.ROLES.items()
+                    if name.startswith("worker_") and role.cli == "agy"
+                    and relay_argon.account_models._pattern(role).fullmatch(requested)]
+        alias = matching[0] if len(matching) == 1 else None
     if alias is None:
         raise Refused("model_not_allowed", requested)
+    if relay_argon.account_models.enabled(dict(os.environ)):
+        if exact is not None and requested != alias and requested != exact:
+            raise Refused("model_override_conflict")
+        configured = (os.environ.get("JARVISOS_AGY_FLASH_MODEL") if alias == "flash" else
+                      os.environ.get("JARVISOS_AGY_ARGON_MODEL") if alias == "argon" else None)
+        if exact is not None and configured is not None and exact != configured:
+            raise Refused("model_override_conflict")
+        try:
+            model = relay_argon.account_models.resolve(
+                f"worker_{alias}", agy_binary(), dict(os.environ),
+                exact=exact or (requested if requested != alias else configured))
+        except relay_argon.account_models.Refused as exc:
+            raise Refused(exc.reason) from exc
+        return alias, model
     return alias, ids[alias]
 
 
@@ -396,7 +415,18 @@ def execute(args: argparse.Namespace, sandbox_check: Callable[[], bool] | None =
     try:
         if not (sandbox_check or in_sandbox)():
             raise Refused("not_sandbox")
-        alias, model = resolve_model(args.model, args.coordinator_fallback)
+        if relay_argon.account_models.enabled(dict(os.environ)):
+            try:
+                relay_argon.prepare_login()
+            except relay_argon.Refused as error:
+                raise Refused(str(error)) from error
+            if getattr(args, "resume_conversation", None) and not getattr(args, "resolved_model", None):
+                raise Refused("resume_model_missing")
+        required_model = getattr(args, "resolved_model", None)
+        alias, model = resolve_model(args.model, args.coordinator_fallback, exact=required_model)
+        if required_model is not None and (not relay_argon.account_models.enabled(dict(os.environ))
+                                           or model != required_model):
+            raise Refused("model_not_authorized")
         result.update(alias=alias, model=model)
         task, digest = read_task(Path(args.task_file))
         result["start_head"], git_dir, common = check_worktree(worktree)
@@ -555,6 +585,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--task-file", required=True)
     run.add_argument("--worktree", required=True)
     run.add_argument("--model", default="flash")
+    run.add_argument("--resolved-model", help="exact ID selected by the router; validated against this account")
     run.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     run.add_argument("--evidence-dir")
     run.add_argument("--coordinator-fallback", action="store_true")
