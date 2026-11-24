@@ -33,11 +33,12 @@ const freecadReason: Record<string, string> = {
   FREECAD_ADDON_NOT_RUNNING: "MCP Bridge è spento in FreeCAD. Attiva MCP On e riprova.",
   FREECAD_MCP_UNAUTHORIZED: "FreeCAD ha rifiutato il token MCP. Verifica il file del token.",
   FREECAD_MCP_DECLINED: "Lo script Jarvis è stato rifiutato nella finestra di FreeCAD.",
-  FREECAD_MCP_PENDING: "La conferma dello script Jarvis è ancora in attesa in FreeCAD.",
+  FREECAD_MCP_PENDING: "La conferma dello script Jarvis è ancora in attesa in FreeCAD: se la dai ora non modificherà il documento.",
+  FREECAD_EDIT_EXPIRED: "La conferma in FreeCAD è arrivata troppo tardi: il documento non è stato modificato.",
   FREECAD_MCP_TOKEN_MISSING: "Manca il file del token MCP FreeCAD.",
   FREECAD_MCP_TOKEN_UNSAFE: "Il file del token MCP è leggibile da altri utenti. Limita i permessi al proprietario.",
   FREECAD_STALE_PREVIEW: "Il valore è cambiato in FreeCAD. Ripeti l'anteprima.",
-  FREECAD_ROLLBACK_FAILED: "FreeCAD non ha confermato il ripristino del valore precedente.",
+  FREECAD_ROLLBACK_FAILED: "FreeCAD non ha confermato il ripristino del valore precedente: controlla il documento.",
   FREECAD_BRIDGE_TIMEOUT: "FreeCAD non ha risposto in tempo.",
 };
 
@@ -135,7 +136,9 @@ export default function FreecadPanel({ workspaceId, candidateId, freecadRefs, on
     if (!preview || !window.confirm("Confermi l'applicazione della modifica in FreeCAD?")) return;
     setBusy(true);
     void applyFreecadEdit(workspaceId, { ...editPayload(), old_value: preview.old_value }).then((next) => {
-      setMessage(next.document_unchanged ? "Il documento non è stato modificato." : `Valore aggiornato: ${display(next.new_value)}`);
+      setMessage(next.document_unchanged ? "Il documento non è stato modificato."
+        : next.outcome.success === true ? `Valore aggiornato: ${display(next.new_value)}`
+          : (next.message ?? "FreeCAD non ha confermato l'esito: controlla il documento."));
       setPreview(null);
       return listFreecadObjects(workspaceId, document).then(setObjects);
     }).catch((error: Error) => setMessage(freecadError(error))).finally(() => setBusy(false));

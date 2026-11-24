@@ -142,6 +142,14 @@ def freecad_edit_preview_endpoint(workspace_id: str, payload: FreecadEditRequest
     }
 
 
+# Failures that prove the fixed edit script did not change the document.
+_FREECAD_EDIT_NOT_RUN = frozenset({
+    "FREECAD_STALE_PREVIEW", "FREECAD_EDIT_EXPIRED", "FREECAD_MCP_DECLINED", "FREECAD_MCP_UNAUTHORIZED",
+    "FREECAD_BRIDGE_UNAVAILABLE", "FREECAD_BRIDGE_DIGEST_MISMATCH", "FREECAD_BRIDGE_DIGEST_UNCONFIGURED",
+    "FREECAD_MCP_TOKEN_MISSING", "FREECAD_MCP_TOKEN_UNSAFE",
+})
+
+
 @router.post("/freecad/edit/apply")
 def freecad_edit_apply_endpoint(workspace_id: str, payload: FreecadApplyRequest) -> dict[str, Any]:
     _require_workspace(workspace_id)
@@ -166,23 +174,26 @@ def freecad_edit_apply_endpoint(workspace_id: str, payload: FreecadApplyRequest)
             },
         )
     except FreecadBridgeError as exc:
-        if exc.code in ("FREECAD_MCP_PENDING", "FREECAD_ROLLBACK_FAILED"):
-            # The document may have changed: record that the outcome is not known.
-            _log_freecad_edit(workspace_id, payload, {"success": False, "mutation_outcome": "unknown", "code": exc.code})
+        # Once the edit was sent, any other failure may have left the document changed.
+        mutation = "unchanged" if exc.code in _FREECAD_EDIT_NOT_RUN else "unknown"
+        _log_freecad_edit(workspace_id, payload, {"success": False, "mutation_outcome": mutation, "code": exc.code})
         raise _freecad_error(exc) from exc
     success = isinstance(outcome, dict) and outcome.get("success") is True
     # FreeCAD may coerce the value; show the one it read back after the edit.
     applied = outcome.get("applied_value", payload.value) if success else payload.value
     # Only the typed outcome leaves the bridge: add-on error text can carry local file names.
     mutation = outcome.get("mutation_outcome") if isinstance(outcome, dict) else None
-    outcome = {"success": success, "mutation_outcome": mutation if isinstance(mutation, str) else None}
+    outcome = {"success": success, "mutation_outcome": mutation if isinstance(mutation, str) else "unknown"}
+    unchanged = not success and outcome["mutation_outcome"] in ("rolled_back", "unchanged")
     result: dict[str, Any] = {
         "document": payload.document, "object": payload.object, "property": payload.property,
         "old_value": payload.old_value, "new_value": applied, "outcome": outcome,
-        "document_unchanged": not success,
+        "document_unchanged": unchanged,
     }
-    if not success:
+    if unchanged:
         result["message"] = "Il documento non è stato modificato."
+    elif not success:
+        result["message"] = "FreeCAD non ha confermato l'esito: controlla il documento."
     _log_freecad_edit(workspace_id, payload, outcome)
     return result
 

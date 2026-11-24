@@ -6,7 +6,7 @@ const workbench = await readFile(new URL("../src/components/bluecad/BluecadWorkb
 assert.match(workbench, /FreecadPanel/);
 assert.match(source, />FreeCAD</);
 assert.match(source, /FreeCAD non configurato/);
-for (const code of ["FREECAD_ADDON_NOT_RUNNING", "FREECAD_MCP_UNAUTHORIZED", "FREECAD_MCP_DECLINED", "FREECAD_MCP_PENDING", "FREECAD_MCP_TOKEN_MISSING", "FREECAD_MCP_TOKEN_UNSAFE"]) {
+for (const code of ["FREECAD_ADDON_NOT_RUNNING", "FREECAD_MCP_UNAUTHORIZED", "FREECAD_MCP_DECLINED", "FREECAD_MCP_PENDING", "FREECAD_MCP_TOKEN_MISSING", "FREECAD_MCP_TOKEN_UNSAFE", "FREECAD_EDIT_EXPIRED"]) {
   assert.match(source, new RegExp(code));
 }
 assert.match(source, /MCP On/);
@@ -18,6 +18,7 @@ assert.match(source, /Anteprima/);
 assert.match(source, /Applica/);
 assert.match(source, /window\.confirm/);
 assert.match(source, /document_unchanged/);
+assert.match(source, /FreeCAD non ha confermato l'esito/);
 assert.match(source, /Proprietà di /);
 assert.doesNotMatch(source, /execute_code|delete_object/);
 assert.match(source, /Parte FreeCAD nella vista/);

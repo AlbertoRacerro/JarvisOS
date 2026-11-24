@@ -91,7 +91,12 @@ else:
         else:
             _emit({"success": False, "code": "FREECAD_ROLLBACK_FAILED", "mutation_outcome": "unknown"})
     else:
-        _emit({"success": True, "mutation_outcome": "applied", "applied_value": _value(getattr(obj, name))})
+        try:
+            applied = _value(getattr(obj, name))
+        except Exception:
+            _emit({"success": True, "mutation_outcome": "applied"})
+        else:
+            _emit({"success": True, "mutation_outcome": "applied", "applied_value": applied})
 ''',
 }
 

@@ -315,4 +315,22 @@ def test_late_approval_never_applies_and_unconfirmed_rollback_is_unknown(
             "SELECT payload FROM events WHERE event_type = 'FreecadPropertyEditApplied'"
         ).fetchall()
     outcomes = [json.loads(row[0])["outcome"] for row in rows]
+    assert {"success": False, "mutation_outcome": "unchanged", "code": "FREECAD_EDIT_EXPIRED"} in outcomes
     assert {"success": False, "mutation_outcome": "unknown", "code": "FREECAD_ROLLBACK_FAILED"} in outcomes
+
+    class TimedOutBridge(FreecadBridge):
+        def request(self, method: str, params: dict | None = None) -> object:
+            if method == "edit_object":
+                raise FreecadBridgeError("FREECAD_BRIDGE_TIMEOUT", "timeout", 504)
+            return super().request(method, params)
+
+    monkeypatch.setattr(routes, "_freecad_bridge", TimedOutBridge)
+    with pytest.raises(HTTPException):
+        routes.freecad_edit_apply_endpoint(workspace_id, routes.FreecadApplyRequest(**{**apply, "old_value": 11}))
+    with open_sqlite_connection() as connection:
+        last = connection.execute(
+            "SELECT payload FROM events WHERE event_type = 'FreecadPropertyEditApplied' ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+    assert json.loads(last[0])["outcome"] == {
+        "success": False, "mutation_outcome": "unknown", "code": "FREECAD_BRIDGE_TIMEOUT"
+    }

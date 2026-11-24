@@ -104,6 +104,8 @@ try {
   await page.getByRole("heading", { name: "Model workbench" }).waitFor();
   await page.getByRole("button", { name: "FreeCAD", exact: true }).click();
   await page.getByText("FreeCAD connesso").waitFor();
+  // The document list arrives after the status, through a second bridge call.
+  await page.getByLabel("Documento").locator("option", { hasText: "Demo" }).waitFor({ state: "attached" });
   assert(await page.getByLabel("Documento").inputValue() === "Demo", "the open document is not selected");
   await page.getByText("Box", { exact: true }).first().waitFor();
   summary.steps.push({ step: "open_freecad_and_read_document", status: "pass" });
