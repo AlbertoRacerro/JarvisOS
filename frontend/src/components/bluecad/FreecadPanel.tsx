@@ -26,6 +26,26 @@ type Props = Readonly<{
 }>;
 type Property = { name: string; value: unknown; readOnly: boolean };
 
+const freecadReason: Record<string, string> = {
+  FREECAD_BRIDGE_UNAVAILABLE: "Imposta il percorso del python.exe di FreeCAD.",
+  FREECAD_BRIDGE_DIGEST_UNCONFIGURED: "Imposta l'impronta SHA-256 del python.exe di FreeCAD.",
+  FREECAD_BRIDGE_DIGEST_MISMATCH: "L'impronta del python.exe di FreeCAD è cambiata.",
+  FREECAD_ADDON_NOT_RUNNING: "MCP Bridge è spento in FreeCAD. Attiva MCP On e riprova.",
+  FREECAD_MCP_UNAUTHORIZED: "FreeCAD ha rifiutato il token MCP. Verifica il file del token.",
+  FREECAD_MCP_DECLINED: "Lo script Jarvis è stato rifiutato nella finestra di FreeCAD.",
+  FREECAD_MCP_PENDING: "La conferma dello script Jarvis è ancora in attesa in FreeCAD: se la dai ora non modificherà il documento.",
+  FREECAD_EDIT_EXPIRED: "La conferma in FreeCAD è arrivata troppo tardi: il documento non è stato modificato.",
+  FREECAD_MCP_TOKEN_MISSING: "Manca il file del token MCP FreeCAD.",
+  FREECAD_MCP_TOKEN_UNSAFE: "Il file del token MCP è leggibile da altri utenti. Limita i permessi al proprietario.",
+  FREECAD_STALE_PREVIEW: "Il valore è cambiato in FreeCAD. Ripeti l'anteprima.",
+  FREECAD_ROLLBACK_FAILED: "FreeCAD non ha confermato il ripristino del valore precedente: controlla il documento.",
+  FREECAD_BRIDGE_TIMEOUT: "FreeCAD non ha risposto in tempo.",
+};
+
+function freecadError(error: Error): string {
+  return freecadReason[error.message] ?? error.message;
+}
+
 function propertiesOf(object: FreecadObject): Property[] {
   const raw = object.Properties ?? object.properties ?? {};
   return Object.entries(raw).map(([name, entry]) => {
@@ -84,7 +104,7 @@ export default function FreecadPanel({ workspaceId, candidateId, freecadRefs, on
     }).then((next) => {
       setDocuments(next);
       setDocument(next[0] ?? "");
-    }).catch((error: Error) => setMessage(error.message));
+    }).catch((error: Error) => setMessage(freecadError(error)));
   }, [open, workspaceId]);
 
   useEffect(() => {
@@ -92,7 +112,7 @@ export default function FreecadPanel({ workspaceId, candidateId, freecadRefs, on
     void listFreecadObjects(workspaceId, document).then((next) => {
       setObjects(next);
       setObjectName(next[0]?.Name ?? "");
-    }).catch((error: Error) => setMessage(error.message));
+    }).catch((error: Error) => setMessage(freecadError(error)));
   }, [document, workspaceId]);
 
   useEffect(() => {
@@ -110,16 +130,18 @@ export default function FreecadPanel({ workspaceId, candidateId, freecadRefs, on
     void previewFreecadEdit(workspaceId, editPayload()).then((next) => {
       setPreview(next);
       setMessage(null);
-    }).catch((error: Error) => setMessage(error.message)).finally(() => setBusy(false));
+    }).catch((error: Error) => setMessage(freecadError(error))).finally(() => setBusy(false));
   };
   const onApply = () => {
     if (!preview || !window.confirm("Confermi l'applicazione della modifica in FreeCAD?")) return;
     setBusy(true);
     void applyFreecadEdit(workspaceId, { ...editPayload(), old_value: preview.old_value }).then((next) => {
-      setMessage(next.document_unchanged ? "Il documento non è stato modificato." : `Valore aggiornato: ${display(next.new_value)}`);
+      setMessage(next.document_unchanged ? "Il documento non è stato modificato."
+        : next.outcome.success === true ? `Valore aggiornato: ${display(next.new_value)}`
+          : (next.message ?? "FreeCAD non ha confermato l'esito: controlla il documento."));
       setPreview(null);
       return listFreecadObjects(workspaceId, document).then(setObjects);
-    }).catch((error: Error) => setMessage(error.message)).finally(() => setBusy(false));
+    }).catch((error: Error) => setMessage(freecadError(error))).finally(() => setBusy(false));
   };
 
   const onChooseFile = (file: File | undefined) => {
@@ -158,9 +180,10 @@ export default function FreecadPanel({ workspaceId, candidateId, freecadRefs, on
     <button type="button" className="secondary-button" onClick={() => setOpen((current) => !current)} aria-expanded={open}>FreeCAD</button>
     {open && <div className="bluecad-freecad__panel">
       <h2 id="freecad-panel-title">FreeCAD</h2>
-      {status && !status.configured && <p role="status">FreeCAD non configurato. Configura il percorso dell&apos;eseguibile per collegarti.</p>}
-      {status && status.configured && !status.connected && <p role="status">Add-on FreeCAD non in esecuzione. Avvia il server FreeCAD e riprova.</p>}
+      {status && !status.configured && <div role="status"><p>FreeCAD non configurato. {freecadReason[status.code ?? ""]}</p><ol><li>Installa l&apos;add-on MCP Bridge in FreeCAD.</li><li>Genera il token nell&apos;add-on e salvalo in ~/.config/jarvis/freecad_mcp_token con permessi 0600.</li><li>Attiva MCP On in FreeCAD.</li><li>Imposta JARVISOS_FREECAD_PYTHON_PATH e JARVISOS_FREECAD_PYTHON_SHA256 per python.exe.</li></ol></div>}
+      {status && status.configured && !status.connected && <p role="status">{freecadReason[status.code ?? ""] ?? "Collegamento MCP FreeCAD non disponibile."}</p>}
       {status?.connected && <p role="status">FreeCAD connesso.</p>}
+      <p>In modalità Ask, FreeCAD chiede conferma per ogni script Jarvis: ping, list_documents, get_objects, get_object, edit_object.</p>
       {message && <p className="error-banner" role="alert">{message}</p>}
       {status?.connected && <label>Documento<select value={document} onChange={(event) => setDocument(event.target.value)}>{documents.map((item) => <option key={item}>{item}</option>)}</select></label>}
       {status?.connected && objects.length > 0 && <div>
@@ -179,8 +202,7 @@ export default function FreecadPanel({ workspaceId, candidateId, freecadRefs, on
         {preview && <div role="status"><p>Anteprima: {display(preview.old_value)} → {display(preview.new_value)}</p><button type="button" onClick={onApply} disabled={busy}>Applica</button></div>}
       </div>}
       <h3>Parte FreeCAD nella vista</h3>
-      {status && !status.configured && <p role="status">FreeCAD non configurato. Configura il percorso dell&apos;eseguibile per collegarti.</p>}
-      {status?.configured && candidateId && <div>
+      {(status?.configured || status?.code?.startsWith("FREECAD_MCP_TOKEN_")) && candidateId && <div>
         <label>Scegli file .FCStd<input type="file" accept=".FCStd" onChange={(event) => onChooseFile(event.target.files?.[0])} /></label>
         {freecadUpload && <div>
           <label>Oggetto FreeCAD<select value={freecadObjectName} onChange={(event) => setFreecadObjectName(event.target.value)}>
