@@ -53,6 +53,8 @@ def test_free_models_parsing_and_secret_path_stripping(
     pools_data = {
         "reference": "luna",
         "scores": {"luna": 28, "sol": 40},
+        "coding_reference": "luna",
+        "coding_scores": {"luna": 35, "sol": 45},
         "pools": [
             {
                 "name": "high-pool",
@@ -63,7 +65,9 @@ def test_free_models_parsing_and_secret_path_stripping(
                 "api_key": "sk-live-1234567890abcdef1234567890",
                 "token": "API_KEY_PLACEHOLDER_12345a",
                 "base_url": "https://api.nous.invalid/v1",
+                "free_list": "openai_models",
                 "index_score": 42,
+                "coding_index": 44,
                 "remaining_percent": 85.4,
                 "status": "active",
             },
@@ -71,8 +75,10 @@ def test_free_models_parsing_and_secret_path_stripping(
                 "name": "zen-pool",
                 "label": "OpenCode Zen Pool",
                 "provider": "OpenCode Zen",
+                "free_list": "opencode_zen",
                 "model": "zen-free",
                 "index_score": 35,
+                "coding_index": 38,
                 "limit_kind": "live_dot",
                 "status": "active",
             },
@@ -80,8 +86,10 @@ def test_free_models_parsing_and_secret_path_stripping(
                 "name": "exhausted-pool",
                 "label": "Exhausted Model",
                 "provider": "OpenRouter",
+                "free_list": "openrouter_public",
                 "model": "deepseek/deepseek-chat:free",
                 "index_score": 30,
+                "coding_index": 36,
                 "remaining_percent": 0.0,
                 "exhausted": True,
             },
@@ -89,8 +97,10 @@ def test_free_models_parsing_and_secret_path_stripping(
                 "name": "unqualified-pool",
                 "label": "Low Score Model",
                 "provider": "Public",
+                "free_list": "openai_models",
                 "model": "low-model",
                 "index_score": 20,
+                "coding_index": 22,
             },
         ],
     }
@@ -99,18 +109,48 @@ def test_free_models_parsing_and_secret_path_stripping(
     pools_file.write_text(json.dumps(pools_data), encoding="utf-8")
     monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
 
+    now_str = "2026-11-22T00:55:00Z"
     lists_file = tmp_path / "temp-pool-lists.json"
     lists_file.write_text(
         json.dumps({
+            "sources": {
+                "https://api.nous.invalid/v1": {
+                    "ids": ["nousresearch/hermes-3-llama-3.1-8b", "low-model"],
+                    "pricing": {
+                        "nousresearch/hermes-3-llama-3.1-8b": {"prompt": 0, "completion": 0},
+                        "low-model": {"prompt": 0, "completion": 0},
+                    },
+                    "read_at": now_str,
+                },
+                "opencode_zen": {
+                    "ids": ["zen-free"],
+                    "pricing": {
+                        "zen-free": {"prompt": 0, "completion": 0},
+                    },
+                    "read_at": now_str,
+                },
+                "openrouter_public": {
+                    "ids": ["deepseek/deepseek-chat:free"],
+                    "pricing": {
+                        "deepseek/deepseek-chat:free": {"prompt": 0, "completion": 0},
+                    },
+                    "read_at": now_str,
+                },
+            },
+            "probes": {
+                "high-pool": {"status": "ok", "code": 200, "answered": True, "at": now_str},
+                "zen-pool": {"status": "ok", "code": 200, "answered": True, "at": now_str},
+                "exhausted-pool": {"status": "ok", "code": 200, "answered": True, "at": now_str},
+            },
             "bridge": {
-                "zen-pool": {"state": "throttled", "at": "2026-11-22T00:55:00Z"},
-            }
+                "zen-pool": {"state": "throttled", "at": now_str},
+            },
         }),
         encoding="utf-8",
     )
 
-    models = pq.read_free_models(tmp_path)
-    assert len(models) == 4
+    models = pq.read_free_models(tmp_path, now=NOW)
+    assert len(models) == 3
 
     # 1. High pool
     m1 = models[0]
@@ -119,6 +159,7 @@ def test_free_models_parsing_and_secret_path_stripping(
     assert m1["source"] == "Nous"
     assert m1["model_id"] == "nousresearch/hermes-3-llama-3.1-8b"
     assert m1["intelligence_index"] == 42
+    assert m1["coding_index"] == 44
     assert m1["status"] == "active"
     assert m1["limit_kind"] == "ring"
     assert m1["remaining_percent"] == 85.4
@@ -147,11 +188,8 @@ def test_free_models_parsing_and_secret_path_stripping(
     assert m3["remaining_percent"] == 0.0
     assert m3["exhausted"] is True
 
-    # 4. Unqualified pool (index_score 20 < reference score 28)
-    m4 = models[3]
-    assert m4["id"] == "unqualified-pool"
-    assert m4["status"] == "unqualified"
-    assert m4["intelligence_index"] == 20
+    # 4. Unqualified pool is omitted completely per spec 349
+    assert "unqualified-pool" not in [m["id"] for m in models]
 
 
 def test_prepaid_balances_parsing_and_secret_path_stripping(
