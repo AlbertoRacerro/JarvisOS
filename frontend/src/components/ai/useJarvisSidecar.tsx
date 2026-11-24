@@ -33,7 +33,9 @@ import {
   type ContextSelection,
   type ThreadDetail,
   type ThreadInteraction,
-  type ThreadSummary
+  type ThreadSummary,
+  type TurnPlan,
+  type LiveStep
 } from "../../api/threads";
 import { publishBubuConversation, publishBubuFailedPrompt, publishBubuRelayEnabled, registerBubuHandlers, type BubuExtras, type BubuTurn } from "../bubu/conversationStore";
 import { useGuidedTourActive } from "../bubu/guidedTourActivity";
@@ -1014,6 +1016,67 @@ export function useJarvisSidecar(
     </section>
   </li>;
 
+  const renderTurnPlan = (plan: TurnPlan | null | undefined) => {
+    if (!plan) return null;
+    const steps = plan.steps || [];
+    const findings = plan.findings || [];
+    if (steps.length === 0 && findings.length === 0) return null;
+
+    return (
+      <div className="jarvis-plan-box" data-testid="jarvis-plan-box">
+        {steps.length > 0 && (
+          <div className="jarvis-plan-section">
+            <span className="jarvis-plan-section__title">Plan checklist</span>
+            <ul className="jarvis-plan-steps">
+              {steps.map((step) => {
+                const statusSymbol =
+                  step.status === "done" ? "✓" : step.status === "in_progress" ? "▶" : step.status === "blocked" ? "✕" : "○";
+                return (
+                  <li key={step.id} className={`jarvis-plan-step jarvis-plan-step--${step.status}`}>
+                    <span className="jarvis-plan-step__indicator" aria-hidden="true">{statusSymbol}</span>
+                    <span className="jarvis-plan-step__title">{step.title}</span>
+                    {step.note ? <span className="jarvis-plan-step__note">({step.note})</span> : null}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+        {findings.length > 0 && (
+          <div className="jarvis-plan-section">
+            <span className="jarvis-plan-section__title">Recorded findings</span>
+            <ul className="jarvis-plan-findings">
+              {findings.map((f, i) => (
+                <li key={`${f.key}-${i}`} className="jarvis-plan-finding">
+                  <code>{f.key}</code>: <span>{f.value}{f.unit ? ` ${f.unit}` : ""}</span>
+                  {f.source_ref ? <cite> ({f.source_ref})</cite> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderLiveSteps = (steps: LiveStep[] | undefined) => {
+    if (!steps || steps.length === 0) return null;
+    return (
+      <div className="jarvis-tool-steps-box" data-testid="jarvis-tool-steps-box">
+        <span className="jarvis-tool-steps__title">Tool steps</span>
+        <ul className="jarvis-live-steps">
+          {steps.map((st) => (
+            <li key={st.call_id} className={`jarvis-live-step jarvis-live-step--${st.status}`}>
+              <span className="jarvis-live-step__dot" aria-hidden="true" />
+              <span className="jarvis-live-step__label">{st.label}</span>
+              <span className="jarvis-live-step__status">{st.status}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  };
+
   const renderInteraction = (interaction: ThreadInteraction) => {
     const running = !TERMINAL_FLOW_STATES.has(interaction.flow_state);
     const notice = outcomeNotice(interaction);
@@ -1035,6 +1098,7 @@ export function useJarvisSidecar(
       ...cloudResults.filter(item => item.source_interaction_id === interaction.id),
       ...relayRuns.filter(run => run.source_interaction_id === interaction.id || (!run.source_interaction_id && interaction.id === lastInteractionId))
     ]).map(item => "response_text" in item ? renderCloudTurn(item) : renderRelayTurn(item));
+    const hasProgress = Boolean(interaction.turn_plan?.steps?.length || interaction.turn_plan?.findings?.length) || Boolean(interaction.live_steps?.length);
     return [
       <li key={`${interaction.id}-user`} className="jarvis-turn jarvis-turn--user">
         <div className="jarvis-bubble jarvis-bubble--user"><p>{interaction.user_text}</p></div>
@@ -1043,7 +1107,17 @@ export function useJarvisSidecar(
         <div className={`jarvis-bubble jarvis-bubble--jarvis${running ? " is-working" : ""}${notice && !interaction.assistant_text ? " is-failed" : ""}`}>
           <div className="jarvis-bubble__meta"><span className="jarvis-bubble__author">{authorLabel}</span>{running ? <span>working…</span> : null}</div>
           {running
-            ? <p className="jarvis-working"><span className="jarvis-working__dots" aria-hidden="true"><i /><i /><i /></span>{interaction.activity ?? "Thinking…"} · {Math.max(0, Math.floor((now - Date.parse(interaction.created_at)) / 1000))}s</p>
+            ? (
+              <>
+                <p className="jarvis-working"><span className="jarvis-working__dots" aria-hidden="true"><i /><i /><i /></span>{interaction.activity ?? "Thinking…"} · {Math.max(0, Math.floor((now - Date.parse(interaction.created_at)) / 1000))}s</p>
+                {hasProgress && (
+                  <div className="jarvis-live-progress" data-testid="jarvis-live-progress">
+                    {renderTurnPlan(interaction.turn_plan)}
+                    {renderLiveSteps(interaction.live_steps)}
+                  </div>
+                )}
+              </>
+            )
             : interaction.assistant_text ? unsafeAssistantText ? <p role="status">Jarvis could not turn this into a valid change, so nothing was changed. Try rephrasing, or use Escalate for a stronger model.</p> : <JarvisMessageText text={interaction.assistant_text} /> : null}
           {interaction.surface_summary ? <p className="jarvis-surface-summary">{interaction.surface_summary}</p> : null}
           <WorkspaceActionCards actions={interaction.actions ?? []} onApply={applyAction} onDismiss={dismissAction} onUndo={undoAction}
@@ -1052,6 +1126,19 @@ export function useJarvisSidecar(
           {notice ? <p className="jarvis-bubble__notice" role="status">{notice}</p> : null}
           {interaction.assistant_text_truncated ? <p className="jarvis-bubble__notice">This saved answer was shortened for storage.</p> : null}
           {interaction.proposal_count ? <p className="jarvis-bubble__proposals">{interaction.proposal_count}{interaction.proposals_truncated ? "+" : ""} proposal{interaction.proposal_count === 1 ? "" : "s"} recorded for your review — nothing was applied.</p> : null}
+          {!running && hasProgress && (
+            <details className="jarvis-turn-progress" data-testid="jarvis-turn-progress">
+              <summary aria-label="Plan and tool activity">
+                Plan & tool activity
+                {interaction.turn_plan?.steps?.length ? ` · ${interaction.turn_plan.steps.length} steps` : ""}
+                {interaction.live_steps?.length ? ` · ${interaction.live_steps.length} tool calls` : ""}
+              </summary>
+              <div className="jarvis-turn-progress__content">
+                {renderTurnPlan(interaction.turn_plan)}
+                {renderLiveSteps(interaction.live_steps)}
+              </div>
+            </details>
+          )}
         </div>
         {!running ? <div className="jarvis-bubble__actions">
           {interaction.flow_state === "partial_terminal" ? <button type="button" className="jarvis-link-button" disabled={submitting} onClick={() => setPrompt(`Continue the previous answer from where it stopped. Do not repeat the completed part. Original request: ${interaction.user_text.slice(0, 1500)}\n\nPrevious partial answer:\n${(interaction.assistant_text ?? "").slice(-8500)}`)}>Continue answer</button> : null}

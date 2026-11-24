@@ -109,6 +109,32 @@ class AIThreadSummary(BaseModel):
     last_activity_at: str
 
 
+class TurnPlanStep(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=160)
+    status: Literal["pending", "in_progress", "done", "blocked"]
+    note: str | None = Field(default=None, max_length=200)
+
+
+class TurnPlanFinding(BaseModel):
+    key: str = Field(min_length=1, max_length=128)
+    value: str | int | float
+    unit: str | None = Field(default=None, max_length=32)
+    source_ref: str | None = Field(default=None, max_length=200)
+
+
+class TurnPlanRead(BaseModel):
+    steps: list[TurnPlanStep] = Field(default_factory=list, max_length=10)
+    findings: list[TurnPlanFinding] = Field(default_factory=list, max_length=24)
+
+
+class LiveStepRead(BaseModel):
+    call_id: str = Field(min_length=1, max_length=128)
+    tool_name: str = Field(min_length=1, max_length=80)
+    label: str = Field(min_length=1, max_length=160)
+    status: str = "running"
+
+
 class AIThreadInteractionRead(BaseModel):
     id: str
     request_id: str
@@ -142,6 +168,8 @@ class AIThreadInteractionRead(BaseModel):
     elapsed_ms: int | None = None
     # Concise status of a running turn, derived from recorded tool events.
     activity: str | None = None
+    turn_plan: TurnPlanRead | None = None
+    live_steps: list[LiveStepRead] = Field(default_factory=list)
     surface_summary: str | None = None
     surface_digest: str | None = None
     # Bubu: screenshots attached to this turn; unsupported = the selected model never saw them.

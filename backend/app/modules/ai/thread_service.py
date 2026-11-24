@@ -5,7 +5,7 @@ import logging
 import re
 import sqlite3
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
 from app.core.database import open_sqlite_connection
@@ -28,7 +28,11 @@ from app.modules.ai.thread_models import (
     AIThreadSubmit,
     AIThreadSubmitRead,
     AIThreadSummary,
+    LiveStepRead,
     PersistenceState,
+    TurnPlanFinding,
+    TurnPlanRead,
+    TurnPlanStep,
 )
 from app.modules.ai.thread_ui_context import (
     VISIBLE_PAGE_SOURCE,
@@ -928,6 +932,7 @@ def _turn_tools(surface: str) -> list[str]:
                "mcp__jarvis__jarvis_patent_read",
                "mcp__jarvis__jarvis_browser_page_read",
                "mcp__jarvis__jarvis_paper_pdf_read",
+               "mcp__jarvis__jarvis_turn_plan",
                "memory", "session_search"]
     if surface in {"process", "bluecad", "studio"}:
         general.extend([f"mcp__jarvis__jarvis_{surface}_read", f"mcp__jarvis__jarvis_{surface}_act"])
@@ -1450,7 +1455,134 @@ _TOOL_ACTIVITY = {
     "jarvis_decide": "Deciding route…",
     "jarvis_bench_read": "Reading evaluation…",
     "jarvis_bench_run": "Running evaluation…",
+    "jarvis_turn_plan": "Updating turn plan…",
+    "turn_plan": "Updating turn plan…",
+    "jarvis_paper_search": "Searching scientific papers…",
+    "paper_search": "Searching scientific papers…",
+    "jarvis_patent_read": "Reading patent…",
+    "patent_read": "Reading patent…",
+    "jarvis_browser_page_read": "Reading web page…",
+    "browser_page_read": "Reading web page…",
+    "jarvis_paper_pdf_read": "Reading paper PDF…",
+    "paper_pdf_read": "Reading paper PDF…",
+    "jarvis_dev_read": "Reading system state…",
+    "jarvis_repo_read": "Searching repository…",
+    "jarvis_knowledge_read": "Reading workspace data…",
 }
+
+
+def _tool_step_label(tool_name: str) -> str:
+    cleaned = tool_name.removeprefix("mcp__jarvis__")
+    if cleaned in _TOOL_ACTIVITY:
+        return _TOOL_ACTIVITY[cleaned].rstrip("…")
+    return cleaned.replace("jarvis_", "").replace("_", " ").capitalize()
+
+
+def interaction_turn_plan(connection: sqlite3.Connection, interaction_id: str) -> TurnPlanRead | None:
+    row = connection.execute(
+        """
+        SELECT payload
+        FROM events
+        WHERE event_type = 'hermes.turn_plan'
+          AND (target_id = ? OR json_extract(payload, '$.interaction_id') = ?)
+        ORDER BY rowid DESC LIMIT 1
+        """,
+        (interaction_id, interaction_id),
+    ).fetchone()
+    if row is None or not row["payload"]:
+        return None
+    try:
+        data = json.loads(row["payload"])
+        steps_raw = data.get("steps") or []
+        findings_raw = data.get("findings") or []
+        if not steps_raw and not findings_raw:
+            return None
+        steps: list[TurnPlanStep] = []
+        for s in steps_raw[:10]:
+            if not isinstance(s, dict) or not s.get("id") or not s.get("title"):
+                continue
+            raw_status = s.get("status")
+            step_status: Literal["pending", "in_progress", "done", "blocked"] = (
+                raw_status
+                if raw_status in ("pending", "in_progress", "done", "blocked")
+                else "pending"
+            )
+            steps.append(
+                TurnPlanStep(
+                    id=str(s.get("id", ""))[:64],
+                    title=str(s.get("title", ""))[:160],
+                    status=step_status,
+                    note=str(s.get("note"))[:200] if s.get("note") is not None else None,
+                )
+            )
+        findings = [
+            TurnPlanFinding(
+                key=str(f.get("key", ""))[:128],
+                value=f.get("value", ""),
+                unit=str(f.get("unit"))[:32] if f.get("unit") is not None else None,
+                source_ref=str(f.get("source_ref"))[:200] if f.get("source_ref") is not None else None,
+            )
+            for f in findings_raw[:24]
+            if isinstance(f, dict) and f.get("key") and f.get("value") is not None
+        ]
+        return TurnPlanRead(steps=steps, findings=findings)
+    except Exception:
+        return None
+
+
+def interaction_live_steps(
+    connection: sqlite3.Connection, interaction_id: str, limit: int = 30
+) -> list[LiveStepRead]:
+    rows = connection.execute(
+        """
+        SELECT event_type, payload
+        FROM events
+        WHERE event_type IN ('hermes.tool_started', 'hermes.tool_result')
+          AND json_extract(payload, '$.interaction_id') = ?
+        ORDER BY rowid ASC
+        """,
+        (interaction_id,),
+    ).fetchall()
+    steps_by_id: dict[str, dict[str, Any]] = {}
+    ordered_ids: list[str] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except Exception:
+            continue
+        call_id = str(payload.get("call_id") or "")
+        if not call_id:
+            continue
+        evt_type = row["event_type"]
+        if call_id not in steps_by_id:
+            ordered_ids.append(call_id)
+            tool_name = str(payload.get("tool_name") or "")
+            label = _tool_step_label(tool_name)
+            steps_by_id[call_id] = {
+                "call_id": call_id,
+                "tool_name": tool_name,
+                "label": label,
+                "status": "running" if evt_type == "hermes.tool_started" else str(payload.get("status") or "succeeded"),
+            }
+        else:
+            if evt_type == "hermes.tool_result":
+                steps_by_id[call_id]["status"] = str(payload.get("status") or "succeeded")
+                if not steps_by_id[call_id]["tool_name"] and payload.get("tool_name"):
+                    steps_by_id[call_id]["tool_name"] = str(payload["tool_name"])
+                    steps_by_id[call_id]["label"] = _tool_step_label(str(payload["tool_name"]))
+
+    result: list[LiveStepRead] = []
+    for cid in ordered_ids[:limit]:
+        item = steps_by_id[cid]
+        result.append(
+            LiveStepRead(
+                call_id=item["call_id"][:128],
+                tool_name=item["tool_name"][:80],
+                label=item["label"][:160],
+                status=item["status"][:32],
+            )
+        )
+    return result
 
 
 def interaction_activity(connection: sqlite3.Connection, interaction_id: str) -> str:
@@ -1547,6 +1679,11 @@ def _interaction_from_row(
     activity = None
     if not terminal and connection is not None:
         activity = interaction_activity(connection, str(row["id"]))
+    turn_plan = None
+    live_steps = []
+    if connection is not None:
+        turn_plan = interaction_turn_plan(connection, str(row["id"]))
+        live_steps = interaction_live_steps(connection, str(row["id"]))
     role_id = None
     sheldon_mode = False
     is_hermes = str(row["requested_route_class"]) == "hermes:agent"
@@ -1610,6 +1747,8 @@ def _interaction_from_row(
         completed_at=completed_at,
         elapsed_ms=_elapsed_ms(str(row["created_at"]), completed_at),
         activity=activity,
+        turn_plan=turn_plan,
+        live_steps=live_steps,
         id=str(row["id"]),
         request_id=str(row["request_id"]),
         interaction_index=int(row["interaction_index"]),

@@ -19,6 +19,7 @@ from app.modules.agents.hermes.worker_shim import (
     compact_tool_payload as compact_tool_payload,
 )
 from app.modules.agents.hermes.worker_shim import (
+    inject_saved_plan,
     shrink_tool_history,
 )
 from app.modules.ai.agent_contracts import (
@@ -63,6 +64,7 @@ HERMES_TOOL_ALLOWLIST = frozenset({"mcp__jarvis__jarvis_context_preview",
                                   "browser_page_read", "jarvis_browser_page_read",
                                   "mcp__jarvis__paper_pdf_read", "mcp__jarvis__jarvis_paper_pdf_read",
                                   "paper_pdf_read", "jarvis_paper_pdf_read",
+                                  "mcp__jarvis__jarvis_turn_plan", "jarvis_turn_plan", "turn_plan",
                                   "memory", "session_search"})
 _BWRAP_PREFIX = ("bwrap", "--dev-bind", "/", "/", "--unshare-net", "--die-with-parent", "--")
 
@@ -140,6 +142,10 @@ _HERMES_BROWSER_PAGE_CAPABILITY = JarvisCapabilityDescriptor(
     capability_id="jarvis.browser_page_read", route_id="ai-threads", action_class="READ",
     label="Read public HTTPS web pages via headless Chromium",
 )
+_HERMES_TURN_PLAN_CAPABILITY = JarvisCapabilityDescriptor(
+    capability_id="jarvis.turn_plan", route_id="ai-threads", action_class="PROPOSE",
+    label="Create and update turn plans and intermediate findings",
+)
 _TOOL_CAPABILITIES = {
     "jarvis_retrieval_query": "jarvis.retrieval_query",
     "jarvis_decide": "jarvis.decide",
@@ -154,6 +160,9 @@ _TOOL_CAPABILITIES = {
     "browser_page_read": "jarvis.browser_page_read",
     "jarvis_paper_pdf_read": "jarvis.paper_pdf_read",
     "paper_pdf_read": "jarvis.paper_pdf_read",
+    "jarvis_turn_plan": "jarvis.turn_plan",
+    "turn_plan": "jarvis.turn_plan",
+    "mcp__jarvis__jarvis_turn_plan": "jarvis.turn_plan",
     "jarvis_process_read": "jarvis.process_read",
     "jarvis_process_act": "jarvis.process_act",
     "jarvis_bluecad_read": "jarvis.bluecad_read",
@@ -172,7 +181,8 @@ for _descriptor in (_HERMES_PROCESS_READ_CAPABILITY, _HERMES_PROCESS_ACT_CAPABIL
                     _HERMES_PAPER_SEARCH_CAPABILITY,
                     _HERMES_PATENT_READ_CAPABILITY,
                     _HERMES_BROWSER_PAGE_CAPABILITY,
-                    _HERMES_PAPER_PDF_READ_CAPABILITY):
+                    _HERMES_PAPER_PDF_READ_CAPABILITY,
+                    _HERMES_TURN_PLAN_CAPABILITY):
     if _descriptor not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
         PRODUCTION_CAPABILITY_REGISTRY.register(_descriptor)
 if _HERMES_CONTEXT_CAPABILITY not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
@@ -309,6 +319,8 @@ DEAD_TURN_NUDGE = (
 
 def is_research_tool(tool_name: str) -> bool:
     name = tool_name.strip().lower()
+    if name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan"}:
+        return False
     return name in RESEARCH_TOOLS or any(k in name for k in ("read", "search", "retrieval", "query"))
 
 
@@ -464,6 +476,7 @@ def dispatch_tool(
     paper_search_opener: Any = None,
     patent_read_opener: Any = None,
     browser_page_runner: Any = None,
+    active_plan: dict[str, Any] | None = None,
 ) -> StructuredToolResult:
     now = datetime.now(UTC)
     grant = live_grants.get(call.grant_id)
@@ -475,6 +488,23 @@ def dispatch_tool(
         error = "use_process_act_grant_id" if call.capability_id == "jarvis.process_act" \
             else "use_process_read_grant_id"
     result: dict[str, Any] | None = None
+    if call.capability_id == "jarvis.turn_plan":
+        from app.modules.agents.hermes.turn_plan_tool import dispatch_turn_plan_tool
+
+        ws_id = (
+            grant.scope.workspace_id
+            if grant is not None
+            else (call.session_ref.workspace_id if call.session_ref is not None else "")
+        )
+        result, error = dispatch_turn_plan_tool(
+            call, ws_id, error, grant=grant, interaction_id=interaction_id, active_plan=active_plan
+        )
+        return StructuredToolResult(
+            call_id=call.call_id, capability_id=call.capability_id,
+            status="succeeded" if result is not None else "refused",
+            result=result, error_code=None if result is not None else error,
+            completed_at=now,
+        )
     if (grant is not None and call.capability_id == "jarvis.retrieval_query"
             and grant.scope.jarvis_thread_id not in (None, call.session_ref.jarvis_thread_id
                                                       if call.session_ref is not None else None)):
@@ -773,6 +803,7 @@ class HermesSupervisor:
         self.turn_research_count: int = 0
         self.research_budget: int = DEFAULT_RESEARCH_BUDGET
         self.turn_tool_hashes: set[str] = set()
+        self.active_turn_plan: dict[str, Any] = {"steps": [], "findings": []}
         self.turn_step_count: int = 0
         self.turn_cap: int = DEFAULT_TURN_CAP
         self.paper_search_opener: Any = None
@@ -902,6 +933,9 @@ class HermesSupervisor:
                 frame["tools"] = []
                 frame["allowed_tools"] = []
 
+            if self.active_turn_plan and (self.active_turn_plan.get("steps") or self.active_turn_plan.get("findings")):
+                frame["messages"] = inject_saved_plan(frame.get("messages", []), self.active_turn_plan)
+
             tools = _admitted_tools(frame)
             envelope = infer_envelope(frame, route_class=selected_route)
             if envelope.agent_session != self.session:
@@ -948,7 +982,11 @@ class HermesSupervisor:
             # Identical repeated-call blocking
             canonical_args = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
             call_key = f"{tool_name}:{canonical_args}"
-            if call_key in self.turn_tool_hashes:
+            is_read_plan = (
+                tool_name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan"}
+                and arguments.get("op") == "read_plan"
+            )
+            if call_key in self.turn_tool_hashes and not is_read_plan:
                 result = StructuredToolResult(
                     call_id=call_id, capability_id=capability_id,
                     status="succeeded",
@@ -958,7 +996,8 @@ class HermesSupervisor:
                 self._send({"type": "tool_result", "id": call_id,
                             "tool_result": result.model_dump(mode="json")})
                 return
-            self.turn_tool_hashes.add(call_key)
+            if not is_read_plan:
+                self.turn_tool_hashes.add(call_key)
 
             # Research budget cap
             if is_research_tool(tool_name):
@@ -981,7 +1020,11 @@ class HermesSupervisor:
                           payload={"call_id": call_id, "tool_name": str(tool_name)[:80],
                                    "interaction_id": self.active_interaction_id})
                 connection.commit()
-            grant_id = arguments.pop("grant_id")
+            grant_id = (
+                arguments.pop("grant_id", None) or "session-turn"
+                if capability_id == "jarvis.turn_plan"
+                else arguments.pop("grant_id")
+            )
             call = StructuredToolCall(
                 call_id=str(frame["id"]), capability_id=capability_id,
                 grant_id=grant_id, correlation_id=str(frame["id"]),
@@ -993,7 +1036,21 @@ class HermesSupervisor:
                                    interaction_id=self.active_interaction_id,
                                    paper_search_opener=self.paper_search_opener,
                                    patent_read_opener=self.patent_read_opener,
-                                   browser_page_runner=self.browser_page_runner)
+                                   browser_page_runner=self.browser_page_runner,
+                                   active_plan=self.active_turn_plan)
+            if (
+                capability_id == "jarvis.turn_plan"
+                and result.status == "succeeded"
+                and isinstance(result.result, dict)
+            ):
+                res_data = result.result
+                if "steps" in res_data or "findings" in res_data:
+                    raw_steps = res_data.get("steps")
+                    raw_findings = res_data.get("findings")
+                    self.active_turn_plan = {
+                        "steps": list(raw_steps) if isinstance(raw_steps, list) else [],
+                        "findings": list(raw_findings) if isinstance(raw_findings, list) else [],
+                    }
         except (ValueError, KeyError, sqlite3.Error):
             result = StructuredToolResult(
                 call_id=call_id, capability_id=capability_id,
@@ -1137,6 +1194,7 @@ class HermesSupervisor:
         self.active_interaction_id = interaction_id
         self.turn_research_count = 0
         self.turn_tool_hashes.clear()
+        self.active_turn_plan = {"steps": [], "findings": []}
         self.turn_step_count = 0
         prompt = _assemble_turn_prompt(prompt, context_blocks or [])
         request_id = str(uuid4())
@@ -1175,7 +1233,8 @@ ENGINEERING_METHODOLOGY_RULES = (
     "- Compute physics with deterministic tools rather than searching for answers.\n"
     "- Express uncertain inputs as an explicit range.\n"
     "- Read a source before citing it.\n"
-    "- Never invent a DOI."
+    "- Never invent a DOI.\n"
+    "- For multi-step questions, create a plan with jarvis_turn_plan and record intermediate findings with source refs."
 )
 
 

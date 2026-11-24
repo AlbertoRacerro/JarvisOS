@@ -30,6 +30,32 @@ export type ConversationRoute = {
   roles?: HermesRoleOption[] | null;
 };
 
+export type TurnPlanStep = {
+  id: string;
+  title: string;
+  status: "pending" | "in_progress" | "done" | "blocked";
+  note?: string | null;
+};
+
+export type TurnPlanFinding = {
+  key: string;
+  value: string | number;
+  unit?: string | null;
+  source_ref?: string | null;
+};
+
+export type TurnPlan = {
+  steps: TurnPlanStep[];
+  findings: TurnPlanFinding[];
+};
+
+export type LiveStep = {
+  call_id: string;
+  tool_name: string;
+  label: string;
+  status: string;
+};
+
 export type ThreadSummary = {
   id: string;
   workspace_id: string;
@@ -69,6 +95,8 @@ export type ThreadInteraction = {
   completed_at?: string | null;
   elapsed_ms?: number | null;
   activity?: string | null;
+  turn_plan?: TurnPlan | null;
+  live_steps?: LiveStep[];
   surface_summary?: string | null;
   surface_digest?: string | null;
   actions?: ActionOutcome[];

@@ -352,3 +352,172 @@
 .jarvis-role-badge{font-size:.625rem;text-transform:uppercase;color:var(--color-danger,#ef4444);font-weight:600}
 .jarvis-sheldon-mode{margin-top:.2rem;font-size:.75rem;color:var(--color-text,#374151)}
 .jarvis-role-unavailable{color:var(--color-danger,#dc2626);font-size:.75rem;margin:0}
+
+/* Spec 362: Live plan checklist and recent tool steps in Jarvis chat */
+.jarvis-live-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.jarvis-turn-progress {
+  margin-top: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--color-border-default, #e5e7eb);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--color-bg-subtle, #f9fafb);
+  font-size: 12px;
+}
+
+.jarvis-turn-progress summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--color-text-secondary, #4b5563);
+  user-select: none;
+}
+
+.jarvis-turn-progress summary:hover {
+  color: var(--color-text-primary, #111827);
+}
+
+.jarvis-turn-progress__content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border-subtle, #f3f4f6);
+}
+
+.jarvis-plan-box, .jarvis-tool-steps-box {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--color-bg-surface, #ffffff);
+  border: 1px solid var(--color-border-default, #e5e7eb);
+}
+
+.jarvis-plan-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.jarvis-plan-section__title, .jarvis-tool-steps__title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted, #9ca3af);
+}
+
+.jarvis-plan-steps, .jarvis-plan-findings, .jarvis-live-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.jarvis-plan-step {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.jarvis-plan-step__indicator {
+  font-family: monospace;
+  font-size: 11px;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+  color: var(--color-text-muted, #9ca3af);
+}
+
+.jarvis-plan-step--done .jarvis-plan-step__indicator {
+  color: var(--color-status-success-text, #10b981);
+}
+
+.jarvis-plan-step--in_progress .jarvis-plan-step__indicator {
+  color: var(--color-accent-primary, #3b82f6);
+}
+
+.jarvis-plan-step--in_progress {
+  font-weight: 500;
+  color: var(--color-text-primary, #111827);
+}
+
+.jarvis-plan-step--blocked .jarvis-plan-step__indicator {
+  color: var(--color-status-danger-text, #ef4444);
+}
+
+.jarvis-plan-step__title {
+  flex: 1 1 auto;
+}
+
+.jarvis-plan-step__note {
+  font-size: 11px;
+  color: var(--color-text-muted, #6b7280);
+}
+
+.jarvis-plan-finding {
+  font-size: 11px;
+  color: var(--color-text-secondary, #374151);
+  overflow-wrap: anywhere;
+}
+
+.jarvis-plan-finding code {
+  font-weight: 600;
+}
+
+.jarvis-plan-finding cite {
+  font-style: normal;
+  color: var(--color-text-muted, #9ca3af);
+}
+
+.jarvis-live-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.jarvis-live-step__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-muted, #9ca3af);
+  flex-shrink: 0;
+}
+
+.jarvis-live-step--running .jarvis-live-step__dot {
+  background: var(--color-status-warning-text, #f59e0b);
+}
+
+.jarvis-live-step--succeeded .jarvis-live-step__dot {
+  background: var(--color-status-success-text, #10b981);
+}
+
+.jarvis-live-step--failed .jarvis-live-step__dot,
+.jarvis-live-step--refused .jarvis-live-step__dot {
+  background: var(--color-status-danger-text, #ef4444);
+}
+
+.jarvis-live-step__label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jarvis-live-step__status {
+  font-size: 10px;
+  color: var(--color-text-muted, #9ca3af);
+  text-transform: lowercase;
+}
