@@ -1,6 +1,6 @@
 # 347 — FREE-MODEL-MONITOR-1: Daily free-model list monitor, automatic spec-334 admission, and Italian Slack alerts
 
-Status: ready
+Status: merged
 Depends on: 334, 346
 
 ## Goal
