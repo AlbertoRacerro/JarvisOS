@@ -9,11 +9,14 @@ Supports an injectable opener and DNS resolver for 100% offline testing.
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import os
 import re
 import socket
+import ssl
+import sys
 import tempfile
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
@@ -22,7 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin, urlsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 from app.modules.agents.hermes.ip_boundary import (
     _KNOWN_SECRET_RE,
@@ -73,6 +76,86 @@ class _DenyRedirects(HTTPRedirectHandler):
         return None
 
 
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection pinned to a pre-verified global IP address.
+
+    Prevents DNS rebinding and TOCTOU attacks by connecting the TCP socket
+    directly to the verified IP, while enforcing TLS SNI and server certificate
+    hostname verification against the original hostname.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int | None = None,
+        *,
+        pinned_ip: str,
+        server_hostname: str,
+        ssl_context: ssl.SSLContext | None = None,
+        connection_factory: Callable[..., Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self._pinned_ip = pinned_ip
+        self._server_hostname = server_hostname
+        self._ssl_context = ssl_context or ssl.create_default_context()
+        self._connection_factory = connection_factory
+        super().__init__(host, port, **kwargs)
+
+    def connect(self) -> None:
+        sys.audit("http.client.connect", self, self._pinned_ip, self.port)
+        if self._connection_factory is not None:
+            sock = self._connection_factory(
+                (self._pinned_ip, self.port), timeout=self.timeout
+            )
+        else:
+            sock = socket.create_connection(
+                (self._pinned_ip, self.port), timeout=self.timeout
+            )
+
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+
+        self.sock = self._ssl_context.wrap_socket(
+            sock,
+            server_hostname=self._server_hostname,
+        )
+
+
+class PinnedHTTPSHandler(HTTPSHandler):
+    """urllib HTTPS handler that delegates to PinnedHTTPSConnection."""
+
+    def __init__(
+        self,
+        pinned_ip: str,
+        server_hostname: str,
+        *,
+        context: ssl.SSLContext | None = None,
+        connection_factory: Callable[..., Any] | None = None,
+        check_hostname: bool | None = None,
+    ) -> None:
+        self._pinned_context = context or ssl.create_default_context()
+        super().__init__(context=self._pinned_context, check_hostname=check_hostname)
+        self.pinned_ip = pinned_ip
+        self.server_hostname = server_hostname
+        self.connection_factory = connection_factory
+
+    def https_open(self, req: Any) -> Any:
+        return self.do_open(
+            lambda host, **kwargs: PinnedHTTPSConnection(
+                host,
+                pinned_ip=self.pinned_ip,
+                server_hostname=self.server_hostname,
+                ssl_context=self._pinned_context,
+                connection_factory=self.connection_factory,
+                **kwargs,
+            ),
+            req,
+            context=self._pinned_context,
+        )
+
+
 _DEFAULT_OPENER: Any = None
 _DEFAULT_DNS_RESOLVER: Callable[[str], list[str]] | None = None
 
@@ -121,6 +204,22 @@ def _get_opener(custom_opener: Any = None) -> Any:
     return build_opener(ProxyHandler({}), _DenyRedirects())
 
 
+def _build_pinned_opener(
+    pinned_ip: str,
+    server_hostname: str,
+    *,
+    context: ssl.SSLContext | None = None,
+    connection_factory: Callable[..., Any] | None = None,
+) -> Any:
+    handler = PinnedHTTPSHandler(
+        pinned_ip=pinned_ip,
+        server_hostname=server_hostname,
+        context=context,
+        connection_factory=connection_factory,
+    )
+    return build_opener(ProxyHandler({}), _DenyRedirects(), handler)
+
+
 def _default_dns_resolver(host: str) -> list[str]:
     infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
     return [str(info[4][0]) for info in infos]
@@ -128,10 +227,21 @@ def _default_dns_resolver(host: str) -> list[str]:
 
 def is_safe_global_ip(ip_str: str) -> bool:
     """Refuse any private, loopback, link-local, multicast, reserved or non-global IP target."""
+    if not ip_str or not isinstance(ip_str, str):
+        return False
+    raw = ip_str.strip()
+    if "%" in raw:
+        return False
     try:
-        ip = ipaddress.ip_address(ip_str.strip())
+        ip = ipaddress.ip_address(raw)
         if hasattr(ip, "ipv4_mapped") and ip.ipv4_mapped:
             ip = ip.ipv4_mapped
+        elif ip.version == 6:
+            # Deprecated IPv4-compatible IPv6 addresses (::/96)
+            if ip in ipaddress.IPv6Network("::/96"):
+                if ip in {ipaddress.IPv6Address("::"), ipaddress.IPv6Address("::1")}:
+                    return False
+                ip = ipaddress.IPv4Address(int(ip))
         if (
             ip.is_private
             or ip.is_loopback
@@ -142,8 +252,54 @@ def is_safe_global_ip(ip_str: str) -> bool:
         ):
             return False
         return True
-    except ValueError:
+    except (ValueError, TypeError):
         return False
+
+
+def resolve_and_verify_host(
+    hostname: str,
+    *,
+    dns_resolver: Callable[[str], list[str]] | None = None,
+) -> tuple[bool, list[str]]:
+    """Resolve and verify hostname maps strictly to public global IP addresses.
+
+    Returns (True, [verified_ip, ...]) on success, or (False, []) on failure.
+    """
+    if not hostname or not isinstance(hostname, str):
+        return False, []
+    h = hostname.strip().lower()
+    if not h or h in {"localhost", "localhost.localdomain"}:
+        return False, []
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+
+    # Check if host is already an IP address literal
+    try:
+        ip_obj = ipaddress.ip_address(h)
+        ip_str = str(ip_obj)
+        if is_safe_global_ip(ip_str):
+            return True, [ip_str]
+        return False, []
+    except ValueError:
+        pass
+
+    # Normalize IDN / Punycode domain name
+    try:
+        ascii_host = h.encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        return False, []
+
+    resolver = dns_resolver or _DEFAULT_DNS_RESOLVER or _default_dns_resolver
+    try:
+        ips = resolver(ascii_host)
+        if not ips:
+            return False, []
+        for ip in ips:
+            if not is_safe_global_ip(ip):
+                return False, []
+        return True, list(ips)
+    except Exception:
+        return False, []
 
 
 def is_safe_global_host(
@@ -152,28 +308,8 @@ def is_safe_global_host(
     dns_resolver: Callable[[str], list[str]] | None = None,
 ) -> bool:
     """Resolve and verify hostname maps strictly to public global IP addresses."""
-    if not hostname:
-        return False
-    h = hostname.strip().lower()
-    if h in {"localhost", "localhost.localdomain"}:
-        return False
-    try:
-        ip = ipaddress.ip_address(h)
-        return is_safe_global_ip(str(ip))
-    except ValueError:
-        pass
-
-    resolver = dns_resolver or _DEFAULT_DNS_RESOLVER or _default_dns_resolver
-    try:
-        ips = resolver(h)
-        if not ips:
-            return False
-        for resolved_ip in ips:
-            if not is_safe_global_ip(resolved_ip):
-                return False
-        return True
-    except (socket.gaierror, OSError, ValueError):
-        return False
+    ok, _ = resolve_and_verify_host(hostname, dns_resolver=dns_resolver)
+    return ok
 
 
 def validate_doi(doi: str) -> bool:
@@ -290,21 +426,63 @@ def download_pdf(
     opener: Any = None,
     dns_resolver: Callable[[str], list[str]] | None = None,
     timeout: float = 20.0,
+    ssl_context: ssl.SSLContext | None = None,
+    connection_factory: Callable[..., Any] | None = None,
 ) -> tuple[bool, str | None, str | None]:
-    """Download HTTPS PDF to target_path with safe DNS validation, max 3 redirects, magic header check, and byte cap."""
-    active_opener = _get_opener(opener)
+    """Download HTTPS PDF to target_path with safe DNS validation, IP connection pinning, max 3 redirects, magic header check, and byte cap."""
     current_url = url
     redirects = 0
 
     while True:
-        parsed = urlsplit(current_url)
+        try:
+            parsed = urlsplit(current_url)
+        except ValueError:
+            return False, "invalid_url", current_url
+
         if parsed.scheme.lower() != "https":
             return False, "refused_non_https", current_url
-        hostname = parsed.hostname
-        if not hostname:
+
+        netloc = parsed.netloc or ""
+        if parsed.username is not None or parsed.password is not None or "@" in netloc:
+            return False, "refused_userinfo", current_url
+
+        raw_hostname = parsed.hostname
+        if not raw_hostname:
             return False, "invalid_url", current_url
-        if not is_safe_global_host(hostname, dns_resolver=dns_resolver):
+
+        try:
+            port = parsed.port if parsed.port is not None else 443
+        except ValueError:
+            return False, "invalid_url", current_url
+
+        if not (1 <= port <= 65535):
+            return False, "invalid_url", current_url
+
+        ok, verified_ips = resolve_and_verify_host(raw_hostname, dns_resolver=dns_resolver)
+        if not ok or not verified_ips:
             return False, "refused_private_or_local_target", current_url
+
+        pinned_ip = verified_ips[0]
+
+        h_clean = raw_hostname
+        if h_clean.startswith("[") and h_clean.endswith("]"):
+            h_clean = h_clean[1:-1]
+        try:
+            server_hostname = h_clean.encode("idna").decode("ascii").lower()
+        except (UnicodeError, ValueError):
+            return False, "invalid_url", current_url
+
+        if opener is not None:
+            active_opener = opener
+        elif _DEFAULT_OPENER is not None:
+            active_opener = _DEFAULT_OPENER
+        else:
+            active_opener = _build_pinned_opener(
+                pinned_ip=pinned_ip,
+                server_hostname=server_hostname,
+                context=ssl_context,
+                connection_factory=connection_factory,
+            )
 
         req = Request(
             current_url,
@@ -321,11 +499,17 @@ def download_pdf(
                     location = response.headers.get("Location")
                     if not location:
                         return False, "invalid_redirect", current_url
+                    loc_clean = location.strip()
+                    if "\r" in loc_clean or "\n" in loc_clean:
+                        return False, "invalid_redirect", current_url
                     redirects += 1
                     if redirects > MAX_REDIRECTS:
                         return False, "too_many_redirects", current_url
-                    current_url = urljoin(current_url, location)
+                    current_url = urljoin(current_url, loc_clean)
                     continue
+
+                if status_code >= 400:
+                    return False, f"http_error_{status_code}", current_url
 
                 cl = response.headers.get("Content-Length")
                 if cl:
@@ -338,6 +522,7 @@ def download_pdf(
                 with open(target_path, "wb") as out_file:
                     first_chunk = response.read(1024)
                     if not first_chunk or not first_chunk.startswith(b"%PDF-"):
+                        target_path.unlink(missing_ok=True)
                         return False, "not_a_pdf", current_url
                     out_file.write(first_chunk)
                     total_bytes = len(first_chunk)
@@ -347,6 +532,7 @@ def download_pdf(
                             break
                         total_bytes += len(chunk)
                         if total_bytes > MAX_PDF_BYTES:
+                            target_path.unlink(missing_ok=True)
                             return False, "payload_too_large", current_url
                         out_file.write(chunk)
                 return True, None, current_url
@@ -356,15 +542,19 @@ def download_pdf(
                     location = exc.headers.get("Location")
                     if not location:
                         return False, "invalid_redirect", current_url
+                    loc_clean = location.strip()
+                    if "\r" in loc_clean or "\n" in loc_clean:
+                        return False, "invalid_redirect", current_url
                     redirects += 1
                     if redirects > MAX_REDIRECTS:
                         return False, "too_many_redirects", current_url
-                    current_url = urljoin(current_url, location)
+                    current_url = urljoin(current_url, loc_clean)
                     continue
                 return False, f"http_error_{exc.code}", current_url
             finally:
                 exc.close()
         except (URLError, TimeoutError, OSError):
+            target_path.unlink(missing_ok=True)
             return False, "network_error", current_url
 
 
@@ -377,6 +567,8 @@ def execute_paper_pdf_read(
     dns_resolver: Callable[[str], list[str]] | None = None,
     timeout: float = 20.0,
     blocked_tokens: Iterable[str] | None = None,
+    ssl_context: ssl.SSLContext | None = None,
+    connection_factory: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Execute bounded open-access PDF lookup and extraction."""
     now_iso = datetime.now(UTC).isoformat()
@@ -453,6 +645,8 @@ def execute_paper_pdf_read(
             opener=opener,
             dns_resolver=dns_resolver,
             timeout=timeout,
+            ssl_context=ssl_context,
+            connection_factory=connection_factory,
         )
         if not ok:
             return {"error": err_code or "download_failed", "status": "refused"}
@@ -537,6 +731,8 @@ def dispatch_paper_pdf_tool(
     opener: Any = None,
     dns_resolver: Callable[[str], list[str]] | None = None,
     live_grants: dict[str, CapabilityGrantRef] | None = None,
+    ssl_context: ssl.SSLContext | None = None,
+    connection_factory: Callable[..., Any] | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     """Broker dispatch for jarvis.paper_pdf_read capability."""
     raw_args = call.arguments
@@ -583,6 +779,8 @@ def dispatch_paper_pdf_tool(
         opener=opener,
         dns_resolver=dns_resolver,
         blocked_tokens=blocked_tokens,
+        ssl_context=ssl_context,
+        connection_factory=connection_factory,
     )
     if result.get("error"):
         if result["error"] == "egress_blocked_private_content":

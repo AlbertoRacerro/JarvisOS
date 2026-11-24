@@ -36,6 +36,7 @@ from app.modules.agents.hermes.paper_pdf_tool import (
     is_safe_global_host,
     is_safe_global_ip,
     parse_pages_range,
+    resolve_and_verify_host,
     validate_doi,
     validate_search_term,
 )
@@ -842,3 +843,272 @@ def test_no_extracted_pdf_text_logged_in_events(monkeypatch: pytest.MonkeyPatch)
         payload_str = r["payload"]
         assert "Secret extracted literature evidence" not in payload_str
         assert "sensitive_user_prompt_query" not in payload_str
+
+
+# ===========================================================================
+# 5. Causal SSRF & Connection Pinning Tests (Criterion 3 Security Hardening)
+# ===========================================================================
+
+
+def test_paper_pdf_dns_rebinding_pinned_to_verified_global_ip(tmp_path: Any) -> None:
+    """SSRF Prevention: connection is pinned to verified global IP; prevents DNS rebinding TOCTOU."""
+    call_count = 0
+
+    def rebinding_dns(host: str) -> list[str]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return ["93.184.216.34"]  # Verified public global IP on preflight
+        return ["127.0.0.1"]  # Rebinding attempt to loopback on connect
+
+    connected_targets: list[tuple[str, int]] = []
+    sent_request_bytes: list[bytes] = []
+
+    def mock_factory(addr: tuple[str, int], timeout: Any = None, source_address: Any = None) -> Any:
+        connected_targets.append(addr)
+        mock_sock = MagicMock()
+        mock_sock.sendall.side_effect = lambda b: sent_request_bytes.append(b)
+        mock_sock.makefile.return_value = io.BytesIO(
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Length: 9\r\n"
+            b"Content-Type: application/pdf\r\n"
+            b"\r\n"
+            b"%PDF-1.4\n"
+        )
+        return mock_sock
+
+    mock_ssl_ctx = MagicMock()
+    mock_ssl_ctx.wrap_socket.side_effect = lambda sock, server_hostname=None: sock
+
+    target_file = tmp_path / "pinned.pdf"
+    ok, err, final_url = download_pdf(
+        "https://rebind.example.org/doc.pdf",
+        target_file,
+        dns_resolver=rebinding_dns,
+        ssl_context=mock_ssl_ctx,
+        connection_factory=mock_factory,
+    )
+
+    assert ok is True
+    assert err is None
+    assert final_url == "https://rebind.example.org/doc.pdf"
+    assert target_file.read_bytes() == b"%PDF-1.4\n"
+
+    # DNS was resolved exactly once during preflight; no second rebinding lookup occurred
+    assert call_count == 1
+    # Socket connected directly to the pinned public IP (not loopback)
+    assert connected_targets == [("93.184.216.34", 443)]
+    # SNI hostname matches target host
+    assert mock_ssl_ctx.wrap_socket.call_args[1]["server_hostname"] == "rebind.example.org"
+    # HTTP Host header matches target host
+    req_text = b"".join(sent_request_bytes).decode("latin1")
+    assert "Host: rebind.example.org" in req_text
+
+
+def test_paper_pdf_redirect_to_private_target_refused(tmp_path: Any) -> None:
+    """SSRF Prevention: redirects to private/loopback/non-https targets are strictly refused."""
+    target_file = tmp_path / "redirect_priv.pdf"
+
+    # 1. Redirect to private RFC 1918 host
+    redirect_to_private = _FakeOpener({
+        "https://oa.example.org/start.pdf": HTTPError(
+            "start", 302, "Found", {"Location": "https://internal.corp/secret.pdf"}, None  # type: ignore[arg-type]
+        ),
+    })
+
+    def fake_dns(host: str) -> list[str]:
+        if host == "oa.example.org":
+            return ["93.184.216.34"]
+        if host == "internal.corp":
+            return ["10.0.0.1"]
+        return ["127.0.0.1"]
+
+    ok, err, _ = download_pdf(
+        "https://oa.example.org/start.pdf",
+        target_file,
+        opener=redirect_to_private,
+        dns_resolver=fake_dns,
+    )
+    assert not ok
+    assert err == "refused_private_or_local_target"
+
+    # 2. Redirect to IPv6 loopback literal
+    redirect_to_ipv6_loopback = _FakeOpener({
+        "https://oa.example.org/start.pdf": HTTPError(
+            "start", 302, "Found", {"Location": "https://[::1]/secret.pdf"}, None  # type: ignore[arg-type]
+        ),
+    })
+    ok, err, _ = download_pdf(
+        "https://oa.example.org/start.pdf",
+        target_file,
+        opener=redirect_to_ipv6_loopback,
+        dns_resolver=fake_dns,
+    )
+    assert not ok
+    assert err == "refused_private_or_local_target"
+
+    # 3. Redirect downgrade to HTTP
+    redirect_to_http = _FakeOpener({
+        "https://oa.example.org/start.pdf": HTTPError(
+            "start", 302, "Found", {"Location": "http://oa.example.org/doc.pdf"}, None  # type: ignore[arg-type]
+        ),
+    })
+    ok, err, _ = download_pdf(
+        "https://oa.example.org/start.pdf",
+        target_file,
+        opener=redirect_to_http,
+        dns_resolver=fake_dns,
+    )
+    assert not ok
+    assert err == "refused_non_https"
+
+    # 4. Redirect with userinfo
+    redirect_with_userinfo = _FakeOpener({
+        "https://oa.example.org/start.pdf": HTTPError(
+            "start", 302, "Found", {"Location": "https://admin:pass@oa.example.org/doc.pdf"}, None  # type: ignore[arg-type]
+        ),
+    })
+    ok, err, _ = download_pdf(
+        "https://oa.example.org/start.pdf",
+        target_file,
+        opener=redirect_with_userinfo,
+        dns_resolver=fake_dns,
+    )
+    assert not ok
+    assert err == "refused_userinfo"
+
+
+def test_paper_pdf_userinfo_and_port_parsing_refusals(tmp_path: Any) -> None:
+    """SSRF Prevention: userinfo in URLs and out-of-bounds/invalid ports are refused."""
+    target_file = tmp_path / "test_userinfo.pdf"
+
+    # Userinfo rejected
+    ok, err, _ = download_pdf("https://user:pass@oa.example.org/paper.pdf", target_file)
+    assert not ok
+    assert err == "refused_userinfo"
+
+    ok, err, _ = download_pdf("https://user@oa.example.org/paper.pdf", target_file)
+    assert not ok
+    assert err == "refused_userinfo"
+
+    ok, err, _ = download_pdf("https://oa.example.org@evil.com/paper.pdf", target_file)
+    assert not ok
+    assert err == "refused_userinfo"
+
+    # Port out of bounds (> 65535 or <= 0)
+    ok, err, _ = download_pdf("https://oa.example.org:99999/paper.pdf", target_file)
+    assert not ok
+    assert err == "invalid_url"
+
+    ok, err, _ = download_pdf("https://oa.example.org:0/paper.pdf", target_file)
+    assert not ok
+    assert err == "invalid_url"
+
+    ok, err, _ = download_pdf("https://oa.example.org:notaport/paper.pdf", target_file)
+    assert not ok
+    assert err == "invalid_url"
+
+    # Valid custom port (e.g. 8443) connected properly
+    connected_targets: list[tuple[str, int]] = []
+
+    def mock_factory(addr: tuple[str, int], timeout: Any = None, source_address: Any = None) -> Any:
+        connected_targets.append(addr)
+        mock_sock = MagicMock()
+        mock_sock.makefile.return_value = io.BytesIO(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\n%PDF-1.4\n"
+        )
+        return mock_sock
+
+    mock_ssl_ctx = MagicMock()
+    mock_ssl_ctx.wrap_socket.side_effect = lambda sock, server_hostname=None: sock
+
+    ok, err, _ = download_pdf(
+        "https://oa.example.org:8443/paper.pdf",
+        target_file,
+        dns_resolver=lambda _: ["93.184.216.34"],
+        ssl_context=mock_ssl_ctx,
+        connection_factory=mock_factory,
+    )
+    assert ok is True
+    assert connected_targets == [("93.184.216.34", 8443)]
+
+
+def test_paper_pdf_ipv6_and_special_addresses_comprehensive() -> None:
+    """SSRF Prevention: loopback, link-local, private, broadcast, multicast, and IPv4-mapped/compatible IPv6 are refused."""
+    # Loopback
+    assert not is_safe_global_ip("127.0.0.1")
+    assert not is_safe_global_ip("127.0.0.2")
+    assert not is_safe_global_ip("::1")
+
+    # Unspecified / Broadcast
+    assert not is_safe_global_ip("0.0.0.0")
+    assert not is_safe_global_ip("::")
+    assert not is_safe_global_ip("255.255.255.255")
+
+    # Private IPv4 & IPv6 (Unique Local)
+    assert not is_safe_global_ip("10.0.0.1")
+    assert not is_safe_global_ip("172.16.0.1")
+    assert not is_safe_global_ip("192.168.1.1")
+    assert not is_safe_global_ip("fc00::1")
+    assert not is_safe_global_ip("fd00::1")
+
+    # Link-local & interface indexes
+    assert not is_safe_global_ip("169.254.169.254")
+    assert not is_safe_global_ip("fe80::1")
+    assert not is_safe_global_ip("fe80::1%eth0")
+
+    # Multicast & Reserved
+    assert not is_safe_global_ip("224.0.0.1")
+    assert not is_safe_global_ip("ff02::1")
+    assert not is_safe_global_ip("240.0.0.1")
+
+    # CGNAT & Documentation & Benchmarking
+    assert not is_safe_global_ip("100.64.0.1")
+    assert not is_safe_global_ip("198.18.0.1")
+    assert not is_safe_global_ip("2001:db8::1")
+
+    # IPv4-mapped IPv6
+    assert not is_safe_global_ip("::ffff:127.0.0.1")
+    assert not is_safe_global_ip("::ffff:10.0.0.1")
+    assert not is_safe_global_ip("::ffff:169.254.169.254")
+
+    # Deprecated IPv4-compatible IPv6 (::/96)
+    assert not is_safe_global_ip("::127.0.0.1")
+    assert not is_safe_global_ip("::10.0.0.1")
+
+    # Public Global IPs are permitted
+    assert is_safe_global_ip("93.184.216.34")
+    assert is_safe_global_ip("2606:4700:4700::1111")
+    assert is_safe_global_ip("::ffff:93.184.216.34")
+    assert is_safe_global_ip("::93.184.216.34")
+
+    # Mixed DNS result (dual-homed public + private) fails closed
+    ok, ips = resolve_and_verify_host(
+        "split.example.org",
+        dns_resolver=lambda _: ["93.184.216.34", "10.0.0.1"],
+    )
+    assert not ok
+    assert ips == []
+
+
+def test_paper_pdf_tls_certificate_hostname_mismatch_fails_closed(tmp_path: Any) -> None:
+    """SSRF Prevention: TLS certificate hostname verification mismatch fails closed."""
+    target_file = tmp_path / "cert_fail.pdf"
+
+    mock_ssl_ctx = MagicMock()
+    # Simulate SSLCertVerificationError / SSLError raised when server certificate does not match server_hostname
+    mock_ssl_ctx.wrap_socket.side_effect = URLError("certificate verify failed: Hostname mismatch")
+
+    def mock_factory(addr: tuple[str, int], timeout: Any = None, source_address: Any = None) -> Any:
+        return MagicMock()
+
+    ok, err, _ = download_pdf(
+        "https://mismatch.example.org/paper.pdf",
+        target_file,
+        dns_resolver=lambda _: ["93.184.216.34"],
+        ssl_context=mock_ssl_ctx,
+        connection_factory=mock_factory,
+    )
+    assert not ok
+    assert err == "network_error"
+    assert not target_file.exists()
