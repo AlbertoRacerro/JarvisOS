@@ -119,7 +119,7 @@ class Optics:
                               {"pitch_h": self.pitch_h, "pitch_v": self.pitch_v, "diameter": self.silhouette_diameter})
         if self.centre_height < self.silhouette_diameter / 2.0:
             raise OpticsError("OPTICS_LAYOUT_INVALID", "The lowest tube centre must be at least one tube (outer, when set) radius "
-                              "above the sea or ground.", {"field": "centre_height_above_sea"})
+                              "above the surface.", {"field": "centre_height_above_surface"})
         if not (1.0 <= self.n_wall and 1.0 <= self.n_water):
             raise OpticsError("OPTICS_PARAMETER_INVALID", "Refractive indices must be >= 1.",
                               {"n_wall": self.n_wall, "n_water": self.n_water})

@@ -89,8 +89,8 @@ def test_negative_absorption_rejected_by_draft_registry() -> None:
 def test_negative_absorption_in_adapter_is_typed() -> None:
     item = {"tag": "PBR", "params": {"tube_inner_diameter": 0.05, "tube_count": 4}, "unit": {"params": {
         **{k: {"si": v} for k, v in dict(tubes_across=2, layers=2, pitch_h=0.09, pitch_v=0.09, stagger_offset=0.0,
-                                         axis_azimuth=0.0, centre_height_above_sea=0.1, n_wall=1.5, n_water=1.33,
-                                         sea_albedo=0.06).items()},
+                                         axis_azimuth=0.0, centre_height_above_surface=0.1, n_wall=1.5, n_water=1.33,
+                                         surface_albedo=0.06).items()},
         "tube_outer_diameter": {"si": 0.06}, "wall_absorption": {"si": -1.0}}}}
     with pytest.raises(dynamic_engine.DynamicError) as exc:
         dynamic_engine.t2_optics_for_unit(item)
