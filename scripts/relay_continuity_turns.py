@@ -1212,7 +1212,13 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
             initialized = True
             conversation = event.get("conversation_id")
             init = event.get("init")
-            if not isinstance(init, dict) or init.get("model") != meta.get("model") or init.get("model") not in allowed_models:
+            recorded = meta.get("model")
+            verified = meta.get("catalog_verified") is True
+            role = relay_argon.account_models.ROLES.get(f"coordinator_{agent}") if verified else None
+            model_valid = (isinstance(recorded, str) and
+                           (bool(relay_argon.account_models._pattern(role).fullmatch(recorded))
+                            if role is not None else recorded in allowed_models))
+            if not isinstance(init, dict) or init.get("model") != recorded or not model_valid:
                 report.bad_lines += 1
         elif typ == "step_update":
             step = event.get("step_update")
