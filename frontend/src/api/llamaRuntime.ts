@@ -33,7 +33,14 @@ export type LocalModelEntry = {
   state_reason?: string | null;
   elapsed_seconds?: number | null;
 };
-export type LocalModels = { registry_present: boolean; models: LocalModelEntry[]; active_id: string | null };
+export type LocalModels = {
+  registry_present: boolean;
+  models: LocalModelEntry[];
+  active_id: string | null;
+  fallback_active?: boolean;
+  fallback_from_id?: string | null;
+  fallback_reason?: string | null;
+};
 async function modelRequest(path: string, method?: "POST"): Promise<LocalModels | LlamaStatus> {
   const response = await fetch(`${API_BASE_URL}/local-ai/models${path}`, method ? { method } : undefined);
   if (!response.ok) {

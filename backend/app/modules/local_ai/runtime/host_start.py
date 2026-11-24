@@ -1,11 +1,13 @@
 """Host operations request writer and readiness probe for Strata-served models (spec 302)."""
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
 import re
 import secrets
+import socket
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -88,6 +90,31 @@ def check_receipt(spool: Path, request_id: str) -> tuple[str, str | None] | None
     return None
 
 
+ALLOWED_LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def is_loopback_port_silent(host: str, port: int, *, timeout_s: float = 0.5) -> bool:
+    """Fail-closed loopback silence check.
+
+    Only definite connection refused on an allowed loopback host is proof of silence.
+    Unsupported host, DNS uncertainty, timeout, active connection, and other socket
+    errors return False (preventing fallback).
+    """
+    if host not in ALLOWED_LOOPBACK_HOSTS:
+        return False
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return False
+    except ConnectionRefusedError:
+        return True
+    except OSError as err:
+        if err.errno == errno.ECONNREFUSED:
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def probe_strata_readiness(
     host: str,
     port: int,
@@ -131,15 +158,20 @@ class StrataRuntimeController:
         clock_fn: Callable[[], float] | None = None,
         sleep_fn: Callable[[float], None] | None = None,
         timeout_s: float = DEFAULT_STARTUP_TIMEOUT_S,
+        port_silence_probe_fn: Callable[[str, int], bool] | None = None,
     ) -> None:
         self._probe_fn = probe_fn or probe_strata_readiness
         self._clock_fn = clock_fn or time.monotonic
         self._sleep_fn = sleep_fn or time.sleep
         self._timeout_s = timeout_s
+        self._port_silence_probe_fn = port_silence_probe_fn or is_loopback_port_silent
         self._states: dict[str, StrataModelState] = {}
 
     def probe(self, host: str, port: int, served_model: str) -> bool:
         return self._probe_fn(host, port, served_model)
+
+    def is_port_silent(self, host: str, port: int) -> bool:
+        return self._port_silence_probe_fn(host, port)
 
     def get_state(self, model_id: str, host: str, port: int, served_model: str) -> StrataModelState:
         st = self._states.setdefault(model_id, StrataModelState(state="stopped"))

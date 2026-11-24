@@ -29,7 +29,7 @@ try {
   browser = await chromium.launch({ headless: true });
   const page = await (await browser.newContext({ viewport: { width: 1600, height: 1000 } })).newPage(); page.setDefaultTimeout(30000);
   page.on('pageerror', e => summary.errors.push(String(e)));
-  let active = 'default';
+  let active = 'default', fallback = false;
   const running = { configured: true, runtime_reachable: true, model_loaded: true, reason_code: null, message: 'Model running', model_file: '/models/default.gguf', ctx_size: 8192, n_gpu_layers: 10, vram_bytes: null, ram_bytes: null, spawned_by_jarvis: true, crash_count: 0, last_crash_at: null };
   const entries = [
     { id: 'default', label: 'Default', runtime: 'llama_cpp', qualification: 'default', model_file: 'default.gguf', installed: true, digest_state: 'verified' },
@@ -42,7 +42,7 @@ try {
       summary.posts.push(path);
       active = path.includes('restore-default') ? 'default' : 'candidate';
       await route.fulfill({ json: { ...running, model_id: active, model_file: `/models/${active}.gguf` } });
-    } else await route.fulfill({ json: { registry_present: true, active_id: active, models: entries } });
+    } else await route.fulfill({ json: { registry_present: true, active_id: active, models: entries, ...(fallback ? { fallback_active: true, fallback_from_id: 'strata', fallback_reason: 'Strata non risponde' } : {}) } });
   });
   await page.route(/\/local-ai\/runtime\/llama-cpp(\/.*)?$/, async route => {
     if (route.request().method() === 'POST') summary.posts.push(new URL(route.request().url()).pathname);
@@ -56,17 +56,24 @@ try {
   const panel = page.getByRole('region', { name: 'Local model' });
   await panel.getByText('Registered models').waitFor();
   if (summary.posts.length) throw Error('POST on load');
-  if (await panel.getByRole('button', { name: 'Activate' }).count() !== 1) throw Error('Wrong activate availability');
+  if (await panel.getByRole('button', { name: 'Usa questo modello' }).count() !== 2) throw Error('Wrong activate availability');
   await page.screenshot({ path: join(evidence, 'registry.png'), fullPage: true }); summary.screenshots.push('registry.png'); summary.steps.push('registry and no POST on load');
   page.once('dialog', dialog => dialog.accept());
-  await panel.getByRole('button', { name: 'Activate' }).click();
-  await panel.getByRole('button', { name: 'Restore default' }).waitFor();
+  await panel.getByRole('listitem').filter({ hasText: 'Candidate' }).getByRole('button', { name: 'Usa questo modello' }).click();
+  await panel.getByRole('button', { name: 'Torna al modello standard' }).waitFor();
   await page.screenshot({ path: join(evidence, 'candidate.png'), fullPage: true }); summary.screenshots.push('candidate.png'); summary.steps.push('confirmed candidate activation');
   page.once('dialog', dialog => dialog.accept());
-  await panel.getByRole('button', { name: 'Restore default' }).click();
+  await panel.getByRole('button', { name: 'Torna al modello standard' }).click();
   await panel.getByText('Model file · default.gguf').waitFor();
   if (summary.posts.length !== 2) throw Error('Unexpected POST count');
   await page.screenshot({ path: join(evidence, 'restored.png'), fullPage: true }); summary.screenshots.push('restored.png'); summary.steps.push('confirmed default restoration');
+  fallback = true; active = 'candidate';
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Coding', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Coding destinations' }).getByRole('link', { name: 'Runtime', exact: true }).click();
+  await panel.getByRole('status').filter({ hasText: 'Ripristino automatico attivo: Strata non risponde.' }).waitFor();
+  if (await panel.getByText('strata', { exact: true }).count()) throw Error('Fallback source id exposed');
+  await page.screenshot({ path: join(evidence, 'fallback.png'), fullPage: true }); summary.screenshots.push('fallback.png'); summary.steps.push('automatic fallback notice visible (spec 359)');
   if (summary.errors.length) throw Error('Page errors occurred');
 } catch (error) { failure = error; summary.failure = String(error.stack ?? error); } finally {
   summary.result = failure ? 'fail' : 'pass'; await writeFile(join(evidence, 'evidence.json'), JSON.stringify(summary, null, 2) + '\n'); await browser?.close(); server.kill('SIGTERM'); await delay(500); await rm(data, { recursive: true, force: true });
