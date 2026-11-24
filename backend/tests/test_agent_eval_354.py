@@ -17,13 +17,19 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
 import pytest
-from scripts.benchmarks.agent_eval.runner import (
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.benchmarks.agent_eval.runner import (  # noqa: E402
     _http_request,
     compare_runs,
     count_thread_tool_calls,
@@ -35,7 +41,6 @@ from scripts.benchmarks.agent_eval.runner import (
     validate_base_url,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_TASKS_PATH = REPO_ROOT / "scripts" / "benchmarks" / "agent_eval" / "example_tasks.json"
 
 
