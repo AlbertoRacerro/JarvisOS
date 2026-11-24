@@ -1,6 +1,6 @@
 # 359 — DEFAULT-LOCAL-HEALTH-1: Default local model startup fallback, Settings/AI health visibility, and Hermes sampling preservation
 
-Status: ready
+Status: merged
 Depends on: 351, 352
 
 ## Goal
