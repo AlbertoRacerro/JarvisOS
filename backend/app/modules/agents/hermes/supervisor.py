@@ -1107,56 +1107,91 @@ ENGINEERING_METHODOLOGY_RULES = (
 
 
 def _assemble_turn_prompt(prompt: str, context_blocks: list[dict[str, str]] | None = None) -> str:
-    rules_suffix = f"\n\n{ENGINEERING_METHODOLOGY_RULES}" if ENGINEERING_METHODOLOGY_RULES not in prompt else ""
+    rules_suffix = f"\n\n{ENGINEERING_METHODOLOGY_RULES}"
+    clean_prompt = prompt
+    if ENGINEERING_METHODOLOGY_RULES in clean_prompt:
+        clean_prompt = clean_prompt.replace(f"\n\n{ENGINEERING_METHODOLOGY_RULES}", "")
+        clean_prompt = clean_prompt.replace(f"\n{ENGINEERING_METHODOLOGY_RULES}", "")
+        clean_prompt = clean_prompt.replace(ENGINEERING_METHODOLOGY_RULES, "")
+        clean_prompt = clean_prompt.strip("\n")
+
     if not context_blocks:
         avail_for_prompt = max(0, _TURN_PROMPT_LIMIT - len(rules_suffix))
-        if len(prompt) > avail_for_prompt:
-            truncated = prompt[: max(0, avail_for_prompt - len(_TURN_PROMPT_TRUNCATED_MARKER))] + _TURN_PROMPT_TRUNCATED_MARKER
+        if len(clean_prompt) > avail_for_prompt:
+            truncated = (
+                clean_prompt[: max(0, avail_for_prompt - len(_TURN_PROMPT_TRUNCATED_MARKER))]
+                + _TURN_PROMPT_TRUNCATED_MARKER
+            )
             return f"{truncated}{rules_suffix}"
-        return f"{prompt}{rules_suffix}"
+        if not clean_prompt:
+            return ENGINEERING_METHODOLOGY_RULES
+        return f"{clean_prompt}{rules_suffix}"
 
     limited_blocks = context_blocks[:16]
-    pinned_blocks: list[str] = []
-    unpinned_blocks: list[str] = []
-    for item in limited_blocks:
-        content = str(item.get("content", ""))
-        if item.get("source") in _PINNED_CONTEXT_SOURCES:
-            pinned_blocks.append(content)
-        else:
-            unpinned_blocks.append(content)
+    pinned_indices: list[int] = []
+    for source in _PINNED_CONTEXT_SOURCES:
+        for idx, item in enumerate(limited_blocks):
+            if item.get("source") == source and idx not in pinned_indices:
+                pinned_indices.append(idx)
 
-    avail_budget = max(0, _TURN_PROMPT_LIMIT - len(rules_suffix))
-    if len(prompt) > avail_budget:
-        fitted_prompt = prompt[: max(0, avail_budget - len(_TURN_PROMPT_TRUNCATED_MARKER))] + _TURN_PROMPT_TRUNCATED_MARKER
+    max_pinned_total = max(0, _TURN_PROMPT_LIMIT - len(_TURN_CONTEXT_HEADER) - len(rules_suffix))
+    pinned_parts: list[str] = []
+    pinned_used = 0
+    for idx in pinned_indices:
+        content = str(limited_blocks[idx].get("content", ""))
+        sep = 2 if pinned_parts else 0
+        avail = max_pinned_total - pinned_used - sep
+        if avail <= 0:
+            break
+        piece = content[:avail]
+        pinned_parts.append(piece)
+        pinned_used += sep + len(piece)
+
+    pinned_set = set(pinned_indices)
+    remaining_blocks = [
+        str(item.get("content", ""))[:_TURN_PROMPT_LIMIT]
+        for idx, item in enumerate(limited_blocks)
+        if idx not in pinned_set
+    ]
+
+    pinned_context = "\n\n".join(pinned_parts)
+    header_overhead = len(_TURN_CONTEXT_HEADER) if (pinned_parts or remaining_blocks) else 0
+    fixed_overhead = header_overhead + len(pinned_context) + len(rules_suffix)
+    prompt_budget = max(0, _TURN_PROMPT_LIMIT - fixed_overhead)
+    if len(clean_prompt) > prompt_budget:
+        if prompt_budget >= len(_TURN_PROMPT_TRUNCATED_MARKER):
+            fitted_prompt = (
+                clean_prompt[: prompt_budget - len(_TURN_PROMPT_TRUNCATED_MARKER)]
+                + _TURN_PROMPT_TRUNCATED_MARKER
+            )
+        else:
+            fitted_prompt = _TURN_PROMPT_TRUNCATED_MARKER[:prompt_budget]
+    else:
+        fitted_prompt = clean_prompt
+
+    context_parts = list(pinned_parts)
+    used = len(fitted_prompt) + header_overhead + len(pinned_context) + len(rules_suffix)
+    for content in remaining_blocks:
+        sep = 2 if context_parts else 0
+        extra = sep + len(content)
+        if used + extra <= _TURN_PROMPT_LIMIT:
+            context_parts.append(content)
+            used += extra
+        else:
+            left = _TURN_PROMPT_LIMIT - used - sep
+            if left > 0:
+                context_parts.append(content[:left])
+                used = _TURN_PROMPT_LIMIT
+            break
+
+    if not context_parts:
+        if not fitted_prompt:
+            return ENGINEERING_METHODOLOGY_RULES
         return f"{fitted_prompt}{rules_suffix}"
 
-    fitted_prompt = prompt
-    header_len = len(_TURN_CONTEXT_HEADER)
-    context_budget = max(0, avail_budget - len(fitted_prompt) - header_len)
-
-    assembled_parts: list[str] = []
-    used_context = 0
-
-    for content in pinned_blocks:
-        sep = 2 if assembled_parts else 0
-        rem = context_budget - used_context - sep
-        if rem <= 0:
-            break
-        piece = content[:rem]
-        assembled_parts.append(piece)
-        used_context += sep + len(piece)
-
-    for content in unpinned_blocks:
-        sep = 2 if assembled_parts else 0
-        rem = context_budget - used_context - sep
-        if rem <= 0:
-            break
-        piece = content[:rem]
-        assembled_parts.append(piece)
-        used_context += sep + len(piece)
-
-    assembled_context = "\n\n".join(assembled_parts)
-    return f"{fitted_prompt}{_TURN_CONTEXT_HEADER}{assembled_context}{rules_suffix}"
+    assembled_context = "\n\n".join(context_parts)
+    header = _TURN_CONTEXT_HEADER if fitted_prompt else _TURN_CONTEXT_HEADER.lstrip()
+    return f"{fitted_prompt}{header}{assembled_context}{rules_suffix}"
 
 
 def _safe_tool_arguments(value: dict[str, Any]) -> dict[str, Any]:

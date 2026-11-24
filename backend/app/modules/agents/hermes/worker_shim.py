@@ -265,6 +265,38 @@ def _json_utf8_len(val: Any) -> int:
         return len(str(val).encode("utf-8"))
 
 
+def _truncate_json_str(s: str, bound: int, suffix: str = "... [output truncated]") -> str:
+    if _json_utf8_len(s) <= bound:
+        return s
+    if _json_utf8_len(suffix) > bound:
+        if bound < 2:
+            return ""
+        low = 0
+        high = len(suffix)
+        best = 0
+        while low <= high:
+            mid = (low + high) // 2
+            if _json_utf8_len(suffix[:mid]) <= bound:
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        return suffix[:best]
+
+    low = 0
+    high = len(s)
+    best = 0
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = s[:mid] + suffix
+        if _json_utf8_len(candidate) <= bound:
+            best = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+    return s[:best] + suffix
+
+
 def compact_tool_payload(payload: Any, max_chars: int = 2000, *, max_bytes: int | None = None) -> Any:
     """Bound an individual tool payload to a compact summary/KPI bound.
 
@@ -277,8 +309,8 @@ def compact_tool_payload(payload: Any, max_chars: int = 2000, *, max_bytes: int 
 
     # 1. Plain string
     if isinstance(payload, str):
-        if len(payload.encode("utf-8")) > bound:
-            return _truncate_str_bytes(payload, bound, suffix="... [output truncated]")
+        if _json_utf8_len(payload) > bound:
+            return _truncate_json_str(payload, bound, suffix="... [output truncated]")
         return payload
 
     # 2. Check if already within bound
@@ -308,8 +340,8 @@ def compact_tool_payload(payload: Any, max_chars: int = 2000, *, max_bytes: int 
 
         def _compact_val(val: Any, str_budget: int) -> Any:
             if isinstance(val, str):
-                if len(val.encode("utf-8")) > str_budget:
-                    return _truncate_str_bytes(val, str_budget, suffix="... [truncated]")
+                if _json_utf8_len(val) > str_budget:
+                    return _truncate_json_str(val, str_budget, suffix="... [truncated]")
                 return val
             if isinstance(val, list):
                 keep_n = 2 if len(val) > 2 else len(val)
@@ -336,7 +368,7 @@ def compact_tool_payload(payload: Any, max_chars: int = 2000, *, max_bytes: int 
                     elif isinstance(v, dict):
                         tight[k] = {sk: "" for sk in v.keys()}
                     elif isinstance(v, str):
-                        tight[k] = _truncate_str_bytes(v, 20, suffix="...")
+                        tight[k] = _truncate_json_str(v, 20, suffix="...")
                     else:
                         tight[k] = v
                 if _json_utf8_len(tight) <= bound:
@@ -354,7 +386,7 @@ def compact_tool_payload(payload: Any, max_chars: int = 2000, *, max_bytes: int 
                 if isinstance(item, (dict, list)):
                     compacted_list.append(compact_tool_payload(item, max_chars=str_budget, max_bytes=str_budget))
                 elif isinstance(item, str):
-                    compacted_list.append(_truncate_str_bytes(item, str_budget))
+                    compacted_list.append(_truncate_json_str(item, str_budget, suffix="... [output truncated]"))
                 else:
                     compacted_list.append(item)
             if len(payload) > keep_count:

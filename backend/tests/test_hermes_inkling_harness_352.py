@@ -209,6 +209,53 @@ def test_assemble_turn_prompt_preserves_methodology_rules_under_long_context() -
     assert len(assembled) <= 12_000
 
 
+def test_assemble_turn_prompt_guarantees_rules_present_under_long_prompt_ending_with_rules() -> None:
+    """Requirement Finding 2: prompt ending with rules retains rules exactly once within limit."""
+    # 20,000-char prompt ending with the rules yields assembled prompt <= limit containing rules exactly once
+    suffix = f"\n\n{ENGINEERING_METHODOLOGY_RULES}"
+    long_prompt = ("A" * (20_000 - len(suffix))) + suffix
+    assert len(long_prompt) == 20_000
+
+    # 1. Without context blocks
+    assembled_no_ctx = _assemble_turn_prompt(long_prompt)
+    assert len(assembled_no_ctx) <= 12_000
+    assert assembled_no_ctx.count("Engineering methodology rules:") == 1
+    assert assembled_no_ctx.count(ENGINEERING_METHODOLOGY_RULES) == 1
+    assert "[prompt truncated to fit the turn limit]" in assembled_no_ctx
+    assert assembled_no_ctx.endswith(ENGINEERING_METHODOLOGY_RULES)
+
+    # 2. With context blocks
+    blocks = [
+        {"source": "jarvis:agent-grant", "content": "grant-data-123"},
+        {"source": "jarvis:system-envelope", "content": "envelope-data-456"},
+    ]
+    assembled_with_ctx = _assemble_turn_prompt(long_prompt, blocks)
+    assert len(assembled_with_ctx) <= 12_000
+    assert assembled_with_ctx.count("Engineering methodology rules:") == 1
+    assert assembled_with_ctx.count(ENGINEERING_METHODOLOGY_RULES) == 1
+    assert "[prompt truncated to fit the turn limit]" in assembled_with_ctx
+    assert "grant-data-123" in assembled_with_ctx
+    assert assembled_with_ctx.endswith(ENGINEERING_METHODOLOGY_RULES)
+
+    # 3. Short prompt containing the rules also contains them exactly once (without context blocks)
+    short_prompt = f"Short prompt question.\n\n{ENGINEERING_METHODOLOGY_RULES}"
+    assembled_short_no_ctx = _assemble_turn_prompt(short_prompt)
+    assert len(assembled_short_no_ctx) <= 12_000
+    assert assembled_short_no_ctx.count("Engineering methodology rules:") == 1
+    assert assembled_short_no_ctx.count(ENGINEERING_METHODOLOGY_RULES) == 1
+    assert assembled_short_no_ctx.endswith(ENGINEERING_METHODOLOGY_RULES)
+    assert "[prompt truncated to fit the turn limit]" not in assembled_short_no_ctx
+
+    # 4. Short prompt containing the rules also contains them exactly once (with context blocks)
+    assembled_short_with_ctx = _assemble_turn_prompt(short_prompt, blocks)
+    assert len(assembled_short_with_ctx) <= 12_000
+    assert assembled_short_with_ctx.count("Engineering methodology rules:") == 1
+    assert assembled_short_with_ctx.count(ENGINEERING_METHODOLOGY_RULES) == 1
+    assert assembled_short_with_ctx.endswith(ENGINEERING_METHODOLOGY_RULES)
+    assert "grant-data-123" in assembled_short_with_ctx
+    assert "[prompt truncated to fit the turn limit]" not in assembled_short_with_ctx
+
+
 # ===========================================================================
 # 2. Loop guardrails: Identical-call blocking & research budget
 # ===========================================================================
@@ -686,6 +733,42 @@ def test_compact_tool_payload_strict_recursive_bound() -> None:
     assert len(json.dumps(compacted_keys, ensure_ascii=False).encode("utf-8")) <= 100
     assert compacted_keys.get("truncated") is True
     assert "preview" in compacted_keys
+
+
+def test_compact_tool_payload_string_serialized_bound() -> None:
+    """Requirement Finding 1: string compaction strictly bounds serialized JSON UTF-8 length."""
+    # 2,000-char string of backslashes with bound 2000
+    bs_str = "\\" * 2000
+    res_bs = compact_tool_payload(bs_str, max_chars=2000)
+    dumped_bs = json.dumps(res_bs, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    assert len(dumped_bs) <= 2000
+    assert "[output truncated]" in res_bs
+
+    # 2,000-char string of quotes with bound 2000
+    quotes_str = '"' * 2000
+    res_quotes = compact_tool_payload(quotes_str, max_chars=2000)
+    dumped_quotes = json.dumps(res_quotes, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    assert len(dumped_quotes) <= 2000
+    assert "[output truncated]" in res_quotes
+
+    # 2,000-char string of non-ASCII (e.g. 2-byte, 3-byte, 4-byte) with bound 2000
+    accent_str = "é" * 2000
+    res_accent = compact_tool_payload(accent_str, max_chars=2000)
+    dumped_accent = json.dumps(res_accent, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    assert len(dumped_accent) <= 2000
+    assert "[output truncated]" in res_accent
+
+    cjk_str = "漢" * 2000
+    res_cjk = compact_tool_payload(cjk_str, max_chars=2000)
+    dumped_cjk = json.dumps(res_cjk, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    assert len(dumped_cjk) <= 2000
+    assert "[output truncated]" in res_cjk
+
+    emoji_str = "🚀" * 2000
+    res_emoji = compact_tool_payload(emoji_str, max_chars=2000)
+    dumped_emoji = json.dumps(res_emoji, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    assert len(dumped_emoji) <= 2000
+    assert "[output truncated]" in res_emoji
 
 
 def test_infer_envelope_ignores_frame_metadata() -> None:
