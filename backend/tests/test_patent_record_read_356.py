@@ -703,3 +703,19 @@ def test_egress_and_secret_blocking() -> None:
     assert res["status"] == "error"
     # Even if regex rejects it first or egress boundary rejects it, status is error
     assert res["error"] in {"invalid_arguments", "egress_blocked_private_content"}
+
+
+def test_trailing_newline_userinfo_fragment_and_html_entity_epo_link() -> None:
+    """Regression: reject trailing newline, URL userinfo, fragments; unescape &amp; in EPO href."""
+    assert validate_publication_number("EP1234567A1\n") is None
+    assert validate_epo_register_url("https://register.epo.org/application?number=EP18123456\n") is None
+    assert validate_epo_register_url("https://evil.com@register.epo.org/application?number=EP18123456") is None
+    assert validate_epo_register_url("https://register.epo.org/application?number=EP18123456#frag") is None
+
+    html_doc = (
+        '<html><body><a href="https://register.epo.org/application?number=EP18123456&amp;tab=main">'
+        "EPO Register</a></body></html>"
+    )
+    parsed = parse_google_patents_html(html_doc, "EP1234567A1")
+    assert parsed["epo_link"] == "https://register.epo.org/application?number=EP18123456&tab=main"
+    assert validate_epo_register_url(parsed["epo_link"]) == parsed["epo_link"]

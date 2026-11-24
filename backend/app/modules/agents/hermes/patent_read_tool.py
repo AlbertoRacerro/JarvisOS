@@ -32,7 +32,7 @@ GOOGLE_PATENTS_BASE_URL = "https://patents.google.com/patent"
 EPO_REGISTER_BASE_HOST = "register.epo.org"
 
 # Canonical patent identifier: 2 uppercase country letters, 5-18 digits, optional kind letter with optional digit
-PATENT_ID_RE = re.compile(r"^[A-Z]{2}[0-9]{5,18}(?:[A-Z][0-9]?)?$")
+PATENT_ID_RE = re.compile(r"^[A-Z]{2}[0-9]{5,18}(?:[A-Z][0-9]?)?\Z")
 
 MAX_RESPONSE_BYTES = 512 * 1024  # 512 KB
 MAX_TITLE_CHARS = 500
@@ -49,8 +49,8 @@ GOOGLE_STATUS_DISCLAIMER = (
 
 _XML_TAG_RE = re.compile(r"<[^>]+>", re.DOTALL)
 _WS_RE = re.compile(r"\s+")
-_EPO_APP_PARAM_RE = re.compile(r"^(?:EP)?[0-9]{7,12}(?:\.[0-9])?$")
-_SAFE_URL_PATH_QUERY_RE = re.compile(r"^[A-Za-z0-9\-_\./\?=&]+$")
+_EPO_APP_PARAM_RE = re.compile(r"^(?:EP)?[0-9]{7,12}(?:\.[0-9])?\Z")
+_SAFE_URL_PATH_QUERY_RE = re.compile(r"^[A-Za-z0-9\-_\./\?=&]+\Z")
 
 
 class _DenyRedirects(HTTPRedirectHandler):
@@ -109,6 +109,8 @@ def validate_epo_register_url(raw_url: str) -> str | None:
     """
     if not raw_url or not isinstance(raw_url, str):
         return None
+    if any(ord(c) < 32 or ord(c) == 127 for c in raw_url):
+        return None
     clean_url = raw_url.strip()
     try:
         parsed = urlsplit(clean_url)
@@ -117,9 +119,15 @@ def validate_epo_register_url(raw_url: str) -> str | None:
 
     if parsed.scheme != "https":
         return None
+    if parsed.username is not None or parsed.password is not None or "@" in (parsed.netloc or ""):
+        return None
+    if (parsed.netloc or "").lower() not in {EPO_REGISTER_BASE_HOST, f"{EPO_REGISTER_BASE_HOST}:443"}:
+        return None
     if parsed.hostname != EPO_REGISTER_BASE_HOST:
         return None
     if parsed.port not in (None, 443):
+        return None
+    if parsed.fragment:
         return None
 
     full_path_query = parsed.path + ("?" + parsed.query if parsed.query else "")
@@ -361,7 +369,8 @@ def parse_google_patents_html(html_text: str, publication_number: str) -> dict[s
     # 8. EPO Register link (if present)
     epo_link: str | None = None
     anchor_matches = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html_text, re.I | re.S)
-    for href, text in anchor_matches:
+    for raw_href, text in anchor_matches:
+        href = html.unescape(raw_href)
         href_lower = href.lower()
         text_lower = text.lower()
         if EPO_REGISTER_BASE_HOST in href_lower:
@@ -559,6 +568,8 @@ def dispatch_patent_read_tool(
     """Broker dispatch for jarvis.patent_read capability."""
     raw_args = call.arguments
     if not isinstance(raw_args, dict):
+        return None, "invalid_arguments"
+    if set(raw_args) - {"grant_id", "publication_number"}:
         return None, "invalid_arguments"
 
     publication_number = raw_args.get("publication_number")
