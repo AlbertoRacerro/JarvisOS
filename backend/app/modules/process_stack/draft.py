@@ -77,6 +77,17 @@ from app.modules.workspaces.service import get_workspace
 
 _COMPOSITION_TOL = 1e-6
 
+T2_PARAMETER_ALIASES = {"centre_height_above_sea": "centre_height_above_surface", "sea_albedo": "surface_albedo"}
+
+
+def normalize_t2_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Project legacy stored parameters onto their current names without mutating the input."""
+    result = dict(params)
+    for old, new in T2_PARAMETER_ALIASES.items():
+        if old in result:
+            result.setdefault(new, result.pop(old))
+    return result
+
 
 @lru_cache(maxsize=1)
 def _capability_manifest() -> dict[str, Any]:
@@ -557,6 +568,8 @@ def apply_op(document: dict[str, Any], op: Any, resolve: studio_unit.Resolver | 
         if unit["type"] == STUDIO_UNIT:
             _set_studio_params(unit, op)
             return
+        if unit["type"] == "PhotobioreactorT1":
+            unit["params"] = normalize_t2_params(unit["params"])
         if op.unset:
             bad = sorted({key for key in op.unset if key not in PBR_T2_OPTIONAL_KEYS})
             if unit["type"] != "PhotobioreactorT1" or bad:
@@ -575,7 +588,16 @@ def apply_op(document: dict[str, Any], op: Any, resolve: studio_unit.Resolver | 
             for param_spec in spec.params_for(op.mode):
                 if param_spec.key not in unit["params"] and param_spec.default is not None:
                     unit["params"][param_spec.key] = _default_param(param_spec)
-        for key, quantity in op.values.items():
+        values = op.values
+        if unit["type"] == "PhotobioreactorT1":
+            values = dict(values)
+            for old, new in T2_PARAMETER_ALIASES.items():
+                if old in values:
+                    alias_param = next(item for item in PBR_T2_SPECS if item.key == new)
+                    if new in values and _si(values[old], alias_param.kind, alias_param.label)["si"] != _si(values[new], alias_param.kind, alias_param.label)["si"]:
+                        raise DraftError("param_conflict", f"Conflicting values for {new}", field=new)
+                    values.setdefault(new, values.pop(old))
+        for key, quantity in values.items():
             if (unit["type"] == "PhotobioreactorT1" and key in {item.key for item in PBR_T2_SPECS}
                     and (unit.get("options") or {}).get("optics_model") != "t2"
                     and op.options.get("optics_model") != "t2"):
@@ -1425,7 +1447,10 @@ def registry_projection(workspace_id: str | None = None) -> dict[str, Any]:
 def _display(document: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     for item in sorted(document["objects"].values(), key=lambda value: (value["kind"], value["tag"])):
-        rows.append(copy.deepcopy(item))
+        row = copy.deepcopy(item)
+        if row.get("type") == "PhotobioreactorT1":
+            row["params"] = normalize_t2_params(row.get("params") or {})
+        rows.append(row)
     return rows
 
 
