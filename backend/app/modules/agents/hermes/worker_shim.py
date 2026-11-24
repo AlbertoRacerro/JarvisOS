@@ -126,6 +126,8 @@ def completion_message(text: str, tools: Any) -> dict[str, Any]:
             admitted = f"mcp__jarvis__{name}"
         elif admitted is None and name == "paper_search" and "mcp__jarvis__jarvis_paper_search" in permitted:
             admitted = "mcp__jarvis__jarvis_paper_search"
+        elif admitted is None and name == "paper_pdf_read" and "mcp__jarvis__jarvis_paper_pdf_read" in permitted:
+            admitted = "mcp__jarvis__jarvis_paper_pdf_read"
         if admitted is None:
             return {"role": "assistant", "content": text}
         promoted.append({"id": uuid.uuid4().hex, "type": "function", "function": {
@@ -165,11 +167,15 @@ ADMITTED_TOOLS = frozenset({"mcp__jarvis__jarvis_context_preview",
                             "mcp__jarvis__jarvis_bench_read", "mcp__jarvis__jarvis_bench_run",
                             "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
                             "paper_search", "jarvis_paper_search",
+                            "mcp__jarvis__paper_pdf_read", "mcp__jarvis__jarvis_paper_pdf_read",
+                            "paper_pdf_read", "jarvis_paper_pdf_read",
                             "memory", "session_search"})
 
 RESEARCH_TOOLS = frozenset({
     "paper_search", "jarvis_paper_search",
     "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
+    "paper_pdf_read", "jarvis_paper_pdf_read",
+    "mcp__jarvis__paper_pdf_read", "mcp__jarvis__jarvis_paper_pdf_read",
     "jarvis_retrieval_query", "mcp__jarvis__jarvis_retrieval_query",
     "jarvis_repo_read", "mcp__jarvis__jarvis_repo_read",
     "jarvis_knowledge_read", "mcp__jarvis__jarvis_knowledge_read",
@@ -494,7 +500,7 @@ def pinned_config(base_url: str, token: str, python: str | None = None) -> dict[
                                   "jarvis_bluecad_read", "jarvis_bluecad_act",
                                   "jarvis_studio_read", "jarvis_studio_act",
                                   "jarvis_bench_read", "jarvis_bench_run",
-                                  "jarvis_paper_search"]},
+                                  "jarvis_paper_search", "jarvis_paper_pdf_read"]},
         }},
         "model_catalog": {"enabled": False}, "updates": {"check": False},
         "telemetry": {"enabled": False, "send": False},

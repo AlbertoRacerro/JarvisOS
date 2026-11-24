@@ -57,6 +57,8 @@ HERMES_TOOL_ALLOWLIST = frozenset({"mcp__jarvis__jarvis_context_preview",
                                   "mcp__jarvis__jarvis_bench_read", "mcp__jarvis__jarvis_bench_run",
                                   "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
                                   "paper_search", "jarvis_paper_search",
+                                  "mcp__jarvis__paper_pdf_read", "mcp__jarvis__jarvis_paper_pdf_read",
+                                  "paper_pdf_read", "jarvis_paper_pdf_read",
                                   "memory", "session_search"})
 _BWRAP_PREFIX = ("bwrap", "--dev-bind", "/", "/", "--unshare-net", "--die-with-parent", "--")
 
@@ -120,7 +122,11 @@ _HERMES_KNOWLEDGE_READ_CAPABILITY = JarvisCapabilityDescriptor(
 )
 _HERMES_PAPER_SEARCH_CAPABILITY = JarvisCapabilityDescriptor(
     capability_id="jarvis.paper_search", route_id="ai-threads", action_class="READ",
-    label="Search public scientific literature metadata via Europe PMC and Crossref",
+    label="Search public scientific literature metadata via OpenAlex, Semantic Scholar, Europe PMC, and Crossref",
+)
+_HERMES_PAPER_PDF_READ_CAPABILITY = JarvisCapabilityDescriptor(
+    capability_id="jarvis.paper_pdf_read", route_id="ai-threads", action_class="READ",
+    label="Read bounded text from open-access scientific paper PDFs via Unpaywall",
 )
 _TOOL_CAPABILITIES = {
     "jarvis_retrieval_query": "jarvis.retrieval_query",
@@ -130,6 +136,8 @@ _TOOL_CAPABILITIES = {
     "jarvis_knowledge_read": "jarvis.knowledge_read",
     "jarvis_paper_search": "jarvis.paper_search",
     "paper_search": "jarvis.paper_search",
+    "jarvis_paper_pdf_read": "jarvis.paper_pdf_read",
+    "paper_pdf_read": "jarvis.paper_pdf_read",
     "jarvis_process_read": "jarvis.process_read",
     "jarvis_process_act": "jarvis.process_act",
     "jarvis_bluecad_read": "jarvis.bluecad_read",
@@ -145,7 +153,8 @@ for _descriptor in (_HERMES_PROCESS_READ_CAPABILITY, _HERMES_PROCESS_ACT_CAPABIL
                     _HERMES_STUDIO_ACT_CAPABILITY, _HERMES_BENCH_READ_CAPABILITY,
                     _HERMES_DEV_READ_CAPABILITY, _HERMES_REPO_READ_CAPABILITY,
                     _HERMES_KNOWLEDGE_READ_CAPABILITY,
-                    _HERMES_PAPER_SEARCH_CAPABILITY):
+                    _HERMES_PAPER_SEARCH_CAPABILITY,
+                    _HERMES_PAPER_PDF_READ_CAPABILITY):
     if _descriptor not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
         PRODUCTION_CAPABILITY_REGISTRY.register(_descriptor)
 if _HERMES_CONTEXT_CAPABILITY not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
@@ -259,6 +268,8 @@ RELAY_TOOL_PROTOCOL = (
 RESEARCH_TOOLS = frozenset({
     "paper_search", "jarvis_paper_search",
     "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
+    "paper_pdf_read", "jarvis_paper_pdf_read",
+    "mcp__jarvis__paper_pdf_read", "mcp__jarvis__jarvis_paper_pdf_read",
     "jarvis_retrieval_query", "mcp__jarvis__jarvis_retrieval_query",
     "jarvis_repo_read", "mcp__jarvis__jarvis_repo_read",
     "jarvis_knowledge_read", "mcp__jarvis__jarvis_knowledge_read",
@@ -535,6 +546,12 @@ def dispatch_tool(
                     from app.modules.agents.hermes.paper_search_tool import dispatch_paper_search_tool
 
                     result, error = dispatch_paper_search_tool(
+                        call, scope.workspace_id, error, grant=grant, opener=paper_search_opener, live_grants=live_grants
+                    )
+                elif call.capability_id == "jarvis.paper_pdf_read":
+                    from app.modules.agents.hermes.paper_pdf_tool import dispatch_paper_pdf_tool
+
+                    result, error = dispatch_paper_pdf_tool(
                         call, scope.workspace_id, error, grant=grant, opener=paper_search_opener, live_grants=live_grants
                     )
     return StructuredToolResult(
@@ -947,6 +964,8 @@ class HermesSupervisor:
                                                   "request_digest": (result.result or {}).get("request_digest")}
                                                  if result.capability_id == "jarvis.decide" and result.result
                                                  else {} if result.capability_id == "jarvis.decide"
+                                                 else {"doi": arguments.get("doi"), "pages": arguments.get("pages")}
+                                                 if result.capability_id == "jarvis.paper_pdf_read"
                                                  else _safe_tool_arguments(arguments)),
                                    "result_digest": canonical_digest(result.model_dump(mode="json")),
                                    "evidence_refs": _tool_evidence_refs(result.model_dump(mode="json")),

@@ -329,16 +329,31 @@ _BENCH_RUN_TOOL = {
 }
 _JARVIS_PAPER_SEARCH_TOOL = {
     "name": "jarvis_paper_search",
-    "description": "Search public scientific literature metadata via Europe PMC and Crossref REST APIs.",
+    "description": "Search public scientific literature metadata via OpenAlex, Semantic Scholar, Europe PMC, and Crossref REST APIs.",
     "inputSchema": {
         "type": "object",
         "properties": {
             "grant_id": {"type": "string", "maxLength": 128},
             "query": {"type": "string", "minLength": 1, "maxLength": 300},
-            "source": {"type": "string", "enum": ["all", "europe_pmc", "crossref"]},
+            "source": {"type": "string", "enum": ["all", "europe_pmc", "crossref", "openalex", "semantic_scholar"]},
             "limit": {"type": "integer", "minimum": 1, "maximum": 20},
         },
         "required": ["grant_id", "query"],
+        "additionalProperties": False,
+    },
+}
+_JARVIS_PAPER_PDF_READ_TOOL = {
+    "name": "jarvis_paper_pdf_read",
+    "description": "Fetch and read bounded text excerpts from an open-access scientific paper PDF by DOI via Unpaywall.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "grant_id": {"type": "string", "maxLength": 128},
+            "doi": {"type": "string", "maxLength": 160},
+            "pages": {"type": "string", "maxLength": 16},
+            "search_term": {"type": "string", "maxLength": 200},
+        },
+        "required": ["grant_id", "doi"],
         "additionalProperties": False,
     },
 }
@@ -346,8 +361,8 @@ _TOOLS = [_TOOL, _RETRIEVAL_TOOL, _DECISION_TOOL, _DEV_READ_TOOL, _REPO_READ_TOO
           _PROCESS_READ_TOOL, _PROCESS_ACT_TOOL,
           _BLUECAD_READ_TOOL, _BLUECAD_ACT_TOOL, _STUDIO_READ_TOOL, _STUDIO_ACT_TOOL,
           _BENCH_READ_TOOL, _BENCH_RUN_TOOL,
-          _JARVIS_PAPER_SEARCH_TOOL]
-_NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL} | {"paper_search"}
+          _JARVIS_PAPER_SEARCH_TOOL, _JARVIS_PAPER_PDF_READ_TOOL]
+_NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL} | {"paper_search", "paper_pdf_read"}
 
 
 class _DenyRedirects(HTTPRedirectHandler):
@@ -368,7 +383,8 @@ def _reply(message: dict[str, Any]) -> dict[str, Any] | None:
         return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": _TOOLS}}
     if method == "tools/call":
         params = message.get("params") or {}
-        if params.get("name") not in {tool["name"] for tool in _TOOLS} and params.get("name") != "paper_search":
+        tool_names = {tool["name"] for tool in _TOOLS} | {"paper_search", "paper_pdf_read"}
+        if params.get("name") not in tool_names:
             return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "unknown tool"}}
         body = params.get("arguments") or {}
         if params.get("name") in _NAMED and isinstance(body, dict):
