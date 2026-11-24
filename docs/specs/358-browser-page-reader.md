@@ -1,6 +1,6 @@
 # 358 — BROWSER-PAGE-READER-1: Headless Chromium public page reader in Hermes
 
-Status: ready
+Status: merged
 Depends on: 352
 
 ## Goal
