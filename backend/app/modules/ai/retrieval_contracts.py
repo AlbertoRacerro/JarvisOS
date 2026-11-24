@@ -44,6 +44,7 @@ class RetrievalHit(FrozenContract):
     lexical_score: float | None = Field(default=None, allow_inf_nan=False)
     vector_score: float | None = Field(default=None, allow_inf_nan=False)
     graph_score: float | None = Field(default=None, allow_inf_nan=False)
+    rerank_score: float | None = Field(default=None, allow_inf_nan=False)
     fused_score: float = Field(allow_inf_nan=False)
     excerpt: str | None = Field(default=None, max_length=MAX_EXCERPT_CHARS)
     index_revision: str = Field(min_length=1, max_length=128)
