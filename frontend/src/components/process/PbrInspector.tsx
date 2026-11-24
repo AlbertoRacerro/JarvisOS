@@ -133,7 +133,7 @@ export default function PbrInspector({ workspaceId, draftId, revision, unit, spe
           </select>
         </label>
         {opticsModel === "t2" && <>
-          <p className="draft-hint">Dynamic profile only. Enter the module layout, wall and water refractive indices, and sea albedo. The ten layout and index values are required for T2. Tube outer diameter and wall absorption are optional but must be set together; with both, optics v2 is used, with neither, optics v1.</p>
+          <p className="draft-hint">Dynamic profile only. Enter the module layout, wall and water refractive indices, and albedo of the surface below (ground or water). The ten layout and index values are required for T2. Tube outer diameter and wall absorption are optional but must be set together; with both, optics v2 is used, with neither, optics v1.</p>
           <div className="pbr-parameters">{opticsParams.map((param) => <QuantityInput key={param.key} label={param.label} kind={param.kind}
             stored={stored(param.key)} units={registry.quantity_units[param.kind]?.display ?? []} value={form[param.key]} error={errors[param.key]}
             onChange={(next) => setForm((old) => ({ ...old, [param.key]: next }))} />)}</div>
