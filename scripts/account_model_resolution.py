@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -90,10 +91,32 @@ def parse_catalog(raw: bytes, cli: str) -> frozenset[str]:
     except json.JSONDecodeError:
         if cli != "agy":
             raise Refused("catalog_malformed") from None
-        # agy models emits plain IDs. Do not mine IDs out of prose or errors.
-        ids = text.splitlines()
-        if not ids or len(ids) > 2048 or any(not re.fullmatch(r"[a-z0-9][a-z0-9.-]{2,100}", line) for line in ids):
+        # agy models emits plain IDs or tab-separated ID and display name. Do not mine IDs out of prose or errors.
+        lines = text.splitlines()
+        if not lines or len(lines) > 2048:
             raise Refused("catalog_malformed") from None
+        ids = []
+        for line in lines:
+            if not line:
+                raise Refused("catalog_malformed") from None
+            parts = line.split("\t")
+            if len(parts) == 1:
+                ident = parts[0]
+            elif len(parts) == 2:
+                ident, display = parts
+                if (
+                    not display
+                    or not display.strip()
+                    or len(display) > 160
+                    or not display.isprintable()
+                    or any(unicodedata.category(c).startswith("C") for c in display)
+                ):
+                    raise Refused("catalog_malformed") from None
+            else:
+                raise Refused("catalog_malformed") from None
+            if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{2,100}", ident):
+                raise Refused("catalog_malformed") from None
+            ids.append(ident)
     else:
         if not isinstance(data, dict) or not isinstance(data.get("models"), list):
             raise Refused("catalog_malformed")

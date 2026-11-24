@@ -63,6 +63,78 @@ def test_plain_catalog_exact_lines_only() -> None:
         models.parse_catalog(b"Available models: gemini-4-argon-low", "agy")
 
 
+def test_tab_separated_catalog_parses_real_agy_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = (
+        b"gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n"
+        b"gemini-4-flash-low\tGemini 4 Flash (Low)\n"
+        b"gemini-4.1-flash-low\tGemini 4.1 Flash (Low)\n"
+        b"gemini-4-flash-medium\tGemini 4 Flash (Medium)\n"
+        b"gemini-4-argon-low\tGemini 4 Argon (Low)\n"
+        b"gemini-5.2-argon-high\tGemini 5.2 Argon (High)\n"
+        b"claude-opus-6-1-high\tClaude Opus 6.1 (High)\n"
+        b"claude-sonnet-4-5-high\tClaude Sonnet 4.5 (High)\n"
+    )
+    parsed = models.parse_catalog(raw, "agy")
+    assert parsed == {
+        "gemini-3.8-flash-low",
+        "gemini-4-flash-low",
+        "gemini-4.1-flash-low",
+        "gemini-4-flash-medium",
+        "gemini-4-argon-low",
+        "gemini-5.2-argon-high",
+        "claude-opus-6-1-high",
+        "claude-sonnet-4-5-high",
+    }
+    monkeypatch.setattr(models, "catalog", lambda *a, **kw: parsed)
+    assert models.resolve("worker_flash", "unused", {}) == "gemini-4.1-flash-low"
+    assert models.resolve("worker_flash-medium", "unused", {}) == "gemini-4-flash-medium"
+    assert models.resolve("worker_argon", "unused", {}) == "gemini-4-argon-low"
+    assert models.resolve("worker_argon-high", "unused", {}) == "gemini-5.2-argon-high"
+    assert models.resolve("worker_agy-opus", "unused", {}) == "claude-opus-6-1-high"
+    assert models.resolve("worker_agy-sonnet", "unused", {}) == "claude-sonnet-4-5-high"
+
+
+def test_tab_separated_catalog_allows_mixed_lines_and_max_length_name() -> None:
+    long_name = "X" * 160
+    raw = f"gemini-4-argon-low\t{long_name}\ngemini-4.1-argon-low\n".encode()
+    assert models.parse_catalog(raw, "agy") == {"gemini-4-argon-low", "gemini-4.1-argon-low"}
+
+
+@pytest.mark.parametrize("raw", [
+    b"gemini-4-neon-medium\t",
+    b"gemini-4-neon-medium\t\n",
+    b"gemini-4-neon-medium\t   \n",
+    b"gemini-4-neon-medium\tGemini 4 Neon\textra\n",
+    b"gemini-4-neon-medium\t\tGemini 4 Neon\n",
+    b"\tgemini-4-neon-medium\tGemini 4 Neon\n",
+    b"GEMINI-4-FLASH\tGemini 4 Flash\n",
+    b"bad_id\tGemini 4 Flash\n",
+    b"-bad-id\tGemini 4 Flash\n",
+    b"g\tGemini 4 Flash\n",
+    b"\tGemini 4 Flash\n",
+    b"gemini 4 flash\tGemini 4 Flash\n",
+    b"Available models:\n",
+    b"Available models:\tGemini 4 Flash\n",
+    b"gemini-4-flash\tGemini 4 Flash\nError: rate limit exceeded\n",
+    b"gemini-4-flash\tGemini\x00Flash\n",
+    b"gemini-4-flash\tGemini\x1bFlash\n",
+    b"gemini-4-flash\tGemini\x08Flash\n",
+    b"gemini-4-flash\t" + (b"X" * 161) + b"\n",
+    b"gemini-4-flash\tGemini 4 Flash\n\ngemini-5-flash\tGemini 5 Flash\n",
+    b"\ngemini-4-flash\tGemini 4 Flash\n",
+    b"gemini-4-flash\tGemini 4 Flash\n\n",
+    b"gemini-4-flash\tGemini 4 Flash\ngemini-4-flash\tGemini 4 Flash Beta\n",
+])
+def test_malformed_tab_catalog_refused(raw: bytes) -> None:
+    with pytest.raises(models.Refused, match="catalog_malformed"):
+        models.parse_catalog(raw, "agy")
+
+
+def test_tab_lines_refused_for_non_agy_cli() -> None:
+    with pytest.raises(models.Refused, match="catalog_malformed"):
+        models.parse_catalog(b"gpt-6-luna\tGPT 6 Luna\n", "codex")
+
+
 def test_explicit_stale_catalog_is_refused() -> None:
     old = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
     with pytest.raises(models.Refused, match="catalog_stale"):
