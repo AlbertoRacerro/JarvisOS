@@ -334,9 +334,10 @@ def run(repo: Path, session: str, agent: str = "argon") -> int:
             binary = shutil.which("agy")
             if binary is None:
                 raise Refused("agy_missing")
-            prepare_login()
-            subscription_settings()
             if account_models.enabled(dict(os.environ)):
+                # The catalog read needs the native login; the default path keeps its old order.
+                prepare_login()
+                subscription_settings()
                 try:
                     selected = json.loads((turn / "selected-model.json").read_text(encoding="utf-8"))["model"]
                 except (OSError, ValueError, KeyError, TypeError) as exc:
