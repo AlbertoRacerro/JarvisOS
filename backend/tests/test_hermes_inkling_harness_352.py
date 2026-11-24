@@ -119,7 +119,7 @@ def _make_call(
         session_ref=SESSION,
         arguments=arguments,
         requested_at=NOW,
-        deadline_at=NOW + timedelta(seconds=60),
+        deadline_at=datetime.now(UTC) + timedelta(seconds=60),
     )
 
 
@@ -369,7 +369,7 @@ def test_dead_turn_detection_and_nudge() -> None:
 
     envelope = InferenceEnvelope(
         envelope_id=str(uuid4()), correlation_id="c-1", task_kind="general",
-        prompt="Initial prompt", requested_at=NOW, deadline_at=NOW + timedelta(seconds=60),
+        prompt="Initial prompt", requested_at=NOW, deadline_at=datetime.now(UTC) + timedelta(seconds=60),
         agent_session=SESSION,
     )
 

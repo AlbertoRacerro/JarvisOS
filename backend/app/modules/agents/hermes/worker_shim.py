@@ -516,6 +516,7 @@ class Worker:
                     worker.turn_step_count += 1
                     tools = body.get("tools")
                     metadata = dict(body.get("metadata") or {})
+                    allowed_tools: list[str] | None
                     if worker.turn_step_count >= worker.turn_cap:
                         tools = []
                         allowed_tools = []
