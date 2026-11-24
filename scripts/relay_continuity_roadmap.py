@@ -613,11 +613,14 @@ def new_mission_id(now: datetime) -> str:
 
 
 def submit_mission(root: Path, repo: Path, authority: Any, tasks: Any, *, session: str | None = None,
-                   now: datetime | None = None, mission_id: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
+                   now: datetime | None = None, mission_id: str | None = None,
+                   coordinator_profile: str = "standard") -> tuple[dict[str, Any] | None, str | None]:
     """Validate and durably queue a mission before any owner can see it. (mission, None) or (None, problem)."""
     now = now or now_utc()
     mission = {"schema": MISSION_SCHEMA, "id": mission_id or new_mission_id(now),
                "authority": authority, "tasks": tasks, "submitted_at": iso(now), "session": session, "repo": str(repo)}
+    if coordinator_profile != "standard":
+        mission["coordinator_profile"] = coordinator_profile
     if problem := validate_mission(mission):
         return None, problem
     env = devctx.default_env(repo)

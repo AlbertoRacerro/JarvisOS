@@ -1,4 +1,6 @@
 import { API_BASE_URL } from "./client";
+import type { NumberProvenance } from "./generated/numberProvenance";
+export type { NumberProvenance, NumberProvenanceEntry } from "./generated/numberProvenance";
 import type { KnowledgeContextPreview } from "./knowledgeActions";
 import type { ActionOutcome, SurfaceRef } from "./workspaceActions";
 
@@ -98,6 +100,7 @@ export type ThreadInteraction = {
   turn_plan?: TurnPlan | null;
   live_steps?: LiveStep[];
   verification_summary?: { status: "passed" | "warnings"; warning_count: number; checks: { kind: string; severity: string; summary: string }[] } | null;
+  number_provenance?: NumberProvenance | null;
   surface_summary?: string | null;
   surface_digest?: string | null;
   actions?: ActionOutcome[];
