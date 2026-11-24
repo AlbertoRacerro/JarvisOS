@@ -15,6 +15,12 @@ from uuid import uuid4
 
 from app.core.database import open_sqlite_connection
 from app.core.paths import build_paths
+from app.modules.agents.hermes.worker_shim import (
+    compact_tool_payload as compact_tool_payload,
+)
+from app.modules.agents.hermes.worker_shim import (
+    shrink_tool_history,
+)
 from app.modules.ai.agent_contracts import (
     AgentControlCommand,
     AgentEvent,
@@ -273,85 +279,6 @@ def is_research_tool(tool_name: str) -> bool:
     return name in RESEARCH_TOOLS or any(k in name for k in ("read", "search", "retrieval", "query"))
 
 
-def shrink_tool_history(
-    messages: list[dict[str, Any]],
-    keep_recent: int = 1,
-    max_shrunk_len: int = 180,
-) -> list[dict[str, Any]]:
-    """Shrink earlier tool-result messages in the turn transcript as new steps arrive.
-
-    Preserves the most recent `keep_recent` tool results intact while compacting
-    earlier ones to a concise snippet to preserve KV-cache headroom.
-    """
-    if not isinstance(messages, list):
-        return messages
-    result_indices = [
-        i for i, m in enumerate(messages)
-        if isinstance(m, dict) and m.get("role") == "tool"
-    ]
-    to_shrink = set(result_indices[:-keep_recent] if keep_recent > 0 else result_indices)
-    shrunk_messages = []
-    for i, msg in enumerate(messages):
-        if i in to_shrink and isinstance(msg, dict):
-            content = msg.get("content")
-            if isinstance(content, str) and len(content) > max_shrunk_len:
-                compact_content = content[: max_shrunk_len - 32] + "... [prior tool output shrunk]"
-                shrunk_messages.append({**msg, "content": compact_content})
-                continue
-        shrunk_messages.append(msg)
-    return shrunk_messages
-
-
-def compact_tool_payload(payload: Any, max_chars: int = 2000) -> Any:
-    """Bound an individual tool payload to a compact summary/KPI bound."""
-    if isinstance(payload, str):
-        if len(payload) > max_chars:
-            return payload[: max(0, max_chars - 30)] + "... [output truncated]"
-        return payload
-
-    str_limit = min(400, max(30, (max_chars - 150) // 6)) if max_chars < 2000 else 400
-
-    def _compact_recursive(val: Any) -> Any:
-        if isinstance(val, str):
-            if len(val) > str_limit:
-                return val[:str_limit] + "... [truncated]"
-            return val
-        if isinstance(val, list):
-            res = [_compact_recursive(item) for item in val[:3]]
-            if len(val) > 3:
-                res.append({"notice": f"... ({len(val) - 3} further items truncated for compact payload)"})
-            return res
-        if isinstance(val, dict):
-            return {k: _compact_recursive(v) for k, v in val.items()}
-        return val
-
-    if isinstance(payload, (dict, list)):
-        try:
-            dumped = json.dumps(payload, separators=(",", ":"))
-        except (TypeError, ValueError):
-            dumped = str(payload)
-        if len(dumped) <= max_chars:
-            return payload
-        compacted = _compact_recursive(payload)
-        try:
-            dumped_compacted = json.dumps(compacted, separators=(",", ":"))
-        except (TypeError, ValueError):
-            dumped_compacted = str(compacted)
-        if len(dumped_compacted) <= max_chars and len(dumped_compacted.encode("utf-8")) <= max_chars:
-            return compacted
-        preview_limit = max(0, max_chars - 60)
-        fallback: dict[str, Any] = {"truncated": True, "preview": dumped_compacted[:preview_limit]}
-        while (
-            len(json.dumps(fallback, separators=(",", ":"))) > max_chars
-            or len(json.dumps(fallback, separators=(",", ":")).encode("utf-8")) > max_chars
-        ) and preview_limit > 0:
-            preview_limit = max(0, preview_limit - 10)
-            fallback["preview"] = dumped_compacted[:preview_limit]
-        return fallback
-
-    return payload
-
-
 def is_dead_turn(text: str | None) -> bool:
     """Return True if model response has neither tool calls nor a non-empty answer."""
     if not text or not isinstance(text, str) or not text.strip():
@@ -392,12 +319,6 @@ def infer_envelope(frame: dict[str, Any], *, deadline_seconds: int = 120,
         raise ValueError("direct provider override refused")
     tools = _admitted_tools(frame)
     now = datetime.now(UTC)
-    raw_metadata = frame.get("metadata")
-    metadata: dict[str, Any] = {}
-    if isinstance(raw_metadata, dict):
-        reasoning_phase = raw_metadata.get("reasoning_phase")
-        if reasoning_phase in {"analysis", "final", "routing"}:
-            metadata["reasoning_phase"] = reasoning_phase
     return InferenceEnvelope(
         envelope_id=str(uuid4()), correlation_id=str(frame["id"]),
         task_kind=str(frame.get("task_kind", "general")),
@@ -409,7 +330,6 @@ def infer_envelope(frame: dict[str, Any], *, deadline_seconds: int = 120,
         max_output_tokens=frame.get("max_output_tokens"), agent_session=ref,
         cancellation_id=ref.hermes_session_id, requested_at=now,
         deadline_at=now + timedelta(seconds=deadline_seconds),
-        metadata=metadata,
     )
 
 
@@ -442,17 +362,21 @@ def run_governed_inference(
     cancelled: Callable[[str], bool] | None = None,
     on_outcome: Callable[[AiTaskOutcome], None] | None = None,
     max_nudges: int = 1,
+    reasoning_phase: str | None = None,
 ) -> dict[str, Any]:
     if envelope.agent_session is None:
         return {"status": "refused"}
     if envelope.is_expired(datetime.now(UTC)) or (cancelled and envelope.cancellation_id and cancelled(envelope.cancellation_id)):
         return {"status": "cancelled"}
     temperature = 0.3 if envelope.task_kind == "general" else None
-    outcome = runner(**run_ai_task_kwargs(
+    runner_kwargs = run_ai_task_kwargs(
         envelope,
         structured_output_schema=structured_output_schema,
         temperature=temperature,
-    ))
+    )
+    if reasoning_phase is not None:
+        runner_kwargs["metadata"] = {"reasoning_phase": reasoning_phase}
+    outcome = runner(**runner_kwargs)
     if on_outcome is not None:
         on_outcome(outcome)
     if envelope.is_expired(datetime.now(UTC)) or (cancelled and envelope.cancellation_id and cancelled(envelope.cancellation_id)):
@@ -462,11 +386,14 @@ def run_governed_inference(
     if outcome.status == "success" and outcome.response and is_dead_turn(outcome.response.text) and max_nudges > 0:
         nudged_prompt = f"{envelope.prompt}\n\n{DEAD_TURN_NUDGE}"
         nudged_envelope = envelope.model_copy(update={"prompt": nudged_prompt})
-        outcome = runner(**run_ai_task_kwargs(
+        nudged_kwargs = run_ai_task_kwargs(
             nudged_envelope,
             structured_output_schema=structured_output_schema,
             temperature=temperature,
-        ))
+        )
+        if reasoning_phase is not None:
+            nudged_kwargs["metadata"] = {"reasoning_phase": reasoning_phase}
+        outcome = runner(**nudged_kwargs)
         if on_outcome is not None:
             on_outcome(outcome)
         if envelope.is_expired(datetime.now(UTC)) or (cancelled and envelope.cancellation_id and cancelled(envelope.cancellation_id)):
@@ -608,10 +535,8 @@ def dispatch_tool(
                     from app.modules.agents.hermes.paper_search_tool import dispatch_paper_search_tool
 
                     result, error = dispatch_paper_search_tool(
-                        call, scope.workspace_id, error, grant=grant, opener=paper_search_opener
+                        call, scope.workspace_id, error, grant=grant, opener=paper_search_opener, live_grants=live_grants
                     )
-    if result is not None:
-        result = compact_tool_payload(result)
     return StructuredToolResult(
         call_id=call.call_id, capability_id=call.capability_id,
         status="succeeded" if result is not None else "refused",
@@ -892,6 +817,7 @@ class HermesSupervisor:
             return self.responses.pop(request_id)
 
     def _handle_relay(self, frame: dict[str, Any]) -> None:
+        result: dict[str, Any]
         try:
             selected_route: str | None
             if self.route_for_role is not None:
@@ -904,12 +830,11 @@ class HermesSupervisor:
             require_local_role_route(selected_route)
 
             self.turn_step_count += 1
-            if self.turn_step_count >= self.turn_cap:
+            is_capped = self.turn_step_count >= self.turn_cap
+            reasoning_phase = "final" if is_capped else None
+            if is_capped:
                 frame["tools"] = []
                 frame["allowed_tools"] = []
-                metadata = dict(frame.get("metadata") or {})
-                metadata["reasoning_phase"] = "final"
-                frame["metadata"] = metadata
 
             tools = _admitted_tools(frame)
             envelope = infer_envelope(frame, route_class=selected_route)
@@ -927,7 +852,10 @@ class HermesSupervisor:
                     structured_output_schema=tool_response_schema(tools) if tools else None,
                     cancelled=lambda value: value in self.cancelled,
                     on_outcome=record_flow,
+                    reasoning_phase=reasoning_phase,
                 )
+                if is_capped:
+                    result["admitted_tools"] = []
         except (ValueError, KeyError):
             result = {"status": "refused"}
         try:
@@ -1181,70 +1109,53 @@ ENGINEERING_METHODOLOGY_RULES = (
 def _assemble_turn_prompt(prompt: str, context_blocks: list[dict[str, str]] | None = None) -> str:
     rules_suffix = f"\n\n{ENGINEERING_METHODOLOGY_RULES}" if ENGINEERING_METHODOLOGY_RULES not in prompt else ""
     if not context_blocks:
+        avail_for_prompt = max(0, _TURN_PROMPT_LIMIT - len(rules_suffix))
+        if len(prompt) > avail_for_prompt:
+            truncated = prompt[: max(0, avail_for_prompt - len(_TURN_PROMPT_TRUNCATED_MARKER))] + _TURN_PROMPT_TRUNCATED_MARKER
+            return f"{truncated}{rules_suffix}"
         return f"{prompt}{rules_suffix}"
+
     limited_blocks = context_blocks[:16]
-    bounded_context = "\n\n".join(str(item.get("content", ""))[:_TURN_PROMPT_LIMIT] for item in limited_blocks)
-    full_prompt = f"{prompt}{_TURN_CONTEXT_HEADER}{bounded_context}{rules_suffix}"
-    if len(full_prompt) <= _TURN_PROMPT_LIMIT:
-        return full_prompt
-
-    pinned_indices: list[int] = []
-    for source in _PINNED_CONTEXT_SOURCES:
-        for idx, item in enumerate(limited_blocks):
-            if item.get("source") == source and idx not in pinned_indices:
-                pinned_indices.append(idx)
-    if not pinned_indices:
-        return full_prompt[:_TURN_PROMPT_LIMIT]
-
-    max_pinned_total = max(0, _TURN_PROMPT_LIMIT - len(_TURN_CONTEXT_HEADER) - len(rules_suffix))
-    pinned_parts: list[str] = []
-    pinned_used = 0
-    for idx in pinned_indices:
-        content = str(limited_blocks[idx].get("content", ""))
-        sep = 2 if pinned_parts else 0
-        avail = max_pinned_total - pinned_used - sep
-        if avail <= 0:
-            break
-        piece = content[:avail]
-        pinned_parts.append(piece)
-        pinned_used += sep + len(piece)
-
-    pinned_set = set(pinned_indices)
-    remaining_blocks = [
-        str(item.get("content", ""))[:_TURN_PROMPT_LIMIT]
-        for idx, item in enumerate(limited_blocks)
-        if idx not in pinned_set
-    ]
-
-    pinned_context = "\n\n".join(pinned_parts)
-    fixed_overhead = len(_TURN_CONTEXT_HEADER) + len(pinned_context) + len(rules_suffix)
-    prompt_budget = max(0, _TURN_PROMPT_LIMIT - fixed_overhead)
-    if len(prompt) > prompt_budget:
-        if prompt_budget >= len(_TURN_PROMPT_TRUNCATED_MARKER):
-            fitted_prompt = (
-                prompt[: prompt_budget - len(_TURN_PROMPT_TRUNCATED_MARKER)] + _TURN_PROMPT_TRUNCATED_MARKER
-            )
+    pinned_blocks: list[str] = []
+    unpinned_blocks: list[str] = []
+    for item in limited_blocks:
+        content = str(item.get("content", ""))
+        if item.get("source") in _PINNED_CONTEXT_SOURCES:
+            pinned_blocks.append(content)
         else:
-            fitted_prompt = _TURN_PROMPT_TRUNCATED_MARKER[:prompt_budget]
-    else:
-        fitted_prompt = prompt
+            unpinned_blocks.append(content)
 
-    context_parts = list(pinned_parts)
-    used = len(fitted_prompt) + len(_TURN_CONTEXT_HEADER) + len(pinned_context) + len(rules_suffix)
-    for content in remaining_blocks:
-        extra = 2 + len(content)
-        if used + extra <= _TURN_PROMPT_LIMIT:
-            context_parts.append(content)
-            used += extra
-        else:
-            left = _TURN_PROMPT_LIMIT - used - 2
-            if left > 0:
-                context_parts.append(content[:left])
-                used = _TURN_PROMPT_LIMIT
+    avail_budget = max(0, _TURN_PROMPT_LIMIT - len(rules_suffix))
+    if len(prompt) > avail_budget:
+        fitted_prompt = prompt[: max(0, avail_budget - len(_TURN_PROMPT_TRUNCATED_MARKER))] + _TURN_PROMPT_TRUNCATED_MARKER
+        return f"{fitted_prompt}{rules_suffix}"
+
+    fitted_prompt = prompt
+    header_len = len(_TURN_CONTEXT_HEADER)
+    context_budget = max(0, avail_budget - len(fitted_prompt) - header_len)
+
+    assembled_parts: list[str] = []
+    used_context = 0
+
+    for content in pinned_blocks:
+        sep = 2 if assembled_parts else 0
+        rem = context_budget - used_context - sep
+        if rem <= 0:
             break
+        piece = content[:rem]
+        assembled_parts.append(piece)
+        used_context += sep + len(piece)
 
-    context_budget = max(0, _TURN_PROMPT_LIMIT - len(fitted_prompt) - len(_TURN_CONTEXT_HEADER) - len(rules_suffix))
-    assembled_context = "\n\n".join(context_parts)[:context_budget]
+    for content in unpinned_blocks:
+        sep = 2 if assembled_parts else 0
+        rem = context_budget - used_context - sep
+        if rem <= 0:
+            break
+        piece = content[:rem]
+        assembled_parts.append(piece)
+        used_context += sep + len(piece)
+
+    assembled_context = "\n\n".join(assembled_parts)
     return f"{fitted_prompt}{_TURN_CONTEXT_HEADER}{assembled_context}{rules_suffix}"
 
 

@@ -182,6 +182,36 @@ DEAD_TURN_NUDGE = (
     "No tool call or final answer was received. Please provide your next tool call "
     "or conclude with your final answer."
 )
+TURN_CAP_REACHED_MESSAGE = "Turn cap reached."
+
+
+def extract_capped_text(text: str) -> str:
+    """Extract usable text from a response at turn cap, dropping any tool calls.
+
+    If no usable text remains after dropping tool calls, returns TURN_CAP_REACHED_MESSAGE.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return TURN_CAP_REACHED_MESSAGE
+    stripped = text.strip()
+    try:
+        data = json.loads(stripped)
+    except (ValueError, TypeError):
+        data = None
+
+    if isinstance(data, dict):
+        answer = data.get("answer")
+        if isinstance(answer, str) and answer.strip():
+            return answer.strip()
+        return TURN_CAP_REACHED_MESSAGE
+
+    proposal = repair_proposal(stripped)
+    if isinstance(proposal, dict) and "tool_calls" in proposal:
+        return TURN_CAP_REACHED_MESSAGE
+
+    if is_dead_turn(stripped):
+        return TURN_CAP_REACHED_MESSAGE
+
+    return stripped
 
 
 def is_research_tool(tool_name: str) -> bool:
@@ -214,52 +244,142 @@ def shrink_tool_history(
     return shrunk_messages
 
 
-def compact_tool_payload(payload: Any, max_chars: int = 2000) -> Any:
-    """Bound an individual tool payload to a compact summary/KPI bound."""
+def _truncate_str_bytes(s: str, max_bytes: int, suffix: str = "... [output truncated]") -> str:
+    raw = s.encode("utf-8")
+    suffix_bytes = suffix.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return s
+    if max_bytes <= len(suffix_bytes):
+        return suffix_bytes[:max_bytes].decode("utf-8", errors="ignore")
+    allowed = max_bytes - len(suffix_bytes)
+    truncated = raw[:allowed].decode("utf-8", errors="ignore")
+    while len(truncated.encode("utf-8")) + len(suffix_bytes) > max_bytes and truncated:
+        truncated = truncated[:-1]
+    return truncated + suffix
+
+
+def _json_utf8_len(val: Any) -> int:
+    try:
+        return len(json.dumps(val, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError):
+        return len(str(val).encode("utf-8"))
+
+
+def compact_tool_payload(payload: Any, max_chars: int = 2000, *, max_bytes: int | None = None) -> Any:
+    """Bound an individual tool payload to a compact summary/KPI bound.
+
+    Strictly bounded by UTF-8 bytes of the serialized JSON.
+    Preserves the top-level keys of a dict result (truncating their values)
+    instead of replacing the whole result with {truncated, preview}.
+    Preview fallback is used only if top-level keys alone still exceed the bound.
+    """
+    bound = max_bytes if max_bytes is not None else max_chars
+
+    # 1. Plain string
     if isinstance(payload, str):
-        if len(payload) > max_chars:
-            return payload[: max(0, max_chars - 30)] + "... [output truncated]"
+        if len(payload.encode("utf-8")) > bound:
+            return _truncate_str_bytes(payload, bound, suffix="... [output truncated]")
         return payload
 
-    str_limit = min(400, max(30, (max_chars - 150) // 6)) if max_chars < 2000 else 400
+    # 2. Check if already within bound
+    if _json_utf8_len(payload) <= bound:
+        return payload
 
-    def _compact_recursive(val: Any) -> Any:
-        if isinstance(val, str):
-            if len(val) > str_limit:
-                return val[:str_limit] + "... [truncated]"
+    # 3. Dict handling: preserve top-level keys
+    if isinstance(payload, dict):
+        keys_skeleton = {k: "" for k in payload.keys()}
+        if _json_utf8_len(keys_skeleton) > bound:
+            try:
+                dumped = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            except (TypeError, ValueError):
+                dumped = str(payload)
+            raw_dumped = dumped.encode("utf-8")
+            preview_limit = max(0, bound - 60)
+            fallback: dict[str, Any] = {"truncated": True, "preview": ""}
+            for plen in range(preview_limit, -1, -5):
+                prev = raw_dumped[:plen].decode("utf-8", errors="ignore")
+                fallback["preview"] = prev
+                if _json_utf8_len(fallback) <= bound:
+                    return fallback
+            return {"truncated": True, "preview": ""}
+
+        num_keys = max(1, len(payload))
+        initial_str_budget = max(30, (bound - _json_utf8_len(keys_skeleton)) // num_keys)
+
+        def _compact_val(val: Any, str_budget: int) -> Any:
+            if isinstance(val, str):
+                if len(val.encode("utf-8")) > str_budget:
+                    return _truncate_str_bytes(val, str_budget, suffix="... [truncated]")
+                return val
+            if isinstance(val, list):
+                keep_n = 2 if len(val) > 2 else len(val)
+                res = [_compact_val(item, str_budget) for item in val[:keep_n]]
+                if len(val) > keep_n:
+                    res.append({"notice": f"... ({len(val) - keep_n} further items truncated for compact payload)"})
+                return res
+            if isinstance(val, dict):
+                sub_keys = len(val) or 1
+                sub_budget = max(20, str_budget // sub_keys)
+                return {k: _compact_val(v, sub_budget) for k, v in val.items()}
             return val
-        if isinstance(val, list):
-            res = [_compact_recursive(item) for item in val[:3]]
-            if len(val) > 3:
-                res.append({"notice": f"... ({len(val) - 3} further items truncated for compact payload)"})
-            return res
-        if isinstance(val, dict):
-            return {k: _compact_recursive(v) for k, v in val.items()}
-        return val
 
-    if isinstance(payload, (dict, list)):
+        str_budget = initial_str_budget
+        while True:
+            compacted = {k: _compact_val(v, str_budget) for k, v in payload.items()}
+            if _json_utf8_len(compacted) <= bound:
+                return compacted
+            if str_budget <= 10:
+                tight: dict[str, Any] = {}
+                for k, v in payload.items():
+                    if isinstance(v, list) and v:
+                        tight[k] = [{"notice": f"... ({len(v)} items truncated for compact payload)"}]
+                    elif isinstance(v, dict):
+                        tight[k] = {sk: "" for sk in v.keys()}
+                    elif isinstance(v, str):
+                        tight[k] = _truncate_str_bytes(v, 20, suffix="...")
+                    else:
+                        tight[k] = v
+                if _json_utf8_len(tight) <= bound:
+                    return tight
+                return keys_skeleton
+            str_budget = max(5, int(str_budget * 0.6))
+
+    # 4. List handling
+    if isinstance(payload, list):
+        keep_count = min(3, len(payload))
+        str_budget = max(30, (bound - 50) // max(1, keep_count + 1))
+        while keep_count >= 0:
+            compacted_list: list[Any] = []
+            for item in payload[:keep_count]:
+                if isinstance(item, (dict, list)):
+                    compacted_list.append(compact_tool_payload(item, max_chars=str_budget, max_bytes=str_budget))
+                elif isinstance(item, str):
+                    compacted_list.append(_truncate_str_bytes(item, str_budget))
+                else:
+                    compacted_list.append(item)
+            if len(payload) > keep_count:
+                compacted_list.append({"notice": f"... ({len(payload) - keep_count} further items truncated for compact payload)"})
+            if _json_utf8_len(compacted_list) <= bound:
+                return compacted_list
+            if keep_count > 0:
+                keep_count -= 1
+            else:
+                str_budget = max(10, str_budget // 2)
+                if str_budget <= 10:
+                    break
+
         try:
-            dumped = json.dumps(payload, separators=(",", ":"))
+            dumped = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         except (TypeError, ValueError):
             dumped = str(payload)
-        if len(dumped) <= max_chars:
-            return payload
-        compacted = _compact_recursive(payload)
-        try:
-            dumped_compacted = json.dumps(compacted, separators=(",", ":"))
-        except (TypeError, ValueError):
-            dumped_compacted = str(compacted)
-        if len(dumped_compacted) <= max_chars and len(dumped_compacted.encode("utf-8")) <= max_chars:
-            return compacted
-        preview_limit = max(0, max_chars - 60)
-        fallback: dict[str, Any] = {"truncated": True, "preview": dumped_compacted[:preview_limit]}
-        while (
-            len(json.dumps(fallback, separators=(",", ":"))) > max_chars
-            or len(json.dumps(fallback, separators=(",", ":")).encode("utf-8")) > max_chars
-        ) and preview_limit > 0:
-            preview_limit = max(0, preview_limit - 10)
-            fallback["preview"] = dumped_compacted[:preview_limit]
-        return fallback
+        raw_dumped = dumped.encode("utf-8")
+        fallback_limit = max(0, bound - 60)
+        fb: dict[str, Any] = {"truncated": True, "preview": ""}
+        for plen in range(fallback_limit, -1, -5):
+            fb["preview"] = raw_dumped[:plen].decode("utf-8", errors="ignore")
+            if _json_utf8_len(fb) <= bound:
+                return fb
+        return {"truncated": True, "preview": ""}
 
     return payload
 
@@ -546,16 +666,29 @@ class Worker:
 
                     tools = body.get("tools")
                     admitted = result.get("admitted_tools")
+                    is_capped = (worker.turn_step_count >= worker.turn_cap) or (isinstance(admitted, list) and len(admitted) == 0)
                     if isinstance(admitted, list):
-                        permitted = set(admitted)
-                        tools = [tool for tool in tools or [] if isinstance(tool, dict)
-                                 and tool.get("function", {}).get("name") in permitted]
-                    message = completion_message(result["text"], tools)
-                    finish_reason = "tool_calls" if "tool_calls" in message else (
-                        "length" if result.get("finish_reason") == "length" else "stop"
-                    )
+                        if not admitted:
+                            tools = []
+                        else:
+                            permitted = set(admitted)
+                            tools = [tool for tool in tools or [] if isinstance(tool, dict)
+                                     and tool.get("function", {}).get("name") in permitted]
+                    elif is_capped:
+                        tools = []
+
+                    message: dict[str, Any]
+                    if is_capped:
+                        final_text = extract_capped_text(result.get("text", ""))
+                        message = {"role": "assistant", "content": final_text}
+                        finish_reason = "stop"
+                    else:
+                        message = completion_message(result["text"], tools)
+                        finish_reason = "tool_calls" if "tool_calls" in message else (
+                            "length" if result.get("finish_reason") == "length" else "stop"
+                        )
                     if body.get("stream") is True:
-                        delta = dict(message)
+                        delta: dict[str, Any] = dict(message)
                         if "tool_calls" in delta:
                             delta["tool_calls"] = [dict(call, index=index)
                                                    for index, call in enumerate(delta["tool_calls"])]

@@ -43,6 +43,10 @@ from app.modules.agents.hermes.supervisor import (
     run_governed_inference,
     shrink_tool_history,
 )
+from app.modules.agents.hermes.worker_shim import (
+    TURN_CAP_REACHED_MESSAGE,
+    extract_capped_text,
+)
 from app.modules.ai import thread_service
 from app.modules.ai.agent_contracts import (
     AgentSessionRef,
@@ -190,6 +194,18 @@ def test_assemble_turn_prompt_with_context_blocks() -> None:
     assert "Engineering methodology rules:" in assembled
     assert "grant_data_here" in assembled
     assert "envelope_data_here" in assembled
+    assert len(assembled) <= 12_000
+
+
+def test_assemble_turn_prompt_preserves_methodology_rules_under_long_context() -> None:
+    """Requirement P2.5: prompt truncation must never remove methodology rules ('Never invent a DOI' survives)."""
+    blocks = [
+        {"source": f"source_{i}", "content": "long context text block " * 100}
+        for i in range(16)
+    ]
+    assembled = _assemble_turn_prompt("Short prompt", blocks)
+    assert "Never invent a DOI" in assembled
+    assert "Engineering methodology rules:" in assembled
     assert len(assembled) <= 12_000
 
 
@@ -387,7 +403,10 @@ def test_forced_final_answer_at_turn_cap() -> None:
     supervisor_inst.turn_cap = 2
     supervisor_inst.turn_step_count = 1  # Next step will hit turn_cap
 
+    captured_kwargs: list[dict[str, Any]] = []
+
     def mock_runner(**kwargs: Any) -> AiTaskOutcome:
+        captured_kwargs.append(kwargs)
         return AiTaskOutcome(
             flow_id="flow-cap", status="success", ledger_id="l-cap",
             selected_route_class="fake", decision=MagicMock(),
@@ -408,8 +427,37 @@ def test_forced_final_answer_at_turn_cap() -> None:
     supervisor_inst._handle_relay(frame)
 
     assert supervisor_inst.turn_step_count == 2
-    assert frame["metadata"].get("reasoning_phase") == "final"
     assert frame["tools"] == []
+    assert len(sent_frames) == 1
+    assert sent_frames[0].get("admitted_tools") == []
+    assert captured_kwargs[0]["metadata"]["reasoning_phase"] == "final"
+
+
+def test_turn_cap_worker_withholds_tools_and_handles_both_paths() -> None:
+    """Requirement P1.2: at turn cap, tool calls are dropped; returns text answer or deterministic message."""
+    # Path 1: Tool call + usable text answer -> tool call dropped, text answer returned
+    resp_with_answer = json.dumps({
+        "answer": "Here is the synthesized final response.",
+        "tool_calls": [{"name": "paper_search", "arguments": {"query": "foo"}}],
+    })
+    extracted1 = extract_capped_text(resp_with_answer)
+    assert extracted1 == "Here is the synthesized final response."
+
+    # Plain text also returns text answer
+    assert extract_capped_text("Synthesized final response in plain text.") == "Synthesized final response in plain text."
+
+    # Path 2: Tool call only (no usable text) -> returns deterministic final message stating turn cap reached
+    resp_tool_only = json.dumps({
+        "tool_calls": [{"name": "paper_search", "arguments": {"query": "foo"}}],
+    })
+    extracted2 = extract_capped_text(resp_tool_only)
+    assert extracted2 == TURN_CAP_REACHED_MESSAGE
+    assert "turn cap reached" in extracted2.lower()
+
+    # Empty text or whitespace -> deterministic final message
+    assert extract_capped_text("") == TURN_CAP_REACHED_MESSAGE
+    assert extract_capped_text("   ") == TURN_CAP_REACHED_MESSAGE
+    assert extract_capped_text(json.dumps({"answer": "  "})) == TURN_CAP_REACHED_MESSAGE
 
 
 # ===========================================================================
@@ -531,6 +579,45 @@ def test_paper_search_egress_sanitization_blocks_secrets_and_private_pack() -> N
     assert error == "egress_pack_blocked"
 
 
+def test_paper_search_rejects_private_data_before_opener() -> None:
+    """Requirement P1.1: live grant-id, UUID, path, and URL are refused and never reach opener."""
+    opener = MagicMock()
+
+    # 1. Live grant id in query
+    live_grant = _make_grant("jarvis.paper_search", "grant-live-secret-42")
+    call = _make_call({"grant_id": "grant-live-secret-42", "query": "photobioreactor with grant-live-secret-42 details"})
+    res, err = dispatch_paper_search_tool(
+        call, "ws-1", "default_err", grant=live_grant, opener=opener, live_grants={"grant-live-secret-42": live_grant}
+    )
+    assert res is None
+    assert err == "egress_pack_blocked"
+    opener.open.assert_not_called()
+
+    # 2. UUID in query
+    uuid_query = "research about 12345678-1234-5678-1234-567812345678 kinetics"
+    res2 = execute_paper_search(uuid_query, opener=opener)
+    assert res2.get("error") == "egress_blocked_private_content"
+    opener.open.assert_not_called()
+
+    # 3. File path in query
+    path_query = "analysis from /home/user/workspace/model.py"
+    res3 = execute_paper_search(path_query, opener=opener)
+    assert res3.get("error") == "egress_blocked_private_content"
+    opener.open.assert_not_called()
+
+    # 4. URL in query
+    url_query = "read https://example.com/secret_leak"
+    res4 = execute_paper_search(url_query, opener=opener)
+    assert res4.get("error") == "egress_blocked_private_content"
+    opener.open.assert_not_called()
+
+    # 5. Non-conservative character set (e.g. bash symbol)
+    bad_char_query = "photobioreactor $(whoami)"
+    res5 = execute_paper_search(bad_char_query, opener=opener)
+    assert res5.get("error") == "egress_blocked_private_content"
+    opener.open.assert_not_called()
+
+
 def test_paper_search_registration_in_all_catalogs_and_allowlists() -> None:
     """Acceptance criterion 1 & 4: registered in broker_mcp, supervisor, worker_shim, thread_service."""
     # 1. broker_mcp._TOOLS contains jarvis_paper_search
@@ -561,8 +648,27 @@ def test_paper_search_registration_in_all_catalogs_and_allowlists() -> None:
 
 
 def test_compact_tool_payload_strict_recursive_bound() -> None:
-    """Requirement 4: deeply nested large dict payload is strictly bounded to <= max_chars serialized bytes."""
-    # 1. Moderately nested structure that compacts via list truncation and string shortening
+    """Requirement P1.3: strictly bounded by UTF-8 bytes (3000 é) and preserves top-level keys."""
+    # 1. 3000 é is 6000 UTF-8 bytes
+    three_k_accent = "é" * 3000
+    compacted_str = compact_tool_payload(three_k_accent, max_chars=1000)
+    assert len(compacted_str.encode("utf-8")) <= 1000
+    assert "[output truncated]" in compacted_str
+
+    # 2. Dict preserving top-level keys
+    payload = {
+        "status": "succeeded",
+        "view": {"evaluator": "solid", "data": "é" * 3000},
+        "count": 42,
+    }
+    compacted_dict = compact_tool_payload(payload, max_chars=500)
+    assert len(json.dumps(compacted_dict, ensure_ascii=False).encode("utf-8")) <= 500
+    assert set(compacted_dict.keys()) == {"status", "view", "count"}
+    assert compacted_dict["status"] == "succeeded"
+    assert compacted_dict["count"] == 42
+    assert "evaluator" in compacted_dict["view"]
+
+    # 3. Moderately nested structure that compacts via list truncation and string shortening
     nested = {
         "items": [
             {"nested_key": f"value_{i}" * 50, "extra": "a" * 500}
@@ -574,31 +680,16 @@ def test_compact_tool_payload_strict_recursive_bound() -> None:
     assert len(serialized) <= 1000
     assert len(serialized.encode("utf-8")) <= 1000
 
-    # 2. Deeply nested structure with massive payloads that exceeds max_chars even after recursive shortening
-    deep: dict[str, Any] = {"level0": {}}
-    cursor = deep["level0"]
-    for lvl in range(1, 15):
-        cursor[f"level{lvl}"] = {
-            "title": "large_title_" * 20,
-            "data": ["long_entry_" * 30 for _ in range(10)],
-            "metadata": {"blob": "z" * 1000},
-        }
-        cursor = cursor[f"level{lvl}"]
-
-    max_chars = 400
-    result = compact_tool_payload(deep, max_chars=max_chars)
-    result_bytes = json.dumps(result, separators=(",", ":")).encode("utf-8")
-    result_str = json.dumps(result, separators=(",", ":"))
-
-    assert len(result_bytes) <= max_chars
-    assert len(result_str) <= max_chars
-    assert isinstance(result, dict)
-    assert result.get("truncated") is True
-    assert "preview" in result
+    # 4. Preview fallback used only when top-level keys alone exceed bound
+    huge_keys = {f"very_long_key_name_{i}_padding": i for i in range(50)}
+    compacted_keys = compact_tool_payload(huge_keys, max_chars=100)
+    assert len(json.dumps(compacted_keys, ensure_ascii=False).encode("utf-8")) <= 100
+    assert compacted_keys.get("truncated") is True
+    assert "preview" in compacted_keys
 
 
-def test_infer_envelope_metadata_whitelisting() -> None:
-    """Requirement 2: infer_envelope only whitelists reasoning_phase in {'analysis', 'final', 'routing'}."""
+def test_infer_envelope_ignores_frame_metadata() -> None:
+    """Requirement P2.4: infer_envelope does not accept reasoning_phase from frame metadata at all."""
     frame = {
         "id": "frame-meta",
         "session_ref": SESSION.model_dump(mode="json"),
@@ -610,14 +701,5 @@ def test_infer_envelope_metadata_whitelisting() -> None:
         },
     }
     envelope = infer_envelope(frame)
-    assert envelope.metadata == {"reasoning_phase": "analysis"}
-
-    # Whitelist accepts "final" and "routing"
-    for phase in ("final", "routing"):
-        frame["metadata"] = {"reasoning_phase": phase}
-        assert infer_envelope(frame).metadata == {"reasoning_phase": phase}
-
-    # Rejects unauthorized reasoning_phase values and arbitrary keys
-    frame["metadata"] = {"reasoning_phase": "unauthorized_phase", "other_key": 123}
-    assert infer_envelope(frame).metadata == {}
+    assert not hasattr(envelope, "metadata")
 

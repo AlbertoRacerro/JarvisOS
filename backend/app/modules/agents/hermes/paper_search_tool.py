@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from contextlib import contextmanager
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -34,6 +35,24 @@ DEFAULT_LIMIT = 5
 MAX_LIMIT = 20
 
 _XML_TAG_RE = re.compile(r"<[^>]+>", re.DOTALL)
+_UUID_OR_HEX_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{16,}"
+)
+_URL_RE = re.compile(r"(?:https?://|ftp://|www\.)\S+", re.IGNORECASE)
+_EMAIL_RE = re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b")
+_PATH_RE = re.compile(
+    r"(?:^|[\s\"'(\[])("
+    r"/(?:[a-zA-Z0-9._-]+/)*[a-zA-Z0-9._-]+"
+    r"|(?:\.\.|\.)/[a-zA-Z0-9._/-]+"
+    r"|~/[a-zA-Z0-9._/-]+"
+    r"|[a-zA-Z]:[\\/][a-zA-Z0-9._\\-]+"
+    r"|[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+\.(?:py|json|md|txt|sh|ts|js|html|css|toml|yaml|yml|csv|xml|pdf|doc|docx|log|env|conf|ini|cfg)"
+    r"|(?:[a-zA-Z0-9._-]+/){2,}[a-zA-Z0-9._-]+"
+    r")"
+)
+_ALLOWED_CHARS_RE = re.compile(
+    r"^[a-zA-Z0-9\s\-\.,:;\(\)'\"/\+\u00C0-\u024F\u0370-\u03FF\u1F00-\u1FFF]+$"
+)
 
 
 class _DenyRedirects(HTTPRedirectHandler):
@@ -258,6 +277,7 @@ def execute_paper_search(
     limit: int = DEFAULT_LIMIT,
     source: str = "all",
     opener: Any = None,
+    blocked_tokens: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Execute bounded public paper search across Europe PMC and/or Crossref."""
     cleaned_query = query.strip()
@@ -271,6 +291,32 @@ def execute_paper_search(
         return {"error": "egress_blocked_private_content", "papers": [], "count": 0}
     if check_sensitivity_floor(cleaned_query) in {"S2", "S3", "S4"}:
         return {"error": "egress_blocked_private_content", "papers": [], "count": 0}
+
+    # Conservative character set check
+    if not _ALLOWED_CHARS_RE.match(cleaned_query):
+        return {"error": "egress_blocked_private_content", "papers": [], "count": 0}
+
+    # UUID-like or hex-token strings (>= 16 hex chars)
+    if _UUID_OR_HEX_RE.search(cleaned_query):
+        return {"error": "egress_blocked_private_content", "papers": [], "count": 0}
+
+    # URLs
+    if _URL_RE.search(cleaned_query):
+        return {"error": "egress_blocked_private_content", "papers": [], "count": 0}
+
+    # Email addresses
+    if _EMAIL_RE.search(cleaned_query):
+        return {"error": "egress_blocked_private_content", "papers": [], "count": 0}
+
+    # File paths
+    if _PATH_RE.search(cleaned_query):
+        return {"error": "egress_blocked_private_content", "papers": [], "count": 0}
+
+    # Blocked tokens (live grant ids, session/thread/workspace ids)
+    if blocked_tokens:
+        for token in blocked_tokens:
+            if token and token in cleaned_query:
+                return {"error": "egress_blocked_private_content", "papers": [], "count": 0}
 
     limit = max(1, min(limit, MAX_LIMIT))
     source_clean = source.strip().lower()
@@ -300,6 +346,7 @@ def dispatch_paper_search_tool(
     *,
     grant: CapabilityGrantRef | None = None,
     opener: Any = None,
+    live_grants: dict[str, CapabilityGrantRef] | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     """Broker dispatch for jarvis.paper_search capability."""
     raw_args = call.arguments
@@ -318,14 +365,37 @@ def dispatch_paper_search_tool(
     if not isinstance(source, str) or source.strip().lower() not in {"all", "europe_pmc", "crossref"}:
         return None, "invalid_arguments"
 
-    # Egress check on query
     cleaned_query = query.strip()
-    if _KNOWN_SECRET_RE.search(cleaned_query) or sanitize_text(cleaned_query) != cleaned_query:
-        return None, "egress_pack_blocked"
-    if check_sensitivity_floor(cleaned_query) in {"S2", "S3", "S4"}:
-        return None, "egress_pack_blocked"
 
-    result = execute_paper_search(cleaned_query, limit=limit, source=source, opener=opener)
+    # Collect blocked private tokens: live grants, session, thread, workspace
+    blocked_tokens: set[str] = set()
+    if workspace_id:
+        blocked_tokens.add(workspace_id)
+    if grant and grant.grant_id:
+        blocked_tokens.add(grant.grant_id)
+    if call.grant_id:
+        blocked_tokens.add(call.grant_id)
+    if call.session_ref:
+        if call.session_ref.workspace_id:
+            blocked_tokens.add(call.session_ref.workspace_id)
+        if call.session_ref.jarvis_thread_id:
+            blocked_tokens.add(call.session_ref.jarvis_thread_id)
+        if call.session_ref.hermes_session_id:
+            blocked_tokens.add(call.session_ref.hermes_session_id)
+    if live_grants:
+        for gid, g in live_grants.items():
+            if gid:
+                blocked_tokens.add(gid)
+            if hasattr(g, "grant_id") and g.grant_id:
+                blocked_tokens.add(g.grant_id)
+
+    result = execute_paper_search(
+        cleaned_query,
+        limit=limit,
+        source=source,
+        opener=opener,
+        blocked_tokens=blocked_tokens,
+    )
     if result.get("error"):
         if result["error"] == "egress_blocked_private_content":
             return None, "egress_pack_blocked"
