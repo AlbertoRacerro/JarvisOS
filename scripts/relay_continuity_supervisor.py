@@ -584,7 +584,9 @@ class Supervisor:
     def _raw_reading(self, agent: str) -> dict[str, Any] | None:
         now = self.host.now()
         if self._reading is None or self._reading_at is None or now - self._reading_at > timedelta(minutes=2):
-            self._reading = self.host.relay.limits() or {}
+            profile = self.mission.get("coordinator_profile", "standard") if self.mission else "standard"
+            self._reading = (self.host.relay.limits(coordinator_profile=profile) if profile != "standard"
+                             else self.host.relay.limits()) or {}
             self._reading_at = now
         entry = self._reading.get(agent)
         if not isinstance(entry, dict) or entry.get("status") not in (None, "ok"):
@@ -1703,7 +1705,8 @@ class Supervisor:
             self._log_resume_decision("launch", tokens, resume=(parent is not None))
         fresh = resume is None and (parent is None or self.state.get("agent") != agent)
         pending = {"nonce": nonce, "agent": agent, "parent": parent, "started_at": iso(now),
-                   "pid": None, "pid_start": None, "fingerprint": self.host.fingerprint(), "attempt": self.attempts}
+                   "pid": None, "pid_start": None, "fingerprint": self.host.fingerprint(), "attempt": self.attempts,
+                   "coordinator_profile": self.mission.get("coordinator_profile", "standard") if self.mission else "standard"}
         if (rec := self.state.get("mission")) is not None and self.mission is not None:
             # Every launch until the task completes (recoveries and failovers included) serves that task.
             pending["task"] = rec["next"]
@@ -1749,6 +1752,8 @@ class Supervisor:
         self.store.journal(launch_journal)
         try:
             launch_options = {"resume": resume} if resume else {}
+            if pending["coordinator_profile"] != "standard":
+                launch_options["coordinator_profile"] = pending["coordinator_profile"]
             if resume and relay_argon.account_models.enabled(dict(os.environ)):
                 launch_options["resume_model"] = resume_model
             proc = self.host.relay.start(agent, parent, text, self.turns, **launch_options)
