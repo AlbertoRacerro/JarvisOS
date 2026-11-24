@@ -157,7 +157,9 @@ def freecad_edit_apply_endpoint(workspace_id: str, payload: FreecadApplyRequest)
             {
                 "doc_name": payload.document,
                 "obj_name": payload.object,
-                "properties": {"Properties": {payload.property: payload.value}},
+                "property": payload.property,
+                "old_value": payload.old_value,
+                "value": payload.value,
             },
         )
     except FreecadBridgeError as exc:

@@ -2,6 +2,7 @@
 // Spec 326: FreeCAD bridge UI against a hash-pinned fake peer.
 // node e2e/freecad_bridge_walk.mjs <evidence-dir> [<data-root-copy>]
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { openSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -24,33 +25,55 @@ await mkdir(join(controlDir, "continuity", "jobs"), { recursive: true });
 await mkdir(join(dataRoot, "relay-repo", ".agent-relay", "devctx"), { recursive: true });
 await mkdir(join(dataRoot, "host"), { recursive: true });
 const peer = join(dataRoot, "fake-python");
-await writeFile(peer, `#!/usr/bin/env python3
-import json, os, sys
-state_path = os.environ["FREECAD_STATE"]
-state = json.loads(open(state_path).read())
-for line in sys.stdin:
-    request = json.loads(line); method = request["method"]
-    if method == "ping": result = True
-    elif method == "list_documents": result = ["Demo"]
-    elif method == "get_objects": result = [{"Name":"Box","Label":"Box","TypeId":"Part::Box","Properties":{"Length":state["length"]}}]
-    elif method == "get_object": result = {"Name":"Box","Label":"Box","TypeId":"Part::Box","Properties":{"Length":state["length"]}}
-    elif method == "edit_object":
-        value = request["params"]["properties"]["Properties"]["Length"]
-        if value == 99: result = {"success":False,"error":"invalid","mutation_outcome":"rolled_back"}
-        else:
-            state["length"] = value; open(state_path,"w").write(json.dumps(state)); result = {"success":True,"object_name":"Box"}
-    else: result = {"success":False}
-    print(json.dumps({"id":request["id"],"ok":True,"result":result}), flush=True)
-`, { mode: 0o755 });
+await writeFile(peer, '#!/bin/sh\nexec "$JARVISOS_PROOF_PYTHON" "$1"\n', { mode: 0o755 });
 const state = join(dataRoot, "freecad-state.json");
 await writeFile(state, JSON.stringify({ length: 10 }));
+const token = "offline-walk-token";
+const tokenFile = join(dataRoot, "freecad-token");
+await writeFile(tokenFile, token, { mode: 0o600 });
+const mcpCalls = [];
+const mcp = createServer(async (req, res) => {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const request = JSON.parse(Buffer.concat(chunks).toString());
+  assert(req.url === "/mcp" && req.method === "POST", "unexpected MCP endpoint");
+  assert(req.headers.authorization === `Bearer ${token}`, "missing MCP bearer token");
+  assert(req.headers["mcp-protocol-version"] === "2025-11-25", "wrong MCP version");
+  assert(request.method === "tools/call" && request.params.name === "execute_python", "unexpected MCP tool");
+  const code = request.params.arguments.code;
+  const method = code.match(/# Jarvis FreeCAD: (\w+)/)?.[1];
+  assert(["ping", "list_documents", "get_objects", "get_object", "edit_object"].includes(method), "unexpected script");
+  const literal = code.match(/_params = json.loads\(([^\n]+)\)/)?.[1];
+  assert(literal, "missing JSON parameters");
+  const params = JSON.parse(JSON.parse(literal));
+  mcpCalls.push(method);
+  const current = JSON.parse(await readFile(state));
+  let result;
+  if (method === "ping") result = true;
+  else if (method === "list_documents") result = ["Demo"];
+  else if (method === "get_objects" || method === "get_object") {
+    const object = { Name: "Box", Label: "Box", TypeId: "Part::Box", Properties: { Length: { value: current.length, read_only: false } } };
+    result = method === "get_objects" ? [object] : object;
+  } else if (params.old_value !== current.length) result = { success: false, code: "FREECAD_STALE_PREVIEW", mutation_outcome: "unchanged" };
+  else if (params.value === 99) result = { success: false, mutation_outcome: "rolled_back" };
+  else {
+    current.length = params.value;
+    await writeFile(state, JSON.stringify(current));
+    result = { success: true, mutation_outcome: "applied" };
+  }
+  const page = { has_more: false, page: [{ stream: "stdout", text: `JARVIS_FREECAD_RESULT:${JSON.stringify(result)}\n` }] };
+  const envelope = { jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: JSON.stringify(page) }] } };
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(envelope));
+});
+await new Promise((resolve, reject) => mcp.listen(39280, "127.0.0.1", resolve).once("error", reject));
 const sha = createHash("sha256").update(await readFile(peer)).digest("hex");
 const env = {
   ...process.env, PYTHONPATH: backend, JARVISOS_DATA_ROOT: dataRoot, JARVIS_CONTROL_DIR: controlDir,
   RELAY_CONTINUITY_DIR: join(controlDir, "continuity"), RELAY_REPO: join(dataRoot, "relay-repo"),
   XDG_STATE_HOME: join(dataRoot, "host"), LOCALAPPDATA: join(dataRoot, "host"),
   JARVISOS_FREECAD_PYTHON_PATH: peer, JARVISOS_FREECAD_PYTHON_SHA256: sha,
-  FREECAD_STATE: state, JARVISOS_AGY_BIN: "/nonexistent/agy", JARVISOS_CODEX_BIN: "/nonexistent/codex"
+  JARVISOS_FREECAD_MCP_TOKEN_FILE: tokenFile, JARVISOS_PROOF_PYTHON: python, JARVISOS_AGY_BIN: "/nonexistent/agy", JARVISOS_CODEX_BIN: "/nonexistent/codex"
 };
 delete env.GH_TOKEN; delete env.GITHUB_TOKEN; delete env.JARVISOS_GITHUB_READ_TOKEN;
 const seed = "from app.core.bootstrap import initialize_storage\ninitialize_storage()\n";
@@ -59,7 +82,7 @@ if (init.status !== 0) throw new Error(`database initialization failed: ${init.s
 const log = openSync(join(evidence, "backend.log"), "w");
 const server = spawn(python, ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(port)],
   { cwd: backend, env, stdio: ["ignore", log, log] });
-const summary = { spec: "326", browser: null, console_errors: [], page_errors: [], steps: [], screenshots: [] };
+const summary = { spec: "361", browser: null, console_errors: [], page_errors: [], steps: [], screenshots: [] };
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 let browser;
 try {
@@ -102,9 +125,11 @@ try {
   assert(summary.console_errors.length === 0, `console errors: ${JSON.stringify(summary.console_errors)}`);
   assert(summary.page_errors.length === 0, `page errors: ${JSON.stringify(summary.page_errors)}`);
   summary.passed = true;
+  assert(mcpCalls.includes("edit_object"), "the MCP edit template did not run");
   await writeFile(join(evidence, "summary.json"), JSON.stringify(summary, null, 2));
   await context.close();
 } finally {
   await browser?.close();
   server.kill("SIGTERM");
+  mcp.close();
 }

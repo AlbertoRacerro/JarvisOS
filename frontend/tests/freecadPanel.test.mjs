@@ -6,7 +6,13 @@ const workbench = await readFile(new URL("../src/components/bluecad/BluecadWorkb
 assert.match(workbench, /FreecadPanel/);
 assert.match(source, />FreeCAD</);
 assert.match(source, /FreeCAD non configurato/);
-assert.match(source, /Add-on FreeCAD non in esecuzione/);
+for (const code of ["FREECAD_ADDON_NOT_RUNNING", "FREECAD_MCP_UNAUTHORIZED", "FREECAD_MCP_DECLINED", "FREECAD_MCP_PENDING", "FREECAD_MCP_TOKEN_MISSING", "FREECAD_MCP_TOKEN_UNSAFE"]) {
+  assert.match(source, new RegExp(code));
+}
+assert.match(source, /MCP On/);
+assert.match(source, /modalità Ask/);
+assert.match(source, /freecad_mcp_token/);
+assert.match(source, /JARVISOS_FREECAD_PYTHON_SHA256/);
 assert.match(source, /FreeCAD connesso/);
 assert.match(source, /Anteprima/);
 assert.match(source, /Applica/);

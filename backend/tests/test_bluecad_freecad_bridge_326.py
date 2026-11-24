@@ -1,200 +1,281 @@
+"""Offline MCP Bridge contract and route tests for the five fixed operations."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
-import socket
 import stat
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 from app.core.bootstrap import initialize_storage
-from app.main import create_app
+from app.modules.bluecad import freecad_relay, routes
 from app.modules.bluecad.freecad_bridge import FreecadBridge, FreecadBridgeError
 from app.modules.workspaces.service import list_workspaces
 
 
-def _fake_peer(path: Path, log: Path, state: Path) -> Path:
-    path.write_text(
-        """#!/usr/bin/env python3
-import json, os, sys
-log = os.environ["FREECAD_METHOD_LOG"]
-state_path = os.environ["FREECAD_STATE"]
-state = json.loads(open(state_path).read())
-for line in sys.stdin:
-    request = json.loads(line)
-    method = request["method"]
-    with open(log, "a", encoding="utf-8") as out:
-        out.write(method + "\\n")
-    if os.environ.get("FREECAD_NOT_RUNNING"):
-        response = {"id": request["id"], "ok": False, "error": {"code": "FREECAD_ADDON_NOT_RUNNING"}}
-    elif method not in {"ping", "list_documents", "get_objects", "get_object", "edit_object"}:
-        response = {"id": request["id"], "ok": False, "error": {"code": "FREECAD_METHOD_NOT_ALLOWED"}}
-    elif method == "ping":
-        response = {"id": request["id"], "ok": True, "result": True}
-    elif method == "list_documents":
-        response = {"id": request["id"], "ok": True, "result": ["Demo"]}
-    elif method == "get_objects":
-        response = {"id": request["id"], "ok": True, "result": [{
-            "Name": "Box", "Label": "Box", "TypeId": "Part::Box",
-            "Properties": {"Length": state["Length"]},
-        }]}
-    elif method == "get_object":
-        response = {"id": request["id"], "ok": True, "result": {
-            "Name": "Box", "Label": "Box", "TypeId": "Part::Box",
-            "Properties": {"Length": state["Length"], "ReadOnly": {"value": 1, "read_only": True}},
-        }}
-    else:
-        properties = request["params"]["properties"]["Properties"]
-        if properties.get("Length") == 99:
-            response = {"id": request["id"], "ok": True, "result": {
-                "success": False, "error": "invalid", "mutation_outcome": "rolled_back",
-            }}
-        else:
-            state["Length"] = properties["Length"]
-            open(state_path, "w", encoding="utf-8").write(json.dumps(state))
-            response = {"id": request["id"], "ok": True, "result": {"success": True, "object_name": "Box"}}
-    print(json.dumps(response), flush=True)
-""",
-        encoding="utf-8",
-    )
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
-    log.write_text("", encoding="utf-8")
-    state.write_text(json.dumps({"Length": 10}), encoding="utf-8")
-    return path
+class FakeObject:
+    Name = "Box"
+    Label = "Box"
+    TypeId = "Part::Box"
+    PropertiesList = ["Length", "ReadOnly"]
+
+    def __init__(self) -> None:
+        self.Length = 10
+        self.ReadOnly = 1
+
+    def getEditorMode(self, name: str) -> int:
+        return int(name == "ReadOnly")
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "Length" and value == 99:
+            super().__setattr__(name, 99)
+            raise ValueError("simulated failing set")
+        super().__setattr__(name, value)
+
+
+class FakeDocument:
+    def __init__(self) -> None:
+        self.Objects = [FakeObject()]
+
+    def getObject(self, name: str) -> FakeObject | None:
+        return self.Objects[0] if name == "Box" else None
+
+
+class FakeApp:
+    def __init__(self) -> None:
+        self.doc = FakeDocument()
+
+    def getDocument(self, name: str) -> FakeDocument | None:
+        return self.doc if name == "Demo" else None
+
+    def listDocuments(self) -> dict:
+        return {"Demo": self.doc}
 
 
 @pytest.fixture
-def peer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path]:
-    executable = _fake_peer(tmp_path / "fake-python", tmp_path / "methods.log", tmp_path / "state.json")
+def peer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    app = FakeApp()
+    calls: list[dict] = []
+    mode = {"reply": "json", "pending": False}
+    token = "secret-for-offline-test"
+
+    class FakeResponse:
+        status = 200
+
+        def __init__(self, body: bytes, content_type: str, status: int = 200) -> None:
+            self.body = body
+            self.content_type = content_type
+            self.status = status
+
+        def getheader(self, name: str, default: str = "") -> str:
+            return self.content_type if name == "Content-Type" else default
+
+        def read(self, size: int) -> bytes:
+            return self.body[:size]
+
+    class FakeConnection:
+        def __init__(self, host: str, port: int, timeout: float) -> None:
+            assert (host, port) == ("127.0.0.1", 39280)
+
+        def request(self, verb: str, path: str, body: bytes, headers: dict) -> None:
+            request = json.loads(body)
+            calls.append({"path": path, "headers": headers, "request": request})
+            assert verb == "POST" and path == "/mcp"
+            assert headers["MCP-Protocol-Version"] == "2025-11-25"
+            assert headers["Authorization"] == "Bearer " + token
+            self.request_data = request
+
+        def getresponse(self) -> FakeResponse:
+            if mode["reply"] == "unauthorized":
+                return FakeResponse(b"", "text/plain", 401)
+            request = self.request_data
+            args = request["params"]["arguments"]
+            name = request["params"]["name"]
+            if name == "execute_python":
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    exec(args["code"], {"App": app})
+                page = [{"stream": "stdout", "text": "untrusted line\n" + output.getvalue()}]
+                if mode["pending"]:
+                    payload = {"has_more": True, "job_token": "job-1", "page": []}
+                    mode["saved_page"] = page
+                else:
+                    payload = {"has_more": False, "page": page}
+            else:
+                assert name == "get_output_page"
+                assert args == {"job_token": "job-1", "page_no": 0}
+                payload = {"has_more": False, "page_no": 0, "job_token": "job-1", "page": mode["saved_page"]}
+            if mode["reply"] == "declined":
+                payload = {"has_more": False, "error": "The code was declined", "page": []}
+            envelope = {"jsonrpc": "2.0", "id": 1, "result": {
+                "content": [{"type": "text", "text": json.dumps(payload)}],
+                **({"isError": True} if "error" in payload else {}),
+            }}
+            if mode["reply"] == "sse":
+                body = b"event: message\ndata: " + json.dumps(envelope).encode() + b"\n\n"
+                content_type = "text/event-stream"
+            else:
+                body = json.dumps(envelope).encode()
+                content_type = "application/json"
+            return FakeResponse(body, content_type)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(freecad_relay.http.client, "HTTPConnection", FakeConnection)
+
+    class FakeProcess:
+        def __init__(self, argv: list[str], **kwargs: object) -> None:
+            assert token not in json.dumps(argv)
+            self.argv = argv
+
+        def communicate(self, request_line: str, timeout: float) -> tuple[str, None]:
+            request = json.loads(request_line)
+            try:
+                result = freecad_relay._call(request["method"], request["params"], request["token"])
+                response = {"id": request["id"], "ok": True, "result": result}
+            except ValueError as error:
+                response = {"id": request["id"], "ok": False, "error": {"code": str(error)}}
+            return json.dumps(response) + "\n", None
+
+    from app.modules.bluecad import freecad_bridge
+    monkeypatch.setattr(freecad_bridge.subprocess, "Popen", FakeProcess)
+    executable = tmp_path / "fake-python"
+    executable.write_text("#!/bin/sh\nexec python3 \"$1\"\n", encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    token_file = tmp_path / "token"
+    token_file.write_text(token, encoding="utf-8")
+    token_file.chmod(0o600)
     monkeypatch.setenv("JARVISOS_FREECAD_PYTHON_PATH", str(executable))
     monkeypatch.setenv("JARVISOS_FREECAD_PYTHON_SHA256", hashlib.sha256(executable.read_bytes()).hexdigest())
-    monkeypatch.setenv("FREECAD_METHOD_LOG", str(tmp_path / "methods.log"))
-    monkeypatch.setenv("FREECAD_STATE", str(tmp_path / "state.json"))
-    return executable, tmp_path / "methods.log", tmp_path / "state.json"
+    monkeypatch.setenv("JARVISOS_FREECAD_MCP_TOKEN_FILE", str(token_file))
+    yield app, calls, mode, token_file, token
 
 
-def test_allowlist_and_digest_reasons(peer: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_five_templates_json_parameters_and_paging(peer) -> None:
+    app, calls, mode, _, token = peer
+    bridge = FreecadBridge(timeout_s=50)
+    assert bridge.request("ping") is True
+    assert bridge.request("list_documents") == ["Demo"]
+    assert bridge.request("get_objects", {"doc_name": "Demo"})[0]["Name"] == "Box"
+    mode["reply"] = "sse"
+    mode["pending"] = True
+    assert bridge.get_object("Demo", "Box")["Properties"]["Length"]["value"] == 10
+    assert bridge.request("edit_object", {"doc_name": "Demo", "obj_name": "Box", "property": "Length", "old_value": 10, "value": 20})["success"]
+    assert app.doc.Objects[0].Length == 20
+    with pytest.raises(FreecadBridgeError) as stale:
+        bridge.request("edit_object", {"doc_name": "Demo", "obj_name": "Box", "property": "Length", "old_value": 10, "value": 30})
+    assert stale.value.code == "FREECAD_STALE_PREVIEW"
+    assert app.doc.Objects[0].Length == 20
+    scripts = [item["request"]["params"]["arguments"]["code"] for item in calls if item["request"]["params"]["name"] == "execute_python"]
+    assert len(scripts) == 6
+    for script in scripts:
+        assert script.count("json.loads(") == 1
+        assert "JARVIS_FREECAD_RESULT:" in script
+        assert token not in script
+        assert all(word not in script for word in ("saveDocument(", "closeDocument(", "openDocument(", "recompute("))
+    assert all(item["headers"]["Authorization"] == "Bearer " + token for item in calls)
+
+
+def test_rejections_before_peer_and_token_permissions(peer, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, calls, _, token_file, _ = peer
     bridge = FreecadBridge()
-    with pytest.raises(FreecadBridgeError) as refused:
-        bridge.request("execute_code")
-    assert refused.value.code == "FREECAD_METHOD_NOT_ALLOWED"
-    assert peer[1].read_text() == ""
-    with pytest.raises(FreecadBridgeError) as refused_delete:
-        bridge.request("delete_object")
-    assert refused_delete.value.code == "FREECAD_METHOD_NOT_ALLOWED"
-    assert peer[1].read_text() == ""
+    for method in ("execute_python", "delete_object"):
+        with pytest.raises(FreecadBridgeError, match="Operazione") as error:
+            bridge.request(method)
+        assert error.value.code == "FREECAD_METHOD_NOT_ALLOWED"
+    for bad in ('Box"', "Box\n", "__import__('os')"):
+        with pytest.raises(FreecadBridgeError) as error:
+            bridge.get_object("Demo", bad)
+        assert error.value.code == "FREECAD_INVALID_IDENTIFIER"
+    assert calls == []
+    token_file.chmod(0o640)
+    with pytest.raises(FreecadBridgeError) as error:
+        bridge.request("ping")
+    assert error.value.code == "FREECAD_MCP_TOKEN_UNSAFE"
+    assert calls == []
+    token_file.unlink()
+    assert bridge.configuration()["code"] == "FREECAD_MCP_TOKEN_MISSING"
     monkeypatch.setenv("JARVISOS_FREECAD_PYTHON_SHA256", "0" * 64)
-    with pytest.raises(FreecadBridgeError) as mismatch:
-        bridge.request("ping")
-    assert mismatch.value.code == "FREECAD_BRIDGE_DIGEST_MISMATCH"
-    monkeypatch.setenv("JARVISOS_FREECAD_PYTHON_SHA256", "")
-    with pytest.raises(FreecadBridgeError) as unconfigured:
-        bridge.request("ping")
-    assert unconfigured.value.code == "FREECAD_BRIDGE_DIGEST_UNCONFIGURED"
-    monkeypatch.delenv("JARVISOS_FREECAD_PYTHON_PATH")
-    assert bridge.configuration()["code"] == "FREECAD_BRIDGE_UNAVAILABLE"
+    assert bridge.configuration()["code"] == "FREECAD_BRIDGE_DIGEST_MISMATCH"
 
 
-def test_missing_addon_is_reported(peer: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FREECAD_NOT_RUNNING", "1")
-    with pytest.raises(FreecadBridgeError) as missing:
+def test_transport_errors_and_decline(peer) -> None:
+    _, _, mode, _, _ = peer
+    bridge = FreecadBridge()
+    for reply, expected in (("unauthorized", "FREECAD_MCP_UNAUTHORIZED"), ("declined", "FREECAD_MCP_DECLINED")):
+        mode["reply"] = reply
+        with pytest.raises(FreecadBridgeError) as error:
+            bridge.request("ping")
+        assert error.value.code == expected
+
+
+def test_pending_timeout_and_missing_addon(peer, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _, mode, _, _ = peer
+    mode["pending"] = True
+    monkeypatch.setattr(freecad_relay, "_DEADLINE_S", 0.0)
+    with pytest.raises(FreecadBridgeError) as pending:
         FreecadBridge().request("ping")
-    assert missing.value.code == "FREECAD_ADDON_NOT_RUNNING"
+    assert pending.value.code == "FREECAD_MCP_PENDING"
+
+    def refused(*_args: object, **_kwargs: object) -> None:
+        raise ConnectionRefusedError()
+
+    monkeypatch.setattr(freecad_relay.http.client, "HTTPConnection", refused)
+    monkeypatch.setattr(freecad_relay, "_DEADLINE_S", 45.0)
+    output = io.StringIO()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"id": 1, "method": "ping", "params": {}, "token": "secret"})))
+    monkeypatch.setattr(sys, "stdout", output)
+    freecad_relay.main()
+    assert json.loads(output.getvalue())["error"]["code"] == "FREECAD_ADDON_NOT_RUNNING"
+    assert "secret" not in output.getvalue()
 
 
-def test_routes_validate_preview_stale_and_failed_apply(
-    peer: tuple[Path, Path, Path], isolated_data_root: None
-) -> None:
+def test_routes_preview_stale_and_rollback(peer, isolated_data_root: None) -> None:
+    app, calls, mode, _, token = peer
     initialize_storage()
     workspace_id = list_workspaces()[0].id
-    with TestClient(create_app()) as client:
-        status = client.get(f"/workspaces/{workspace_id}/bluecad/freecad/status")
-        assert status.json()["connected"] is True
-        assert client.get(f"/workspaces/{workspace_id}/bluecad/freecad/documents").json() == ["Demo"]
-        preview = client.post(
-            f"/workspaces/{workspace_id}/bluecad/freecad/edit/preview",
-            json={"document": "Demo", "object": "Box", "property": "Length", "value": 20},
-        )
-        assert preview.status_code == 200
-        assert preview.json()["old_value"] == 10
-        assert "edit_object" not in peer[1].read_text()
-        applied = client.post(
-            f"/workspaces/{workspace_id}/bluecad/freecad/edit/apply",
-            json={"document": "Demo", "object": "Box", "property": "Length", "value": 20,
-                  "old_value": preview.json()["old_value"]},
-        )
-        assert applied.status_code == 200
-        assert applied.json()["outcome"]["success"] is True
-        stale = client.post(
-            f"/workspaces/{workspace_id}/bluecad/freecad/edit/apply",
-            json={"document": "Demo", "object": "Box", "property": "Length", "value": 30, "old_value": 10},
-        )
-        assert stale.status_code == 409
-        assert stale.json()["detail"]["code"] == "FREECAD_STALE_PREVIEW"
-        failed = client.post(
-            f"/workspaces/{workspace_id}/bluecad/freecad/edit/apply",
-            json={"document": "Demo", "object": "Box", "property": "Length", "value": 99, "old_value": 20},
-        )
-        assert failed.status_code == 200
-        assert failed.json()["document_unchanged"] is True
-        assert failed.json()["outcome"] == {"success": False, "mutation_outcome": "rolled_back"}
-        assert "non è stato modificato" in failed.json()["message"]
+    assert routes.freecad_status_endpoint(workspace_id)["connected"] is True
+    assert routes.freecad_documents_endpoint(workspace_id) == ["Demo"]
+    preview = routes.freecad_edit_preview_endpoint(
+        workspace_id, routes.FreecadEditRequest(document="Demo", object="Box", property="Length", value=20))
+    assert preview["old_value"] == 10
+    apply = {"document": "Demo", "object": "Box", "property": "Length", "value": 20, "old_value": 10}
+    assert routes.freecad_edit_apply_endpoint(workspace_id, routes.FreecadApplyRequest(**apply))["outcome"]["success"]
+    before = len(calls)
+    with pytest.raises(HTTPException) as stale:
+        routes.freecad_edit_apply_endpoint(workspace_id, routes.FreecadApplyRequest(**{**apply, "value": 30}))
+    assert stale.value.detail["code"] == "FREECAD_STALE_PREVIEW"
+    assert not any(item["request"]["params"]["name"] == "execute_python" and "edit_object" in item["request"]["params"]["arguments"]["code"] for item in calls[before:])
+    failed = routes.freecad_edit_apply_endpoint(workspace_id, routes.FreecadApplyRequest(**{**apply, "old_value": 20, "value": 99}))
+    assert failed["document_unchanged"] is True
+    assert failed["outcome"]["mutation_outcome"] == "rolled_back"
+    assert app.doc.Objects[0].Length == 20
+    assert token not in json.dumps(failed)
+    assert token not in json.dumps(routes.freecad_status_endpoint(workspace_id))
 
 
-def _run_relay(*requests: dict) -> list[dict]:
-    relay = Path(__file__).resolve().parents[1] / "app" / "modules" / "bluecad" / "freecad_relay.py"
-    completed = subprocess.run(
-        [sys.executable, str(relay)],
-        input="".join(json.dumps(item) + "\n" for item in requests),
-        capture_output=True, text=True, timeout=30, check=True,
-    )
-    return [json.loads(line) for line in completed.stdout.splitlines()]
-
-
-def test_relay_refuses_methods_outside_the_allowlist_without_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.modules.bluecad import freecad_relay
-
-    def no_proxy(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("the relay must not connect for a refused method")
-
-    monkeypatch.setattr(freecad_relay.xmlrpc.client, "ServerProxy", no_proxy)
-    for method in ("execute_code", "execute_code_async", "delete_object", "create_object", "reload_document"):
-        with pytest.raises(ValueError, match="FREECAD_METHOD_NOT_ALLOWED"):
-            freecad_relay._call(method, {})
-    responses = _run_relay({"id": 1, "method": "execute_code", "params": {"code": "print(1)"}}, {"id": 2})
-    assert responses == [
-        {"id": 1, "ok": False, "error": {"code": "FREECAD_METHOD_NOT_ALLOWED", "message": "FreeCAD request failed."}},
-        {"id": 2, "ok": False, "error": {"code": "FREECAD_INVALID_REQUEST", "message": "FreeCAD request failed."}},
-    ]
-
-
-def test_relay_reports_a_missing_addon() -> None:
-    with socket.socket() as probe:
-        if probe.connect_ex(("127.0.0.1", 9875)) == 0:
-            pytest.skip("a listener occupies the add-on port on this machine")
-    [response] = _run_relay({"id": 3, "method": "ping", "params": {}})
-    assert response["ok"] is False
-    assert response["error"]["code"] == "FREECAD_ADDON_NOT_RUNNING"
-
-
-def test_relay_forwards_typed_edit_to_the_addon(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.modules.bluecad import freecad_relay
-
-    calls: list[tuple] = []
-
-    class Proxy:
-        def __init__(self, url: str, **_kwargs: object) -> None:
-            assert url == "http://127.0.0.1:9875"
-
-        def edit_object(self, *args: object) -> dict:
-            calls.append(args)
-            return {"success": True}
-
-    monkeypatch.setattr(freecad_relay.xmlrpc.client, "ServerProxy", Proxy)
-    params = {"doc_name": "Demo", "obj_name": "Box", "properties": {"Properties": {"Length": "20 mm"}}}
-    assert freecad_relay._call("edit_object", params) == {"success": True}
-    assert calls == [("Demo", "Box", {"Properties": {"Length": "20 mm"}})]
+def test_relay_guard_and_no_xmlrpc() -> None:
+    with pytest.raises(ValueError, match="FREECAD_METHOD_NOT_ALLOWED"):
+        freecad_relay._script("execute_python", {})
+    source = Path(freecad_relay.__file__).read_text(encoding="utf-8")
+    assert "xmlrpc" not in source
+    for bad in ("Box'", "Box\n", "x;print(1)"):
+        with pytest.raises(ValueError, match="FREECAD_INVALID_IDENTIFIER"):
+            freecad_relay._script("get_object", {"doc_name": "Demo", "obj_name": bad})
+    value = '20"; __import__("os").system("false")\n'
+    script = freecad_relay._script("edit_object", {
+        "doc_name": "Demo", "obj_name": "Box", "property": "Length", "old_value": 10, "value": value,
+    })
+    literal = script.split("_params = json.loads(", 1)[1].split("\n", 1)[0].removesuffix(")")
+    assert json.loads(json.loads(literal))["value"] == value
+    assert script.count("json.loads(") == 1
+    with pytest.raises(ValueError, match="FREECAD_INVALID_EDIT"):
+        freecad_relay._script("edit_object", {
+            "doc_name": "Demo", "obj_name": "Box", "property": "Length", "old_value": 10, "value": float("nan"),
+        })

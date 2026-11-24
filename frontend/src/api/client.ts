@@ -663,22 +663,33 @@ export type FreecadEditApply = FreecadEditPreview & {
   message?: string;
 };
 
+async function freecadJson<T>(path: string, payload?: Record<string, unknown>): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, payload === undefined ? undefined : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { detail?: { code?: string } };
+    throw new Error(body.detail?.code ?? `Request failed with ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
 export function getFreecadStatus(workspaceId: string): Promise<FreecadStatus> {
   return getJson<FreecadStatus>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/status`);
 }
 export function listFreecadDocuments(workspaceId: string): Promise<string[]> {
-  return getJson<string[]>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/documents`);
+  return freecadJson<string[]>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/documents`);
 }
 export function listFreecadObjects(workspaceId: string, document: string): Promise<FreecadObject[]> {
-  return getJson<FreecadObject[]>(
+  return freecadJson<FreecadObject[]>(
     `/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/documents/${encodeURIComponent(document)}/objects`
   );
 }
 export function previewFreecadEdit(workspaceId: string, payload: Record<string, unknown>): Promise<FreecadEditPreview> {
-  return postJson<FreecadEditPreview>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/edit/preview`, payload);
+  return freecadJson<FreecadEditPreview>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/edit/preview`, payload);
 }
 export function applyFreecadEdit(workspaceId: string, payload: Record<string, unknown>): Promise<FreecadEditApply> {
-  return postJson<FreecadEditApply>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/edit/apply`, payload);
+  return freecadJson<FreecadEditApply>(`/workspaces/${encodeURIComponent(workspaceId)}/bluecad/freecad/edit/apply`, payload);
 }
 
 export function archiveBluecadCandidate(workspaceId: string, candidateId: string): Promise<BluecadCandidate> {
