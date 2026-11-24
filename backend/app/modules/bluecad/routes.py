@@ -175,8 +175,8 @@ def freecad_edit_apply_endpoint(workspace_id: str, payload: FreecadApplyRequest)
         )
     except FreecadBridgeError as exc:
         # Once the edit was sent, any other failure may have left the document changed.
-        mutation = "unchanged" if exc.code in _FREECAD_EDIT_NOT_RUN else "unknown"
-        _log_freecad_edit(workspace_id, payload, {"success": False, "mutation_outcome": mutation, "code": exc.code})
+        err_mutation = "unchanged" if exc.code in _FREECAD_EDIT_NOT_RUN else "unknown"
+        _log_freecad_edit(workspace_id, payload, {"success": False, "mutation_outcome": err_mutation, "code": exc.code})
         raise _freecad_error(exc) from exc
     success = isinstance(outcome, dict) and outcome.get("success") is True
     # FreeCAD may coerce the value; show the one it read back after the edit.
