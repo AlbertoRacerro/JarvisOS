@@ -24,6 +24,10 @@ SPEC.loader.exec_module(wr)
 NOW = datetime(2026, 11, 24, 10, 0, tzinfo=UTC)
 
 
+def _iso_offset(**kwargs: float) -> str:
+    return (datetime.now(UTC) + timedelta(**kwargs)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 @pytest.fixture(autouse=True)
 def isolate_sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sandbox_home = tmp_path / "sandbox_home"
@@ -74,10 +78,10 @@ def test_claude_refresh_when_token_expired_and_refresh_token_present(
                 {
                     "agent_key": "claude",
                     "status": "ok",
-                    "as_of": "2026-11-24T10:00:00Z",
+                    "as_of": _iso_offset(),
                     "windows": [
-                        {"id": "5h", "label": "5-hour limit", "used_percent": 15.0, "resets_at": "2026-11-24T15:00:00Z"},
-                        {"id": "weekly", "label": "Weekly limit", "used_percent": 30.0, "resets_at": "2026-11-30T00:00:00Z"},
+                        {"id": "5h", "label": "5-hour limit", "used_percent": 15.0, "resets_at": _iso_offset(hours=5)},
+                        {"id": "weekly", "label": "Weekly limit", "used_percent": 30.0, "resets_at": _iso_offset(days=6)},
                     ],
                 }
             ]
@@ -146,8 +150,8 @@ def test_claude_refresh_updates_disk_and_retries_fetch(
     def fake_fetch_claude_usage(token: str, **kwargs: Any) -> tuple[dict[str, Any] | None, str | None]:
         fetch_tokens.append(token)
         return {
-            "five_hour": {"utilization": 22.0, "resets_at": "2026-11-24T15:00:00Z"},
-            "seven_day": {"utilization": 45.0, "resets_at": "2026-11-30T00:00:00Z"},
+            "five_hour": {"utilization": 22.0, "resets_at": _iso_offset(hours=5)},
+            "seven_day": {"utilization": 45.0, "resets_at": _iso_offset(days=6)},
         }, None
 
     monkeypatch.setattr(pq, "_fetch_claude_usage", fake_fetch_claude_usage)
@@ -200,8 +204,8 @@ def test_claude_refresh_triggered_on_401_403(
                 {
                     "agent_key": "claude",
                     "status": "ok",
-                    "as_of": "2026-11-24T10:00:00Z",
-                    "windows": [{"id": "5h", "used_percent": 5.0, "resets_at": "2026-11-24T15:00:00Z"}],
+                    "as_of": _iso_offset(),
+                    "windows": [{"id": "5h", "used_percent": 5.0, "resets_at": _iso_offset(hours=5)}],
                 }
             ]
         }
@@ -301,7 +305,7 @@ def test_codex_recovers_via_fallback_user_home_when_primary_fails(
         if codex_home == str(user_codex):
             return {
                 "status": "ok",
-                "as_of": "2026-11-24T10:00:00Z",
+                "as_of": _iso_offset(),
                 "windows": [{"id": "primary", "used_percent": 10.0, "resets_at": None}],
             }, None
         return None, "not_found"
