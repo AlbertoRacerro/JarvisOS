@@ -540,6 +540,24 @@ UNIT_TEMPLATES = {
         "ExecStart=%h/.local/bin/jarvis-sandbox python3 %h/.local/share/jarvisos/hostops/current/scripts/relay_continuity.py serve --interval 60\n"
         "KillMode=process\nRestart=on-failure\nRestartPreventExitStatus=2 3\nRestartSec=120\n"
         "[Install]\nWantedBy=default.target\n"),
+    "jarvisos-searxng": (
+        "[Unit]\nDescription=JarvisOS SearXNG metasearch engine (spec 353)\n"
+        "[Service]\nWorkingDirectory=%h/tools/searxng\n"
+        "Environment=SEARXNG_SETTINGS_PATH=%h/.config/jarvisos-hostops/searxng/settings.yml\n"
+        "ExecStart=%h/tools/searxng/.venv/bin/python -m searx.webapp\n"
+        "Restart=on-failure\nRestartSec=10\n"
+        "MemoryMax=2G\nCPUQuota=200%\n"
+        "[Install]\nWantedBy=default.target\n"),
+    "jarvisos-search-guard": (
+        "[Unit]\nDescription=JarvisOS search query guard proxy (spec 353)\n"
+        "After=jarvisos-searxng.service\nWants=jarvisos-searxng.service\n"
+        "[Service]\nWorkingDirectory=%h/src/JarvisOS\n"
+        "EnvironmentFile=-%h/.config/jarvisos-hostops/search-guard.env\n"
+        "Environment=PYTHONPATH=%h/.local/share/jarvisos-hostops/current/backend\n"
+        "ExecStart=%h/src/JarvisOS/backend/.venv/bin/python %h/.local/share/jarvisos-hostops/current/scripts/search_guard.py\n"
+        "Restart=on-failure\nRestartSec=10\n"
+        "NoNewPrivileges=yes\n"
+        "[Install]\nWantedBy=default.target\n"),
 }
 
 
@@ -557,6 +575,7 @@ def op_service_install(ctx: Context) -> dict[str, Any]:
             current = read_regular(fd, unit, 1 << 16)
         except FileNotFoundError:
             current = None
+        previous_state = _unit_state(ctx, unit) if current is not None else {}
         if current is not None and current != body:
             sfd = open_dir(ctx.paths.state / "unit-backups", create=True)
             try:
@@ -567,15 +586,49 @@ def op_service_install(ctx: Context) -> dict[str, Any]:
             write_at(fd, unit, body)
     finally:
         os.close(fd)
-    reload = _systemctl(ctx, "daemon-reload")
-    enable = _systemctl(ctx, "enable", "--now", unit)
-    time.sleep(3)
-    state = _unit_state(ctx, unit)
-    detail = {"unit": unit, "unit_sha256": hashlib.sha256(body).hexdigest(), "changed": current != body,
-              "returncodes": [reload.returncode, enable.returncode], "state": state}
-    if reload.returncode != 0 or enable.returncode != 0 or state.get("ActiveState") != "active":
-        raise Failed(f"{unit} is {state.get('ActiveState')} after install", detail)
-    return detail
+    changed = current != body
+    detail: dict[str, Any] = {"unit": unit, "unit_sha256": hashlib.sha256(body).hexdigest(),
+                              "changed": changed, "returncodes": [], "state": {}}
+    try:
+        reload = _systemctl(ctx, "daemon-reload")
+        detail["returncodes"].append(reload.returncode)
+        if reload.returncode != 0:
+            raise Failed(f"{unit} daemon reload failed", detail)
+        enable = _systemctl(ctx, "enable", "--now", unit)
+        detail["returncodes"].append(enable.returncode)
+        if enable.returncode != 0:
+            raise Failed(f"{unit} enable failed", detail)
+        # enable --now leaves an already active service running with its old unit body.
+        if changed and previous_state.get("ActiveState") == "active":
+            restart = _systemctl(ctx, "restart", unit)
+            detail["returncodes"].append(restart.returncode)
+            if restart.returncode != 0:
+                raise Failed(f"{unit} restart failed", detail)
+        time.sleep(3)
+        state = _unit_state(ctx, unit)
+        detail["state"] = state
+        if state.get("ActiveState") != "active":
+            raise Failed(f"{unit} is {state.get('ActiveState')} after install", detail)
+        return detail
+    except Exception:
+        if changed:
+            # A failed install must not leave a new executable unit for reboot.
+            restore_fd = open_dir(ctx.paths.units, create=True)
+            try:
+                if current is None:
+                    os.unlink(unit, dir_fd=restore_fd)
+                else:
+                    write_at(restore_fd, unit, current)
+            finally:
+                os.close(restore_fd)
+            _systemctl(ctx, "daemon-reload")
+            if current is None or previous_state.get("UnitFileState") not in {"enabled", "enabled-runtime"}:
+                _systemctl(ctx, "disable", "--now", unit)
+            elif previous_state.get("ActiveState") == "active":
+                _systemctl(ctx, "restart", unit)
+            else:
+                _systemctl(ctx, "stop", unit)
+        raise
 
 
 _WIN_PATH_RE = re.compile(r"^[A-Za-z]:\\[A-Za-z0-9 ._\\-]{1,240}$")
@@ -2331,6 +2384,21 @@ def return_release(
     if not is_return_marker:
         restore_release_links(paths, previous_sha)
 
+    # The query guard imports code from the installed release. A rollback must
+    # replace a running candidate process; on restart failure stop it closed.
+    guard_restored: bool | None = None
+    if (paths.units / "jarvisos-search-guard.service").is_file():
+        try:
+            guard_restart = run(["systemctl", "--user", "restart", "jarvisos-search-guard.service"], timeout=60)
+            guard_restored = guard_restart.returncode == 0
+        except Exception:  # noqa: BLE001
+            guard_restored = False
+        if not guard_restored:
+            try:
+                run(["systemctl", "--user", "stop", "jarvisos-search-guard.service"], timeout=60)
+            except Exception:  # noqa: BLE001, S110
+                pass
+
     # Restore watcher if it was active
     if marker and marker.get("watcher_active"):
         unit = "jarvisos-relay-watch.service"
@@ -2376,6 +2444,8 @@ def return_release(
         "returned_at": iso(current_time),
         "notified": notified,
     })
+    if guard_restored is not None:
+        entry["search_guard_restored"] = guard_restored
     state_fd = open_dir(paths.state, create=True)
     try:
         with open(paths.release_history, "a", encoding="utf-8") as handle:
@@ -3380,15 +3450,23 @@ DEFAULT_POLICY: dict[str, Any] = {
         "release.install": {"trust_master": False},
         "slack.deliver": {"max_per_hour": 6},
         "service.status": {"units": ["jarvisos-relay-watch.service", "jarvisos-mission-owner.service",
-                                     "jarvisos-hostops.service", "agent-relay.service"]},
-        "service.control": {"units": ["jarvisos-relay-watch.service", "jarvisos-mission-owner.service"],
+                                     "jarvisos-hostops.service", "agent-relay.service",
+                                     "jarvisos-searxng.service", "jarvisos-search-guard.service"]},
+        "service.control": {"units": ["jarvisos-relay-watch.service", "jarvisos-mission-owner.service",
+                                      "jarvisos-searxng.service", "jarvisos-search-guard.service"],
                             "actions": OWNER_ACTIONS},
-        "service.install": {"templates": ["jarvisos-relay-watch", "jarvisos-mission-owner"]},
+        "service.install": {"templates": ["jarvisos-relay-watch", "jarvisos-mission-owner",
+                                          "jarvisos-searxng", "jarvisos-search-guard"]},
         "wsl.probe": {},
         "wsl.handoff": {"dir": "/mnt/c/Users/user/JarvisOS-print", "open": True, "max_bytes": 200 << 20,
                         "extensions": [".3mf", ".stl", ".step", ".glb", ".png", ".pdf"]},
         "browser.screenshot": {"chrome": os.path.expanduser("~/.cache/ms-playwright/chromium-1187/chrome-linux/chrome")},
-        "http.smoke": {"targets": {"backend-health": {"url": "http://127.0.0.1:8000/health", "expect": 200}}},
+        "http.smoke": {
+            "targets": {
+                "backend-health": {"url": "http://127.0.0.1:8000/health", "expect": 200},
+                "search-guard": {"url": "http://127.0.0.1:8889/healthz", "expect": 200},
+            }
+        },
         "bench.run": {"benchmarks": {
             "relay-observe-tests": {"cwd": "backend", "timeout_s": 900, "memory_max": "4G", "cpu_quota": "200%",
                                     "argv": [os.path.expanduser("~/src/JarvisOS/backend/.venv/bin/python"), "-m", "pytest",
@@ -3716,7 +3794,7 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
                 parts = Path(member.name).parts
                 if member.name.startswith("/") or ".." in parts or not (member.isdir() or member.isfile()):
                     raise Refused("unsafe release archive member")
-                if len(parts) < 2 or parts[1] != "scripts":
+                if len(parts) < 2 or not (parts[1] == "scripts" or parts[1:3] == ("backend", "app")):
                     continue
                 target = stage.joinpath(*parts[1:])
                 if member.isdir():

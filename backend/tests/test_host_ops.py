@@ -1324,6 +1324,20 @@ def test_install_release_green_installs(tmp_path, monkeypatch):
     assert current.resolve() == paths.install / "releases" / SHA
 
 
+def test_install_release_includes_search_guard_backend(tmp_path, monkeypatch):
+    payload = release_archive([
+        ("repo/backend/app/__init__.py", tarfile.REGTYPE),
+        ("repo/backend/app/core/packs.py", tarfile.REGTYPE),
+        ("repo/backend/tests/test_packs.py", tarfile.REGTYPE),
+    ])
+    mock_install(monkeypatch, payload)
+    paths = h.Paths(tmp_path)
+    h.install_release(paths, SHA)
+    release = paths.install / "releases" / SHA
+    assert (release / "backend/app/core/packs.py").is_file()
+    assert not (release / "backend/tests").exists()
+
+
 @pytest.mark.parametrize("rules,checks,match", [
     (None, [{"name": "other", "status": "completed", "conclusion": "success"}], "missing"),
     (None, [{"name": "backend", "status": "in_progress", "conclusion": None, "id": 1}], "in_progress"),
@@ -4605,6 +4619,36 @@ def test_unit_templates_contains_mission_owner():
     assert h.DEFAULT_POLICY["ops"]["service.control"]["actions"] == {"jarvisos-mission-owner.service": ["start"]}
 
 
+def test_service_install_restarts_changed_active_unit_and_restores_on_failure(host, monkeypatch):
+    paths, ex, calls = host
+    monkeypatch.setattr(h.time, "sleep", lambda _seconds: None)
+    unit = "jarvisos-search-guard.service"
+    paths.units.mkdir(parents=True, exist_ok=True)
+    old_body = b"[Unit]\nDescription=previous guard\n"
+    (paths.units / unit).write_bytes(old_body)
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if "show" in argv:
+            return subprocess.CompletedProcess(argv, 0, "ActiveState=active\nUnitFileState=enabled\n", "")
+        return subprocess.CompletedProcess(argv, 1 if "restart" in argv and fail_restart[0] else 0, "", "")
+
+    fail_restart = [False]
+    ex.run = run
+    _, receipt = request(host, "service.install", {"template": "jarvisos-search-guard"})
+    assert receipt["outcome"] == "ok"
+    assert any("restart" in argv and unit in argv for argv, _ in calls)
+    assert (paths.units / unit).read_bytes() == h.UNIT_TEMPLATES["jarvisos-search-guard"].encode()
+
+    (paths.units / unit).write_bytes(old_body)
+    calls.clear()
+    fail_restart[0] = True
+    _, receipt = request(host, "service.install", {"template": "jarvisos-search-guard"})
+    assert receipt["outcome"] == "failed"
+    assert (paths.units / unit).read_bytes() == old_body
+    assert sum("daemon-reload" in argv for argv, _ in calls) == 2
+
+
 def test_publish_release_creates_readonly_scripts_and_symlink(tmp_path):
     paths = h.Paths(tmp_path)
     sha = "b" * 40
@@ -4934,6 +4978,31 @@ def test_return_release_returns_published_link_and_starts_owner(tmp_path):
     assert (paths.published / "current").resolve().name == prev_sha
     start_calls = [c for c in calls if "start" in c[0] and "jarvisos-mission-owner.service" in c[0]]
     assert len(start_calls) >= 1
+
+
+def test_return_release_restarts_guard_after_switch(tmp_path):
+    paths = h.Paths(tmp_path)
+    prev_sha = "8" * 40
+    cand_sha = "9" * 40
+    for sha in (prev_sha, cand_sha):
+        scripts = paths.install / "releases" / sha / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "host_ops.py").write_text("# code\n")
+        h.publish_release(paths, sha)
+    h.switch_install_release(paths, cand_sha)
+    paths.units.mkdir(parents=True)
+    (paths.units / "jarvisos-search-guard.service").write_text("[Unit]\n")
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    marker = {"candidate_sha": cand_sha, "previous_sha": prev_sha,
+              "watcher_active": False, "owner_active": False}
+    assert h.return_release(paths, marker=marker, reason="test rollback", run=run)
+    assert (paths.install / "current").resolve().name == prev_sha
+    assert ["systemctl", "--user", "restart", "jarvisos-search-guard.service"] in calls
 
 
 def test_install_release_failure_after_publication_restores_links(tmp_path, monkeypatch):

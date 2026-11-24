@@ -63,6 +63,10 @@ class JarvisPaths:
         return self.secrets_dir / "scaleway-api-key.v1.json"
 
     @property
+    def search_guard_log_file(self) -> Path:
+        return self.logs_dir / "search_guard.log"
+
+    @property
     def data_root_exists(self) -> bool:
         return self.data_root.exists()
 
