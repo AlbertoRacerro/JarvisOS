@@ -25,8 +25,8 @@ BACKEND_DIR = REPO_ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path and BACKEND_DIR.is_dir():
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.core import packs, paths
-from app.modules.agents.hermes.ip_boundary import (
+from app.core import packs, paths  # noqa: E402
+from app.modules.agents.hermes.ip_boundary import (  # noqa: E402
     check_sensitivity_floor,
     sanitize_text,
 )

@@ -576,6 +576,7 @@ def op_service_install(ctx: Context) -> dict[str, Any]:
         except FileNotFoundError:
             current = None
         previous_state = _unit_state(ctx, unit) if current is not None else {}
+        was_active = previous_state.get("ActiveState") == "active"
         if current is not None and current != body:
             sfd = open_dir(ctx.paths.state / "unit-backups", create=True)
             try:
@@ -599,7 +600,7 @@ def op_service_install(ctx: Context) -> dict[str, Any]:
         if enable.returncode != 0:
             raise Failed(f"{unit} enable failed", detail)
         # enable --now leaves an already active service running with its old unit body.
-        if changed and previous_state.get("ActiveState") == "active":
+        if was_active:
             restart = _systemctl(ctx, "restart", unit)
             detail["returncodes"].append(restart.returncode)
             if restart.returncode != 0:
@@ -612,22 +613,31 @@ def op_service_install(ctx: Context) -> dict[str, Any]:
         return detail
     except Exception:
         if changed:
-            # A failed install must not leave a new executable unit for reboot.
-            restore_fd = open_dir(ctx.paths.units, create=True)
+            # A failed install must not leave a replacement or newly created unit.
             try:
-                if current is None:
-                    os.unlink(unit, dir_fd=restore_fd)
+                restore_fd = open_dir(ctx.paths.units, create=True)
+                try:
+                    if current is None:
+                        unlink_at(restore_fd, unit)
+                    else:
+                        write_at(restore_fd, unit, current)
+                finally:
+                    os.close(restore_fd)
+            except Exception:
+                pass
+            try:
+                _systemctl(ctx, "daemon-reload")
+            except Exception:
+                pass
+            try:
+                if current is None or previous_state.get("UnitFileState") not in {"enabled", "enabled-runtime"}:
+                    _systemctl(ctx, "disable", "--now", unit)
+                elif was_active:
+                    _systemctl(ctx, "restart", unit)
                 else:
-                    write_at(restore_fd, unit, current)
-            finally:
-                os.close(restore_fd)
-            _systemctl(ctx, "daemon-reload")
-            if current is None or previous_state.get("UnitFileState") not in {"enabled", "enabled-runtime"}:
-                _systemctl(ctx, "disable", "--now", unit)
-            elif previous_state.get("ActiveState") == "active":
-                _systemctl(ctx, "restart", unit)
-            else:
-                _systemctl(ctx, "stop", unit)
+                    _systemctl(ctx, "stop", unit)
+            except Exception:
+                pass
         raise
 
 
@@ -2386,18 +2396,30 @@ def return_release(
 
     # The query guard imports code from the installed release. A rollback must
     # replace a running candidate process; on restart failure stop it closed.
+    guard_unit = "jarvisos-search-guard.service"
     guard_restored: bool | None = None
-    if (paths.units / "jarvisos-search-guard.service").is_file():
-        try:
-            guard_restart = run(["systemctl", "--user", "restart", "jarvisos-search-guard.service"], timeout=60)
-            guard_restored = guard_restart.returncode == 0
-        except Exception:  # noqa: BLE001
-            guard_restored = False
-        if not guard_restored:
+    if (paths.units / guard_unit).is_file():
+        guard_active = False
+        if marker and marker.get("search_guard_active") is not None:
+            guard_active = bool(marker.get("search_guard_active"))
+        else:
             try:
-                run(["systemctl", "--user", "stop", "jarvisos-search-guard.service"], timeout=60)
-            except Exception:  # noqa: BLE001, S110
-                pass
+                check = run(["systemctl", "--user", "is-active", guard_unit], timeout=10)
+                guard_active = check.returncode == 0
+            except Exception:  # noqa: BLE001
+                guard_active = False
+
+        if guard_active:
+            try:
+                guard_restart = run(["systemctl", "--user", "restart", guard_unit], timeout=60)
+                guard_restored = guard_restart.returncode == 0
+            except Exception:  # noqa: BLE001
+                guard_restored = False
+            if not guard_restored:
+                try:
+                    run(["systemctl", "--user", "stop", guard_unit], timeout=60)
+                except Exception:  # noqa: BLE001, S110
+                    pass
 
     # Restore watcher if it was active
     if marker and marker.get("watcher_active"):
@@ -3890,6 +3912,8 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
         raise Refused("release.install requires trust_master: true in the host policy")
     unit = "jarvisos-relay-watch.service"
     watcher_active = _unit_state(ctx, unit).get("ActiveState") == "active"
+    guard_unit = "jarvisos-search-guard.service"
+    guard_active = _unit_state(ctx, guard_unit).get("ActiveState") == "active"
     owner_active = (ctx.request.get("requester") == "relay-continuity:owner"
                     or (ctx.request.get("args") or {}).get("owner_active") is True)
     kwargs: dict[str, Any] = {"request_id": ctx.request.get("id"),
@@ -3917,6 +3941,14 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
         else:
             restore_release_links(ctx.paths, installed_before)
         raise Failed("watcher restart failed")
+
+    if guard_active and _systemctl(ctx, "restart", guard_unit).returncode:
+        # If guard restart failed, the install request failed.
+        if ctx.paths.release_pending.exists():
+            guard(ctx.paths, force_return=True, reason="search-guard restart failed", post=ctx.post, run=ctx.run, now=ctx.now())
+        else:
+            restore_release_links(ctx.paths, installed_before)
+        raise Failed("search-guard restart failed")
 
     return {"sha": args["sha"], "executor_restart": True}
 

@@ -4649,6 +4649,62 @@ def test_service_install_restarts_changed_active_unit_and_restores_on_failure(ho
     assert sum("daemon-reload" in argv for argv, _ in calls) == 2
 
 
+@pytest.mark.parametrize("fail_point", ["reload", "enable", "active"])
+def test_service_install_failure_restores_backup(host, monkeypatch, fail_point):
+    paths, ex, calls = host
+    monkeypatch.setattr(h.time, "sleep", lambda _seconds: None)
+    unit = "jarvisos-search-guard.service"
+    paths.units.mkdir(parents=True, exist_ok=True)
+    old_body = b"[Unit]\nDescription=previous guard backup\n"
+    (paths.units / unit).write_bytes(old_body)
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if "show" in argv:
+            if fail_point == "active" and len(calls) > 2:
+                return subprocess.CompletedProcess(argv, 0, "ActiveState=failed\nUnitFileState=enabled\n", "")
+            return subprocess.CompletedProcess(argv, 0, "ActiveState=active\nUnitFileState=enabled\n", "")
+        if "daemon-reload" in argv and fail_point == "reload":
+            if sum("daemon-reload" in c[0] for c in calls) == 1:
+                return subprocess.CompletedProcess(argv, 1, "", "reload error")
+        if "enable" in argv and fail_point == "enable":
+            return subprocess.CompletedProcess(argv, 1, "", "enable error")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    ex.run = run
+    _, receipt = request(host, "service.install", {"template": "jarvisos-search-guard"})
+    assert receipt["outcome"] == "failed"
+    assert (paths.units / unit).read_bytes() == old_body
+
+
+@pytest.mark.parametrize("fail_point", ["reload", "enable", "active"])
+def test_service_install_failure_unlinks_new_unit(host, monkeypatch, fail_point):
+    paths, ex, calls = host
+    monkeypatch.setattr(h.time, "sleep", lambda _seconds: None)
+    unit = "jarvisos-search-guard.service"
+    paths.units.mkdir(parents=True, exist_ok=True)
+    if (paths.units / unit).exists():
+        (paths.units / unit).unlink()
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if "show" in argv:
+            if fail_point == "active":
+                return subprocess.CompletedProcess(argv, 0, "ActiveState=failed\nUnitFileState=disabled\n", "")
+            return subprocess.CompletedProcess(argv, 0, "ActiveState=inactive\nUnitFileState=disabled\n", "")
+        if "daemon-reload" in argv and fail_point == "reload":
+            if sum("daemon-reload" in c[0] for c in calls) == 1:
+                return subprocess.CompletedProcess(argv, 1, "", "reload error")
+        if "enable" in argv and fail_point == "enable":
+            return subprocess.CompletedProcess(argv, 1, "", "enable error")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    ex.run = run
+    _, receipt = request(host, "service.install", {"template": "jarvisos-search-guard"})
+    assert receipt["outcome"] == "failed"
+    assert not (paths.units / unit).exists()
+
+
 def test_publish_release_creates_readonly_scripts_and_symlink(tmp_path):
     paths = h.Paths(tmp_path)
     sha = "b" * 40
@@ -5003,6 +5059,100 @@ def test_return_release_restarts_guard_after_switch(tmp_path):
     assert h.return_release(paths, marker=marker, reason="test rollback", run=run)
     assert (paths.install / "current").resolve().name == prev_sha
     assert ["systemctl", "--user", "restart", "jarvisos-search-guard.service"] in calls
+
+
+def test_return_release_guard_inactive_or_missing_is_noop(tmp_path):
+    paths = h.Paths(tmp_path)
+    prev_sha = "8" * 40
+    cand_sha = "9" * 40
+    for sha in (prev_sha, cand_sha):
+        scripts = paths.install / "releases" / sha / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "host_ops.py").write_text("# code\n")
+        h.publish_release(paths, sha)
+    h.switch_install_release(paths, cand_sha)
+    paths.units.mkdir(parents=True)
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if "is-active" in argv:
+            return subprocess.CompletedProcess(argv, 3, "inactive\n", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    # 1. When unit file does not exist, no systemctl call for search-guard
+    marker = {"candidate_sha": cand_sha, "previous_sha": prev_sha,
+              "watcher_active": False, "owner_active": False}
+    assert h.return_release(paths, marker=marker, reason="test rollback", run=run)
+    assert not any("jarvisos-search-guard.service" in argv for argv in calls)
+
+    # 2. When unit file exists but is inactive, is-active is checked and no restart/stop occurs
+    (paths.units / "jarvisos-search-guard.service").write_text("[Unit]\n")
+    calls.clear()
+    assert h.return_release(paths, marker=marker, reason="test rollback", run=run)
+    assert ["systemctl", "--user", "is-active", "jarvisos-search-guard.service"] in calls
+    assert not any("restart" in argv and "jarvisos-search-guard.service" in argv for argv in calls)
+    assert not any("stop" in argv and "jarvisos-search-guard.service" in argv for argv in calls)
+
+
+def test_return_release_guard_restart_failure_stops_closed(tmp_path):
+    paths = h.Paths(tmp_path)
+    prev_sha = "8" * 40
+    cand_sha = "9" * 40
+    for sha in (prev_sha, cand_sha):
+        scripts = paths.install / "releases" / sha / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "host_ops.py").write_text("# code\n")
+        h.publish_release(paths, sha)
+    h.switch_install_release(paths, cand_sha)
+    paths.units.mkdir(parents=True)
+    (paths.units / "jarvisos-search-guard.service").write_text("[Unit]\n")
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if "is-active" in argv:
+            return subprocess.CompletedProcess(argv, 0, "active\n", "")
+        if "restart" in argv and "jarvisos-search-guard.service" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "failed to restart")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    marker = {"candidate_sha": cand_sha, "previous_sha": prev_sha,
+              "watcher_active": False, "owner_active": False}
+    assert h.return_release(paths, marker=marker, reason="test rollback", run=run)
+    assert ["systemctl", "--user", "restart", "jarvisos-search-guard.service"] in calls
+    assert ["systemctl", "--user", "stop", "jarvisos-search-guard.service"] in calls
+
+
+def test_op_release_install_restarts_active_search_guard(host, monkeypatch):
+    paths, ex, _ = host
+    policy = copy.deepcopy(h.DEFAULT_POLICY)
+    policy["ops"]["release.install"]["trust_master"] = True
+    paths.policy.write_text(json.dumps(policy))
+
+    monkeypatch.setattr(h, "install_release", lambda *args, **kw: None)
+
+    calls = []
+    fail_guard = [False]
+
+    def run(argv, **kw):
+        calls.append(argv)
+        if "show" in argv:
+            return subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", "")
+        if "restart" in argv and "jarvisos-search-guard.service" in argv and fail_guard[0]:
+            return subprocess.CompletedProcess(argv, 1, "", "restart failed")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    ex.run = run
+    req, receipt = request(host, "release.install", {"sha": SHA})
+    assert receipt["outcome"] == "ok"
+    assert any("restart" in argv and "jarvisos-search-guard.service" in argv for argv in calls)
+
+    # When guard restart fails during release install
+    calls.clear()
+    fail_guard[0] = True
+    req, receipt = request(host, "release.install", {"sha": SHA})
+    assert receipt["outcome"] == "failed"
 
 
 def test_install_release_failure_after_publication_restores_links(tmp_path, monkeypatch):
