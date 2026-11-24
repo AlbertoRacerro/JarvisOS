@@ -351,16 +351,19 @@ def download_pdf(
                         out_file.write(chunk)
                 return True, None, current_url
         except HTTPError as exc:
-            if exc.code in {301, 302, 303, 307, 308}:
-                location = exc.headers.get("Location")
-                if not location:
-                    return False, "invalid_redirect", current_url
-                redirects += 1
-                if redirects > MAX_REDIRECTS:
-                    return False, "too_many_redirects", current_url
-                current_url = urljoin(current_url, location)
-                continue
-            return False, f"http_error_{exc.code}", current_url
+            try:
+                if exc.code in {301, 302, 303, 307, 308}:
+                    location = exc.headers.get("Location")
+                    if not location:
+                        return False, "invalid_redirect", current_url
+                    redirects += 1
+                    if redirects > MAX_REDIRECTS:
+                        return False, "too_many_redirects", current_url
+                    current_url = urljoin(current_url, location)
+                    continue
+                return False, f"http_error_{exc.code}", current_url
+            finally:
+                exc.close()
         except (URLError, TimeoutError, OSError):
             return False, "network_error", current_url
 
@@ -519,7 +522,6 @@ def execute_paper_pdf_read(
             "page_count": total_pages,
             "returned_pages": ret_pages,
             "excerpts": excerpts,
-            "pages": excerpts,
             "observed_at": now_iso,
         }
     finally:

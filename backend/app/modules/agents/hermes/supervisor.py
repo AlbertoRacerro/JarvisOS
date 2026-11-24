@@ -964,7 +964,7 @@ class HermesSupervisor:
                                                   "request_digest": (result.result or {}).get("request_digest")}
                                                  if result.capability_id == "jarvis.decide" and result.result
                                                  else {} if result.capability_id == "jarvis.decide"
-                                                 else {"doi": arguments.get("doi"), "pages": arguments.get("pages")}
+                                                 else _safe_tool_arguments({"doi": arguments.get("doi"), "pages": arguments.get("pages")})
                                                  if result.capability_id == "jarvis.paper_pdf_read"
                                                  else _safe_tool_arguments(arguments)),
                                    "result_digest": canonical_digest(result.model_dump(mode="json")),
