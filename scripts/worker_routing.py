@@ -1791,11 +1791,13 @@ def load_snapshot(paths: list[Path]) -> dict[str, tuple[datetime, dict[str, floa
 def apply_snapshot(pools: dict[str, Pool], snapshot: dict[str, tuple[datetime, dict[str, float]]],
                    now: datetime, max_age: float = SNAPSHOT_MAX_AGE) -> dict[str, Pool]:
     """Pools that could not be read live fall back to a snapshot entry no older than `max_age`. A live reading
-    always wins, and a pool the provider reported as disabled never falls back. Older or missing: unchanged."""
+    always wins, and a pool the provider reported as disabled never falls back. Temporary free-model pools never
+    fall back to a snapshot. Older or missing: unchanged."""
     out = dict(pools)
+    temp_names = {f"temp-{entry['name']}" for entry in load_temp_pools()}
     for name, pool in pools.items():
-        if (name == "copilot" or pool.free is not None or name not in snapshot
-                or (pool.reason or "").endswith("_disabled")):
+        if (name == "copilot" or name in temp_names or name.startswith("temp-") or pool.free is not None
+                or name not in snapshot or (pool.reason or "").endswith("_disabled")):
             continue
         at, windows = snapshot[name]
         if -60 <= (now - at).total_seconds() <= max_age:
@@ -1804,13 +1806,19 @@ def apply_snapshot(pools: dict[str, Pool], snapshot: dict[str, tuple[datetime, d
 
 
 def write_snapshot(path: Path, pools: dict[str, Pool], now: datetime | None = None) -> bool:
-    """Persist the live-read pools atomically, keeping other pools' older entries. Writes nothing when no pool
-    was read live. Never raises."""
-    live = {n: p for n, p in pools.items() if p.free is not None and p.source == "live"}
+    """Persist the live-read pools atomically, keeping other pools' older entries. Temporary free-model pools
+    are never persisted. Writes nothing when no pool was read live. Never raises."""
+    temp_names = {f"temp-{entry['name']}" for entry in load_temp_pools()}
+    live = {n: p for n, p in pools.items() if p.free is not None and p.source == "live"
+            and n not in temp_names and not n.startswith("temp-")}
     if not live:
         return False
     moment = now or datetime.now(UTC)
-    entries: dict[str, Any] = {n: {"as_of": _iso(at), "windows": w} for n, (at, w) in load_snapshot([path]).items()}
+    entries: dict[str, Any] = {
+        n: {"as_of": _iso(at), "windows": w}
+        for n, (at, w) in load_snapshot([path]).items()
+        if n not in temp_names and not n.startswith("temp-")
+    }
     for name, pool in live.items():
         entries[name] = {"as_of": _iso(moment), "windows": {k: round(v, 4) for k, v in pool.windows.items()}}
     document = {"schema": SNAPSHOT_SCHEMA, "as_of": _iso(moment), "pools": entries}

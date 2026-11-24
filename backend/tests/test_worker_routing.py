@@ -2152,3 +2152,91 @@ def test_active_throttled_exhausted_alone_do_not_satisfy_live_response_proof(mon
         res = wr.temp_pool_read(e, now, opener=_refuse)
         assert res.free is None
         assert res.reason == "missing_proof"
+
+
+def test_temp_pool_rejected_live_never_restored_from_snapshot_and_not_persisted(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    key = tmp_path / "pool.key"
+    key.write_text("secret", encoding="utf-8")
+    target = _temp_file(tmp_path, [_pool("zen", key, 43)])
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
+    now = datetime.now(UTC)
+    now_str = wr._iso(now)
+
+    # 1. temp pool rejected live (probe 404)
+    (tmp_path / "temp-pool-lists.json").write_text(json.dumps({
+        "sources": {
+            "https://example.invalid/v1": {
+                "ids": ["zen:free"],
+                "pricing": {"zen:free": {"prompt": 0, "completion": 0}},
+                "read_at": now_str,
+            }
+        },
+        "probes": {
+            "zen:free": {"status": "error", "code": 404, "answered": False, "at": now_str},
+        },
+    }), encoding="utf-8")
+
+    quota = tmp_path / "quota.json"
+    quota.write_text(json.dumps({
+        "schema": wr.SNAPSHOT_SCHEMA,
+        "as_of": now_str,
+        "pools": {
+            "codex": {"as_of": now_str, "windows": {"5h": 1.0, "weekly": 0.8}},
+            "temp-zen": {"as_of": now_str, "windows": {"main": 1.0}},
+        },
+    }), encoding="utf-8")
+
+    # apply_snapshot: temp pool rejected live with fresh snapshot entry stays unreadable
+    # normal subscription pool (codex) still falls back to fresh snapshot
+    live = {
+        "temp-zen": wr.unreadable("temp-zen", "probe_404"),
+        "codex": wr.unreadable("codex", "timeout"),
+        "gemini": pool("gemini", 0.0),
+    }
+    snap = wr.load_snapshot([quota])
+    resolved = wr.apply_snapshot(live, snap, now)
+    assert resolved["temp-zen"].free is None
+    assert resolved["temp-zen"].reason == "probe_404"
+    assert resolved["codex"].source == "snapshot"
+    assert resolved["codex"].free == pytest.approx(0.8)
+
+    # resolve_pools: rejected live pool stays unreadable, codex falls back to snapshot
+    entries = wr.load_temp_pools()
+    assert len(entries) == 1
+    monkeypatch.setattr(wr, "read_pools", lambda: {
+        "temp-zen": wr.temp_pool_read(entries[0], now, opener=_refuse),
+        "codex": wr.unreadable("codex", "timeout"),
+        "gemini": pool("gemini", 0.0),
+    })
+    resolved_pools = wr.resolve_pools([quota], now=now)
+    assert resolved_pools["temp-zen"].free is None
+    assert resolved_pools["temp-zen"].reason == "probe_404"
+    assert resolved_pools["codex"].source == "snapshot"
+    assert resolved_pools["codex"].free == pytest.approx(0.8)
+
+    # cmd_pick: temp pool rejected live is not picked; codex (terra) is chosen via snapshot fallback
+    wr._cache.update(at=None, line=None, ttl=0.0)
+    assert wr.main(["pick", "--difficulty", "medium", "--risk", "low", "--json", "--quota-file", str(quota)]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["worker"] == "terra"
+    assert data["source"] == "snapshot"
+    assert not any(a["worker"] == "temp-zen" for a in data.get("alternatives", []))
+    assert any(s["worker"] == "temp-zen" and s["skipped"] == "probe_404" for s in data.get("skipped", []))
+    wr._cache.update(at=None, line=None, ttl=0.0)
+
+    # write_snapshot: never persists temporary pools even when live
+    snap_out = tmp_path / "snap_out.json"
+    live_pools = {
+        "temp-zen": wr.Pool("temp-zen", {"main": 1.0}, 1.0, None, "live"),
+        "codex": wr.Pool("codex", {"5h": 0.8}, 0.8, None, "live"),
+    }
+    assert wr.write_snapshot(snap_out, live_pools, now)
+    persisted = json.loads(snap_out.read_text(encoding="utf-8"))
+    assert "temp-zen" not in persisted["pools"]
+    assert "codex" in persisted["pools"]
+
+    # write_snapshot with only temp pools live writes nothing and returns False
+    snap_only_temp = tmp_path / "only_temp.json"
+    assert not wr.write_snapshot(snap_only_temp, {"temp-zen": live_pools["temp-zen"]}, now)
+    assert not snap_only_temp.exists()
