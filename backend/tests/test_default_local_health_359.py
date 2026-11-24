@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import errno
 import json
+import socket
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -24,7 +28,10 @@ from app.modules.ai.contracts import (
 from app.modules.ai.execution import AiTaskOutcome
 from app.modules.ai.providers.local_llamacpp_adapter import LocalLlamaCppAdapter
 from app.modules.local_ai.runtime import host_start, llama_cpp, model_registry
-from app.modules.local_ai.runtime.host_start import StrataRuntimeController
+from app.modules.local_ai.runtime.host_start import (
+    StrataRuntimeController,
+    is_loopback_port_silent,
+)
 from app.modules.local_ai.runtime.llama_cpp import LlamaCppRuntimeConfig
 from app.modules.local_ai.runtime.model_registry import (
     ModelEntry,
@@ -494,6 +501,407 @@ def test_fallback_refuses_to_spawn_llama_cpp_if_strata_port_still_answers(
     assert listed["fallback_active"] is False
     assert llama_spawned is False
     assert owner.active_model_id == "sage"
+
+
+def test_is_loopback_port_silent_real_sockets() -> None:
+    """Real loopback sockets: an answering port is not silent, a closed one is; other hosts never are."""
+    assert is_loopback_port_silent("example.com", 80) is False
+
+    # Bind ephemeral port on 127.0.0.1
+    server = HTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert is_loopback_port_silent("127.0.0.1", port) is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
+
+    assert is_loopback_port_silent("127.0.0.1", port) is True
+
+
+def test_is_loopback_port_silent_fail_closed_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail-closed loopback silence check: only definite ECONNREFUSED on loopback is True."""
+    # 1. Unsupported hosts fail closed
+    assert is_loopback_port_silent("192.168.1.1", 8080) is False
+    assert is_loopback_port_silent("example.com", 80) is False
+    assert is_loopback_port_silent("10.0.0.1", 8080) is False
+    assert is_loopback_port_silent("", 8080) is False
+
+    # 2. Ephemeral server on 127.0.0.1: open -> not silent (False); stopped -> silent (True)
+    server = HTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert is_loopback_port_silent("127.0.0.1", port) is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
+
+    # Definite connection refused on loopback -> True
+    assert is_loopback_port_silent("127.0.0.1", port) is True
+
+    # 3. Timeout uncertainty -> False (not proven silent)
+    def mock_timeout(*args: Any, **kwargs: Any) -> Any:
+        raise TimeoutError("connect timed out")
+
+    monkeypatch.setattr(socket, "create_connection", mock_timeout)
+    assert is_loopback_port_silent("127.0.0.1", 8080) is False
+
+    # 4. DNS uncertainty -> False
+    def mock_gaierror(*args: Any, **kwargs: Any) -> Any:
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(socket, "create_connection", mock_gaierror)
+    assert is_loopback_port_silent("localhost", 8080) is False
+
+    # 5. Generic OS / network errors -> False
+    def mock_unreach(*args: Any, **kwargs: Any) -> Any:
+        raise OSError(errno.EHOSTUNREACH, "No route to host")
+
+    monkeypatch.setattr(socket, "create_connection", mock_unreach)
+    assert is_loopback_port_silent("127.0.0.1", 8080) is False
+
+
+def test_strata_controller_deterministic_port_silence_injection() -> None:
+    """StrataRuntimeController supports deterministic port silence injection without sockets."""
+    ctrl_loud = StrataRuntimeController(port_silence_probe_fn=lambda h, p: False)
+    assert ctrl_loud.is_port_silent("127.0.0.1", 8080) is False
+
+    ctrl_silent = StrataRuntimeController(port_silence_probe_fn=lambda h, p: True)
+    assert ctrl_silent.is_port_silent("127.0.0.1", 8080) is True
+
+
+def test_fallback_refuses_when_strata_port_alive_with_wrong_model_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When Strata fails but its loopback port is still answering (e.g. wrong served_model), fallback refuses.
+
+    Causal proof:
+    1. Port open with wrong model id -> probe is False, but port is reachable -> fallback refused (no llama_cpp spawn).
+    2. Server stopped -> port silent -> fallback activates and spawns llama_cpp.
+    """
+    spool = tmp_path / "spool"
+    (spool / "requests").mkdir(parents=True, exist_ok=True)
+    (spool / "receipts").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("JARVISOS_HOSTOPS_SPOOL", str(spool))
+
+    class WrongModelHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/v1/models":
+                body = json.dumps({"data": [{"id": "wrong-model-id"}]}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format: str, *args: Any) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), WrongModelHandler)
+    server_port = server.server_address[1]
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    llama_file = tmp_path / "qwen.gguf"
+    llama_file.write_bytes(b"qwen-weights")
+    models = [
+        {
+            "id": "sage",
+            "label": "Sage",
+            "runtime": "strata",
+            "qualification": "default",
+            "unit": "sage.service",
+            "port": server_port,
+            "served_model": "sage-model",
+        },
+        {
+            "id": "qwen",
+            "label": "Qwen 2.5",
+            "runtime": "llama_cpp",
+            "qualification": "qualified",
+            "model_path": str(llama_file),
+            "model_sha256": "b" * 64,
+        },
+    ]
+    _setup_registry(tmp_path, monkeypatch, models)
+    monkeypatch.setattr(model_registry, "peek_model_sha256", lambda *_: ("b" * 64, False))
+
+    ctrl = StrataRuntimeController()
+    st = ctrl.start("sage", "sage.service", "127.0.0.1", server_port, "sage-model")
+    assert st.state == "loading"
+    req_id = st.last_request_id
+    (spool / "receipts" / f"{req_id}.json").write_text(
+        json.dumps({
+            "schema": host_start.RECEIPT_SCHEMA,
+            "request_id": req_id,
+            "outcome": "failed",
+            "error": "host ops crash",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(host_start, "get_strata_controller", lambda: ctrl)
+
+    assert ctrl.probe("127.0.0.1", server_port, "sage-model") is False
+    assert ctrl.get_state("sage", "127.0.0.1", server_port, "sage-model").state == "failed"
+
+    llama_spawned = False
+
+    def fake_start() -> dict[str, Any]:
+        nonlocal llama_spawned
+        llama_spawned = True
+        return {"status": "ok"}
+
+    owner = SimpleNamespace(
+        active_model_id="sage",
+        default_model_id="sage",
+        config=LlamaCppRuntimeConfig(),
+        status=lambda: {"model_loaded": False, "runtime_reachable": False},
+        start=fake_start,
+        stop=lambda: None,
+    )
+    monkeypatch.setattr(model_registry, "get_llama_cpp_runtime_owner", lambda: owner)
+    monkeypatch.setattr(model_registry, "llama_cpp_runtime_config", lambda: LlamaCppRuntimeConfig(manage=True))
+
+    try:
+        # Phase 1: Port is reachable (though wrong model ID) -> fallback MUST be refused
+        listed = list_models()
+        assert listed["fallback_active"] is False
+        assert llama_spawned is False
+        assert owner.active_model_id == "sage"
+
+        # Direct check on determine_fallback
+        entries, _ = model_registry.read_registry()
+        active, fallback, _ = model_registry.determine_fallback(entries)
+        assert active is False
+        assert fallback is None
+    finally:
+        # Phase 2: Shut down server -> port becomes silent
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2.0)
+
+    # Now port is silent: fallback activates and spawns llama_cpp
+    listed_after = list_models()
+    assert listed_after["fallback_active"] is True
+    assert listed_after["active_id"] == "qwen"
+    assert llama_spawned is True
+    assert owner.active_model_id == "qwen"
+
+
+def test_fallback_refuses_when_strata_host_is_unsupported_non_loopback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When Strata host is non-loopback / unsupported, fallback fails closed and refuses llama_cpp.
+
+    Causal proof:
+    1. Host is non-loopback (192.168.1.99) -> port silence check fails closed -> fallback refused.
+    2. Host is allowed loopback host (127.0.0.1) with silent port -> fallback activates and spawns llama_cpp.
+    """
+    llama_file = tmp_path / "qwen.gguf"
+    llama_file.write_bytes(b"qwen-weights")
+    monkeypatch.setattr(model_registry, "peek_model_sha256", lambda *_: ("b" * 64, False))
+
+    llama_entry = ModelEntry(
+        id="qwen",
+        label="Qwen 2.5",
+        runtime="llama_cpp",
+        qualification="qualified",
+        model_path=str(llama_file),
+        model_sha256="b" * 64,
+    )
+    unsupported_strata_entry = ModelEntry(
+        id="sage",
+        label="Sage",
+        runtime="strata",
+        qualification="default",
+        unit="sage.service",
+        host="192.168.1.99",
+        port=8080,
+        served_model="sage-model",
+    )
+    supported_strata_entry = ModelEntry(
+        id="sage",
+        label="Sage",
+        runtime="strata",
+        qualification="default",
+        unit="sage.service",
+        host="127.0.0.1",
+        port=8080,
+        served_model="sage-model",
+    )
+
+    class FailedController:
+        def get_state(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(state="failed", reason="host ops crash", elapsed_seconds=0)
+
+        def probe(self, *args: Any, **kwargs: Any) -> bool:
+            return False
+
+        def is_port_silent(self, host: str, port: int) -> bool:
+            return is_loopback_port_silent(host, port)
+
+    ctrl = FailedController()
+    monkeypatch.setattr(host_start, "get_strata_controller", lambda: ctrl)
+
+    llama_spawned = False
+
+    def fake_start() -> dict[str, Any]:
+        nonlocal llama_spawned
+        llama_spawned = True
+        return {"status": "ok"}
+
+    owner = SimpleNamespace(
+        active_model_id="sage",
+        default_model_id="sage",
+        config=LlamaCppRuntimeConfig(),
+        status=lambda: {"model_loaded": False, "runtime_reachable": False},
+        start=fake_start,
+        stop=lambda: None,
+    )
+    monkeypatch.setattr(model_registry, "get_llama_cpp_runtime_owner", lambda: owner)
+    monkeypatch.setattr(model_registry, "llama_cpp_runtime_config", lambda: LlamaCppRuntimeConfig(manage=True))
+
+    # Phase 1: Unsupported non-loopback host -> fallback MUST be refused
+    monkeypatch.setattr(model_registry, "read_registry", lambda: ([unsupported_strata_entry, llama_entry], True))
+
+    active, fallback, _ = model_registry.determine_fallback([unsupported_strata_entry, llama_entry])
+    assert active is False
+    assert fallback is None
+
+    listed = list_models()
+    assert listed["fallback_active"] is False
+    assert llama_spawned is False
+    assert owner.active_model_id == "sage"
+
+    # Phase 2: Switch to allowed loopback host on silent port -> fallback activates
+    monkeypatch.setattr(model_registry, "read_registry", lambda: ([supported_strata_entry, llama_entry], True))
+
+    active_after, fallback_after, _ = model_registry.determine_fallback([supported_strata_entry, llama_entry])
+    assert active_after is True
+    assert fallback_after is not None
+    assert fallback_after.id == "qwen"
+
+    listed_after = list_models()
+    assert listed_after["fallback_active"] is True
+    assert listed_after["active_id"] == "qwen"
+    assert llama_spawned is True
+    assert owner.active_model_id == "qwen"
+
+
+def test_fallback_refuses_when_strata_port_check_times_out_uncertainly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When Strata port connect times out (uncertainty), fallback fails closed and refuses llama_cpp.
+
+    Causal proof:
+    1. Connection times out -> silence not proven -> fallback refused (no llama_cpp spawn).
+    2. Connection refused (proven silent) -> fallback activates and spawns llama_cpp.
+    """
+    spool = tmp_path / "spool"
+    (spool / "requests").mkdir(parents=True, exist_ok=True)
+    (spool / "receipts").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("JARVISOS_HOSTOPS_SPOOL", str(spool))
+
+    llama_file = tmp_path / "qwen.gguf"
+    llama_file.write_bytes(b"qwen-weights")
+    models = [
+        {
+            "id": "sage",
+            "label": "Sage",
+            "runtime": "strata",
+            "qualification": "default",
+            "unit": "sage.service",
+            "host": "127.0.0.1",
+            "port": 8080,
+            "served_model": "sage-model",
+        },
+        {
+            "id": "qwen",
+            "label": "Qwen 2.5",
+            "runtime": "llama_cpp",
+            "qualification": "qualified",
+            "model_path": str(llama_file),
+            "model_sha256": "b" * 64,
+        },
+    ]
+    _setup_registry(tmp_path, monkeypatch, models)
+    monkeypatch.setattr(model_registry, "peek_model_sha256", lambda *_: ("b" * 64, False))
+
+    ctrl = StrataRuntimeController(probe_fn=lambda *_: False)
+    st = ctrl.start("sage", "sage.service", "127.0.0.1", 8080, "sage-model")
+    req_id = st.last_request_id
+    (spool / "receipts" / f"{req_id}.json").write_text(
+        json.dumps({
+            "schema": host_start.RECEIPT_SCHEMA,
+            "request_id": req_id,
+            "outcome": "failed",
+            "error": "host ops crash",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(host_start, "get_strata_controller", lambda: ctrl)
+
+    llama_spawned = False
+
+    def fake_start() -> dict[str, Any]:
+        nonlocal llama_spawned
+        llama_spawned = True
+        return {"status": "ok"}
+
+    owner = SimpleNamespace(
+        active_model_id="sage",
+        default_model_id="sage",
+        config=LlamaCppRuntimeConfig(),
+        status=lambda: {"model_loaded": False, "runtime_reachable": False},
+        start=fake_start,
+        stop=lambda: None,
+    )
+    monkeypatch.setattr(model_registry, "get_llama_cpp_runtime_owner", lambda: owner)
+    monkeypatch.setattr(model_registry, "llama_cpp_runtime_config", lambda: LlamaCppRuntimeConfig(manage=True))
+
+    # Phase 1: Port probe times out -> fail closed, fallback refused
+    def mock_timeout(*args: Any, **kwargs: Any) -> Any:
+        raise TimeoutError("connection timed out")
+
+    monkeypatch.setattr(socket, "create_connection", mock_timeout)
+
+    entries, _ = model_registry.read_registry()
+    active, fallback, _ = model_registry.determine_fallback(entries)
+    assert active is False
+    assert fallback is None
+
+    listed = list_models()
+    assert listed["fallback_active"] is False
+    assert llama_spawned is False
+    assert owner.active_model_id == "sage"
+
+    # Phase 2: Definite connection refused on loopback -> proven silent, fallback activates
+    def mock_refused(*args: Any, **kwargs: Any) -> Any:
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused")
+
+    monkeypatch.setattr(socket, "create_connection", mock_refused)
+
+    entries_after, _ = model_registry.read_registry()
+    active_after, fallback_after, _ = model_registry.determine_fallback(entries_after)
+    assert active_after is True
+    assert fallback_after is not None
+    assert fallback_after.id == "qwen"
+
+    listed_after = list_models()
+    assert listed_after["fallback_active"] is True
+    assert listed_after["active_id"] == "qwen"
+    assert llama_spawned is True
+    assert owner.active_model_id == "qwen"
 
 
 # -----------------------------------------------------------------------------

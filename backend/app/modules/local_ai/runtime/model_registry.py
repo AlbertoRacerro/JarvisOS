@@ -112,13 +112,21 @@ def determine_fallback(entries: list[ModelEntry]) -> tuple[bool, ModelEntry | No
     target = _configured_model_entry(entries)
     if target is None or target.runtime != "strata" or not _host_startable(target):
         return False, None, None
-    from app.modules.local_ai.runtime.host_start import get_strata_controller
+    from app.modules.local_ai.runtime.host_start import get_strata_controller, is_loopback_port_silent
 
     strata_ctrl = get_strata_controller()
     st = strata_ctrl.get_state(target.id, target.host, target.port or 8080, target.served_model or "")
     if st.state != "failed":
         return False, None, None
-    if strata_ctrl.probe(target.host, target.port or 8080, target.served_model or ""):
+    port = target.port or 8080
+    port_silent = (
+        strata_ctrl.is_port_silent(target.host, port)
+        if hasattr(strata_ctrl, "is_port_silent")
+        else is_loopback_port_silent(target.host, port)
+    )
+    if not port_silent:
+        return False, None, None
+    if strata_ctrl.probe(target.host, port, target.served_model or ""):
         return False, None, None
     fallback = find_fallback_llama_entry(entries)
     if fallback is None:
@@ -129,10 +137,16 @@ def determine_fallback(entries: list[ModelEntry]) -> tuple[bool, ModelEntry | No
 def _ensure_fallback_started(owner: Any, fallback: ModelEntry, entries: list[ModelEntry]) -> None:
     target = _configured_model_entry(entries)
     if target and target.runtime == "strata":
-        from app.modules.local_ai.runtime.host_start import get_strata_controller
+        from app.modules.local_ai.runtime.host_start import get_strata_controller, is_loopback_port_silent
 
         strata_ctrl = get_strata_controller()
-        if strata_ctrl.probe(target.host, target.port or 8080, target.served_model or ""):
+        port = target.port or 8080
+        port_silent = (
+            strata_ctrl.is_port_silent(target.host, port)
+            if hasattr(strata_ctrl, "is_port_silent")
+            else is_loopback_port_silent(target.host, port)
+        )
+        if not port_silent or strata_ctrl.probe(target.host, port, target.served_model or ""):
             return
     default_entry = next((e for e in entries if e.qualification == "default"), fallback)
     cfg = config_for_entry(fallback)
@@ -384,7 +398,6 @@ def get_active_model_entry() -> ModelEntry | None:
     return determine_initial_model(entries)
 
 
-active_model_entry = get_active_model_entry
 
 
 def list_models() -> dict[str, Any]:
