@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
+import sys
 import tempfile
-import urllib.error
-import urllib.parse
-import urllib.request
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -23,20 +22,19 @@ SAFE_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,150}\Z")
 SAFE_PROVIDER = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}\Z")
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
-        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, fp)
-
-
-def _http_json(url: str, headers: dict[str, str], timeout: float) -> Any:
-    parts = urllib.parse.urlsplit(url)
-    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password or parts.fragment:
-        raise ValueError("invalid endpoint")
-    request = urllib.request.Request(url, headers={"Accept": "application/json",
-                                                   "User-Agent": "jarvisos-free-model-monitor/1", **headers})
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
-    with opener.open(request, timeout=timeout) as response:
-        return json.loads(response.read(16_000_001))
+def _routing() -> Any:
+    """The Spec 334 routing module, whose `_http_get_json` is the accepted owner of free-list reads."""
+    if "worker_routing" not in sys.modules:
+        spec = importlib.util.spec_from_file_location("worker_routing", Path(__file__).resolve().with_name("worker_routing.py"))
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["worker_routing"] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules["worker_routing"]
+            raise
+    return sys.modules["worker_routing"]
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -116,7 +114,7 @@ def _source_items(source: dict[str, Any], opener: Callable[..., Any]) -> set[str
         raise ValueError("model list unavailable")
     return {model for item in data if isinstance(item, dict)
             if isinstance(model := item.get("id"), str) and SAFE_LABEL.fullmatch(model)
-            and (model.endswith(suffix) if suffix else item.get("pricing") is not None)
+            and model.endswith(suffix)
             and _zero_price(item) and (kind != "openai_models" or key not in model)}
 
 
@@ -152,7 +150,7 @@ def _sources(config: dict[str, Any]) -> list[dict[str, Any]]:
                 and SAFE_PROVIDER.fullmatch(provider) and item.get("free_list") == "openai_models"
                 and isinstance(item.get("base_url"), str) and item["base_url"].startswith("https://")
                 and isinstance(item.get("key_file"), str) and isinstance(item.get("free_suffix"), str)
-                and item["free_suffix"] in (":free", "-free", "")
+                and item["free_suffix"] == ":free"
                 and "rate_limits" in item and "data_policy" in item):
             continue
         if sid in {s["source_id"] for s in sources}:
@@ -189,6 +187,14 @@ def _pool_name(source_id: str, model: str) -> str:
     import hashlib
     label = re.sub(r"[^A-Za-z0-9._-]", "-", model).strip("-")[:48]
     return f"auto-{label}-{hashlib.sha256((source_id + ':' + model).encode()).hexdigest()[:10]}"
+
+
+def _routable(entry: dict[str, Any]) -> bool:
+    """worker_routing.load_temp_pools rejects a keyed pool without an absolute key file; never admit one."""
+    if entry.get("free_list") == "opencode_zen":
+        return True
+    key_file = entry.get("key_file")
+    return isinstance(key_file, str) and Path(key_file).is_absolute() and Path(key_file).is_file()
 
 
 def _reference(pool: dict[str, Any]) -> int | None:
@@ -240,7 +246,7 @@ def check(*, control_dir: Path | str | None = None, notify_fn: Callable[[str, st
                 break
     for sid, source in source_by_id.items():
         try:
-            available[sid] = _source_items(source, opener or _http_json)
+            available[sid] = _source_items(source, opener or _routing()._http_get_json)
             seen[sid] = sorted(available[sid])
         except Exception:  # noqa: BLE001 - source errors must never reveal a key or abort other sources
             if log:
@@ -263,6 +269,9 @@ def check(*, control_dir: Path | str | None = None, notify_fn: Callable[[str, st
                 expired_by_source.setdefault(sid, set()).add(model)
             continue
         if sid in available and model not in available[sid]:
+            continue
+        score = _score(model, pool, config) if isinstance(model, str) else None
+        if reference is None or score is None or score < reference or not _routable(entry):
             continue
         new_pools.append(dict(entry))
     manual_models = {(entry["free_list"], entry["model"]) for entry in new_pools
@@ -293,7 +302,8 @@ def check(*, control_dir: Path | str | None = None, notify_fn: Callable[[str, st
             if source["free_list"] != "opencode_zen":
                 item["base_url"] = source["base_url"]
                 item["key_file"] = source["key_file"]
-            new_pools.append(item)
+            if _routable(item):
+                new_pools.append(item)
     old_hits = state.get("alert_hits")
     old_hits = old_hits if isinstance(old_hits, dict) else {}
     hits = dict(old_hits)

@@ -23,13 +23,17 @@ def fixture(tmp_path: Path) -> tuple[Path, Path]:
     control = tmp_path / "control"
     control.mkdir()
     target = tmp_path / "temp-pools.json"
+    router_key = tmp_path / "router-key"
+    router_key.write_text("routerkey456", encoding="utf-8")
     target.write_text(json.dumps({
         "index": {"name": "curated"}, "reference": "base", "scores": {"base": 30},
         "read_at": "2026-11-23", "catalog_scores": {"strong:free": 42, "paid:free": 50,
                                                        "low:free": 20, "zen-free": 35,
                                                        "custom:free": 40},
         "watchlist": ["glm-5.4"], "pools": [{"name": "manual", "model": "manual:free",
-                                               "free_list": "openrouter_public", "index_score": 44}],
+                                               "free_list": "openrouter_public", "index_score": 44,
+                                               "key_file": str(router_key),
+                                               "base_url": "https://openrouter.ai/api/v1"}],
     }), encoding="utf-8")
     return control, target
 
@@ -235,3 +239,43 @@ def test_offline_host_retries_hourly_not_every_loop(tmp_path: Path) -> None:
                                      opener=lambda url, *_: {"data": [{"id": "zen-free"}]} if url == monitor.ZEN
                                      else offline())
     assert result["sources"] == ["opencode_zen"]
+
+
+def test_unkeyed_router_and_below_bar_models_are_never_kept(tmp_path: Path) -> None:
+    control, target = fixture(tmp_path)
+
+    def lists(url: str, *_args: Any) -> dict[str, Any]:
+        return {"data": [{"id": "strong:free"}, {"id": "manual:free"}]} if url == monitor.OPENROUTER else {"data": []}
+
+    monitor.check(control_dir=control, now=NOW, opener=lists)
+    assert "strong:free" in {p["model"] for p in read(target)["pools"]}
+    doc = read(target)
+    doc["catalog_scores"]["strong:free"] = 10
+    target.write_text(json.dumps(doc), encoding="utf-8")
+    monitor.check(control_dir=control, now=NOW + timedelta(days=1), opener=lists)
+    assert {p["model"] for p in read(target)["pools"]} == {"manual:free"}
+    doc = read(target)
+    doc["catalog_scores"]["strong:free"] = 42
+    doc["pools"][0].pop("key_file")
+    target.write_text(json.dumps(doc), encoding="utf-8")
+    monitor.check(control_dir=control, now=NOW + timedelta(days=2), opener=lists)
+    assert not [p for p in read(target)["pools"] if p.get("auto_managed")]
+
+
+def test_configured_source_must_use_free_suffix(tmp_path: Path) -> None:
+    control, target = fixture(tmp_path)
+    key = tmp_path / "key"
+    key.write_text("k", encoding="utf-8")
+    (tmp_path / "free-monitor-sources.json").write_text(json.dumps({"sources": [{
+        "source_id": "custom", "provider": "Example", "free_list": "openai_models",
+        "base_url": "https://example.invalid/v1", "key_file": str(key), "free_suffix": "",
+        "rate_limits": "", "data_policy": "",
+    }]}), encoding="utf-8")
+    urls: list[str] = []
+
+    def lists(url: str, *_args: Any) -> dict[str, Any]:
+        urls.append(url)
+        return {"data": [{"id": "custom:free", "pricing": {"prompt": "0"}}]}
+
+    monitor.check(control_dir=control, now=NOW, opener=lists)
+    assert not any("example.invalid" in url for url in urls)
