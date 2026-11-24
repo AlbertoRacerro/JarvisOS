@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import sqlite3
@@ -15,7 +17,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from itertools import chain
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -73,6 +75,12 @@ class Embedder(Protocol):
     def embed_query(self, text: str) -> tuple[float, ...]: ...
 
 
+class Reranker(Protocol):
+    identity: str
+
+    def score(self, query: str, passages: Sequence[str]) -> list[float]: ...
+
+
 class IndexFreshness(BaseModel):
     indexed_sha: str | None
     master_sha: str | None
@@ -128,10 +136,247 @@ class E5Embedder:
         return self._encode("query: " + text)
 
     def _encode(self, text: str) -> tuple[float, ...]:
-        from typing import Any
 
         model: Any = self.model
         return tuple(float(value) for value in model.encode(text, normalize_embeddings=True))
+
+
+@functools.lru_cache(maxsize=8)
+def _fastembed_model(model_cls: Any, model_name: str, cache_dir: str, local_files_only: bool) -> object:
+    # Stores are built per query; load each ONNX model once per process (about 1 s each on CPU).
+    return model_cls(model_name=model_name, cache_dir=cache_dir, local_files_only=local_files_only,
+                     providers=["CPUExecutionProvider"])
+
+
+class FastEmbedEmbedder:
+    """Lazy CPU-only embedder using fastembed with zero silent network downloads."""
+
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-small-en-v1.5",
+        *,
+        cache_dir: Path | str | None = None,
+        local_files_only: bool = True,
+    ) -> None:
+        from fastembed import TextEmbedding
+
+        self.model_name = model_name
+        if cache_dir is None:
+            from app.core.paths import build_paths
+
+            cache_dir = os.environ.get("JARVISOS_FASTEMBED_CACHE_DIR") or build_paths().data_root / "models" / "fastembed"
+        self.cache_dir = Path(cache_dir)
+        self.local_files_only = local_files_only
+        self.identity = f"fastembed:{model_name}"
+        self.model: object = _fastembed_model(TextEmbedding, model_name, str(self.cache_dir), local_files_only)
+
+    def embed(self, text: str) -> tuple[float, ...]:
+
+        model: Any = self.model
+        if hasattr(model, "passage_embed"):
+            generator = model.passage_embed([text])
+        else:
+            generator = model.embed([text])
+        return tuple(float(v) for v in next(iter(generator)))
+
+    def embed_query(self, text: str) -> tuple[float, ...]:
+
+        model: Any = self.model
+        if hasattr(model, "query_embed"):
+            generator = model.query_embed([text])
+        else:
+            generator = model.embed([text])
+        return tuple(float(v) for v in next(iter(generator)))
+
+
+class FastEmbedReranker:
+    """Lazy CPU-only cross-encoder reranker using fastembed with zero silent network downloads."""
+
+    def __init__(
+        self,
+        model_name: str = "Xenova/ms-marco-MiniLM-L-6-v2",
+        *,
+        cache_dir: Path | str | None = None,
+        local_files_only: bool = True,
+    ) -> None:
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+        self.model_name = model_name
+        if cache_dir is None:
+            from app.core.paths import build_paths
+
+            cache_dir = os.environ.get("JARVISOS_FASTEMBED_CACHE_DIR") or build_paths().data_root / "models" / "fastembed"
+        self.cache_dir = Path(cache_dir)
+        self.local_files_only = local_files_only
+        self.identity = f"fastembed-reranker:{model_name}"
+        self.model: object = _fastembed_model(TextCrossEncoder, model_name, str(self.cache_dir), local_files_only)
+
+    def score(self, query: str, passages: Sequence[str]) -> list[float]:
+
+        if not passages:
+            return []
+        model: Any = self.model
+        if hasattr(model, "rerank"):
+            raw = model.rerank(query, list(passages))
+            return [float(score) for score in raw]
+        if hasattr(model, "predict"):
+            pairs = [[query, p] for p in passages]
+            raw_scores = model.predict(pairs)
+            return [float(s) for s in raw_scores]
+        if callable(model):
+            raw_scores = model(query, list(passages))
+            return [float(s) for s in raw_scores]
+        raise RuntimeError("TextCrossEncoder missing rerank/predict interface")
+
+
+class LoopbackHttpEmbedder:
+    """Loopback-only OpenAI-compatible /v1/embeddings client."""
+
+    _ALLOWED_HOSTNAMES = frozenset({"127.0.0.1", "localhost", "::1"})
+
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8080/v1",
+        *,
+        model_name: str = "default",
+        timeout: float = 30.0,
+    ) -> None:
+        self._validate_loopback_url(base_url)
+        self.base_url = base_url.rstrip("/")
+        self.model_name = model_name
+        self.timeout = timeout
+        self.identity = f"loopback_http:{model_name}@{self.base_url}"
+
+    @classmethod
+    def _validate_loopback_url(cls, url: str) -> None:
+        import ipaddress
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(f"LoopbackHttpEmbedder requires http or https scheme, got {parsed.scheme!r}")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("LoopbackHttpEmbedder does not accept URL credentials")
+        hostname = parsed.hostname
+        if not hostname:
+            raise ValueError("LoopbackHttpEmbedder requires a valid loopback host")
+        clean_host = hostname.lower().strip("[]")
+        if clean_host in cls._ALLOWED_HOSTNAMES:
+            return
+        try:
+            ip = ipaddress.ip_address(clean_host)
+            if ip.is_loopback:
+                return
+        except ValueError:
+            pass
+        raise ValueError(f"LoopbackHttpEmbedder rejected non-loopback host {hostname!r}; only loopback is permitted")
+
+    def _request_embeddings(self, text: str) -> dict[str, Any]:
+        import json
+        from urllib.error import HTTPError, URLError
+        from urllib.parse import urlsplit, urlunsplit
+        from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+        class RefuseRedirect(HTTPRedirectHandler):
+            def redirect_request(self, req: Any, fp: Any, code: int, msg: str,
+                                 headers: Any, newurl: str) -> None:
+                return None
+
+        url = self.base_url if self.base_url.endswith("/embeddings") else f"{self.base_url}/embeddings"
+        parsed = urlsplit(url)
+        if parsed.hostname == "localhost":
+            # Pin the hostname to a literal loopback address, independent of hosts/DNS.
+            netloc = "127.0.0.1" + (f":{parsed.port}" if parsed.port is not None else "")
+            url = urlunsplit(parsed._replace(netloc=netloc))
+        payload = json.dumps({"model": self.model_name, "input": text}).encode("utf-8")
+        req = Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with build_opener(ProxyHandler({}), RefuseRedirect()).open(req, timeout=self.timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except (HTTPError, URLError, OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Loopback embedding request failed: {exc}") from exc
+
+    def embed(self, text: str) -> tuple[float, ...]:
+        data = self._request_embeddings(text)
+        try:
+            vec = data["data"][0]["embedding"]
+            return tuple(float(v) for v in vec)
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"Malformed embedding response from loopback server: {exc}") from exc
+
+    def embed_query(self, text: str) -> tuple[float, ...]:
+        return self.embed(text)
+
+
+def _is_fastembed_model_cached(cache_dir: Path, model_name: str) -> bool:
+    if not cache_dir.is_dir():
+        return False
+    direct = cache_dir / model_name
+    if direct.is_dir() and any(direct.iterdir()):
+        return True
+    hf_name = f"models--{model_name.replace('/', '--')}"
+    hf_dir = cache_dir / hf_name
+    if hf_dir.is_dir() and any(hf_dir.iterdir()):
+        return True
+    slug = model_name.split("/")[-1]
+    for item in cache_dir.glob(f"*{slug}*"):
+        if item.is_dir() and any(item.iterdir()):
+            return True
+    return False
+
+
+def default_embedder() -> Embedder:
+    mode = os.environ.get("JARVISOS_RETRIEVAL_EMBEDDER", "auto").strip().lower()
+    if mode == "hashing":
+        return HashingEmbedder()
+    if mode == "e5":
+        return E5Embedder()
+    if mode == "loopback_http":
+        base_url = os.environ.get("JARVISOS_LOOPBACK_EMBEDDER_URL", "http://127.0.0.1:8080/v1")
+        model_name = os.environ.get("JARVISOS_LOOPBACK_EMBEDDER_MODEL", "default")
+        return LoopbackHttpEmbedder(base_url=base_url, model_name=model_name)
+    if mode == "fastembed":
+        return FastEmbedEmbedder()
+    if mode == "auto":
+        try:
+            import fastembed  # noqa: F401
+
+            from app.core.paths import build_paths
+
+            cache_dir = Path(
+                os.environ.get("JARVISOS_FASTEMBED_CACHE_DIR")
+                or (build_paths().data_root / "models" / "fastembed")
+            )
+            if _is_fastembed_model_cached(cache_dir, "BAAI/bge-small-en-v1.5"):
+                return FastEmbedEmbedder(cache_dir=cache_dir)
+        except Exception:
+            pass
+        return HashingEmbedder()
+    raise ValueError(f"unsupported retrieval embedder: {mode}")
+
+
+def default_reranker() -> Reranker | None:
+    mode = os.environ.get("JARVISOS_RETRIEVAL_RERANKER", "auto").strip().lower()
+    if mode in {"none", ""}:
+        return None
+    if mode == "fastembed":
+        return FastEmbedReranker()
+    if mode == "auto":
+        try:
+            import fastembed  # noqa: F401
+
+            from app.core.paths import build_paths
+
+            cache_dir = Path(
+                os.environ.get("JARVISOS_FASTEMBED_CACHE_DIR")
+                or (build_paths().data_root / "models" / "fastembed")
+            )
+            if _is_fastembed_model_cached(cache_dir, "Xenova/ms-marco-MiniLM-L-6-v2"):
+                return FastEmbedReranker(cache_dir=cache_dir)
+        except Exception:
+            pass
+        return None
+    raise ValueError(f"unsupported retrieval reranker: {mode}")
 
 
 def _key(ref: SourceRef) -> str:
@@ -475,14 +720,23 @@ def _pack_vector(vector: Sequence[float]) -> bytes:
     return struct.pack(f"<{len(vector)}f", *vector)
 
 
+_SENTINEL_RERANKER = object()
+
+
 class SQLiteIndexStore:
     def __init__(self, *, embedder: Embedder | None = None,
+                 reranker: Reranker | None | object = _SENTINEL_RERANKER,
                  documents: Callable[[], Iterable[IndexDocument]] = lambda: chain(
                      canonical_documents(), hermes_operational_memory_documents()),
                  resolver: Callable[[SourceRef], IndexDocument | None] | None = None,
                  repository_root: Path | None = None, master_ref: str = "refs/remotes/origin/master",
                  db_path: Path | None = None, read_only: bool = False) -> None:
-        self.embedder = embedder or HashingEmbedder()
+        self.embedder = embedder if embedder is not None else default_embedder()
+        self.reranker: Reranker | None
+        if reranker is not _SENTINEL_RERANKER:
+            self.reranker = reranker  # type: ignore[assignment]
+        else:
+            self.reranker = default_reranker()
         self.documents = documents
         self.resolver = resolver
         self.repository_root = repository_root
@@ -790,7 +1044,10 @@ class SQLiteIndexStore:
                     payload = doc.text
                     if not payload.lstrip().startswith("{") and "\n" in payload:
                         payload = payload.split("\n", 1)[1]
-                    data = json.loads(payload)
+                    try:
+                        data = json.loads(payload)
+                    except (json.JSONDecodeError, ValueError):
+                        data = {}
                 else:
                     data = {}
                 since = data.get("created_at") or data.get("updated_at") or ref.revision
@@ -1339,12 +1596,17 @@ class SQLiteIndexStore:
                     break
         return self._fresh_hits(found, fresh)
 
-    def search_hybrid(self, query: str, *, limit: int, workspace_id: str | None = None) -> list[RetrievalHit]:
+    def search_hybrid(self, query: str, *, limit: int, workspace_id: str | None = None,
+                      rerank: bool = True) -> list[RetrievalHit]:
         """Merge lexical and vector ranks with credibility-weighted reciprocal-rank fusion (k=60)."""
         if limit <= 0:
             return []
-        lexical_hits = self.search_lexical(query, limit=limit, workspace_id=workspace_id)
-        vector_hits = self.search_vector(query, limit=limit, workspace_id=workspace_id)
+        do_rerank = rerank and self.reranker is not None
+        rerank_pool = min(max(limit * 3, 24), 64) if do_rerank else 0
+        candidate_limit = max(limit, rerank_pool)
+
+        lexical_hits = self.search_lexical(query, limit=candidate_limit, workspace_id=workspace_id)
+        vector_hits = self.search_vector(query, limit=candidate_limit, workspace_id=workspace_id)
         vector_weight = 1.0
         if lexical_hits and vector_hits:
             top_vec = max((h.vector_score for h in vector_hits if h.vector_score is not None), default=None)
@@ -1371,8 +1633,47 @@ class SQLiteIndexStore:
             factor = 0.2 if ranked[key].source_ref.authority_owner == "hermes_operational_memory" else 1.0
             return scores[key] * factor
 
-        ordered = sorted(scores, key=lambda key: (-ranked_score(key), key))[:limit]
-        return [ranked[key].model_copy(update={"fused_score": ranked_score(key)}) for key in ordered]
+        ordered = sorted(scores, key=lambda key: (-ranked_score(key), key))
+        if not do_rerank:
+            return [ranked[key].model_copy(update={"fused_score": ranked_score(key)}) for key in ordered[:limit]]
+
+        in_scope = [
+            key for key in ordered
+            if workspace_id is None or ranked[key].source_ref.workspace_id == workspace_id
+        ]
+        # Only the top of the fused list is reranked; the rest keeps its fused order below it.
+        candidate_keys = in_scope[:rerank_pool]
+        if not candidate_keys:
+            return []
+
+        with self._open_connection() as db:
+            marks = ",".join("?" for _ in candidate_keys)
+            rows = db.execute(f"SELECT key, text FROM docs WHERE key IN ({marks})", candidate_keys).fetchall()
+            doc_rows = {str(r[0]): str(r[1]) for r in rows}
+
+        passages = [doc_rows.get(k, ranked[k].excerpt or "") for k in candidate_keys]
+        assert self.reranker is not None
+        raw_rerank_scores = self.reranker.score(query, passages)
+        if len(raw_rerank_scores) != len(candidate_keys) or any(not math.isfinite(float(s)) for s in raw_rerank_scores):
+            raise ValueError("reranker returned invalid scores")
+
+        scored_candidates: list[tuple[float, bool, str, RetrievalHit]] = []
+        for k, raw_sc in zip(candidate_keys, raw_rerank_scores, strict=True):
+            hit = ranked[k]
+            is_hermes = hit.source_ref.authority_owner == "hermes_operational_memory"
+            factor = 0.2 if is_hermes else 1.0
+            penalized = float(raw_sc) * factor if float(raw_sc) >= 0 else float(raw_sc) * (1.0 / factor)
+            updated_hit = hit.model_copy(update={
+                "rerank_score": float(raw_sc),
+                "fused_score": penalized,
+            })
+            scored_candidates.append((penalized, is_hermes, k, updated_hit))
+
+        scored_candidates.sort(key=lambda t: (-t[0], t[1], t[2]))
+        reranked = [item[3] for item in scored_candidates]
+        tail = [ranked[key].model_copy(update={"fused_score": ranked_score(key)})
+                for key in in_scope[rerank_pool:]]
+        return (reranked + tail)[:limit]
 
     def resolve_authoritative(self, ref: SourceRef) -> AuthoritativeResolution:
         doc: IndexDocument | None = None

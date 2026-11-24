@@ -22,7 +22,15 @@ from app.modules.ai.document_intake import (
 )
 from app.modules.ai.jarvis_context_models import SourceRef
 from app.modules.ai.retrieval_contracts import IndexDocument, RetrievalHit
-from app.modules.ai.retrieval_index import SQLiteIndexStore
+from app.modules.ai.retrieval_index import (
+    Embedder,
+    FastEmbedEmbedder,
+    FastEmbedReranker,
+    HashingEmbedder,
+    SQLiteIndexStore,
+    default_embedder,
+    default_reranker,
+)
 from app.modules.engineering.evaluator_contracts import (
     EvaluationFailure,
     EvaluationResult,
@@ -182,7 +190,7 @@ def evaluate_retrieval_request(
     root = root.resolve()
     if not isinstance(request_data, dict):
         raise ValueError("request must be an object")
-    if len(json.dumps(request_data, ensure_ascii=True)) > 2_000_000:
+    if len(json.dumps(request_data, ensure_ascii=True, default=str)) > 2_000_000:
         raise ValueError("request size limit exceeded")
     mode = request_data.get("mode", "hybrid")
     if mode not in {"lexical", "vector", "hybrid"}:
@@ -212,9 +220,52 @@ def evaluate_retrieval_request(
     errors: list[dict[str, str]] = []
     per_question: list[dict[str, Any]] = []
 
+    embedder_choice = request_data.get("embedder")
+    chosen_embedder: Embedder | None = None
+    if isinstance(embedder_choice, str):
+        if embedder_choice not in {"hashing", "fastembed", "auto", "none"}:
+            raise ValueError("embedder must be hashing, fastembed, auto, or none")
+        if embedder_choice == "hashing":
+            chosen_embedder = HashingEmbedder()
+        elif embedder_choice == "fastembed":
+            chosen_embedder = FastEmbedEmbedder()
+        elif embedder_choice == "auto":
+            chosen_embedder = default_embedder()
+        elif embedder_choice == "none":
+            if mode != "lexical":
+                raise ValueError("embedder 'none' is only allowed in lexical mode")
+            chosen_embedder = HashingEmbedder()
+    elif embedder_choice is not None:
+        if not hasattr(embedder_choice, "embed"):
+            raise ValueError("embedder must be hashing, fastembed, auto, or none")
+        chosen_embedder = embedder_choice
+
+    _RERANKER_UNSET = object()
+    chosen_reranker: Any = _RERANKER_UNSET
+    reranker_choice = request_data.get("reranker")
+    if isinstance(reranker_choice, str):
+        if reranker_choice not in {"none", "fastembed", "auto"}:
+            raise ValueError("reranker must be none, fastembed, or auto")
+        if reranker_choice == "none":
+            chosen_reranker = None
+        elif reranker_choice == "fastembed":
+            chosen_reranker = FastEmbedReranker()
+        elif reranker_choice == "auto":
+            chosen_reranker = default_reranker()
+    elif reranker_choice is not None:
+        if not hasattr(reranker_choice, "score"):
+            raise ValueError("reranker must be none, fastembed, or auto")
+        chosen_reranker = reranker_choice
+
+    store_kwargs: dict[str, Any] = {}
+    if chosen_embedder is not None:
+        store_kwargs["embedder"] = chosen_embedder
+    if chosen_reranker is not _RERANKER_UNSET:
+        store_kwargs["reranker"] = chosen_reranker
+
     with TemporaryDirectory(dir=root) if index_path is None or documents else nullcontext() as temp_dir:
         if index_path is not None:
-            source = SQLiteIndexStore(db_path=index_path, read_only=True)
+            source = SQLiteIndexStore(db_path=index_path, read_only=True, **store_kwargs)
             if (mode != "lexical" or documents) and not source.has_compatible_embedder():
                 raise ValueError("index embedder identity is missing or incompatible")
         if index_path is None or documents:
@@ -223,11 +274,13 @@ def evaluate_retrieval_request(
             if index_path is not None:
                 with source._open_connection() as src, open_sqlite_connection(db_path) as dst:
                     src.backup(dst)
-            store = SQLiteIndexStore(db_path=db_path, documents=lambda: ())
+            store = SQLiteIndexStore(db_path=db_path, documents=lambda: (), **store_kwargs)
             store.upsert(documents)
         else:
             store = source
         document_count = store.document_count()
+        embedder_identity = store._embedder_identity()
+        reranker_identity = getattr(store.reranker, "identity", None) or "none"
 
         @lru_cache(maxsize=1024)
         def title_for(ref_json: str) -> str | None:
@@ -350,4 +403,13 @@ def evaluate_retrieval_request(
         checks=checks,
         completed_at=datetime.now(UTC),
     )
-    return result, result_verdict(descriptor, result), {"questions": per_question, "errors": errors}
+    return (
+        result,
+        result_verdict(descriptor, result),
+        {
+            "questions": per_question,
+            "errors": errors,
+            "embedder_identity": embedder_identity,
+            "reranker_identity": reranker_identity,
+        },
+    )

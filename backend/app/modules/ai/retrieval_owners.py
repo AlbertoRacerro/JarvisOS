@@ -346,17 +346,48 @@ def owner_catch_up(store: SQLiteIndexStore) -> dict[str, dict[str, int]]:
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspaces'").fetchone() is not None
     if not workspaces_ready:
         return {owner: {"changed": 0, "deleted": 0, "embedded": 0} for owner in fingerprints}
+    reembedded_by_owner: dict[str, int] = defaultdict(int)
+    if not store.read_only and not store.has_compatible_embedder():
+        with store._open_connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if store.use_sqlite_vec:
+                from app.modules.ai.retrieval_index import _load_vector_extension
+
+                _load_vector_extension(db)
+            rows = db.execute("SELECT key, text, ref FROM docs").fetchall()
+            for row in rows:
+                k, txt, ref_json = str(row[0]), str(row[1]), str(row[2])
+                try:
+                    ref = SourceRef.model_validate_json(ref_json)
+                    owner = ref.authority_owner
+                except Exception:
+                    owner = "unknown"
+                vector = store.embedder.embed(txt)
+                vector_json = json.dumps(vector)
+                db.execute("UPDATE docs SET vector=? WHERE key=?", (vector_json, k))
+                reembedded_by_owner[owner] += 1
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('embedder_identity', ?)", (store._embedder_identity(),))
+            if store.use_sqlite_vec:
+                store._sync_vector_table(db)
+            store._revision(db)
+            db.commit()
+
+    if store.db_path is not None or store.read_only:
+        # Owner projections live only in the default writable index; a separate or read-only store
+        # (benchmark copies, snapshots) re-embeds itself above but never writes the default index.
+        return {owner: {"changed": 0, "deleted": 0, "embedded": reembedded_by_owner.get(owner, 0)}
+                for owner in fingerprints}
     with open_retrieval_index_connection() as db:
         db.execute("CREATE TABLE IF NOT EXISTS owner_manifest (key TEXT PRIMARY KEY, owner TEXT NOT NULL, object_type TEXT NOT NULL, workspace_id TEXT NOT NULL, content_digest TEXT NOT NULL)")
         previous = {str(row[0]).removeprefix("owner_fingerprint:"): str(row[1]) for row in db.execute(
             "SELECT name,value FROM meta WHERE name LIKE 'owner_fingerprint:%'"
         )}
         if previous and previous == fingerprints:
-            return {owner: {"changed": 0, "deleted": 0, "embedded": 0} for owner in fingerprints}
+            return {owner: {"changed": 0, "deleted": 0, "embedded": reembedded_by_owner.get(owner, 0)} for owner in fingerprints}
     changed_owners = {owner for owner, fingerprint in fingerprints.items()
                       if previous.get(owner) != fingerprint}
     if not changed_owners:
-        return {owner: {"changed": 0, "deleted": 0, "embedded": 0} for owner in fingerprints}
+        return {owner: {"changed": 0, "deleted": 0, "embedded": reembedded_by_owner.get(owner, 0)} for owner in fingerprints}
     documents = list(canonical_owner_documents(changed_owners))
     desired = {_manifest_key(doc.source_ref): doc for doc in documents}
     grouped: dict[str, list[tuple[str, IndexDocument]]] = defaultdict(list)
@@ -469,6 +500,9 @@ def owner_catch_up(store: SQLiteIndexStore) -> dict[str, dict[str, int]]:
             db.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (f"owner_fingerprint:{owner}", fingerprint))
         store._revision(db)
         db.commit()
+    for owner, count in reembedded_by_owner.items():
+        if owner in fingerprints:
+            result.setdefault(owner, {"changed": 0, "deleted": 0, "embedded": 0})["embedded"] += count
     return result
 
 
