@@ -47,6 +47,7 @@ _RELEASE_SCRIPTS = (
     "relay_observe.py",
     "devctx.py",
     "worker_routing.py",
+    "free_model_monitor.py",
 )
 
 
