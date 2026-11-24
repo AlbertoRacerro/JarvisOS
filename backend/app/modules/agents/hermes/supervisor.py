@@ -59,6 +59,8 @@ HERMES_TOOL_ALLOWLIST = frozenset({"mcp__jarvis__jarvis_context_preview",
                                   "paper_search", "jarvis_paper_search",
                                   "mcp__jarvis__patent_read", "mcp__jarvis__jarvis_patent_read",
                                   "patent_read", "jarvis_patent_read",
+                                  "mcp__jarvis__browser_page_read", "mcp__jarvis__jarvis_browser_page_read",
+                                  "browser_page_read", "jarvis_browser_page_read",
                                   "memory", "session_search"})
 _BWRAP_PREFIX = ("bwrap", "--dev-bind", "/", "/", "--unshare-net", "--die-with-parent", "--")
 
@@ -128,6 +130,10 @@ _HERMES_PATENT_READ_CAPABILITY = JarvisCapabilityDescriptor(
     capability_id="jarvis.patent_read", route_id="ai-threads", action_class="READ",
     label="Look up public patent publications via Google Patents and official registers",
 )
+_HERMES_BROWSER_PAGE_CAPABILITY = JarvisCapabilityDescriptor(
+    capability_id="jarvis.browser_page_read", route_id="ai-threads", action_class="READ",
+    label="Read public HTTPS web pages via headless Chromium",
+)
 _TOOL_CAPABILITIES = {
     "jarvis_retrieval_query": "jarvis.retrieval_query",
     "jarvis_decide": "jarvis.decide",
@@ -138,6 +144,8 @@ _TOOL_CAPABILITIES = {
     "paper_search": "jarvis.paper_search",
     "jarvis_patent_read": "jarvis.patent_read",
     "patent_read": "jarvis.patent_read",
+    "jarvis_browser_page_read": "jarvis.browser_page_read",
+    "browser_page_read": "jarvis.browser_page_read",
     "jarvis_process_read": "jarvis.process_read",
     "jarvis_process_act": "jarvis.process_act",
     "jarvis_bluecad_read": "jarvis.bluecad_read",
@@ -154,7 +162,8 @@ for _descriptor in (_HERMES_PROCESS_READ_CAPABILITY, _HERMES_PROCESS_ACT_CAPABIL
                     _HERMES_DEV_READ_CAPABILITY, _HERMES_REPO_READ_CAPABILITY,
                     _HERMES_KNOWLEDGE_READ_CAPABILITY,
                     _HERMES_PAPER_SEARCH_CAPABILITY,
-                    _HERMES_PATENT_READ_CAPABILITY):
+                    _HERMES_PATENT_READ_CAPABILITY,
+                    _HERMES_BROWSER_PAGE_CAPABILITY):
     if _descriptor not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
         PRODUCTION_CAPABILITY_REGISTRY.register(_descriptor)
 if _HERMES_CONTEXT_CAPABILITY not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
@@ -270,6 +279,8 @@ RESEARCH_TOOLS = frozenset({
     "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
     "patent_read", "jarvis_patent_read",
     "mcp__jarvis__patent_read", "mcp__jarvis__jarvis_patent_read",
+    "browser_page_read", "jarvis_browser_page_read",
+    "mcp__jarvis__browser_page_read", "mcp__jarvis__jarvis_browser_page_read",
     "jarvis_retrieval_query", "mcp__jarvis__jarvis_retrieval_query",
     "jarvis_repo_read", "mcp__jarvis__jarvis_repo_read",
     "jarvis_knowledge_read", "mcp__jarvis__jarvis_knowledge_read",
@@ -379,7 +390,18 @@ def run_governed_inference(
         return {"status": "refused"}
     if envelope.is_expired(datetime.now(UTC)) or (cancelled and envelope.cancellation_id and cancelled(envelope.cancellation_id)):
         return {"status": "cancelled"}
-    temperature = 0.3 if envelope.task_kind == "general" else None
+    active_entry = None
+    try:
+        from app.modules.local_ai.runtime.model_registry import get_active_model_entry
+
+        active_entry = get_active_model_entry()
+    except Exception:
+        active_entry = None
+
+    if active_entry is not None and active_entry.temperature is not None:
+        temperature = None
+    else:
+        temperature = 0.3 if envelope.task_kind == "general" else None
     runner_kwargs = run_ai_task_kwargs(
         envelope,
         structured_output_schema=structured_output_schema,
@@ -430,6 +452,7 @@ def dispatch_tool(
     interaction_id: str | None = None,
     paper_search_opener: Any = None,
     patent_read_opener: Any = None,
+    browser_page_runner: Any = None,
 ) -> StructuredToolResult:
     now = datetime.now(UTC)
     grant = live_grants.get(call.grant_id)
@@ -554,6 +577,12 @@ def dispatch_tool(
 
                     result, error = dispatch_patent_read_tool(
                         call, scope.workspace_id, error, grant=grant, opener=patent_read_opener, live_grants=live_grants
+                    )
+                elif call.capability_id == "jarvis.browser_page_read":
+                    from app.modules.agents.hermes.browser_page_tool import dispatch_browser_page_tool
+
+                    result, error = dispatch_browser_page_tool(
+                        call, scope.workspace_id, error, grant=grant, runner=browser_page_runner, live_grants=live_grants
                     )
     return StructuredToolResult(
         call_id=call.call_id, capability_id=call.capability_id,
@@ -731,6 +760,7 @@ class HermesSupervisor:
         self.turn_cap: int = DEFAULT_TURN_CAP
         self.paper_search_opener: Any = None
         self.patent_read_opener: Any = None
+        self.browser_page_runner: Any = None
 
     def _read_worker(self, process: subprocess.Popen[str]) -> None:
         assert process.stdout is not None
@@ -945,7 +975,8 @@ class HermesSupervisor:
             result = dispatch_tool(call, live_grants=self.live_grants,
                                    interaction_id=self.active_interaction_id,
                                    paper_search_opener=self.paper_search_opener,
-                                   patent_read_opener=self.patent_read_opener)
+                                   patent_read_opener=self.patent_read_opener,
+                                   browser_page_runner=self.browser_page_runner)
         except (ValueError, KeyError, sqlite3.Error):
             result = StructuredToolResult(
                 call_id=call_id, capability_id=capability_id,
@@ -967,6 +998,9 @@ class HermesSupervisor:
                                                   "request_digest": (result.result or {}).get("request_digest")}
                                                  if result.capability_id == "jarvis.decide" and result.result
                                                  else {} if result.capability_id == "jarvis.decide"
+                                                 else ({"has_search_term": bool(arguments.get("search_term"))}
+                                                       if result.status == "succeeded" else {})
+                                                 if result.capability_id == "jarvis.browser_page_read"
                                                  else _safe_tool_arguments(arguments)),
                                    "result_digest": canonical_digest(result.model_dump(mode="json")),
                                    "evidence_refs": _tool_evidence_refs(result.model_dump(mode="json")),

@@ -83,18 +83,88 @@ def save_model_choice(model_id: str) -> None:
         pass
 
 
-def determine_initial_model(entries: list[ModelEntry]) -> ModelEntry | None:
+def _configured_model_entry(entries: list[ModelEntry]) -> ModelEntry | None:
     if not entries:
         return None
     default_entry = next((e for e in entries if e.qualification == "default"), None)
     stored_id = read_stored_model_choice()
     stored_entry = next((e for e in entries if e.id == stored_id), None) if stored_id else None
-    target = (
+    return (
         stored_entry
         if stored_entry and stored_entry.qualification in ("default", "qualified") and _host_startable(stored_entry)
         else default_entry
     )
 
+
+def find_fallback_llama_entry(entries: list[ModelEntry]) -> ModelEntry | None:
+    for e in entries:
+        if e.runtime == "llama_cpp" and e.qualification in ("default", "qualified"):
+            if not e.model_path or not Path(e.model_path).is_file():
+                continue
+            digest, _ = peek_model_sha256(e.model_path)
+            if digest is not None and e.model_sha256 and digest.lower() != e.model_sha256.lower():
+                continue
+            return e
+    return None
+
+
+def determine_fallback(entries: list[ModelEntry]) -> tuple[bool, ModelEntry | None, str | None]:
+    target = _configured_model_entry(entries)
+    if target is None or target.runtime != "strata" or not _host_startable(target):
+        return False, None, None
+    from app.modules.local_ai.runtime.host_start import get_strata_controller, is_loopback_port_silent
+
+    strata_ctrl = get_strata_controller()
+    st = strata_ctrl.get_state(target.id, target.host, target.port or 8080, target.served_model or "")
+    if st.state != "failed":
+        return False, None, None
+    port = target.port or 8080
+    port_silent = (
+        strata_ctrl.is_port_silent(target.host, port)
+        if hasattr(strata_ctrl, "is_port_silent")
+        else is_loopback_port_silent(target.host, port)
+    )
+    if not port_silent:
+        return False, None, None
+    if strata_ctrl.probe(target.host, port, target.served_model or ""):
+        return False, None, None
+    fallback = find_fallback_llama_entry(entries)
+    if fallback is None:
+        return False, None, None
+    return True, fallback, st.reason or "Modello Strata non avviato"
+
+
+def _ensure_fallback_started(owner: Any, fallback: ModelEntry, entries: list[ModelEntry]) -> None:
+    target = _configured_model_entry(entries)
+    if target and target.runtime == "strata":
+        from app.modules.local_ai.runtime.host_start import get_strata_controller, is_loopback_port_silent
+
+        strata_ctrl = get_strata_controller()
+        port = target.port or 8080
+        port_silent = (
+            strata_ctrl.is_port_silent(target.host, port)
+            if hasattr(strata_ctrl, "is_port_silent")
+            else is_loopback_port_silent(target.host, port)
+        )
+        if not port_silent or strata_ctrl.probe(target.host, port, target.served_model or ""):
+            return
+    default_entry = next((e for e in entries if e.qualification == "default"), fallback)
+    cfg = config_for_entry(fallback)
+    if owner.active_model_id != fallback.id:
+        owner.active_model_id = fallback.id
+        owner.default_model_id = default_entry.id
+        owner.config = cfg
+        if llama_cpp_runtime_config().manage:
+            owner.start()
+    elif llama_cpp_runtime_config().manage:
+        status = owner.status() if hasattr(owner, "status") else {}
+        if not status.get("runtime_reachable") and not status.get("model_loaded"):
+            owner.config = cfg
+            owner.start()
+
+
+def determine_initial_model(entries: list[ModelEntry]) -> ModelEntry | None:
+    target = _configured_model_entry(entries)
     if target is None:
         return None
 
@@ -109,6 +179,12 @@ def determine_initial_model(entries: list[ModelEntry]) -> ModelEntry | None:
         )
         if llama_entry is not None:
             return llama_entry
+
+    if target.runtime == "strata":
+        fallback_active, fallback, _ = determine_fallback(entries)
+        if fallback_active and fallback:
+            return fallback
+
     return target
 
 
@@ -309,8 +385,19 @@ def get_active_model_entry() -> ModelEntry | None:
     if active_id:
         entry = next((e for e in entries if e.id == active_id), None)
         if entry:
+            if entry.runtime == "strata":
+                fallback_active, fallback, _ = determine_fallback(entries)
+                if fallback_active and fallback:
+                    _ensure_fallback_started(owner, fallback, entries)
+                    return fallback
             return entry
+    fallback_active, fallback, _ = determine_fallback(entries)
+    if fallback_active and fallback:
+        _ensure_fallback_started(owner, fallback, entries)
+        return fallback
     return determine_initial_model(entries)
+
+
 
 
 def list_models() -> dict[str, Any]:
@@ -318,8 +405,17 @@ def list_models() -> dict[str, Any]:
     owner = get_llama_cpp_runtime_owner()
     if not present:
         return {"registry_present": False, "models": [], "active_id": None}
-    initial = determine_initial_model(entries)
-    active_id = owner.active_model_id or (initial.id if initial else None)
+    target = _configured_model_entry(entries)
+    fallback_active, fallback, fallback_reason = determine_fallback(entries)
+    fallback_from_id = target.id if (fallback_active and target) else None
+
+    active_id: str | None
+    if fallback_active and fallback:
+        _ensure_fallback_started(owner, fallback, entries)
+        active_id = fallback.id
+    else:
+        initial = determine_initial_model(entries)
+        active_id = owner.active_model_id or (initial.id if initial else None)
     models = []
     from app.modules.local_ai.runtime.host_start import StrataModelState, get_strata_controller
 
@@ -394,7 +490,14 @@ def list_models() -> dict[str, Any]:
                 "digest_state": digest_state,
                 "state": state,
             })
-    return {"registry_present": True, "models": models, "active_id": active_id}
+    return {
+        "registry_present": True,
+        "models": models,
+        "active_id": active_id,
+        "fallback_active": fallback_active,
+        "fallback_from_id": fallback_from_id,
+        "fallback_reason": fallback_reason,
+    }
 
 
 def activate_model(model_id: str) -> dict[str, Any]:
