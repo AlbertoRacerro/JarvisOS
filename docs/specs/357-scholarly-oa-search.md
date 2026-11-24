@@ -1,6 +1,6 @@
 # 357 — SCHOLARLY-OA-SEARCH-1: OpenAlex, Semantic Scholar, Unpaywall OA lookup and bounded PDF text reading in Hermes
 
-Status: ready
+Status: merged
 Depends on: 352
 
 ## Goal
