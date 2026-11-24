@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import json
 import math
@@ -140,6 +141,13 @@ class E5Embedder:
         return tuple(float(value) for value in model.encode(text, normalize_embeddings=True))
 
 
+@functools.lru_cache(maxsize=8)
+def _fastembed_model(model_cls: Any, model_name: str, cache_dir: str, local_files_only: bool) -> object:
+    # Stores are built per query; load each ONNX model once per process (about 1 s each on CPU).
+    return model_cls(model_name=model_name, cache_dir=cache_dir, local_files_only=local_files_only,
+                     providers=["CPUExecutionProvider"])
+
+
 class FastEmbedEmbedder:
     """Lazy CPU-only embedder using fastembed with zero silent network downloads."""
 
@@ -160,12 +168,7 @@ class FastEmbedEmbedder:
         self.cache_dir = Path(cache_dir)
         self.local_files_only = local_files_only
         self.identity = f"fastembed:{model_name}"
-        self.model: object = TextEmbedding(
-            model_name=model_name,
-            cache_dir=str(self.cache_dir),
-            local_files_only=local_files_only,
-            providers=["CPUExecutionProvider"],
-        )
+        self.model: object = _fastembed_model(TextEmbedding, model_name, str(self.cache_dir), local_files_only)
 
     def embed(self, text: str) -> tuple[float, ...]:
 
@@ -206,12 +209,7 @@ class FastEmbedReranker:
         self.cache_dir = Path(cache_dir)
         self.local_files_only = local_files_only
         self.identity = f"fastembed-reranker:{model_name}"
-        self.model: object = TextCrossEncoder(
-            model_name=model_name,
-            cache_dir=str(self.cache_dir),
-            local_files_only=local_files_only,
-            providers=["CPUExecutionProvider"],
-        )
+        self.model: object = _fastembed_model(TextCrossEncoder, model_name, str(self.cache_dir), local_files_only)
 
     def score(self, query: str, passages: Sequence[str]) -> list[float]:
 
