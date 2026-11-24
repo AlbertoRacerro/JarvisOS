@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -40,6 +41,12 @@ class ModelEntry:
     port: int | None = None
     served_model: str | None = None
     host: str = "127.0.0.1"
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
+    reasoning_effort_analysis: str | None = None
+    reasoning_effort_final: str | None = None
 
 
 def _get_choice_file() -> Path:
@@ -127,6 +134,80 @@ def read_registry() -> tuple[list[ModelEntry], bool]:
                 or not all(isinstance(arg, str) for arg in row["extra_args"])
             ):
                 raise ValueError("invalid extra arguments")
+
+            temperature_raw = row.get("temperature")
+            temperature: float | None = None
+            if temperature_raw is not None:
+                if (
+                    isinstance(temperature_raw, bool)
+                    or not isinstance(temperature_raw, (int, float))
+                    or not math.isfinite(temperature_raw)
+                    or not (0.0 <= float(temperature_raw) <= 2.0)
+                ):
+                    raise ValueError("invalid temperature")
+                temperature = float(temperature_raw)
+
+            top_p_raw = row.get("top_p")
+            top_p: float | None = None
+            if top_p_raw is not None:
+                if (
+                    isinstance(top_p_raw, bool)
+                    or not isinstance(top_p_raw, (int, float))
+                    or not math.isfinite(top_p_raw)
+                    or not (0.0 < float(top_p_raw) <= 1.0)
+                ):
+                    raise ValueError("invalid top_p")
+                top_p = float(top_p_raw)
+
+            top_k_raw = row.get("top_k")
+            top_k: int | None = None
+            if top_k_raw is not None:
+                if (
+                    isinstance(top_k_raw, bool)
+                    or type(top_k_raw) is not int
+                    or top_k_raw < 0
+                ):
+                    raise ValueError("invalid top_k")
+                top_k = top_k_raw
+
+            min_p_raw = row.get("min_p")
+            min_p: float | None = None
+            if min_p_raw is not None:
+                if (
+                    isinstance(min_p_raw, bool)
+                    or not isinstance(min_p_raw, (int, float))
+                    or not math.isfinite(min_p_raw)
+                    or not (0.0 <= float(min_p_raw) <= 1.0)
+                ):
+                    raise ValueError("invalid min_p")
+                min_p = float(min_p_raw)
+
+            reasoning_effort_analysis_raw = row.get("reasoning_effort_analysis")
+            reasoning_effort_analysis: str | None = None
+            if reasoning_effort_analysis_raw is not None:
+                if (
+                    not isinstance(reasoning_effort_analysis_raw, str)
+                    or reasoning_effort_analysis_raw not in {"low", "medium", "high"}
+                ):
+                    raise ValueError("invalid reasoning_effort_analysis")
+                reasoning_effort_analysis = reasoning_effort_analysis_raw
+
+            reasoning_effort_final_raw = row.get("reasoning_effort_final")
+            reasoning_effort_final: str | None = None
+            if reasoning_effort_final_raw is not None:
+                if (
+                    not isinstance(reasoning_effort_final_raw, str)
+                    or reasoning_effort_final_raw not in {"low", "medium", "high"}
+                ):
+                    raise ValueError("invalid reasoning_effort_final")
+                reasoning_effort_final = reasoning_effort_final_raw
+
+            ctx_size_raw = row.get("ctx_size")
+            if ctx_size_raw is not None and (
+                type(ctx_size_raw) is not int or isinstance(ctx_size_raw, bool) or ctx_size_raw <= 0
+            ):
+                raise ValueError("invalid ctx_size")
+
             entry = ModelEntry(
                 id=row["id"],
                 label=row["label"],
@@ -134,7 +215,7 @@ def read_registry() -> tuple[list[ModelEntry], bool]:
                 qualification=row["qualification"],
                 model_path=row.get("model_path", ""),
                 model_sha256=row.get("model_sha256", ""),
-                ctx_size=row.get("ctx_size"),
+                ctx_size=ctx_size_raw,
                 n_gpu_layers=row.get("n_gpu_layers"),
                 extra_args=tuple(row["extra_args"]) if "extra_args" in row else None,
                 thinking=row.get("thinking"),
@@ -142,6 +223,12 @@ def read_registry() -> tuple[list[ModelEntry], bool]:
                 port=row.get("port"),
                 served_model=row.get("served_model"),
                 host=row.get("host", "127.0.0.1"),
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                reasoning_effort_analysis=reasoning_effort_analysis,
+                reasoning_effort_final=reasoning_effort_final,
             )
             if (
                 not isinstance(entry.id, str)
@@ -179,6 +266,7 @@ def read_registry() -> tuple[list[ModelEntry], bool]:
                     or not Path(entry.model_path).is_absolute()
                     or not isinstance(entry.model_sha256, str)
                     or not _SHA.fullmatch(entry.model_sha256)
+                    or (entry.ctx_size is not None and (type(entry.ctx_size) is not int or isinstance(entry.ctx_size, bool) or entry.ctx_size <= 0))
                 ):
                     raise ValueError("invalid strata entry fields")
             elif entry.runtime == "strata":
@@ -195,6 +283,7 @@ def read_registry() -> tuple[list[ModelEntry], bool]:
                     or validate_loopback_host(entry.host) is not None
                     or (entry.model_path and (not isinstance(entry.model_path, str) or not Path(entry.model_path).is_absolute()))
                     or (entry.model_sha256 and (not isinstance(entry.model_sha256, str) or not _SHA.fullmatch(entry.model_sha256)))
+                    or (entry.ctx_size is not None and (type(entry.ctx_size) is not int or isinstance(entry.ctx_size, bool) or entry.ctx_size <= 0))
                 ):
                     raise ValueError("invalid strata entry fields")
 
