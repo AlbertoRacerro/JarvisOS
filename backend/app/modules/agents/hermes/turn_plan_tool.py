@@ -53,10 +53,11 @@ def dispatch_turn_plan_tool(
     if "findings" not in active_plan or not isinstance(active_plan["findings"], list):
         active_plan["findings"] = []
 
-    target_interaction_id = interaction_id or (
-        grant.scope.jarvis_thread_id if grant is not None else (
-            call.session_ref.jarvis_thread_id if call.session_ref is not None else ""
-        )
+    target_interaction_id: str = (
+        interaction_id
+        or (grant.scope.jarvis_thread_id if grant is not None else None)
+        or (call.session_ref.jarvis_thread_id if call.session_ref is not None else None)
+        or ""
     )
 
     if op == "read_plan":

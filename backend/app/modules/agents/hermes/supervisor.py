@@ -1045,9 +1045,11 @@ class HermesSupervisor:
             ):
                 res_data = result.result
                 if "steps" in res_data or "findings" in res_data:
+                    raw_steps = res_data.get("steps")
+                    raw_findings = res_data.get("findings")
                     self.active_turn_plan = {
-                        "steps": list(res_data.get("steps", [])),
-                        "findings": list(res_data.get("findings", [])),
+                        "steps": list(raw_steps) if isinstance(raw_steps, list) else [],
+                        "findings": list(raw_findings) if isinstance(raw_findings, list) else [],
                     }
         except (ValueError, KeyError, sqlite3.Error):
             result = StructuredToolResult(

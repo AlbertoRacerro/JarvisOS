@@ -5,7 +5,7 @@ import logging
 import re
 import sqlite3
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
 from app.core.database import open_sqlite_connection
@@ -1497,16 +1497,24 @@ def interaction_turn_plan(connection: sqlite3.Connection, interaction_id: str) -
         findings_raw = data.get("findings") or []
         if not steps_raw and not findings_raw:
             return None
-        steps = [
-            TurnPlanStep(
-                id=str(s.get("id", ""))[:64],
-                title=str(s.get("title", ""))[:160],
-                status=s.get("status") if s.get("status") in {"pending", "in_progress", "done", "blocked"} else "pending",
-                note=str(s.get("note"))[:200] if s.get("note") is not None else None,
+        steps: list[TurnPlanStep] = []
+        for s in steps_raw[:10]:
+            if not isinstance(s, dict) or not s.get("id") or not s.get("title"):
+                continue
+            raw_status = s.get("status")
+            step_status: Literal["pending", "in_progress", "done", "blocked"] = (
+                raw_status
+                if raw_status in ("pending", "in_progress", "done", "blocked")
+                else "pending"
             )
-            for s in steps_raw[:10]
-            if isinstance(s, dict) and s.get("id") and s.get("title")
-        ]
+            steps.append(
+                TurnPlanStep(
+                    id=str(s.get("id", ""))[:64],
+                    title=str(s.get("title", ""))[:160],
+                    status=step_status,
+                    note=str(s.get("note"))[:200] if s.get("note") is not None else None,
+                )
+            )
         findings = [
             TurnPlanFinding(
                 key=str(f.get("key", ""))[:128],
