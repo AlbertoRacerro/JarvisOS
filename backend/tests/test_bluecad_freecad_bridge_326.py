@@ -334,3 +334,15 @@ def test_late_approval_never_applies_and_unconfirmed_rollback_is_unknown(
     assert json.loads(last[0])["outcome"] == {
         "success": False, "mutation_outcome": "unknown", "code": "FREECAD_BRIDGE_TIMEOUT"
     }
+
+
+def test_relay_path_accepts_wsl_unc_path_for_windows_exe(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.modules.bluecad import freecad_bridge as fb
+
+    unc = r"\\wsl.localhost\Ubuntu\home\developer\sample\backend\app\modules\bluecad\freecad_relay.py"
+    monkeypatch.setattr(
+        fb.subprocess,
+        "run",
+        lambda *args, **kwargs: type("R", (), {"returncode": 0, "stdout": unc + "\n"})(),
+    )
+    assert fb._relay_path(Path("/mnt/c/Python312/python.exe")) == unc

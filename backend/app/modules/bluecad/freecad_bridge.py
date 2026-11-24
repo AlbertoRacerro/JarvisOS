@@ -13,12 +13,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from app.modules.bluecad.print_handoff import _to_windows_path
-
 FREECAD_ALLOWLIST = ("ping", "list_documents", "get_objects", "get_object", "edit_object")
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _RELAY = Path(__file__).with_name("freecad_relay.py")
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_WIN_RELAY_PATH = re.compile(r"^(?:[A-Za-z]:\\|\\\\wsl(?:\.localhost|\$)\\)")
+_WIN_FORBIDDEN = re.compile(r'[\x00-\x1f"<>|*?&%^]')
 
 
 class FreecadBridgeError(RuntimeError):
@@ -57,7 +57,16 @@ def _configured_runtime() -> tuple[Path | None, str, str | None]:
 
 def _relay_path(executable: Path) -> str:
     if executable.suffix.lower() == ".exe" and str(executable).lower().startswith("/mnt/"):
-        return _to_windows_path(_RELAY)
+        try:
+            completed = subprocess.run(
+                ["wslpath", "-w", str(_RELAY)], shell=False, timeout=10, capture_output=True, text=True
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise FreecadBridgeError("FREECAD_BRIDGE_UNAVAILABLE", "wslpath could not convert relay path.", 502) from None
+        value = str(completed.stdout or "").strip()
+        if completed.returncode != 0 or _WIN_RELAY_PATH.match(value) is None or _WIN_FORBIDDEN.search(value) is not None:
+            raise FreecadBridgeError("FREECAD_BRIDGE_UNAVAILABLE", "wslpath returned an unusable relay path.", 502)
+        return value
     return str(_RELAY)
 
 
