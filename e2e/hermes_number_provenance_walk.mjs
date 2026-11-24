@@ -134,6 +134,12 @@ with open_sqlite_connection() as conn:
     }
     log_event(conn, event_type="hermes.number_provenance", actor="jarvis", target_type="ai_thread_interaction",
               target_id="inter-done-363", workspace_id=ws_id, payload=prov_payload)
+    # Spec 366: one offline verification warning on the same answer.
+    log_event(conn, event_type="hermes.verification_pass", actor="jarvis", target_type="ai_thread_interaction",
+              target_id="inter-done-363", workspace_id=ws_id,
+              payload={"status": "warnings", "warning_count": 1, "checks": [
+                  {"kind": "magnitude", "severity": "warning",
+                   "summary": "An answer quantity differs by at least 10x from a same-turn tool result."}]})
     conn.commit()
 `;
 
@@ -219,6 +225,11 @@ with open_sqlite_connection() as conn:
   const unverifiedBadge = provContainer.locator('[data-testid="provenance-summary-unverified"]');
   assert(await unverifiedBadge.isVisible(), 'unverified count badge not visible in summary');
   assert((await unverifiedBadge.innerText()).includes('1 non verificato'), 'unverified count text mismatch');
+
+  const verificationWarning = jarvis.locator('.jarvis-verification-warning');
+  assert(await verificationWarning.isVisible(), 'spec 366 verification warning badge not visible');
+  assert((await verificationWarning.innerText()).includes('1 verification warning'), 'verification warning text mismatch');
+  summary.checks.push('spec 366 verification warning badge renders "1 verification warning" under the answer');
 
   await shot('01-provenance-summary-badges.png');
   summary.checks.push('verified compact provenance bar renders verified (2) and unverified (1) summary badges');
