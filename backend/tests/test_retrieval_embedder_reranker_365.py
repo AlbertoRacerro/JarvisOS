@@ -475,13 +475,14 @@ def test_owner_catch_up_reembeds_documents_when_embedder_changes(
         assert len(vec) == 32
 
 
-def test_owner_catch_up_reembeds_only_the_given_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_owner_catch_up_never_writes_for_a_separate_or_read_only_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("JARVISOS_DATA_ROOT", str(tmp_path))
     get_settings.cache_clear()
     initialize_database()
     seed_default_workspace()
     create_decision("main", DecisionCreate(title="Decision 1", decision_text="Decision details one"))
-
     default_store = SQLiteIndexStore(embedder=HashingEmbedder(dimensions=128))
     owner_catch_up(default_store)
     other = SQLiteIndexStore(embedder=HashingEmbedder(dimensions=128), documents=lambda: (),
@@ -491,19 +492,22 @@ def test_owner_catch_up_reembeds_only_the_given_store(tmp_path: Path, monkeypatc
                              workspace_id="main", content_digest=canonical_digest("other")),
         title="Other", text="other store text")])
 
+    # Owner data changes while a separate store with another embedder catches up.
+    create_decision("main", DecisionCreate(title="Decision 2", decision_text="Decision details two"))
     other.embedder = HashingEmbedder(dimensions=32)
-    owner_catch_up(other)
-
-    assert other.has_compatible_embedder()
-    with other._open_connection() as db:
-        assert len(json.loads(db.execute("SELECT vector FROM docs WHERE object_id='other-1'").fetchone()[0])) == 32
-    # The default index keeps its own embedder and vectors.
-    assert default_store.has_compatible_embedder()
-
+    changes = owner_catch_up(other)
     read_only = SQLiteIndexStore(embedder=HashingEmbedder(dimensions=16), documents=lambda: (),
                                  db_path=tmp_path / "other.db", read_only=True)
     owner_catch_up(read_only)
-    assert not read_only.has_compatible_embedder()
+
+    assert all(item == {"changed": 0, "deleted": 0, "embedded": 0} for item in changes.values())
+    assert default_store.has_compatible_embedder()
+    with default_store._open_connection() as db:
+        dims = {len(json.loads(row[0])) for row in db.execute("SELECT vector FROM docs")}
+    assert dims == {128}
+    with other._open_connection() as db:
+        assert db.execute("SELECT COUNT(*) FROM docs").fetchone()[0] == 1
+        assert len(json.loads(db.execute("SELECT vector FROM docs").fetchone()[0])) == 128
 
 
 def test_search_hybrid_with_reranker_keeps_limits_above_the_rerank_pool() -> None:

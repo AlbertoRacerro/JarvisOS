@@ -341,14 +341,18 @@ def owner_catch_up(store: SQLiteIndexStore) -> dict[str, dict[str, int]]:
     """Synchronize canonical-owner projections atomically; unchanged records are not embedded."""
     store._last_owner_changes = []
     fingerprints = _owner_fingerprints()
+    if store.db_path is not None or store.read_only:
+        # Owner projections live only in the default writable index; a separate or read-only store
+        # (benchmark copies, snapshots) must never write it with its own embedder.
+        return {owner: {"changed": 0, "deleted": 0, "embedded": 0} for owner in fingerprints}
     with open_sqlite_connection() as canonical_db:
         workspaces_ready = canonical_db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspaces'").fetchone() is not None
     if not workspaces_ready:
         return {owner: {"changed": 0, "deleted": 0, "embedded": 0} for owner in fingerprints}
     reembedded_by_owner: dict[str, int] = defaultdict(int)
-    if not store.read_only and not store.has_compatible_embedder():
-        with store._open_connection() as db:
+    if not store.has_compatible_embedder():
+        with open_retrieval_index_connection() as db:
             db.execute("BEGIN IMMEDIATE")
             if store.use_sqlite_vec:
                 from app.modules.ai.retrieval_index import _load_vector_extension
