@@ -57,6 +57,8 @@ from relay_continuity_notify import (  # noqa: E402
     Notifier,
 )
 
+free_model_monitor = load_sibling("free_model_monitor", "free_model_monitor.py")
+
 load_sibling("relay_continuity_adapters", "relay_continuity_adapters.py")
 from relay_continuity_adapters import (  # noqa: E402
     _reap_zombies,
@@ -548,6 +550,16 @@ def command_serve(args: argparse.Namespace) -> int:
     try:
         while not stop["flag"] and not (root / "STOP").exists():
             _reap_zombies()  # adopted durable wrappers also finish while the owner is idle
+            try:
+                def send_free_model(kind: str, message: str) -> bool:
+                    state = load_serve_state()
+                    sent = Notifier(state, sender=sender, log=log).send_text(kind, message, now_utc())
+                    serve_store.save(state, now_utc())
+                    return sent
+                free_model_monitor.maybe_run_daily(
+                    control_dir=root, notify_fn=send_free_model if sender is not None else None, log=log)
+            except Exception:  # noqa: BLE001 - monitoring must never interrupt the mission owner
+                log("free model monitor: supervisor hook failed")
             if check_and_request_release_update(repo, root, log=log):
                 log("owner: release install requested; stopping at task boundary without taking a new task")
                 return 0
