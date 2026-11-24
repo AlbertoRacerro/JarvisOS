@@ -16,6 +16,7 @@ from app.modules.ai.contracts import (
     AIProviderHealth,
     AIRequest,
     AIResponse,
+    AITaskType,
     AIUsage,
     AIUsageSource,
     ModelRegistryEntry,
@@ -151,13 +152,28 @@ class LocalLlamaCppAdapter:
             messages = [{"role": "user", "content": content}]
         else:
             messages = [message.model_dump() for message in request.messages]
+        if request.temperature is not None:
+            temperature: float = request.temperature
+        elif active_entry and active_entry.temperature is not None:
+            temperature = active_entry.temperature
+        else:
+            temperature = 0
+
         payload: dict[str, Any] = {
             "model": model_id,
             "messages": messages,
-            "temperature": request.temperature if request.temperature is not None else 0,
+            "temperature": temperature,
             "max_tokens": request.max_output_tokens or 2048,
             "stream": False,
         }
+        if active_entry:
+            if active_entry.top_p is not None:
+                payload["top_p"] = active_entry.top_p
+            if active_entry.top_k is not None:
+                payload["top_k"] = active_entry.top_k
+            if active_entry.min_p is not None:
+                payload["min_p"] = active_entry.min_p
+
         schema_enabled = os.getenv("JARVIS_LLAMA_JSON_SCHEMA", "true").lower() not in {"0", "false", "no", "off"}
         if request.structured_output_schema is not None and schema_enabled:
             payload["response_format"] = {"type": "json_schema", "json_schema": {
@@ -167,6 +183,24 @@ class LocalLlamaCppAdapter:
         config = llama_cpp_runtime_config()
         if config.thinking in {"on", "off"}:
             payload["chat_template_kwargs"] = {"enable_thinking": config.thinking == "on"}
+        if active_entry:
+            is_final_or_routing = False
+            if request.metadata and request.metadata.get("reasoning_phase") == "final":
+                is_final_or_routing = True
+            elif request.task_type in {AITaskType.smoke_console_test, AITaskType.smoke_test}:
+                is_final_or_routing = True
+            else:
+                task_str = str(getattr(request.task_type, "value", request.task_type)).lower()
+                if any(k in task_str for k in ("routing", "classification", "smoke")):
+                    is_final_or_routing = True
+
+            effort = (
+                active_entry.reasoning_effort_final
+                if is_final_or_routing
+                else active_entry.reasoning_effort_analysis
+            )
+            if effort is not None:
+                payload.setdefault("chat_template_kwargs", {})["reasoning_effort"] = effort
         client = self._client_factory()
         schema_fallback = False
         try:
