@@ -60,8 +60,22 @@ def test_first_step_uses_real_broker_schemas_size_guard(surface: str) -> None:
              "tools": compact, "allowed_tools": names}
     envelope = infer_envelope(frame, route_class="local:llamacpp")
     payload = json.loads(envelope.prompt.removesuffix(RELAY_TOOL_PROTOCOL))
-    assert payload["tools"] == [{key: tool["function"][key] for key in ("name", "description")
-                                if key in tool["function"]} for tool in compact]
+    for prompted, tool in zip(payload["tools"], compact, strict=True):
+        function = tool["function"]
+        schema = function["parameters"]
+        assert prompted == {
+            "name": function["name"], "description": function["description"],
+            "parameters": {name: prop.get("type", "object") for name, prop in schema["properties"].items()},
+            "required": schema.get("required", []),
+        }
+    assert "maxLength" not in json.dumps(payload["tools"])
+    assert "additionalProperties" not in json.dumps(payload["tools"])
+    first_step = frame | {"messages": [
+        {"role": "system", "content": get_role_instructions("isaac") + "\n\n" + COMPACT_METHODOLOGY},
+        {"role": "user", "content": "What is the result?\n\n" + "x" * 2500},
+    ]}
+    # Character guard for the real local prompt shape, not an actual model token count.
+    assert len(infer_envelope(first_step, route_class="local:llamacpp").prompt) < 6500
     cloud_envelope = infer_envelope(frame, route_class="external:cheap")
     cloud_payload = json.loads(cloud_envelope.prompt.removesuffix(RELAY_TOOL_PROTOCOL))
     assert cloud_payload["tools"] == compact

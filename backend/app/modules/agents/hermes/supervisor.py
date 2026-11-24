@@ -388,6 +388,22 @@ def compact_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [compact(tool) for tool in tools]
 
 
+def _local_tool_prompt(tool: dict[str, Any]) -> dict[str, Any]:
+    """Give the local model argument shape without duplicating validation constraints."""
+    function = tool["function"]
+    summary = {key: function[key] for key in ("name", "description") if key in function}
+    parameters = function.get("parameters") or function.get("inputSchema")
+    if isinstance(parameters, dict):
+        properties = parameters.get("properties")
+        if isinstance(properties, dict):
+            summary["parameters"] = {
+                name: schema.get("type", "object") if isinstance(schema, dict) else "object"
+                for name, schema in properties.items()
+            }
+            summary["required"] = parameters.get("required", [])
+    return summary
+
+
 def compact_system_message(messages: Any, system_prompt: str) -> Any:
     """Replace the upstream Hermes system message on local routes, keeping a saved-plan tail."""
     if not isinstance(messages, list) or not messages or not isinstance(messages[0], dict) \
@@ -450,8 +466,7 @@ def infer_envelope(frame: dict[str, Any], *, deadline_seconds: int = 120,
         envelope_id=str(uuid4()), correlation_id=str(frame["id"]),
         task_kind=str(frame.get("task_kind", "general")),
         workspace_id=ref.workspace_id,
-        prompt=json.dumps({"messages": messages, "tools": ([{key: tool["function"][key] for key in ("name", "description")
-                                                         if key in tool["function"]} for tool in tools]
+        prompt=json.dumps({"messages": messages, "tools": ([_local_tool_prompt(tool) for tool in tools]
                                                         if route_class and route_class.startswith("local:") else tools)},
                           ensure_ascii=False, separators=separators) + RELAY_TOOL_PROTOCOL
                if tools else json.dumps(messages, ensure_ascii=False, separators=separators),

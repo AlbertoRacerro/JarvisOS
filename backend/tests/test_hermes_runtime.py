@@ -204,7 +204,12 @@ def test_compact_relay_proposal_executes_turn_plan(monkeypatch: pytest.MonkeyPat
     def runner(**kwargs: Any) -> Any:
         payload = json.loads(kwargs["user_prompt"].removesuffix(RELAY_TOOL_PROTOCOL))
         compact = hermes_supervisor_module.compact_tool_schemas([tool])[0]["function"]
-        assert payload["tools"] == [{"name": compact["name"], "description": compact["description"]}]
+        assert payload["tools"] == [{
+            "name": compact["name"], "description": compact["description"],
+            "parameters": {name: prop.get("type", "object")
+                           for name, prop in compact["parameters"]["properties"].items()},
+            "required": compact["parameters"].get("required", []),
+        }]
         branches = kwargs["structured_output_schema"]["oneOf"][1]["properties"]["tool_calls"]["items"]["anyOf"]
         assert branches[0]["properties"]["arguments"] == compact["parameters"]
         assert "description" not in json.dumps(branches[0]["properties"]["arguments"])
