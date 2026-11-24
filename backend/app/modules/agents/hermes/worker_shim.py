@@ -647,6 +647,7 @@ class Worker:
                         tool_answer: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
                         with worker.pending_lock:
                             worker.pending[request_id] = tool_answer
+                        worker.event("tool.call", request_id)
                         worker.send({"type": "tool_call", "id": request_id,
                                      "session_ref": worker.session, "arguments": body})
                         try:
