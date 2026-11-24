@@ -754,8 +754,7 @@ def test_run_marks_stalled_submit_as_timeout(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(runner, "_http_request", fake_http)
     before = time.monotonic()
     result = run_eval(tasks_path=tasks, label="deadline", reps=1,
-                      base_url="http://127.0.0.1:8123", out_dir=tmp_path / "out", timeout=0.2,
-                      route_class="local:fake")
+                      base_url="http://127.0.0.1:8123", out_dir=tmp_path / "out", timeout=0.2)
     rep = result["tasks"]["one"]["repetitions"][0]
     assert rep["flow_state"] == "timed_out"
     assert rep["terminal_reason"] == "timeout"

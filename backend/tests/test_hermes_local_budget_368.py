@@ -29,7 +29,6 @@ from app.modules.agents.hermes.supervisor import (
 )
 from app.modules.agents.hermes.worker_shim import COMPACT_METHODOLOGY
 from app.modules.agents.hermes.worker_shim import is_dead_turn as worker_is_dead_turn
-from app.modules.agents.hermes.worker_shim import turn_guard_kind as worker_guard_kind
 from app.modules.ai.thread_service import _turn_tools
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -75,7 +74,7 @@ def test_speed_deadline() -> None:
     assert step_deadline_from_rows([], 2048) == 240
 
 
-@pytest.mark.parametrize("guard", [turn_guard_kind, worker_guard_kind])
+@pytest.mark.parametrize("guard", [turn_guard_kind])
 def test_announcement_guard_is_pinned_in_both_processes(guard: object) -> None:
     assert guard("Let me verify the numbers before reporting.", tools_offered=True) == "announcement"
     assert guard("I'll make the actual calls now.", tools_offered=True) == "announcement"

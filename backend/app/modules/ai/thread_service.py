@@ -794,7 +794,8 @@ def _install_hermes_retrieval_grant(
     worker.live_grants[browser_page_grant_id] = browser_page_grant
     worker.live_grants[paper_pdf_grant_id] = paper_pdf_grant
     if compact:
-        return (f"Read-only grants: retrieval_grant_id={grant_id}; knowledge_read_grant_id={knowledge_read_grant_id}; "
+        return (f"Read-only grants: retrieval_grant_id={grant_id} (source_scope={allowed_owners}); "
+                f"decision_grant_id={decision_grant_id}; knowledge_read_grant_id={knowledge_read_grant_id}; "
                 f"repo_read_grant_id={repo_read_grant_id}; dev_read_grant_id={dev_read_grant_id}; "
                 f"paper_search_grant_id={paper_search_grant_id}; paper_pdf_grant_id={paper_pdf_grant_id}; "
                 f"patent_read_grant_id={patent_read_grant_id}; browser_page_grant_id={browser_page_grant_id}. "

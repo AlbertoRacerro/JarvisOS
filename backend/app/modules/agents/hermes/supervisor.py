@@ -1395,7 +1395,6 @@ class HermesSupervisor:
         try:
             self._send({"type": "turn", "id": request_id, "prompt": prompt,
                         "allowed_tools": allowed_tools, "sheldon_mode": sheldon_mode,
-                        "role_instructions": role_instructions,
                         "step_deadline_seconds": self.step_deadline_seconds,
                         "general_output_cap": output_cap})
             try:

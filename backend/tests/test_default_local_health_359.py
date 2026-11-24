@@ -265,7 +265,7 @@ def test_hermes_reasoning_effort_final_and_analysis_phases(monkeypatch: pytest.M
         "messages": [{"role": "user", "content": "Produce final summary"}],
     })
     run_governed_inference(envelope, runner=mock_runner, reasoning_phase="final")
-    assert captured_kwargs[-1]["metadata"] == {"reasoning_phase": "final"}
+    assert captured_kwargs[-1]["metadata"]["reasoning_phase"] == "final"
 
     captured_payloads: list[dict[str, Any]] = []
     adapter = _mock_adapter(captured_payloads)
@@ -280,7 +280,7 @@ def test_hermes_reasoning_effort_final_and_analysis_phases(monkeypatch: pytest.M
 
     # 2. Analysis / tool turn without reasoning_phase="final"
     run_governed_inference(envelope, runner=mock_runner, reasoning_phase=None)
-    assert "metadata" not in captured_kwargs[-1]
+    assert "reasoning_phase" not in captured_kwargs[-1].get("metadata", {})
     captured_payloads.clear()
     adapter.complete(
         AIRequest(

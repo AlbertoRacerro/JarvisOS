@@ -970,8 +970,7 @@ def test_hermes_agent_gets_the_thread_formula_instruction(monkeypatch) -> None:
     shim.base_url, shim.token, shim.session_db = "http://127.0.0.1:1/v1", "t", object()
     shim.session = {"hermes_session_id": "h1"}
     shim._build_agent()
-    assert captured["ephemeral_system_prompt"].startswith(worker_shim.PRESENTATION_INSTRUCTIONS)
-    assert worker_shim.COMPACT_METHODOLOGY in captured["ephemeral_system_prompt"]
+    assert captured["ephemeral_system_prompt"] == worker_shim.PRESENTATION_INSTRUCTIONS
     assert captured["enabled_toolsets"] == ["mcp-jarvis", "memory", "session_search"]
 
 
