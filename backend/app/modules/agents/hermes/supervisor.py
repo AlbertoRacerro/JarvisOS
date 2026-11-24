@@ -415,8 +415,6 @@ def dispatch_tool(
                                     if grant is not None and grant.constraints:
                                         if grant.constraints.get("is_local") is not None:
                                             qc_kwargs["is_local"] = bool(grant.constraints["is_local"])
-                                        if grant.constraints.get("cloud_ip_mode") is not None:
-                                            qc_kwargs["cloud_ip_mode"] = str(grant.constraints["cloud_ip_mode"])
                                     result = query_context(raw_query, **qc_kwargs)
                             else:
                                 error = "scope_denied"

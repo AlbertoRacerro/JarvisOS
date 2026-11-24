@@ -7,6 +7,8 @@ Fail-closed, server-owned IP egress boundary across Jarvis chat read-only tools:
 """
 from __future__ import annotations
 
+import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,10 +21,7 @@ from app.core import packs
 from app.core.database import open_sqlite_connection
 from app.modules.agents.hermes.ip_boundary import (
     CLOUD_IP_MODE_NO_CLOUD,
-    clear_audit_events,
-    get_audit_events,
     normalize_cloud_ip_mode,
-    set_runtime_cloud_ip_mode,
 )
 from app.modules.agents.hermes.knowledge_read_tool import dispatch_knowledge_read_tool
 from app.modules.agents.hermes.repo_read_tool import dispatch_repo_read_tool
@@ -80,7 +79,7 @@ def _make_grant(
     if is_local is not None:
         constraints["is_local"] = is_local
     if cloud_ip_mode is not None:
-        constraints["cloud_ip_mode"] = cloud_ip_mode
+        os.environ["JARVIS_CLOUD_IP_MODE"] = cloud_ip_mode
     return CapabilityGrantRef(
         grant_id=grant_id,
         capability_id=capability_id,
@@ -96,8 +95,6 @@ def _make_grant(
 def _reset_boundary_state(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.core.database import initialize_database
 
-    set_runtime_cloud_ip_mode(None)
-    clear_audit_events()
     initialize_database()
     monkeypatch.delenv("JARVIS_CLOUD_IP_MODE", raising=False)
     monkeypatch.delenv("JARVISOS_CLOUD_IP_MODE", raising=False)
@@ -108,8 +105,14 @@ def _reset_boundary_state(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr("app.modules.ai.settings.get_ai_settings", lambda: mock_settings)
     yield
-    set_runtime_cloud_ip_mode(None)
-    clear_audit_events()
+
+
+def _audit_events() -> list[dict[str, Any]]:
+    with open_sqlite_connection(read_only=True) as conn:
+        rows = conn.execute(
+            "SELECT payload FROM events WHERE event_type = 'hermes.cloud_ip_boundary' ORDER BY rowid"
+        ).fetchall()
+    return [json.loads(row["payload"]) for row in rows]
 
 
 @pytest.fixture
@@ -308,11 +311,11 @@ def test_cloud_route_no_cloud_pack_repo_refused(fake_zephyr_pack: Path) -> None:
     assert err == "egress_pack_blocked"
 
     # Audit event recorded
-    events = get_audit_events()
+    events = _audit_events()
     assert len(events) == 1
-    assert events[0]["tool_name"] == "jarvis_repo_read"
+    assert events[0]["tool"] == "jarvis_repo_read"
     assert events[0]["op"] == "read"
-    assert events[0]["egress_mode"] == "no_cloud"
+    assert events[0]["mode"] == "no_cloud"
     assert events[0]["reason_code"] == "egress_pack_blocked"
 
 
@@ -329,7 +332,8 @@ def test_cloud_route_no_cloud_knowledge_read_withholds_s2_s3_s4(
             "VALUES ('a-s0', 'ws-345', 'Standard public engineering assumption', 'active', 'high', '2026-01-01', '2026-01-01'), "
             "       ('a-s2', 'ws-345', 'confidential partner-only under NDA', 'active', 'high', '2026-01-01', '2026-01-01'), "
             "       ('a-s3', 'ws-345', 'zephyr geometry correlation and process parameter', 'active', 'high', '2026-01-01', '2026-01-01'), "
-            "       ('a-s4', 'ws-345', 'secret api_key = sk-12345678901234567890', 'active', 'high', '2026-01-01', '2026-01-01')"
+            "       ('a-s4', 'ws-345', 'secret api_key = sk-12345678901234567890', 'active', 'high', '2026-01-01', '2026-01-01'), "
+            "       ('a-s4-token', 'ws-345', 'sk-12345678901234567890', 'active', 'high', '2026-01-01', '2026-01-01')"
         )
         conn.commit()
 
@@ -347,13 +351,13 @@ def test_cloud_route_no_cloud_knowledge_read_withholds_s2_s3_s4(
     assert err == "err"
     assert res is not None
     assert res["egress_mode"] == "no_cloud"
-    assert res["withheld_count"] == 3
+    assert res["withheld_count"] == 4
     assert res["count"] == 1
     assert res["memory_records"][0]["id"] == "a-s0"
 
     # Audit event recorded
-    events = get_audit_events()
-    assert any(e["tool_name"] == "jarvis_knowledge_read" and e["withheld_count"] == 3 for e in events)
+    events = _audit_events()
+    assert any(e["tool"] == "jarvis_knowledge_read" and e["withheld_count"] == 4 for e in events)
 
 
 def test_cloud_route_no_cloud_retrieval_query_withholds_s2_s3(
@@ -379,7 +383,7 @@ def test_cloud_route_no_cloud_retrieval_query_withholds_s2_s3(
         token_estimate=10,
     )
     item_s3 = SimpleNamespace(
-        source_ref=SimpleNamespace(model_dump=lambda mode="json": {"id": "2"}),
+        source_ref=SimpleNamespace(model_dump=lambda mode="json": {"id": "zephyr geometry"}),
         content_digest="d-s3",
         token_estimate=10,
     )
@@ -396,7 +400,7 @@ def test_cloud_route_no_cloud_retrieval_query_withholds_s2_s3(
         def resolve_authoritative(self, ref: Any) -> Any:
             if ref.model_dump().get("id") == "1":
                 return SimpleNamespace(state="current", content="Standard open passage.", current_content_digest="d-s0")
-            return SimpleNamespace(state="current", content="zephyr geometry design decision", current_content_digest="d-s3")
+            return SimpleNamespace(state="current", content="Standard safe passage.", current_content_digest="d-s3")
 
     cloud_grant = _make_grant(
         "jarvis.retrieval_query",
@@ -409,6 +413,8 @@ def test_cloud_route_no_cloud_retrieval_query_withholds_s2_s3(
     assert result["withheld_count"] == 1
     assert len(result["evidence"]) == 1
     assert result["evidence"][0]["content_digest"] == "d-s0"
+    assert result["bundle"] == {"items": []}
+    assert "zephyr geometry" not in str(result)
 
 
 # ===========================================================================
@@ -456,7 +462,7 @@ def test_cloud_route_sanitized_withholds_unredacted_s2_fail_closed(
     assert res is None
     assert err == "egress_sanitization_required"
 
-    events = get_audit_events()
+    events = _audit_events()
     assert any(e["reason_code"] == "egress_sanitization_required" for e in events)
 
 
@@ -513,59 +519,20 @@ def test_cloud_route_sanitized_knowledge_read(fake_zephyr_pack: Path) -> None:
 
 
 # ===========================================================================
-# 4. Cloud Route: full
+# 4. Removed modes fail closed
 # ===========================================================================
 
 
-def test_cloud_route_full_permits_pack_and_s2_s3(fake_zephyr_pack: Path) -> None:
-    cloud_grant = _make_grant(
-        "jarvis.repo_read",
-        route_class="cloud:scaleway",
-        is_local=False,
-        cloud_ip_mode="full",
-    )
-    # S3 pack read succeeds
-    call_s3 = _make_call(
-        {"op": "read", "scope": "pack", "path": "zephyr_design.txt"},
-        capability_id="jarvis.repo_read",
-    )
-    res_s3, err_s3 = dispatch_repo_read_tool(call_s3, "ws-345", "err", grant=cloud_grant)
-    assert err_s3 == "err"
-    assert res_s3 is not None
-    assert "zephyr geometry" in res_s3["content"]
-    assert res_s3["egress_mode"] == "full"
-
-    # S2 confidential pack read succeeds under full
-    call_s2 = _make_call(
-        {"op": "read", "scope": "pack", "path": "confidential_doc.txt"},
-        capability_id="jarvis.repo_read",
-    )
-    res_s2, err_s2 = dispatch_repo_read_tool(call_s2, "ws-345", "err", grant=cloud_grant)
-    assert err_s2 == "err"
-    assert res_s2 is not None
-    assert "confidential" in res_s2["content"]
-
-
-def test_cloud_route_full_strictly_blocks_s4_secrets(fake_zephyr_pack: Path) -> None:
-    cloud_grant = _make_grant(
-        "jarvis.repo_read",
-        route_class="cloud:scaleway",
-        is_local=False,
-        cloud_ip_mode="full",
-    )
-    call_s4 = _make_call(
-        {"op": "read", "scope": "pack", "path": "tokens_doc.txt"},
-        capability_id="jarvis.repo_read",
-    )
-    res_s4, err_s4 = dispatch_repo_read_tool(call_s4, "ws-345", "err", grant=cloud_grant)
-    assert res_s4 is None
-    assert err_s4 == "egress_s4_blocked"
-
-    # Verify zero secret leakage
-    events = get_audit_events()
-    assert any(e["reason_code"] == "egress_s4_blocked" for e in events)
-    for event in events:
-        assert "sk-" not in str(event)
+@pytest.mark.parametrize("mode", ["full", "unknown"])
+def test_removed_or_unknown_mode_blocks_pack_reads(fake_zephyr_pack: Path, mode: str) -> None:
+    grant = _make_grant("jarvis.repo_read", route_class="cloud:scaleway", is_local=False,
+                        cloud_ip_mode=mode)
+    call = _make_call({"op": "read", "scope": "pack", "path": "zephyr_design.txt"},
+                      capability_id="jarvis.repo_read")
+    result, error = dispatch_repo_read_tool(call, "ws-345", "err", grant=grant)
+    assert result is None
+    assert error == "egress_pack_blocked"
+    assert _audit_events()[-1]["mode"] == "no_cloud"
 
 
 # ===========================================================================
@@ -573,7 +540,7 @@ def test_cloud_route_full_strictly_blocks_s4_secrets(fake_zephyr_pack: Path) -> 
 # ===========================================================================
 
 
-@pytest.mark.parametrize("invalid_mode", [None, "", "unknown", "bypass", "unrestricted", "FULL_CAPS", 123])
+@pytest.mark.parametrize("invalid_mode", [None, "", "unknown", "bypass", "unrestricted", "FULL_CAPS", "full", 123])
 def test_invalid_mode_normalizes_to_no_cloud(invalid_mode: Any) -> None:
     assert normalize_cloud_ip_mode(invalid_mode) == CLOUD_IP_MODE_NO_CLOUD
 
@@ -592,6 +559,18 @@ def test_invalid_mode_in_grant_fails_closed(fake_zephyr_pack: Path) -> None:
     res, err = dispatch_repo_read_tool(call, "ws-345", "err", grant=grant)
     assert res is None
     assert err == "egress_pack_blocked"
+
+
+def test_grant_constraint_cannot_raise_cloud_mode(fake_zephyr_pack: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JARVIS_CLOUD_IP_MODE", "no_cloud")
+    grant = _make_grant("jarvis.repo_read", route_class="cloud:scaleway", is_local=False)
+    grant.constraints["cloud_ip_mode"] = "sanitized"
+    call = _make_call({"op": "read", "scope": "pack", "path": "zephyr_design.txt"},
+                      capability_id="jarvis.repo_read")
+    result, error = dispatch_repo_read_tool(call, "ws-345", "err", grant=grant)
+    assert result is None
+    assert error == "egress_pack_blocked"
+    assert _audit_events()[-1]["mode"] == "no_cloud"
 
 
 # ===========================================================================
@@ -653,51 +632,24 @@ def test_model_supplied_mode_override_rejected_in_retrieval_query() -> None:
 # ===========================================================================
 
 
-def test_system_envelope_reports_cloud_ip_mode_on_external_routes() -> None:
-    # 1. External route with default no_cloud
-    env_no_cloud = thread_service._jarvis_system_envelope(
-        workspace_id="ws-345",
-        workspace_name="Workspace 345",
-        app_state=None,
-        route_availability=[],
-        route_class="cloud:scaleway",
-        cloud_ip_mode="no_cloud",
-    )
-    assert "Route boundary: external (private-pack reads blocked)" in env_no_cloud
-    assert "Cloud IP mode: no_cloud" in env_no_cloud
+def test_system_envelope_reports_cloud_ip_mode_on_external_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    for mode in ("no_cloud", "sanitized", "full", "unknown"):
+        monkeypatch.setenv("JARVIS_CLOUD_IP_MODE", mode)
+        envelope = thread_service._jarvis_system_envelope(
+            workspace_id="ws-345", workspace_name="Workspace 345", app_state=None,
+            route_availability=[], route_class="cloud:scaleway",
+        )
+        expected = mode if mode in {"no_cloud", "sanitized"} else "no_cloud"
+        assert f"Cloud IP mode: {expected}" in envelope
+        boundary = "sanitized" if expected == "sanitized" else "blocked"
+        assert f"Route boundary: external (private-pack reads {boundary})" in envelope
 
-    # 2. External route with sanitized
-    env_sanitized = thread_service._jarvis_system_envelope(
-        workspace_id="ws-345",
-        workspace_name="Workspace 345",
-        app_state=None,
-        route_availability=[],
-        route_class="cloud:scaleway",
-        cloud_ip_mode="sanitized",
+    local_envelope = thread_service._jarvis_system_envelope(
+        workspace_id="ws-345", workspace_name="Workspace 345", app_state=None,
+        route_availability=[], route_class="local:llamacpp",
     )
-    assert "Cloud IP mode: sanitized" in env_sanitized
-
-    # 3. External route with full
-    env_full = thread_service._jarvis_system_envelope(
-        workspace_id="ws-345",
-        workspace_name="Workspace 345",
-        app_state=None,
-        route_availability=[],
-        route_class="cloud:scaleway",
-        cloud_ip_mode="full",
-    )
-    assert "Cloud IP mode: full" in env_full
-
-    # 4. Local route does NOT include Cloud IP mode
-    env_local = thread_service._jarvis_system_envelope(
-        workspace_id="ws-345",
-        workspace_name="Workspace 345",
-        app_state=None,
-        route_availability=[],
-        route_class="local:llamacpp",
-    )
-    assert "Route boundary: local (private-pack reads permitted)" in env_local
-    assert "Cloud IP mode:" not in env_local
+    assert "Route boundary: local (private-pack reads permitted)" in local_envelope
+    assert "Cloud IP mode:" not in local_envelope
 
 
 # ===========================================================================
@@ -705,13 +657,13 @@ def test_system_envelope_reports_cloud_ip_mode_on_external_routes() -> None:
 # ===========================================================================
 
 
-def test_grant_installation_propagates_cloud_ip_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_grant_installation_keeps_mode_server_owned(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_settings = SimpleNamespace(
         hermes_role_routes={"isaac": "cloud:scaleway"},
         provider_mode="cloud",
     )
     monkeypatch.setattr("app.modules.ai.settings.get_ai_settings", lambda: mock_settings)
-    set_runtime_cloud_ip_mode("sanitized")
+    monkeypatch.setenv("JARVIS_CLOUD_IP_MODE", "sanitized")
 
     payload = AIThreadSubmit(
         request_id="req-345",
@@ -725,14 +677,21 @@ def test_grant_installation_propagates_cloud_ip_mode(monkeypatch: pytest.MonkeyP
     )
     assert grant_text is not None
 
+    # A caller route hint cannot turn a cloud-backed worker into a local read grant.
+    payload.route_class = "local:llamacpp"
+    second_worker = SimpleNamespace(live_grants={}, session=_SESSION)
+    thread_service._install_hermes_retrieval_grant(second_worker, payload, "ws-345", "thread-345")
+    assert all(g.constraints.get("is_local") is False for g in second_worker.live_grants.values()
+               if g.capability_id in {"jarvis.repo_read", "jarvis.knowledge_read", "jarvis.retrieval_query"})
+
     repo_grant = next(g for g in worker.live_grants.values() if g.capability_id == "jarvis.repo_read")
     assert repo_grant.constraints.get("is_local") is False
-    assert repo_grant.constraints.get("cloud_ip_mode") == "sanitized"
+    assert "cloud_ip_mode" not in repo_grant.constraints
 
     knowledge_grant = next(g for g in worker.live_grants.values() if g.capability_id == "jarvis.knowledge_read")
     assert knowledge_grant.constraints.get("is_local") is False
-    assert knowledge_grant.constraints.get("cloud_ip_mode") == "sanitized"
+    assert "cloud_ip_mode" not in knowledge_grant.constraints
 
     retrieval_grant = next(g for g in worker.live_grants.values() if g.capability_id == "jarvis.retrieval_query")
     assert retrieval_grant.constraints.get("is_local") is False
-    assert retrieval_grant.constraints.get("cloud_ip_mode") == "sanitized"
+    assert "cloud_ip_mode" not in retrieval_grant.constraints

@@ -947,16 +947,22 @@ def dispatch_knowledge_read_tool(
         else:
             return None, "unknown_view"
 
-    scrubbed = _scrub_value(result, home_str)
     items_key = None if view == "table_counts" else ("ai_jobs" if view == "ai_jobs_recent" else view)
+    raw_items = result.get(items_key, []) if items_key and isinstance(result, dict) else []
+    scrubbed = _scrub_value(result, home_str)
 
     is_local = is_local_route(grant=grant)
     if not is_local and isinstance(scrubbed, dict):
-        mode = resolve_cloud_ip_mode(workspace_id=target_workspace, grant=grant)
+        mode = resolve_cloud_ip_mode()
         if items_key and isinstance(scrubbed.get(items_key), list):
             kept_items = []
             withheld_count = 0
-            for item in scrubbed[items_key]:
+            for raw_item, item in zip(raw_items, scrubbed[items_key], strict=True):
+                if mode == CLOUD_IP_MODE_NO_CLOUD:
+                    raw_allowed, _, _ = sanitize_record(raw_item, mode)
+                    if not raw_allowed:
+                        withheld_count += 1
+                        continue
                 allowed, out_item, _ = sanitize_record(item, mode)
                 if allowed:
                     kept_items.append(out_item)
@@ -969,9 +975,8 @@ def dispatch_knowledge_read_tool(
             if mode == CLOUD_IP_MODE_SANITIZED:
                 scrubbed["sanitized"] = True
             if withheld_count > 0:
-                reason_code = "egress_pack_blocked" if mode == CLOUD_IP_MODE_NO_CLOUD else (
-                    "egress_sanitization_required" if mode == CLOUD_IP_MODE_SANITIZED else "egress_s4_blocked"
-                )
+                reason_code = ("egress_pack_blocked" if mode == CLOUD_IP_MODE_NO_CLOUD
+                               else "egress_sanitization_required")
                 log_cloud_boundary_event(
                     tool_name="jarvis_knowledge_read",
                     op=view,

@@ -4,25 +4,22 @@ from __future__ import annotations
 import os
 import re
 from typing import Any
-from uuid import uuid4
 
 from app.core import packs
-from app.core.database import open_sqlite_connection
+from app.core.database import initialize_database, open_sqlite_connection
 from app.modules.ai.agent_contracts import CapabilityGrantRef
 from app.modules.ai.sensitivity import (
     _SECRET_PATTERNS,
     _pack_ip_patterns,
     deterministic_floor,
 )
-from app.modules.events.service import log_event, utc_now
+from app.modules.events.service import log_event
 
 CLOUD_IP_MODE_NO_CLOUD = "no_cloud"
 CLOUD_IP_MODE_SANITIZED = "sanitized"
-CLOUD_IP_MODE_FULL = "full"
 CLOUD_IP_MODES = frozenset({
     CLOUD_IP_MODE_NO_CLOUD,
     CLOUD_IP_MODE_SANITIZED,
-    CLOUD_IP_MODE_FULL,
 })
 DEFAULT_CLOUD_IP_MODE = CLOUD_IP_MODE_NO_CLOUD
 
@@ -34,10 +31,6 @@ LOCAL_PROVIDER_MODES = frozenset({
     "ollama",
     "llamacpp",
 })
-
-_runtime_cloud_ip_mode: str | None = None
-_workspace_cloud_ip_modes: dict[str, str] = {}
-_AUDIT_EVENTS: list[dict[str, Any]] = []
 
 _KNOWN_SECRET_RE = re.compile(
     r"(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,}|Bearer\s+[A-Za-z0-9_.-]+)"
@@ -60,62 +53,11 @@ def normalize_cloud_ip_mode(value: Any) -> str:
     return DEFAULT_CLOUD_IP_MODE
 
 
-def set_runtime_cloud_ip_mode(mode: str | None) -> None:
-    """Set server-owned runtime cloud IP mode (for runtime configuration or testing)."""
-    global _runtime_cloud_ip_mode
-    _runtime_cloud_ip_mode = normalize_cloud_ip_mode(mode) if mode is not None else None
-
-
-def set_workspace_cloud_ip_mode(workspace_id: str, mode: str | None) -> None:
-    """Set server-owned per-workspace cloud IP mode."""
-    if mode is None:
-        _workspace_cloud_ip_modes.pop(workspace_id, None)
-    else:
-        _workspace_cloud_ip_modes[workspace_id] = normalize_cloud_ip_mode(mode)
-
-
-def get_runtime_cloud_ip_mode() -> str | None:
-    return _runtime_cloud_ip_mode
-
-
-def get_workspace_cloud_ip_mode(workspace_id: str) -> str | None:
-    return _workspace_cloud_ip_modes.get(workspace_id)
-
-
-def resolve_cloud_ip_mode(
-    workspace_id: str | None = None,
-    grant: CapabilityGrantRef | None = None,
-) -> str:
-    """Resolve active server-owned cloud IP mode (no_cloud, sanitized, full).
-
-    Strictly fail-closed: model/caller supplied overrides are rejected or ignored.
-    """
-    if grant is not None and grant.constraints:
-        candidate = grant.constraints.get("cloud_ip_mode")
-        if candidate is not None:
-            return normalize_cloud_ip_mode(candidate)
-
-    if workspace_id and workspace_id in _workspace_cloud_ip_modes:
-        return normalize_cloud_ip_mode(_workspace_cloud_ip_modes[workspace_id])
-
-    if _runtime_cloud_ip_mode is not None:
-        return normalize_cloud_ip_mode(_runtime_cloud_ip_mode)
-
+def resolve_cloud_ip_mode() -> str:
+    """Resolve server-owned cloud IP mode; unknown values fail closed."""
     env_val = os.getenv("JARVIS_CLOUD_IP_MODE") or os.getenv("JARVISOS_CLOUD_IP_MODE")
     if env_val:
         return normalize_cloud_ip_mode(env_val)
-
-    if workspace_id:
-        try:
-            with open_sqlite_connection(read_only=True) as conn:
-                row = conn.execute(
-                    "SELECT cloud_ip_mode FROM workspace_egress_policy WHERE workspace_id = ?",
-                    (workspace_id,),
-                ).fetchone()
-                if row and row["cloud_ip_mode"]:
-                    return normalize_cloud_ip_mode(row["cloud_ip_mode"])
-        except Exception:
-            pass
 
     return DEFAULT_CLOUD_IP_MODE
 
@@ -221,13 +163,6 @@ def filter_or_sanitize_text(text: str, mode: str) -> tuple[bool, str, str | None
             return False, "", "egress_sanitization_required"
         return True, redacted, None
 
-    if mode == CLOUD_IP_MODE_FULL:
-        floor = check_sensitivity_floor(text)
-        if floor == "S4":
-            return False, "", "egress_s4_blocked"
-        return True, text, None
-
-    return False, "", "egress_pack_blocked"
 
 
 def _record_text_recursive(value: Any) -> str:
@@ -279,13 +214,6 @@ def sanitize_record(record: dict[str, Any], mode: str) -> tuple[bool, dict[str, 
             sanitized["sanitized"] = True
         return True, sanitized, None
 
-    if mode == CLOUD_IP_MODE_FULL:
-        floor = check_sensitivity_floor(raw_text)
-        if floor == "S4":
-            return False, {}, "egress_s4_blocked"
-        return True, record, None
-
-    return False, {}, "egress_pack_blocked"
 
 
 def log_cloud_boundary_event(
@@ -295,45 +223,28 @@ def log_cloud_boundary_event(
     withheld_count: int,
     reason_code: str,
     workspace_id: str | None = None,
-) -> dict[str, Any]:
-    """Record a safe metadata audit event for a cloud route refusal or withholding.
-
-    Never records raw private content or secrets.
-    """
-    event_payload = {
-        "tool_name": str(tool_name),
-        "op": str(op),
-        "egress_mode": str(egress_mode),
-        "withheld_count": int(withheld_count),
-        "reason_code": str(reason_code),
+) -> None:
+    """Persist metadata only for a cloud-route refusal or withholding."""
+    payload = {
+        "tool": tool_name,
+        "op": op,
+        "mode": normalize_cloud_ip_mode(egress_mode),
+        "withheld_count": withheld_count,
+        "reason_code": reason_code,
     }
-    event_entry = dict(event_payload)
-    if workspace_id is not None:
-        event_entry["workspace_id"] = str(workspace_id)
-    event_entry["timestamp"] = utc_now()
-    _AUDIT_EVENTS.append(event_entry)
-
-    try:
-        with open_sqlite_connection() as connection:
-            log_event(
-                connection,
-                event_type="hermes.cloud_ip_boundary",
-                actor="jarvis",
-                target_type="cloud_ip_boundary",
-                target_id=str(uuid4()),
-                workspace_id=workspace_id,
-                payload=event_payload,
-            )
-            connection.commit()
-    except Exception:
-        pass
-
-    return event_entry
-
-
-def get_audit_events() -> list[dict[str, Any]]:
-    return list(_AUDIT_EVENTS)
-
-
-def clear_audit_events() -> None:
-    _AUDIT_EVENTS.clear()
+    with open_sqlite_connection() as connection:
+        has_events_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'"
+        ).fetchone()
+    if not has_events_table:
+        initialize_database()
+    with open_sqlite_connection() as connection:
+        log_event(
+            connection,
+            event_type="hermes.cloud_ip_boundary",
+            actor="jarvis",
+            target_type="cloud_ip_boundary",
+            workspace_id=None,
+            payload=payload,
+        )
+        connection.commit()

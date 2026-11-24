@@ -655,7 +655,7 @@ def _install_hermes_retrieval_grant(
         {ref.authority_owner for ref in source_refs})
     now = datetime.now(UTC)
 
-    from app.modules.agents.hermes.ip_boundary import is_local_route, resolve_cloud_ip_mode
+    from app.modules.agents.hermes.ip_boundary import is_local_route
 
     worker_session = getattr(worker, "session", None)
     role_id = payload.role_id or (worker_session.profile_id if worker_session else "isaac")
@@ -666,8 +666,6 @@ def _install_hermes_retrieval_grant(
         role_route = worker.route_for_role(role_id)
     elif hasattr(worker, "route_for_task") and callable(worker.route_for_task):
         role_route = worker.route_for_task("general")
-    if not role_route and payload.route_class and payload.route_class != "hermes:agent":
-        role_route = payload.route_class
     if not role_route:
         try:
             from app.modules.ai.settings import get_ai_settings
@@ -677,11 +675,9 @@ def _install_hermes_retrieval_grant(
             role_route = None
 
     is_local = is_local_route(route_class=role_route, role_id=role_id)
-    cloud_ip_mode = resolve_cloud_ip_mode(workspace_id=workspace_id)
     read_constraints: dict[str, str | int | float | bool] = {
         "route_class": role_route or "",
         "is_local": is_local,
-        "cloud_ip_mode": cloud_ip_mode,
     }
 
     grant_id = str(uuid4())
@@ -1072,7 +1068,6 @@ def _jarvis_system_envelope(
     route_class: str | None = None,
     role_id: str | None = None,
     granted_tools: tuple[str, ...] | list[str] | None = None,
-    cloud_ip_mode: str | None = None,
 ) -> str:
     try:
         capabilities = capability_reads(evaluator_registry(), app_state or object())
@@ -1116,14 +1111,11 @@ def _jarvis_system_envelope(
             loaded_packs_line = f"Loaded packs: {len(pack_ids)} private pack(s)"
         else:
             loaded_packs_line = "Loaded packs: none"
-        route_boundary_line = "Route boundary: external (private-pack reads blocked)"
-        from app.modules.agents.hermes.ip_boundary import normalize_cloud_ip_mode, resolve_cloud_ip_mode
+        from app.modules.agents.hermes.ip_boundary import CLOUD_IP_MODE_SANITIZED, resolve_cloud_ip_mode
 
-        active_cloud_ip_mode = (
-            normalize_cloud_ip_mode(cloud_ip_mode)
-            if cloud_ip_mode is not None
-            else resolve_cloud_ip_mode(workspace_id=workspace_id)
-        )
+        active_cloud_ip_mode = resolve_cloud_ip_mode()
+        pack_boundary = "sanitized" if active_cloud_ip_mode == CLOUD_IP_MODE_SANITIZED else "blocked"
+        route_boundary_line = f"Route boundary: external (private-pack reads {pack_boundary})"
         cloud_ip_mode_line = f"Cloud IP mode: {active_cloud_ip_mode}"
 
     # Granted read-only tools section
