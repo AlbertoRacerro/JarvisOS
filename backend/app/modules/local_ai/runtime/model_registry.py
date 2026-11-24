@@ -409,6 +409,7 @@ def list_models() -> dict[str, Any]:
     fallback_active, fallback, fallback_reason = determine_fallback(entries)
     fallback_from_id = target.id if (fallback_active and target) else None
 
+    active_id: str | None
     if fallback_active and fallback:
         _ensure_fallback_started(owner, fallback, entries)
         active_id = fallback.id
