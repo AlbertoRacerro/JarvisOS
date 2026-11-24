@@ -6,3 +6,13 @@ terms = ["zephyr"]
 
 [readiness]
 cases = "readiness_cases.toml"
+
+[search_guard]
+min_groups = 4
+groups = [
+    ["apple", "malus"],
+    ["banana", "musa"],
+    ["cherry", "prunus"],
+    ["date", "phoenix"],
+    ["elderberry", "sambucus"],
+]
