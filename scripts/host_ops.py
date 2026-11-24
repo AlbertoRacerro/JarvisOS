@@ -630,12 +630,15 @@ def op_service_install(ctx: Context) -> dict[str, Any]:
             except Exception:
                 pass
             try:
-                if current is None or previous_state.get("UnitFileState") not in {"enabled", "enabled-runtime"}:
+                if current is None:
                     _systemctl(ctx, "disable", "--now", unit)
-                elif was_active:
-                    _systemctl(ctx, "restart", unit)
                 else:
-                    _systemctl(ctx, "stop", unit)
+                    if previous_state.get("UnitFileState") not in {"enabled", "enabled-runtime"}:
+                        _systemctl(ctx, "disable", unit)
+                    if was_active:
+                        _systemctl(ctx, "restart", unit)
+                    else:
+                        _systemctl(ctx, "stop", unit)
             except Exception:
                 pass
         raise
@@ -2209,6 +2212,7 @@ def write_release_pending(
     attempts: int = 0,
     watcher_active: bool = False,
     owner_active: bool = False,
+    search_guard_active: bool = False,
     now: datetime | None = None,
     kind: str | None = None,
     guard_source: str | None = None,
@@ -2226,6 +2230,8 @@ def write_release_pending(
     }
     if owner_active:
         marker["owner_active"] = True
+    if search_guard_active:
+        marker["search_guard_active"] = True
     if kind is not None:
         marker["kind"] = kind
     if guard_source is not None:
@@ -2490,6 +2496,7 @@ def return_release(
         write_release_pending(paths, previous_sha=None, candidate_sha=previous_sha,
                               deadline=deadline, request_id=None,
                               attempts=0, watcher_active=bool(marker and marker.get("watcher_active")),
+                              search_guard_active=bool(marker and marker.get("search_guard_active")),
                               now=current_time, kind="return")
 
     return True
@@ -3754,7 +3761,8 @@ def _release_has_guard(release_dir: Path) -> bool:
 
 
 def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
-                    watcher_active: bool = False, owner_active: bool = False, now: datetime | None = None) -> None:
+                    watcher_active: bool = False, owner_active: bool = False,
+                    search_guard_active: bool = False, now: datetime | None = None) -> None:
     if os.environ.get("JARVIS_SANDBOX") or socket.gethostname() == "jarvis-sandbox":
         raise Refused("installation is host-only")
     if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
@@ -3874,6 +3882,7 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
     p_attempts = (pending.get("attempts", 0) if pending and pending.get("candidate_sha") == sha else 0)
     p_watch = bool(watcher_active or (pending and pending.get("watcher_active")))
     p_owner = bool(owner_active or (pending and pending.get("owner_active")))
+    p_guard = bool(search_guard_active or (pending and pending.get("search_guard_active")))
 
     pending_written = False
     install_switched = False
@@ -3882,7 +3891,7 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
         write_release_pending(paths, previous_sha=p_prev, candidate_sha=sha,
                               deadline=deadline, request_id=p_req,
                               attempts=p_attempts, watcher_active=p_watch,
-                              owner_active=p_owner, now=ts,
+                              owner_active=p_owner, search_guard_active=p_guard, now=ts,
                               guard_source=guard_source, guard_reason=guard_reason)
         pending_written = True
 
@@ -3921,6 +3930,8 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
                               "now": ctx.now()}
     if owner_active:
         kwargs["owner_active"] = True
+    if guard_active:
+        kwargs["search_guard_active"] = True
 
     current_link = ctx.paths.install / "current"
     installed_before = None

@@ -65,10 +65,10 @@ def matches_min_groups(
     """Check if query matches at least min_groups of synonyms groups (case-insensitive)."""
     if not groups or min_groups <= 0:
         return False
-    lowered = query.lower()
+    lowered = " ".join(query.lower().split())
     matched_count = 0
     for group in groups:
-        if any(term.lower() in lowered for term in group if term.strip()):
+        if any(" ".join(term.lower().split()) in lowered for term in group if term.strip()):
             matched_count += 1
     return matched_count >= min_groups
 
@@ -81,10 +81,11 @@ def evaluate_query(query: str) -> tuple[bool, str]:
     if not pack_is_ready():
         return False, "pack_load_error"
     try:
-        if packs.mentions_pack_term(query):
+        normalized = " ".join(query.split())
+        if packs.mentions_pack_term(normalized):
             return False, "pack_term"
         guard_cfg = packs.search_guard()
-        if matches_min_groups(query, guard_cfg.groups, guard_cfg.min_groups):
+        if matches_min_groups(normalized, guard_cfg.groups, guard_cfg.min_groups):
             return False, "guard_groups"
         if sanitize_text(query) != query:
             return False, "sanitized_diff"

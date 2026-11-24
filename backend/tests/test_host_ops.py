@@ -1911,8 +1911,13 @@ def test_op_release_install_passes_request_id_and_watcher_state(host, monkeypatc
 
     installed_info = {}
 
-    def fake_install(p, sha, *, request_id=None, watcher_active=False, now=None):
-        installed_info.update({"sha": sha, "request_id": request_id, "watcher_active": watcher_active})
+    def fake_install(p, sha, *, request_id=None, watcher_active=False, search_guard_active=False, now=None):
+        installed_info.update({
+            "sha": sha,
+            "request_id": request_id,
+            "watcher_active": watcher_active,
+            "search_guard_active": search_guard_active,
+        })
 
     monkeypatch.setattr(h, "install_release", fake_install)
     ex.run = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", "")
@@ -5148,11 +5153,97 @@ def test_op_release_install_restarts_active_search_guard(host, monkeypatch):
     assert receipt["outcome"] == "ok"
     assert any("restart" in argv and "jarvisos-search-guard.service" in argv for argv in calls)
 
-    # When guard restart fails during release install
+    # When guard restart fails during release install, release-pending records search_guard_active
+    # so return_release restarts (or stops closed) the guard even if is-active is now non-zero.
+    guard_unit = "jarvisos-search-guard.service"
+    paths.units.mkdir(parents=True, exist_ok=True)
+    (paths.units / guard_unit).write_text("[Unit]\nDescription=guard\n")
+    prev_sha = "8" * 40
+    cand_sha = SHA
+    for s in (prev_sha, cand_sha):
+        d = paths.install / "releases" / s / "scripts"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "host_ops.py").write_text("# code\n")
+        h.publish_release(paths, s)
+
+    def fake_install_release(p, sha, **kw):
+        h.write_release_pending(
+            p,
+            previous_sha=prev_sha,
+            candidate_sha=sha,
+            deadline=h.iso(ex.now() + timedelta(minutes=10)),
+            request_id=kw.get("request_id"),
+            watcher_active=bool(kw.get("watcher_active")),
+            owner_active=bool(kw.get("owner_active")),
+            search_guard_active=bool(kw.get("search_guard_active")),
+            now=ex.now(),
+        )
+
+    monkeypatch.setattr(h, "install_release", fake_install_release)
     calls.clear()
-    fail_guard[0] = True
-    req, receipt = request(host, "release.install", {"sha": SHA})
+    restart_attempts = [0]
+
+    def run_rollback(argv, **kw):
+        calls.append(argv)
+        if "show" in argv:
+            return subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", "")
+        if "is-active" in argv and guard_unit in argv:
+            # Candidate crashed on restart so systemd reports inactive/failed.
+            return subprocess.CompletedProcess(argv, 3, "failed\n", "")
+        if "restart" in argv and guard_unit in argv:
+            restart_attempts[0] += 1
+            # First restart (candidate) fails; second restart (return_release) succeeds.
+            return subprocess.CompletedProcess(argv, 1 if restart_attempts[0] == 1 else 0, "", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    ex.run = run_rollback
+    req, receipt = request(host, "release.install", {"sha": cand_sha})
     assert receipt["outcome"] == "failed"
+    assert restart_attempts[0] == 2
+
+    # If the rollback restart also fails, return_release stops the guard closed.
+    calls.clear()
+    def run_rollback_stop(argv, **kw):
+        calls.append(argv)
+        if "show" in argv:
+            return subprocess.CompletedProcess(argv, 0, "ActiveState=active\n", "")
+        if "is-active" in argv and guard_unit in argv:
+            return subprocess.CompletedProcess(argv, 3, "failed\n", "")
+        if "restart" in argv and guard_unit in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "restart failed")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    ex.run = run_rollback_stop
+    req, receipt = request(host, "release.install", {"sha": cand_sha})
+    assert receipt["outcome"] == "failed"
+    assert ["systemctl", "--user", "stop", guard_unit] in calls
+
+
+def test_op_service_install_rollback_preserves_disabled_active_unit(host, monkeypatch):
+    paths, ex, _ = host
+    monkeypatch.setattr(h.time, "sleep", lambda _s: None)
+    unit = "jarvisos-search-guard.service"
+    paths.units.mkdir(parents=True, exist_ok=True)
+    old_body = b"[Unit]\nDescription=old-manual\n"
+    (paths.units / unit).write_bytes(old_body)
+
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        if "show" in argv:
+            return subprocess.CompletedProcess(argv, 0, "ActiveState=active\nUnitFileState=disabled\n", "")
+        if "enable" in argv and "--now" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "enable failed")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    ex.run = run
+    req, receipt = request(host, "service.install", {"template": "jarvisos-search-guard"})
+    assert receipt["outcome"] == "failed"
+    assert (paths.units / unit).read_bytes() == old_body
+    assert ["systemctl", "--user", "disable", unit] in calls
+    assert ["systemctl", "--user", "disable", "--now", unit] not in calls
+    assert ["systemctl", "--user", "restart", unit] in calls
 
 
 def test_install_release_failure_after_publication_restores_links(tmp_path, monkeypatch):

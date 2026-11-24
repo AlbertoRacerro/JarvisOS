@@ -128,6 +128,29 @@ def test_blocked_categories_and_no_query_echo(tmp_path):
     assert all(query not in "\n".join(lines) for query in ("zephyr", "apple", "password"))
 
 
+def test_multi_whitespace_cannot_bypass_multiword_terms_or_groups(tmp_path, monkeypatch):
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    (pack_dir / "jarvis_pack.toml").write_text(
+        'id="sample"\n'
+        '[sensitivity]\n'
+        'terms=["project falcon"]\n'
+        '[search_guard]\n'
+        'min_groups=2\n'
+        'groups=[["blue ridge"],["solar array"]]\n'
+    )
+    monkeypatch.setenv(packs.PACK_PATH_ENV, str(pack_dir))
+    packs._load.cache_clear()
+    try:
+        for query in ("project   falcon", "blue  ridge  solar   array"):
+            output, body = request("/search?q=" + quote(query) + "&format=json", tmp_path)
+            assert status(output) == 200
+            assert json.loads(body) == {"results": []}
+        assert not FakeConnection.calls
+    finally:
+        packs._load.cache_clear()
+
+
 @pytest.mark.usefixtures("fake_pack")
 def test_synonyms_count_once_and_clean_query_forwards(tmp_path):
     output, body = request("/search?q=apple+malus+banana+cherry&format=json", tmp_path)
