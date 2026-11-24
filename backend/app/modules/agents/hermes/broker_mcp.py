@@ -342,6 +342,33 @@ _JARVIS_PAPER_SEARCH_TOOL = {
         "additionalProperties": False,
     },
 }
+_JARVIS_PATENT_READ_TOOL = {
+    "name": "jarvis_patent_read",
+    "description": "Look up a public patent publication record by publication number via Google Patents and official registers.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "grant_id": {"type": "string", "maxLength": 128},
+            "publication_number": {"type": "string", "minLength": 7, "maxLength": 30},
+        },
+        "required": ["grant_id", "publication_number"],
+        "additionalProperties": False,
+    },
+}
+_JARVIS_BROWSER_PAGE_TOOL = {
+    "name": "jarvis_browser_page_read",
+    "description": "Read bounded plain text of a public HTTPS web page using headless Chromium.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "grant_id": {"type": "string", "maxLength": 128},
+            "url": {"type": "string", "maxLength": 1024},
+            "search_term": {"type": "string", "maxLength": 160},
+        },
+        "required": ["grant_id", "url"],
+        "additionalProperties": False,
+    },
+}
 _JARVIS_PAPER_PDF_READ_TOOL = {
     "name": "jarvis_paper_pdf_read",
     "description": "Fetch and read bounded text excerpts from an open-access scientific paper PDF by DOI via Unpaywall.",
@@ -361,8 +388,8 @@ _TOOLS = [_TOOL, _RETRIEVAL_TOOL, _DECISION_TOOL, _DEV_READ_TOOL, _REPO_READ_TOO
           _PROCESS_READ_TOOL, _PROCESS_ACT_TOOL,
           _BLUECAD_READ_TOOL, _BLUECAD_ACT_TOOL, _STUDIO_READ_TOOL, _STUDIO_ACT_TOOL,
           _BENCH_READ_TOOL, _BENCH_RUN_TOOL,
-          _JARVIS_PAPER_SEARCH_TOOL, _JARVIS_PAPER_PDF_READ_TOOL]
-_NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL} | {"paper_search", "paper_pdf_read"}
+          _JARVIS_PAPER_SEARCH_TOOL, _JARVIS_PATENT_READ_TOOL, _JARVIS_BROWSER_PAGE_TOOL, _JARVIS_PAPER_PDF_READ_TOOL]
+_NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL} | {"paper_search", "patent_read", "browser_page_read", "paper_pdf_read"}
 
 
 class _DenyRedirects(HTTPRedirectHandler):
@@ -383,7 +410,7 @@ def _reply(message: dict[str, Any]) -> dict[str, Any] | None:
         return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": _TOOLS}}
     if method == "tools/call":
         params = message.get("params") or {}
-        tool_names = {tool["name"] for tool in _TOOLS} | {"paper_search", "paper_pdf_read"}
+        tool_names = {tool["name"] for tool in _TOOLS} | {"paper_search", "patent_read", "browser_page_read", "paper_pdf_read"}
         if params.get("name") not in tool_names:
             return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "unknown tool"}}
         body = params.get("arguments") or {}
