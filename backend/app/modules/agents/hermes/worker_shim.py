@@ -132,6 +132,8 @@ def completion_message(text: str, tools: Any) -> dict[str, Any]:
             admitted = "mcp__jarvis__jarvis_browser_page_read"
         elif admitted is None and name == "paper_pdf_read" and "mcp__jarvis__jarvis_paper_pdf_read" in permitted:
             admitted = "mcp__jarvis__jarvis_paper_pdf_read"
+        elif admitted is None and name == "turn_plan" and "mcp__jarvis__jarvis_turn_plan" in permitted:
+            admitted = "mcp__jarvis__jarvis_turn_plan"
         if admitted is None:
             return {"role": "assistant", "content": text}
         promoted.append({"id": uuid.uuid4().hex, "type": "function", "function": {
@@ -177,6 +179,7 @@ ADMITTED_TOOLS = frozenset({"mcp__jarvis__jarvis_context_preview",
                             "browser_page_read", "jarvis_browser_page_read",
                             "mcp__jarvis__paper_pdf_read", "mcp__jarvis__jarvis_paper_pdf_read",
                             "paper_pdf_read", "jarvis_paper_pdf_read",
+                            "mcp__jarvis__jarvis_turn_plan", "jarvis_turn_plan", "turn_plan",
                             "memory", "session_search"})
 
 RESEARCH_TOOLS = frozenset({
@@ -234,7 +237,81 @@ def extract_capped_text(text: str) -> str:
 
 def is_research_tool(tool_name: str) -> bool:
     name = tool_name.strip().lower()
+    if name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan"}:
+        return False
     return name in RESEARCH_TOOLS or any(k in name for k in ("read", "search", "retrieval", "query"))
+
+
+_PLAN_HEADER = "[Active turn plan]"
+
+
+def format_turn_plan_summary(plan: dict[str, Any] | None, max_len: int = 2400) -> str:
+    if not isinstance(plan, dict):
+        return ""
+    steps = plan.get("steps", [])
+    findings = plan.get("findings", [])
+    if not steps and not findings:
+        return ""
+    lines = [_PLAN_HEADER]
+    if steps:
+        lines.append("Steps:")
+        for step in steps[:10]:
+            if not isinstance(step, dict):
+                continue
+            s_id = str(step.get("id", ""))[:32]
+            status = str(step.get("status", "pending"))[:16]
+            title = str(step.get("title", ""))[:160]
+            note = str(step.get("note", ""))[:200] if step.get("note") else ""
+            note_part = f" ({note})" if note else ""
+            lines.append(f"- [{status}] {s_id}: {title}{note_part}")
+    if findings:
+        lines.append("Findings:")
+        for f in findings[:24]:
+            if not isinstance(f, dict):
+                continue
+            k = str(f.get("key", ""))[:64]
+            v = str(f.get("value", ""))[:128]
+            u = f" {f['unit']}" if f.get("unit") else ""
+            s = f" ({f['source_ref']})" if f.get("source_ref") else ""
+            lines.append(f"- {k}: {v}{u}{s}")
+    summary = "\n".join(lines)
+    if len(summary) > max_len:
+        summary = summary[: max_len - 28] + "\n... [plan truncated]"
+    return summary
+
+
+def inject_saved_plan(
+    messages: list[dict[str, Any]],
+    plan: dict[str, Any] | None,
+    max_len: int = 2400,
+) -> list[dict[str, Any]]:
+    if not isinstance(messages, list) or not plan:
+        return messages
+    summary = format_turn_plan_summary(plan, max_len=max_len)
+    if not summary:
+        return messages
+
+    updated: list[dict[str, Any]] = [dict(m) for m in messages if isinstance(m, dict)]
+    found_idx = None
+    for idx, msg in enumerate(updated):
+        content = msg.get("content")
+        if isinstance(content, str) and _PLAN_HEADER in content:
+            found_idx = idx
+            break
+
+    if found_idx is not None:
+        content = updated[found_idx].get("content") or ""
+        parts = content.split(_PLAN_HEADER, 1)
+        base = parts[0].rstrip("\n")
+        updated[found_idx]["content"] = f"{base}\n\n{summary}" if base else summary
+        return updated
+
+    if updated and updated[0].get("role") == "system":
+        base = updated[0].get("content") or ""
+        updated[0]["content"] = f"{base}\n\n{summary}" if base else summary
+    else:
+        updated.insert(0, {"role": "system", "content": summary})
+    return updated
 
 
 def shrink_tool_history(
@@ -512,7 +589,8 @@ def pinned_config(base_url: str, token: str, python: str | None = None) -> dict[
                                   "jarvis_bluecad_read", "jarvis_bluecad_act",
                                   "jarvis_studio_read", "jarvis_studio_act",
                                   "jarvis_bench_read", "jarvis_bench_run",
-                                  "jarvis_paper_search", "jarvis_patent_read", "jarvis_browser_page_read", "jarvis_paper_pdf_read"]},
+                                  "jarvis_paper_search", "jarvis_patent_read", "jarvis_browser_page_read", "jarvis_paper_pdf_read",
+                                  "jarvis_turn_plan"]},
         }},
         "model_catalog": {"enabled": False}, "updates": {"check": False},
         "telemetry": {"enabled": False, "send": False},
@@ -547,6 +625,7 @@ class Worker:
         self.session_db: Any = None
         self.tool_names: list[str] = []
         self.active_turn_tools: list[str] | None = None
+        self.active_turn_plan: dict[str, Any] | None = None
         self.turn_step_count: int = 0
         self.turn_cap: int = DEFAULT_TURN_CAP
         self.turn_research_count: int = 0
@@ -614,9 +693,13 @@ class Worker:
                         if worker.session is None or not isinstance(body, dict):
                             raise ValueError("no active session or malformed tool call")
                         tool_name = str(body.get("tool_name", ""))
+                        is_read_plan = (
+                            tool_name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan"}
+                            and body.get("op") == "read_plan"
+                        )
                         canonical_args = json.dumps(body, sort_keys=True, separators=(",", ":"))
                         call_key = f"{tool_name}:{canonical_args}"
-                        if call_key in worker.seen_tool_calls:
+                        if call_key in worker.seen_tool_calls and not is_read_plan:
                             dup_result = {
                                 "status": "succeeded",
                                 "result": {
@@ -633,7 +716,8 @@ class Worker:
                             self.end_headers()
                             self.wfile.write(encoded)
                             return
-                        worker.seen_tool_calls.add(call_key)
+                        if not is_read_plan:
+                            worker.seen_tool_calls.add(call_key)
 
                         if is_research_tool(tool_name):
                             if worker.turn_research_count >= worker.research_budget:
@@ -669,7 +753,18 @@ class Worker:
                                 worker.pending.pop(request_id, None)
                         tool_res = result["tool_result"]
                         if isinstance(tool_res, dict) and tool_res.get("result") is not None:
-                            tool_res = {**tool_res, "result": compact_tool_payload(tool_res["result"])}
+                            raw_res_data = tool_res.get("result")
+                            if (
+                                tool_name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan"}
+                                and tool_res.get("status") == "succeeded"
+                                and isinstance(raw_res_data, dict)
+                                and ("steps" in raw_res_data or "findings" in raw_res_data)
+                            ):
+                                worker.active_turn_plan = {
+                                    "steps": list(raw_res_data.get("steps", [])),
+                                    "findings": list(raw_res_data.get("findings", [])),
+                                }
+                            tool_res = {**tool_res, "result": compact_tool_payload(raw_res_data)}
                         encoded = json.dumps(tool_res).encode()
                         self.send_response(200)
                         self.send_header("Content-Type", "application/json")
@@ -684,6 +779,10 @@ class Worker:
                     messages = body.get("messages")
                     if isinstance(messages, list):
                         messages = shrink_tool_history(messages)
+                        if worker.active_turn_plan and (
+                            worker.active_turn_plan.get("steps") or worker.active_turn_plan.get("findings")
+                        ):
+                            messages = inject_saved_plan(messages, worker.active_turn_plan)
                     worker.turn_step_count += 1
                     tools = body.get("tools")
                     metadata = dict(body.get("metadata") or {})
@@ -822,6 +921,7 @@ class Worker:
         try:
             self.turn_step_count = 0
             self.turn_research_count = 0
+            self.active_turn_plan = None
             self.turn_cap = getattr(self, "turn_cap", DEFAULT_TURN_CAP)
             self.research_budget = getattr(self, "research_budget", DEFAULT_RESEARCH_BUDGET)
             if not hasattr(self, "seen_tool_calls"):

@@ -384,12 +384,61 @@ _JARVIS_PAPER_PDF_READ_TOOL = {
         "additionalProperties": False,
     },
 }
+_TURN_PLAN_STEP = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string", "maxLength": 64},
+        "title": {"type": "string", "maxLength": 160},
+        "status": {"type": "string", "enum": ["pending", "in_progress", "done", "blocked"]},
+        "note": {"type": "string", "maxLength": 200},
+    },
+    "required": ["id", "title", "status"],
+    "additionalProperties": False,
+}
+_TURN_PLAN_FINDING = {
+    "type": "object",
+    "properties": {
+        "key": {"type": "string", "maxLength": 128},
+        "value": {"oneOf": [{"type": "string"}, {"type": "number"}]},
+        "unit": {"type": "string", "maxLength": 32},
+        "source_ref": {"type": "string", "maxLength": 200},
+    },
+    "required": ["key", "value"],
+    "additionalProperties": False,
+}
+_TURN_PLAN_TOOL = {
+    "name": "jarvis_turn_plan",
+    "description": "Create, update, and read bounded multi-step turn plans and intermediate findings.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "grant_id": {"type": "string", "maxLength": 128},
+            "op": {
+                "type": "string",
+                "enum": ["set_plan", "update_step", "record_finding", "read_plan"],
+            },
+            "steps": {"type": "array", "items": _TURN_PLAN_STEP, "maxItems": 10},
+            "id": {"type": "string", "maxLength": 64},
+            "status": {"type": "string", "enum": ["pending", "in_progress", "done", "blocked"]},
+            "note": {"type": "string", "maxLength": 200},
+            "finding": _TURN_PLAN_FINDING,
+            "findings": {"type": "array", "items": _TURN_PLAN_FINDING, "maxItems": 24},
+            "key": {"type": "string", "maxLength": 128},
+            "value": {"oneOf": [{"type": "string"}, {"type": "number"}]},
+            "unit": {"type": "string", "maxLength": 32},
+            "source_ref": {"type": "string", "maxLength": 200},
+        },
+        "required": ["op"],
+        "additionalProperties": False,
+    },
+}
 _TOOLS = [_TOOL, _RETRIEVAL_TOOL, _DECISION_TOOL, _DEV_READ_TOOL, _REPO_READ_TOOL, _KNOWLEDGE_READ_TOOL,
           _PROCESS_READ_TOOL, _PROCESS_ACT_TOOL,
           _BLUECAD_READ_TOOL, _BLUECAD_ACT_TOOL, _STUDIO_READ_TOOL, _STUDIO_ACT_TOOL,
           _BENCH_READ_TOOL, _BENCH_RUN_TOOL,
-          _JARVIS_PAPER_SEARCH_TOOL, _JARVIS_PATENT_READ_TOOL, _JARVIS_BROWSER_PAGE_TOOL, _JARVIS_PAPER_PDF_READ_TOOL]
-_NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL} | {"paper_search", "patent_read", "browser_page_read", "paper_pdf_read"}
+          _JARVIS_PAPER_SEARCH_TOOL, _JARVIS_PATENT_READ_TOOL, _JARVIS_BROWSER_PAGE_TOOL, _JARVIS_PAPER_PDF_READ_TOOL,
+          _TURN_PLAN_TOOL]
+_NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL} | {"paper_search", "patent_read", "browser_page_read", "paper_pdf_read", "turn_plan"}
 
 
 class _DenyRedirects(HTTPRedirectHandler):
