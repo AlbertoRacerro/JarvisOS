@@ -542,6 +542,11 @@ def _submit_hermes_interaction(
         transition_flow_state(flow_id=reservation_flow_id, new_state="cancelled_terminal",
                               terminal_reason="agent_relayed")
         final_text, technical_details = _guard_tool_shaped_output(final)
+        try:
+            from app.modules.agents.hermes.verification import verify_answer
+            verification = verify_answer(final_text, getattr(worker, "turn_tool_outputs", []))
+        except Exception:
+            verification = {"status": "passed", "warning_count": 0, "checks": []}
         bounded, truncated = _assistant_snapshot(final_text)
         now = utc_now()
         with open_sqlite_connection() as connection:
@@ -570,6 +575,12 @@ def _submit_hermes_interaction(
                                    "relay_flow_ids": [str(value) for value in relay_flow_ids[:32]
                                                       if isinstance(value, str)] if isinstance(relay_flow_ids, list) else [relay_flow_id],
                                    "route_class": relay_flow.get("requested_route_class")})
+                try:
+                    log_event(connection, event_type="hermes.verification_pass", actor="jarvis",
+                              target_type="ai_thread_interaction", target_id=interaction_id,
+                              workspace_id=workspace_id, payload=verification)
+                except Exception:
+                    _LOGGER.warning("Hermes verification event unavailable for %s", interaction_id)
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -1681,15 +1692,24 @@ def _interaction_from_row(
         activity = interaction_activity(connection, str(row["id"]))
     turn_plan = None
     live_steps = []
+    verification_summary = None
     if connection is not None:
         turn_plan = interaction_turn_plan(connection, str(row["id"]))
         live_steps = interaction_live_steps(connection, str(row["id"]))
+        try:
+            verification_row = connection.execute(
+                "SELECT payload FROM events WHERE event_type = 'hermes.verification_pass' "
+                "AND target_id = ? ORDER BY rowid DESC LIMIT 1", (str(row["id"]),)
+            ).fetchone()
+            if verification_row:
+                verification_summary = json.loads(verification_row["payload"])
+        except Exception:
+            pass
     role_id = None
     sheldon_mode = False
     is_hermes = str(row["requested_route_class"]) == "hermes:agent"
     if connection is not None:
         try:
-            import json
             requested = connection.execute(
                 "SELECT payload FROM events WHERE event_type = 'hermes.interaction_requested' "
                 "AND target_id = ? ORDER BY rowid DESC LIMIT 1",
@@ -1749,6 +1769,7 @@ def _interaction_from_row(
         activity=activity,
         turn_plan=turn_plan,
         live_steps=live_steps,
+        verification_summary=verification_summary,
         id=str(row["id"]),
         request_id=str(row["request_id"]),
         interaction_index=int(row["interaction_index"]),

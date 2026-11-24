@@ -350,6 +350,7 @@
 .jarvis-role-name{font-weight:600;color:var(--color-text,#111827)}
 .jarvis-role-purpose{font-size:.6875rem;color:var(--color-text-muted,#6b7280);line-height:1.2}
 .jarvis-role-badge{font-size:.625rem;text-transform:uppercase;color:var(--color-danger,#ef4444);font-weight:600}
+.jarvis-verification-warning{display:inline-block;margin:.25rem 0;padding:.15rem .4rem;border-radius:.35rem;color:var(--color-status-warning-text);border:1px solid currentColor;font-size:.75rem}
 .jarvis-sheldon-mode{margin-top:.2rem;font-size:.75rem;color:var(--color-text,#374151)}
 .jarvis-role-unavailable{color:var(--color-danger,#dc2626);font-size:.75rem;margin:0}
 

@@ -803,6 +803,7 @@ class HermesSupervisor:
         self.turn_research_count: int = 0
         self.research_budget: int = DEFAULT_RESEARCH_BUDGET
         self.turn_tool_hashes: set[str] = set()
+        self.turn_tool_outputs: list[dict[str, Any]] = []
         self.active_turn_plan: dict[str, Any] = {"steps": [], "findings": []}
         self.turn_step_count: int = 0
         self.turn_cap: int = DEFAULT_TURN_CAP
@@ -1038,6 +1039,8 @@ class HermesSupervisor:
                                    patent_read_opener=self.patent_read_opener,
                                    browser_page_runner=self.browser_page_runner,
                                    active_plan=self.active_turn_plan)
+            if result.status == "succeeded" and isinstance(result.result, dict) and len(self.turn_tool_outputs) < 50:
+                self.turn_tool_outputs.append(result.result)
             if (
                 capability_id == "jarvis.turn_plan"
                 and result.status == "succeeded"
@@ -1194,6 +1197,7 @@ class HermesSupervisor:
         self.active_interaction_id = interaction_id
         self.turn_research_count = 0
         self.turn_tool_hashes.clear()
+        self.turn_tool_outputs.clear()
         self.active_turn_plan = {"steps": [], "findings": []}
         self.turn_step_count = 0
         prompt = _assemble_turn_prompt(prompt, context_blocks or [])
@@ -1229,9 +1233,11 @@ _PINNED_CONTEXT_SOURCES = ("jarvis:agent-grant", "jarvis:system-envelope")
 
 ENGINEERING_METHODOLOGY_RULES = (
     "Engineering methodology rules:\n"
-    "- Report numbers only from tool outputs.\n"
+    "- Ground reported numbers in tool outputs or clearly labelled engineering estimates.\n"
     "- Compute physics with deterministic tools rather than searching for answers.\n"
     "- Express uncertain inputs as an explicit range.\n"
+    "- If an exact literature value or source cannot be confirmed, give your best engineering estimate, "
+    "label confidence high, medium, or low, and state what remains unconfirmed. Do not refuse solely for missing confirmation.\n"
     "- Read a source before citing it.\n"
     "- Never invent a DOI.\n"
     "- For multi-step questions, create a plan with jarvis_turn_plan and record intermediate findings with source refs."

@@ -169,7 +169,8 @@ def test_assemble_turn_prompt_injects_engineering_methodology_rules() -> None:
     prompt = "What is the yield of the reaction?"
     assembled = _assemble_turn_prompt(prompt, [])
 
-    assert "Report numbers only from tool outputs" in assembled
+    # Spec 366 replaced "numbers only from tool outputs" with calibrated, labelled estimates.
+    assert "Ground reported numbers in tool outputs or clearly labelled engineering estimates" in assembled
     assert "Compute physics with deterministic tools rather than searching for answers" in assembled
     assert "Express uncertain inputs as an explicit range" in assembled
     assert "Read a source before citing it" in assembled
