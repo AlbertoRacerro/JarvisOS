@@ -154,3 +154,61 @@
 .design-feature-inspector__list > li { border: 1px solid var(--color-border-default); border-radius: .4rem; padding: .5rem; }
 .design-feature-inspector__actions { display: flex; flex-wrap: wrap; gap: .4rem; margin: .5rem 0; }
 .design-feature-inspector__note, .design-feature-inspector__lineage { color: var(--color-text-secondary); margin: .25rem 0; }
+
+/* Spec 350: Marine motion & Axial O2 physics wiring */
+.design-project__motion { min-width: 0; }
+.design-project__motion-context { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-bottom: 1rem; }
+.design-project__motion-component-hint { font-size: var(--font-size-label); color: var(--color-text-secondary); }
+.design-project__motion-grid { display: grid; grid-template-columns: minmax(18rem, 1.1fr) minmax(18rem, 1fr); gap: 1.5rem; align-items: start; }
+@media (max-width: 900px) {
+  .design-project__motion-grid { grid-template-columns: 1fr; }
+}
+.design-project__motion-form-container, .design-project__motion-results-container { border: 1px solid var(--color-border-default); border-radius: .6rem; padding: 1rem; background: var(--color-bg-surface); }
+.design-project__motion-form-container h3, .design-project__motion-form-container h4, .design-project__motion-results-container h3, .design-project__motion-results-container h4 { margin: 0 0 .75rem; }
+.design-project__fields-grid { display: grid; gap: .6rem; }
+.design-field-row { display: grid; gap: .2rem; }
+.design-field-row label { font-size: var(--font-size-label); color: var(--color-text-secondary); }
+.design-field-control { display: flex; align-items: center; gap: .5rem; }
+.design-field-control input { flex: 1 1 auto; }
+.design-project__provenance { font-size: var(--font-size-caption); padding: .1rem .4rem; border-radius: .3rem; white-space: nowrap; }
+.design-project__provenance--from-environment { background: var(--color-status-info-bg); color: var(--color-status-info-text); }
+.design-project__provenance--from-process { background: var(--color-status-success-bg); color: var(--color-status-success-text); }
+.design-project__provenance--manual { background: var(--color-status-neutral-bg); color: var(--color-status-neutral-text); }
+
+.design-project__motion-actions { margin-top: 1rem; }
+.design-project__motion-results { display: grid; gap: .8rem; }
+.design-project__motion-verdict-banner { display: flex; align-items: center; gap: .5rem; font-size: var(--font-size-label); font-weight: 600; }
+.verdict-badge { padding: .2rem .5rem; border-radius: .4rem; font-size: var(--font-size-caption); font-weight: 700; text-transform: uppercase; }
+.verdict-badge--usable, .verdict-badge--succeeded, .stage-verdict--usable, .stage-verdict--succeeded, .stage-verdict--finished { background: var(--color-status-success-bg); color: var(--color-status-success-text); }
+.verdict-badge--usable_with_warnings, .verdict-badge--running, .stage-verdict--usable_with_warnings, .stage-verdict--running { background: var(--color-status-warning-bg); color: var(--color-status-warning-text); }
+.verdict-badge--not_usable, .verdict-badge--failed, .stage-verdict--not_usable, .stage-verdict--failed { background: var(--color-status-danger-bg); color: var(--color-status-danger-text); }
+.verdict-badge--unchecked, .stage-verdict--empty { background: var(--color-status-neutral-bg); color: var(--color-status-neutral-text); }
+.check-badge { padding: .1rem .4rem; border-radius: .3rem; font-size: var(--font-size-caption); font-weight: 600; text-transform: uppercase; }
+.check-badge--pass { background: var(--color-status-success-bg); color: var(--color-status-success-text); }
+.check-badge--fail { background: var(--color-status-danger-bg); color: var(--color-status-danger-text); }
+
+.design-project__motion-outputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .5rem; margin: 0; }
+.design-project__motion-outputs > div { display: grid; gap: .1rem; padding: .4rem; border: 1px solid var(--color-border-default); border-radius: .4rem; background: var(--color-bg-surface-raised); }
+.design-project__motion-outputs dt { font-size: var(--font-size-caption); color: var(--color-text-secondary); }
+.design-project__motion-outputs dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.design-project__motion-checks table { width: 100%; border-collapse: collapse; font-size: var(--font-size-label); }
+.design-project__motion-checks th, .design-project__motion-checks td { padding: .3rem .4rem; text-align: left; border-bottom: 1px solid var(--color-border-default); }
+
+.design-project__motion-history { margin-top: 1rem; border-top: 1px solid var(--color-border-default); padding-top: .75rem; }
+.design-project__runs-list { list-style: none; padding: 0; margin: .4rem 0 0; display: grid; gap: .3rem; max-height: 12rem; overflow-y: auto; }
+.design-project__run-item { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .3rem .5rem; border: 1px solid var(--color-border-default); border-radius: .3rem; background: var(--color-bg-surface); cursor: pointer; text-align: left; }
+.design-project__run-item.is-active { border-color: var(--color-focus-ring); background: var(--color-accent-surface); }
+
+/* Axial O2 Drawer in Dynamic */
+.design-dynamic__axial-drawer { margin-bottom: 1rem; border: 1px solid var(--color-border-default); border-radius: .6rem; background: var(--color-bg-surface); overflow: hidden; }
+.design-dynamic__axial-summary { display: flex; align-items: center; justify-content: space-between; padding: .6rem 1rem; cursor: pointer; font-weight: 600; background: var(--color-bg-surface-raised); border-bottom: 1px solid transparent; }
+.design-dynamic__axial-drawer[open] .design-dynamic__axial-summary { border-bottom-color: var(--color-border-default); }
+.design-dynamic__axial-content { padding: 1rem; }
+
+/* Variant verdicts summary */
+.design-project__variant-summary { margin-bottom: .75rem; padding-bottom: .75rem; border-bottom: 1px solid var(--color-border-default); }
+.design-project__variant-summary h4 { margin: 0 0 .4rem; font-size: var(--font-size-label); color: var(--color-text-secondary); }
+.design-project__stage-verdicts { list-style: none; padding: 0; margin: 0; display: grid; gap: .25rem; font-size: var(--font-size-caption); }
+.design-project__stage-verdicts li { display: flex; justify-content: space-between; align-items: center; }
+.stage-verdict { padding: .05rem .35rem; border-radius: .25rem; font-size: var(--font-size-caption); font-weight: 600; }

@@ -184,6 +184,9 @@ CARDS: tuple[BenchCard, ...] = (
 )
 
 CARD_BY_ID = {card.card_id: card for card in CARDS}
+CARD_ALIASES: dict[str, str] = {
+    "photobioreactor.tube_oxygen": "bioprocess.tube_oxygen_buildup",
+}
 
 
 def list_cards(workspace_id: str) -> dict[str, Any]:
@@ -204,7 +207,8 @@ def run_card(workspace_id: str, payload: CreateBenchRunRequest) -> dict[str, Any
     if not workspace_id or get_workspace(workspace_id) is None:
         raise LookupError("workspace_not_found")
 
-    card = CARD_BY_ID.get(payload.card_id)
+    resolved_id = CARD_ALIASES.get(payload.card_id, payload.card_id)
+    card = CARD_BY_ID.get(resolved_id)
     if card is None:
         raise _validation_error("unknown_card", "Scheda sconosciuta")
 

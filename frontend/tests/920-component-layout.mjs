@@ -14,7 +14,7 @@ const header = page.split("<header")[1]?.split("</header>")[0] ?? fail("header m
 if (!header.includes('id="design-version"')) fail("version selector must be in the header");
 if (!header.includes('aria-label="Design stages"') || !header.includes("STAGES.map")) fail("stage bar must be inside the header");
 if (page.split("</header>")[1].includes('aria-label="Design stages"')) fail("stage bar must not remain in the body");
-if (!header.includes("(placeholder)")) fail("Motion/Mechanics must be marked as placeholder");
+if (header.includes("(placeholder)")) fail("Motion/Mechanics must not be marked as placeholder");
 
 for (const token of ['role="tree"', 'role="treeitem"', "aria-level=", "aria-expanded=", "aria-selected=", "tabIndex={row.id === stop ? 0 : -1}"]) {
   if (!tree.includes(token)) fail(`tree missing ${token}`);

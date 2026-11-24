@@ -32,6 +32,9 @@ import { readableKey, readableProse } from "../components/design/designText";
 import { libraryLabel } from "../components/design/libraryLabel";
 import DesignOpticsPanel from "./DesignOpticsPanel";
 import DesignDynamicPanel from "./DesignDynamicPanel";
+import DesignMotionPanel from "./DesignMotionPanel";
+import { listBenchRuns, type BenchRunRow } from "../api/benchRuns";
+import { buildVariantStageSummary, isTubularUnit } from "../components/design/physicsHandoff";
 import DesignSplitter, { clampDesignWidth, type DesignPanelBounds } from "../components/design/DesignSplitter";
 import GuidedFlowBar from "../components/design/GuidedFlowBar";
 import { designViewHref, readDesignView, STAGE_NODE, STAGES, type DesignView, type Stage } from "./designView";
@@ -107,6 +110,7 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldSlice, setFieldSlice] = useState<{ key: string; state: DesignPanelState } | null>(null);
+  const [benchRuns, setBenchRuns] = useState<BenchRunRow[]>([]);
 
   const reload = useCallback(async () => {
     if (!projectId) return;
@@ -148,6 +152,15 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
     finally { setBusy(false); }
   };
   const active = versions?.versions.find((item) => item.id === versions.active_version_id);
+  useEffect(() => {
+    let live = true;
+    if (active?.data_workspace_id) {
+      void listBenchRuns(active.data_workspace_id)
+        .then((res) => { if (live) setBenchRuns(res.runs); })
+        .catch(() => {});
+    }
+    return () => { live = false; };
+  }, [active?.data_workspace_id]);
   const plantDraftIds = [...new Set(components.map((item) => item.source_draft_id).filter((id): id is string => Boolean(id)))];
   const plantDraftId = plantDraftIds.length === 1 ? plantDraftIds[0] : undefined;
   useEffect(() => { setWorkshop(null); }, [active?.id]);
@@ -307,6 +320,7 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
   const plantMode = stage === "Plant" && !selected;
   const opticsMode = stage === "Optics";
   const dynamicMode = stage === "Dynamic";
+  const motionMode = stage === "Motion/Mechanics";
   // The older surfaces read the app workspace, which is this project's first version's data context.
   const firstVersion = active?.id === projectId;
   const c1Example = workspaces.find((item) => item.slug === C1_EXAMPLE_SLUG);
@@ -348,7 +362,7 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
     : stage === "Plant" ? "Plant shows the Process flowsheet. Select a unit there, then choose CAD, CFD or Reduced model."
     : stage === "Dynamic" ? "Dynamic works with this version's Process drafts. Choose a draft in this stage to inspect its dynamic setup."
     : stage === "Optics" ? "Optics shows available Process-unit optics inputs and runs for this version. Check the panel below for availability."
-    : stage === "Motion/Mechanics" ? "Motion/Mechanics is a placeholder; calculations are not available here yet. Use another Design stage for available work."
+    : stage === "Motion/Mechanics" ? "Motion/Mechanics evaluates wave-induced motion and quasi-static mooring tension for the floating structure."
     : !currentComponent ? stage === "CAD" ? "Select a component in the model tree, or open a unit from Plant, to inspect or attach geometry."
       : stage === "CFD" ? "Select a component in the model tree, or open a unit from Plant, to inspect its CFD runs. Selection does not imply a result exists."
       : "Select a component in the model tree, or open a unit from Plant, to inspect its reduced models."
@@ -376,6 +390,23 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
     </details>
     <details className="design-project__fold">
       <summary>Versions</summary>
+      <div className="design-project__variant-summary variant-verdicts-summary">
+        <h4>Variant stage verdicts</h4>
+        <ul className="design-project__stage-verdicts">
+          {buildVariantStageSummary({
+            benchRuns,
+            cfdRuns: Array.isArray(cfdRuns) ? cfdRuns : [],
+            hasOpticsUnits: false,
+          }).map((sv) => (
+            <li key={sv.stage}>
+              <span>{sv.stage}</span>
+              <span className={`stage-verdict stage-verdict--${sv.latestVerdict ?? "empty"}`}>
+                {sv.latestVerdict ?? "empty"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
       <form onSubmit={(event) => { event.preventDefault(); if (!versions || !newVersion.trim()) return; void perform(async () => { await createDesignVersion(projectId, newVersion.trim(), versions.active_version_id, emptyVersion ? "empty" : "fork"); setNewVersion(""); setEmptyVersion(false); }); }}>
         <label htmlFor="design-new-version">New version (forks the current version)</label>
         <input id="design-new-version" value={newVersion} maxLength={80} onChange={(event) => setNewVersion(event.target.value)} />
@@ -407,14 +438,14 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
       </div>
       <nav className="design-project__stages" aria-label="Design stages" {...designTarget("design.stages")}>
         {STAGES.map((item) => <button key={item} type="button" aria-current={stage === item ? "step" : undefined} {...designTarget(STAGE_TARGET[item])}
-          title={item === "Motion/Mechanics" ? "Placeholder: no motion or mechanics capability yet" : undefined} onClick={() => {
+          title={item === "Motion/Mechanics" ? "Motion and mooring calculations" : undefined} onClick={() => {
           setWorkshop(null);
           if (plantMode && plantUnit && (item === "CAD" || item === "CFD" || item === "Reduced model")) {
             void openUnit(plantUnit.draftId, plantUnit.revision, plantUnit.unit, item);
             return;
           }
           showView({ stage: item, componentId: item === "Plant" ? null : selectedId, node: STAGE_NODE[item] });
-        }}>{item}{item === "Motion/Mechanics" ? <small className="design-project__placeholder"> (placeholder)</small> : null}</button>)}
+        }}>{item}</button>)}
       </nav>
     </header>
     {error ? <p role="alert" className="design-project__error">{error}</p> : null}
@@ -432,14 +463,19 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
       {leftPane}
       {active ? <DesignOpticsPanel workspaceId={active.data_workspace_id} plantDraftId={plantDraftId} /> : <p>Loading the active version…</p>}
     </div> : dynamicMode ? <div className="design-project__body design-project__body--plant">
-      {active ? <DesignDynamicPanel key={active.id} workspaceId={active.data_workspace_id} plantDraftIds={plantDraftIds} requestedDraftId={view.draftId ?? null}
+      {active ? <DesignDynamicPanel key={active.id} workspaceId={active.data_workspace_id} plantDraftIds={plantDraftIds} requestedDraftId={view.draftId ?? null} openAxial={view.axial ?? false}
         onChooseDraft={(draftId, replace) => showView({ ...view, draftId }, replace)} onOpenPlant={() => showView({ stage: "Plant", componentId: null, node: STAGE_NODE.Plant })} />
         : <p>Loading the active version…</p>}
+    </div> : motionMode ? <div className="design-project__body design-project__body--plant">
+      {leftPane}
+      {active ? <DesignMotionPanel workspaceId={active.data_workspace_id} selectedComponent={selected} /> : <p>Loading the active version…</p>}
     </div> : plantMode ? <div className="design-project__body design-project__body--plant">
       <section className="design-project__panel design-project__main" aria-label="Plant" {...designTarget("design.panel.plant")}>
         <h2>Plant</h2>
         <p className="design-project__plant-hint" role="status">{plantUnit
-          ? <>Selected <strong>{plantUnit.unit.tag}</strong>. Choose CAD, CFD or Reduced model above to work on it.</>
+          ? <>Selected <strong>{plantUnit.unit.tag}</strong>. Choose CAD, CFD or Reduced model above to work on it.
+            {isTubularUnit(plantUnit.unit) ? <>{" "}<button type="button" onClick={() => showView({ stage: "Dynamic", draftId: plantUnit.draftId, axial: true, componentId: null, node: STAGE_NODE.Dynamic })}>Axial O₂ (tube)</button></> : null}
+          </>
           : "Click a unit in the flowsheet to select it, then choose CAD, CFD or Reduced model above to work on it."}</p>
         {active ? <>
           <details className="design-project__about"><summary>About Plant</summary><p>This is the plant flowsheet: the same one you see in the Process editor. Double-click a unit to open it as a component and work on its geometry, CFD and reduced model.</p></details>
@@ -585,8 +621,7 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
               (editName.trim() === selected.name && editParent === (selected.parent_id ?? ""))}>Save component</button>
           </form> : null}
         </> : null}
-        {stage === "Motion/Mechanics" ? <div className="design-project__node-head"><h3>Motion/Mechanics</h3><DesignStatus state="empty" title="Not modelled yet" /></div>
-          : !selected ? <p className="design-empty">Select a component</p> : null}
+        {!selected ? <p className="design-empty">Select a component</p> : null}
       </aside>
     </div>}
   </div>;
