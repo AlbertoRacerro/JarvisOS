@@ -475,7 +475,7 @@ def test_owner_catch_up_reembeds_documents_when_embedder_changes(
         assert len(vec) == 32
 
 
-def test_owner_catch_up_never_writes_for_a_separate_or_read_only_store(
+def test_owner_catch_up_reembeds_a_separate_store_but_never_writes_the_default_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("JARVISOS_DATA_ROOT", str(tmp_path))
@@ -500,14 +500,17 @@ def test_owner_catch_up_never_writes_for_a_separate_or_read_only_store(
                                  db_path=tmp_path / "other.db", read_only=True)
     owner_catch_up(read_only)
 
-    assert all(item == {"changed": 0, "deleted": 0, "embedded": 0} for item in changes.values())
+    assert all(item["changed"] == 0 and item["deleted"] == 0 for item in changes.values())
+    assert changes["modeling"]["embedded"] == 1
     assert default_store.has_compatible_embedder()
     with default_store._open_connection() as db:
         dims = {len(json.loads(row[0])) for row in db.execute("SELECT vector FROM docs")}
     assert dims == {128}
     with other._open_connection() as db:
         assert db.execute("SELECT COUNT(*) FROM docs").fetchone()[0] == 1
-        assert len(json.loads(db.execute("SELECT vector FROM docs").fetchone()[0])) == 128
+        assert len(json.loads(db.execute("SELECT vector FROM docs").fetchone()[0])) == 32
+    assert other.has_compatible_embedder()
+    assert [hit.source_ref.object_id for hit in other.search_vector("other", limit=5)] == ["other-1"]
 
 
 def test_search_hybrid_with_reranker_keeps_limits_above_the_rerank_pool() -> None:
