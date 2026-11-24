@@ -1,8 +1,8 @@
-"""Bounded, read-only literature metadata search tool (Europe PMC & Crossref).
+"""Bounded, read-only literature metadata search tool (OpenAlex, Semantic Scholar, Europe PMC & Crossref).
 
-Per Spec 352:
-Queries Europe PMC and Crossref public REST APIs for scientific paper metadata
-(title, authors, year, journal, doi, abstract truncated to safe bound, source).
+Per Spec 352 & Spec 357:
+Queries OpenAlex, Semantic Scholar, Europe PMC, and Crossref public REST APIs for scientific
+paper metadata (title, authors, year, journal, doi, abstract truncated to safe bound, oa_pdf_url, source).
 Fails closed on invalid queries, secrets/private pack content (egress boundary),
 HTTP redirects (never follow redirects!), or oversized responses.
 Supports an injectable opener for 100% offline testing.
@@ -27,6 +27,10 @@ from app.modules.ai.agent_contracts import CapabilityGrantRef, StructuredToolCal
 
 EUROPE_PMC_SEARCH_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 CROSSREF_SEARCH_URL = "https://api.crossref.org/works"
+OPENALEX_SEARCH_URL = "https://api.openalex.org/works"
+SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+
+VALID_SOURCES = frozenset({"all", "europe_pmc", "crossref", "openalex", "semantic_scholar"})
 
 MAX_RESPONSE_BYTES = 512 * 1024  # 512 KB
 MAX_ABSTRACT_CHARS = 500
@@ -103,6 +107,23 @@ def _clean_abstract(raw: str | None) -> str | None:
     return normalized
 
 
+def _normalize_doi(doi: str | None) -> str | None:
+    if not doi:
+        return None
+    cleaned = doi.strip().lower()
+    cleaned = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", cleaned)
+    cleaned = re.sub(r"^doi:", "", cleaned)
+    return cleaned.strip() or None
+
+
+def _normalize_title(title: str | None) -> str | None:
+    if not title:
+        return None
+    cleaned = " ".join(title.lower().split())
+    cleaned = cleaned.rstrip(".,;:!?")
+    return cleaned or None
+
+
 def _safe_fetch_json(url: str, *, opener: Any = None, timeout: float = 10.0) -> dict[str, Any] | None:
     """Fetch URL ensuring no redirects and bounded response size; fails closed."""
     active_opener = _get_opener(opener)
@@ -130,7 +151,13 @@ def _safe_fetch_json(url: str, *, opener: Any = None, timeout: float = 10.0) -> 
         return None
 
 
-def search_europe_pmc(query: str, limit: int = DEFAULT_LIMIT, *, opener: Any = None) -> list[dict[str, Any]]:
+def search_europe_pmc(
+    query: str,
+    limit: int = DEFAULT_LIMIT,
+    *,
+    opener: Any = None,
+    error_collector: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     """Query Europe PMC REST search endpoint and parse into compact records."""
     params = urlencode({
         "query": query,
@@ -140,7 +167,9 @@ def search_europe_pmc(query: str, limit: int = DEFAULT_LIMIT, *, opener: Any = N
     })
     url = f"{EUROPE_PMC_SEARCH_URL}?{params}"
     data = _safe_fetch_json(url, opener=opener)
-    if not data or not isinstance(data, dict):
+    if data is None or not isinstance(data, dict):
+        if error_collector is not None:
+            error_collector["europe_pmc"] = "fetch_failed"
         return []
 
     records: list[dict[str, Any]] = []
@@ -190,12 +219,19 @@ def search_europe_pmc(query: str, limit: int = DEFAULT_LIMIT, *, opener: Any = N
             "journal": journal,
             "doi": doi_str,
             "abstract": abstract,
+            "oa_pdf_url": None,
             "source": "europe_pmc",
         })
     return records
 
 
-def search_crossref(query: str, limit: int = DEFAULT_LIMIT, *, opener: Any = None) -> list[dict[str, Any]]:
+def search_crossref(
+    query: str,
+    limit: int = DEFAULT_LIMIT,
+    *,
+    opener: Any = None,
+    error_collector: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     """Query Crossref REST works endpoint and parse into compact records."""
     params = urlencode({
         "query": query,
@@ -203,7 +239,9 @@ def search_crossref(query: str, limit: int = DEFAULT_LIMIT, *, opener: Any = Non
     })
     url = f"{CROSSREF_SEARCH_URL}?{params}"
     data = _safe_fetch_json(url, opener=opener)
-    if not data or not isinstance(data, dict):
+    if data is None or not isinstance(data, dict):
+        if error_collector is not None:
+            error_collector["crossref"] = "fetch_failed"
         return []
 
     message = data.get("message", {})
@@ -266,7 +304,201 @@ def search_crossref(query: str, limit: int = DEFAULT_LIMIT, *, opener: Any = Non
             "journal": journal,
             "doi": doi_str,
             "abstract": abstract,
+            "oa_pdf_url": None,
             "source": "crossref",
+        })
+    return records
+
+
+def search_openalex(
+    query: str,
+    limit: int = DEFAULT_LIMIT,
+    *,
+    opener: Any = None,
+    error_collector: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Query OpenAlex works endpoint, reconstruct abstract from inverted index, and extract oa_pdf_url."""
+    params = urlencode({
+        "search": query,
+        "per-page": str(max(1, min(limit, MAX_LIMIT))),
+    })
+    url = f"{OPENALEX_SEARCH_URL}?{params}"
+    data = _safe_fetch_json(url, opener=opener)
+    if data is None or not isinstance(data, dict):
+        if error_collector is not None:
+            error_collector["openalex"] = "fetch_failed"
+        return []
+
+    results = data.get("results", [])
+    if not isinstance(results, list):
+        return []
+
+    records: list[dict[str, Any]] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+
+        author_names: list[str] = []
+        authorships = item.get("authorships")
+        if isinstance(authorships, list):
+            for a in authorships:
+                if isinstance(a, dict):
+                    author = a.get("author")
+                    name = ""
+                    if isinstance(author, dict) and author.get("display_name"):
+                        name = str(author["display_name"]).strip()
+                    elif a.get("raw_author_name"):
+                        name = str(a["raw_author_name"]).strip()
+                    if name:
+                        author_names.append(name)
+        authors = ", ".join(author_names)
+
+        pub_year = item.get("publication_year")
+        year: int | str | None = None
+        if pub_year:
+            try:
+                year = int(pub_year)
+            except (ValueError, TypeError):
+                year = str(pub_year)[:10]
+
+        journal: str | None = None
+        primary_loc = item.get("primary_location")
+        if isinstance(primary_loc, dict):
+            src = primary_loc.get("source")
+            if isinstance(src, dict) and src.get("display_name"):
+                journal = str(src["display_name"]).strip()
+        if not journal and isinstance(item.get("host_venue"), dict):
+            journal = str(item["host_venue"].get("name") or "").strip() or None
+
+        raw_doi = item.get("doi")
+        doi_str: str | None = None
+        if raw_doi:
+            clean = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", str(raw_doi).strip(), flags=re.IGNORECASE)
+            doi_str = re.sub(r"^doi:", "", clean, flags=re.IGNORECASE).strip() or None
+
+        # Reconstruct abstract from abstract_inverted_index if present
+        abstract_raw: str | None = None
+        inverted_index = item.get("abstract_inverted_index")
+        if isinstance(inverted_index, dict) and inverted_index:
+            word_positions: list[tuple[int, str]] = []
+            for word, positions in inverted_index.items():
+                if isinstance(positions, list):
+                    for pos in positions:
+                        if isinstance(pos, int) and pos >= 0:
+                            word_positions.append((pos, str(word)))
+            if word_positions:
+                word_positions.sort(key=lambda x: x[0])
+                abstract_raw = " ".join(w for _, w in word_positions)
+        elif isinstance(item.get("abstract"), str):
+            abstract_raw = item["abstract"]
+
+        abstract = _clean_abstract(abstract_raw)
+
+        # oa_pdf_url from best_oa_location.pdf_url or open_access.oa_url when HTTPS
+        oa_pdf_url: str | None = None
+        best_oa = item.get("best_oa_location")
+        if isinstance(best_oa, dict) and isinstance(best_oa.get("pdf_url"), str):
+            cand = best_oa["pdf_url"].strip()
+            if cand.lower().startswith("https://"):
+                oa_pdf_url = cand
+        if not oa_pdf_url and isinstance(item.get("open_access"), dict):
+            cand = item["open_access"].get("oa_url")
+            if isinstance(cand, str) and cand.strip().lower().startswith("https://"):
+                oa_pdf_url = cand.strip()
+
+        records.append({
+            "title": title,
+            "authors": authors,
+            "year": year,
+            "journal": journal,
+            "doi": doi_str,
+            "abstract": abstract,
+            "oa_pdf_url": oa_pdf_url,
+            "source": "openalex",
+        })
+    return records
+
+
+def search_semantic_scholar(
+    query: str,
+    limit: int = DEFAULT_LIMIT,
+    *,
+    opener: Any = None,
+    error_collector: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Query Semantic Scholar search endpoint and parse into compact records."""
+    params = urlencode({
+        "query": query,
+        "limit": str(max(1, min(limit, MAX_LIMIT))),
+        "fields": "title,authors,year,venue,externalIds,abstract,openAccessPdf",
+    })
+    url = f"{SEMANTIC_SCHOLAR_SEARCH_URL}?{params}"
+    data = _safe_fetch_json(url, opener=opener)
+    if data is None or not isinstance(data, dict):
+        if error_collector is not None:
+            error_collector["semantic_scholar"] = "fetch_failed"
+        return []
+
+    data_list = data.get("data", [])
+    if not isinstance(data_list, list):
+        return []
+
+    records: list[dict[str, Any]] = []
+    for item in data_list:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+
+        authors_list = item.get("authors", [])
+        author_names: list[str] = []
+        if isinstance(authors_list, list):
+            for a in authors_list:
+                if isinstance(a, dict) and a.get("name"):
+                    author_names.append(str(a["name"]).strip())
+        authors = ", ".join(author_names)
+
+        year_val = item.get("year")
+        year: int | str | None = None
+        if year_val:
+            try:
+                year = int(year_val)
+            except (ValueError, TypeError):
+                year = str(year_val)[:10]
+
+        venue = item.get("venue")
+        if not venue and isinstance(item.get("journal"), dict):
+            venue = item["journal"].get("name")
+        journal = str(venue).strip() if venue else None
+
+        doi_str: str | None = None
+        ext_ids = item.get("externalIds")
+        if isinstance(ext_ids, dict) and ext_ids.get("DOI"):
+            doi_str = str(ext_ids["DOI"]).strip()
+        elif item.get("doi"):
+            doi_str = str(item["doi"]).strip()
+        if doi_str:
+            clean = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", doi_str, flags=re.IGNORECASE)
+            doi_str = re.sub(r"^doi:", "", clean, flags=re.IGNORECASE).strip() or None
+
+        abstract = _clean_abstract(item.get("abstract"))
+
+        oa_pdf_url: str | None = None
+        oa_pdf = item.get("openAccessPdf")
+        if isinstance(oa_pdf, dict) and isinstance(oa_pdf.get("url"), str):
+            cand = oa_pdf["url"].strip()
+            if cand.lower().startswith("https://"):
+                oa_pdf_url = cand
+
+        records.append({
+            "title": title,
+            "authors": authors,
+            "year": year,
+            "journal": journal,
+            "doi": doi_str,
+            "abstract": abstract,
+            "oa_pdf_url": oa_pdf_url,
+            "source": "semantic_scholar",
         })
     return records
 
@@ -279,7 +511,7 @@ def execute_paper_search(
     opener: Any = None,
     blocked_tokens: Iterable[str] | None = None,
 ) -> dict[str, Any]:
-    """Execute bounded public paper search across Europe PMC and/or Crossref."""
+    """Execute bounded public paper search across OpenAlex, Semantic Scholar, Europe PMC and/or Crossref."""
     cleaned_query = query.strip()
     if not cleaned_query or len(cleaned_query) > MAX_QUERY_CHARS:
         return {"error": "invalid_query", "papers": [], "count": 0}
@@ -321,22 +553,68 @@ def execute_paper_search(
     limit = max(1, min(limit, MAX_LIMIT))
     source_clean = source.strip().lower()
 
+    if source_clean not in VALID_SOURCES:
+        return {"error": "invalid_source", "papers": [], "count": 0}
+
+    source_errors: dict[str, str] = {}
+    candidates: list[dict[str, Any]] = []
+
+    if source_clean == "all":
+        # Query all 4 sources and merge/interleave gracefully
+        epmc_list = search_europe_pmc(cleaned_query, limit=limit, opener=opener, error_collector=source_errors)
+        crossref_list = search_crossref(cleaned_query, limit=limit, opener=opener, error_collector=source_errors)
+        openalex_list = search_openalex(cleaned_query, limit=limit, opener=opener, error_collector=source_errors)
+        s2_list = search_semantic_scholar(cleaned_query, limit=limit, opener=opener, error_collector=source_errors)
+
+        # Round-robin interleaving
+        lists = [epmc_list, crossref_list, openalex_list, s2_list]
+        max_len = max((len(lst) for lst in lists), default=0)
+        for idx in range(max_len):
+            for lst in lists:
+                if idx < len(lst):
+                    candidates.append(lst[idx])
+    elif source_clean == "europe_pmc":
+        candidates.extend(search_europe_pmc(cleaned_query, limit=limit, opener=opener, error_collector=source_errors))
+    elif source_clean == "crossref":
+        candidates.extend(search_crossref(cleaned_query, limit=limit, opener=opener, error_collector=source_errors))
+    elif source_clean == "openalex":
+        candidates.extend(search_openalex(cleaned_query, limit=limit, opener=opener, error_collector=source_errors))
+    elif source_clean == "semantic_scholar":
+        candidates.extend(search_semantic_scholar(cleaned_query, limit=limit, opener=opener, error_collector=source_errors))
+
+    # Deduplicate by normalized DOI and normalized title
+    seen_dois: set[str] = set()
+    seen_titles: set[str] = set()
     papers: list[dict[str, Any]] = []
-    if source_clean in {"all", "europe_pmc"}:
-        epmc_limit = limit if source_clean == "europe_pmc" else max(1, limit // 2)
-        papers.extend(search_europe_pmc(cleaned_query, limit=epmc_limit, opener=opener))
 
-    if source_clean in {"all", "crossref"}:
-        crossref_limit = limit - len(papers) if source_clean == "all" else limit
-        if crossref_limit > 0:
-            papers.extend(search_crossref(cleaned_query, limit=crossref_limit, opener=opener))
+    for item in candidates:
+        doi = _normalize_doi(item.get("doi"))
+        title = _normalize_title(item.get("title"))
 
-    papers = papers[:limit]
-    return {
+        if doi and doi in seen_dois:
+            continue
+        if title and title in seen_titles:
+            continue
+
+        if doi:
+            seen_dois.add(doi)
+        if title:
+            seen_titles.add(title)
+
+        papers.append(item)
+        if len(papers) >= limit:
+            break
+
+    result: dict[str, Any] = {
         "query": cleaned_query,
         "count": len(papers),
         "papers": papers,
     }
+    if source_errors:
+        result["errors"] = source_errors
+        result["warnings"] = [f"Source {s} failed: {err}" for s, err in source_errors.items()]
+
+    return result
 
 
 def dispatch_paper_search_tool(
@@ -362,7 +640,7 @@ def dispatch_paper_search_tool(
         return None, "invalid_arguments"
 
     source = raw_args.get("source", "all")
-    if not isinstance(source, str) or source.strip().lower() not in {"all", "europe_pmc", "crossref"}:
+    if not isinstance(source, str) or source.strip().lower() not in VALID_SOURCES:
         return None, "invalid_arguments"
 
     cleaned_query = query.strip()
