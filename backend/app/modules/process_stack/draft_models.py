@@ -144,7 +144,7 @@ def _heat(label: str, dwsim_type: str) -> UnitSpec:
 _PBR_MODE = ("periodic_steady",)
 PBR_T2_PARAMETERS = frozenset({
     "tubes_across", "layers", "pitch_h", "pitch_v", "stagger_offset", "axis_azimuth",
-    "centre_height_above_sea", "n_wall", "n_water", "sea_albedo",
+    "centre_height_above_surface", "n_wall", "n_water", "surface_albedo",
 })
 PBR_MAX_PHOTOPERIOD_S = 24.0 * 3600.0
 
@@ -162,13 +162,13 @@ PBR_T2_SPECS: tuple[ParamSpec, ...] = (
               group="Light & environment"),
     ParamSpec("axis_azimuth", "Tube axis azimuth (degrees)", "dimensionless", "", _PBR_MODE,
               minimum_si=0.0, maximum_si=360.0, group="Light & environment"),
-    ParamSpec("centre_height_above_sea", "Lowest tube centre above sea", "length", "", _PBR_MODE,
+    ParamSpec("centre_height_above_surface", "Lowest tube centre above the surface below", "length", "", _PBR_MODE,
               minimum_si=0.0, group="Light & environment"),
     ParamSpec("n_wall", "Wall refractive index", "dimensionless", "", _PBR_MODE,
               minimum_si=1.0, maximum_si=5.0, group="Light & environment"),
     ParamSpec("n_water", "Water refractive index", "dimensionless", "", _PBR_MODE,
               minimum_si=1.0, maximum_si=5.0, group="Light & environment"),
-    ParamSpec("sea_albedo", "Sea albedo", "dimensionless", "", _PBR_MODE,
+    ParamSpec("surface_albedo", "Albedo of the surface below (ground or water)", "dimensionless", "", _PBR_MODE,
               minimum_si=0.0, maximum_si=1.0, group="Light & environment"),
     # #920 optics v2: optional pair. Both set selects optics_t2.v2; neither keeps v1; one alone is refused at prepare.
     ParamSpec("tube_outer_diameter", "Tube outer diameter (optional, optics v2)", "length", "", _PBR_MODE,

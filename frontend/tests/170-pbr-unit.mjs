@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
-  branchExplanation, entrySi, failureTouchesUnit, nSourceNote, pinDescription, formatReported, formatSig, gasTransferWords, growthVersusDilution, liquidVolumeM3, missingSetSymbols,
+  T2_OPTICS_KEYS, branchExplanation, entrySi, failureTouchesUnit, nSourceNote, pinDescription, formatReported, formatSig, gasTransferWords, growthVersusDilution, liquidVolumeM3, missingSetSymbols,
   nSourceLabel, pbrCardRefusal, pbrFailureHeading, pbrFieldError, pinStatus, setMatchesCard, cardOnLatestSet, severityWord, verificationChip,
 } from "../src/components/process/pbrLogic.ts";
 import { ownerLabel, ownerShort } from "../src/components/process/processOwners.ts";
@@ -209,3 +209,8 @@ assert.equal(pkg.scripts["test:170"], "node tests/170-pbr-unit.mjs");
 assert.match(pkg.scripts.build, /npm run test:170/);
 
 console.log("170 PBR unit frontend contract passed");
+
+assert.ok(T2_OPTICS_KEYS.has("centre_height_above_surface"));
+assert.ok(T2_OPTICS_KEYS.has("surface_albedo"));
+assert.ok(inspector.includes("albedo of the surface below (ground or water)"));
+assert.match(pbrFieldError("surface_albedo", { text: "1.1", unit: "dimensionless" }, () => null), /0–1/);
