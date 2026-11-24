@@ -654,11 +654,38 @@ def _install_hermes_retrieval_grant(
     allowed_owners = sorted(WORKSPACE_SCOPED_OWNERS) if workspace_scoped else sorted(
         {ref.authority_owner for ref in source_refs})
     now = datetime.now(UTC)
+
+    from app.modules.agents.hermes.ip_boundary import is_local_route
+
+    worker_session = getattr(worker, "session", None)
+    role_id = payload.role_id or (worker_session.profile_id if worker_session else "isaac")
+    role_route = None
+    if hasattr(worker, "active_role_route") and worker.active_role_route:
+        role_route = worker.active_role_route
+    elif hasattr(worker, "route_for_role") and callable(worker.route_for_role):
+        role_route = worker.route_for_role(role_id)
+    elif hasattr(worker, "route_for_task") and callable(worker.route_for_task):
+        role_route = worker.route_for_task("general")
+    if not role_route:
+        try:
+            from app.modules.ai.settings import get_ai_settings
+
+            role_route = get_ai_settings().hermes_role_routes.get(role_id)
+        except Exception:
+            role_route = None
+
+    is_local = is_local_route(route_class=role_route, role_id=role_id)
+    read_constraints: dict[str, str | int | float | bool] = {
+        "route_class": role_route or "",
+        "is_local": is_local,
+    }
+
     grant_id = str(uuid4())
     grant = CapabilityGrantRef(
         grant_id=grant_id, capability_id="jarvis.retrieval_query", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id,
                               object_refs=tuple(source_refs)),
+        constraints=dict(read_constraints),
         issued_at=now, expires_at=now + timedelta(minutes=10),
     )
     worker.live_grants[grant_id] = grant
@@ -678,31 +705,10 @@ def _install_hermes_retrieval_grant(
     worker.live_grants[dev_read_grant_id] = dev_read_grant
     dev_read_ops = "specs, spec_text, recent_work, plan, supervisor, directives, quotas, runtime_health"
     repo_read_grant_id = str(uuid4())
-    worker_session = getattr(worker, "session", None)
-    role_id = payload.role_id or (worker_session.profile_id if worker_session else "isaac")
-    role_route = None
-    if hasattr(worker, "active_role_route") and worker.active_role_route:
-        role_route = worker.active_role_route
-    elif hasattr(worker, "route_for_role") and callable(worker.route_for_role):
-        role_route = worker.route_for_role(role_id)
-    elif hasattr(worker, "route_for_task") and callable(worker.route_for_task):
-        role_route = worker.route_for_task("general")
-    if not role_route and payload.route_class and payload.route_class != "hermes:agent":
-        role_route = payload.route_class
-    if not role_route:
-        try:
-            from app.modules.ai.settings import get_ai_settings
-
-            role_route = get_ai_settings().hermes_role_routes.get(role_id)
-        except Exception:
-            role_route = None
-    repo_read_constraints: dict[str, str | int | float | bool] = (
-        {"route_class": role_route} if role_route else {}
-    )
     repo_read_grant = CapabilityGrantRef(
         grant_id=repo_read_grant_id, capability_id="jarvis.repo_read", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
-        constraints=repo_read_constraints,
+        constraints=dict(read_constraints),
         issued_at=now, expires_at=now + timedelta(minutes=10),
     )
     worker.live_grants[repo_read_grant_id] = repo_read_grant
@@ -712,6 +718,7 @@ def _install_hermes_retrieval_grant(
     knowledge_read_grant = CapabilityGrantRef(
         grant_id=knowledge_read_grant_id, capability_id="jarvis.knowledge_read", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
+        constraints=dict(read_constraints),
         issued_at=now, expires_at=now + timedelta(minutes=10),
     )
     worker.live_grants[knowledge_read_grant_id] = knowledge_read_grant
@@ -1097,17 +1104,19 @@ def _jarvis_system_envelope(
     if is_local_route:
         loaded_packs_str = ", ".join(pack_ids) if pack_ids else "none"
         loaded_packs_line = f"Loaded packs: {_envelope_value(loaded_packs_str, 200)}"
+        route_boundary_line = "Route boundary: local (private-pack reads permitted)"
+        cloud_ip_mode_line = None
     else:
         if pack_ids:
             loaded_packs_line = f"Loaded packs: {len(pack_ids)} private pack(s)"
         else:
             loaded_packs_line = "Loaded packs: none"
+        from app.modules.agents.hermes.ip_boundary import CLOUD_IP_MODE_SANITIZED, resolve_cloud_ip_mode
 
-    # Route boundary: local (private-pack reads permitted) vs external (private-pack reads blocked)
-    if is_local_route:
-        route_boundary_line = "Route boundary: local (private-pack reads permitted)"
-    else:
-        route_boundary_line = "Route boundary: external (private-pack reads blocked)"
+        active_cloud_ip_mode = resolve_cloud_ip_mode()
+        pack_boundary = "sanitized" if active_cloud_ip_mode == CLOUD_IP_MODE_SANITIZED else "blocked"
+        route_boundary_line = f"Route boundary: external (private-pack reads {pack_boundary})"
+        cloud_ip_mode_line = f"Cloud IP mode: {active_cloud_ip_mode}"
 
     # Granted read-only tools section
     if granted_tools is None:
@@ -1141,10 +1150,14 @@ def _jarvis_system_envelope(
         workspace_line,
         loaded_packs_line,
         route_boundary_line,
+    ]
+    if cloud_ip_mode_line is not None:
+        lines.append(cloud_ip_mode_line)
+    lines.extend([
         read_tools_block,
         ("Capabilities: " + "; ".join(capability_lines))[:700],
         ("Conversation routes: " + ("; ".join(route_lines) if route_lines else "unavailable"))[:600],
-    ]
+    ])
     envelope = "\n".join(lines)
     if len(envelope) > MAX_SYSTEM_ENVELOPE_CHARS:
         envelope = envelope[:MAX_SYSTEM_ENVELOPE_CHARS]

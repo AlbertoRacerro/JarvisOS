@@ -34,6 +34,8 @@ def query_context(
     master_ref: str = "refs/remotes/origin/master",
     allowed_refs: frozenset[tuple[str, str, str]] | None = None,
     store: SQLiteIndexStore | None = None,
+    grant: Any = None,
+    is_local: bool | None = None,
 ) -> dict[str, Any]:
     """Return current, owner-validated evidence; index contents remain candidates only."""
     if not query.strip() or len(query) > MAX_QUERY_CHARS:
@@ -50,6 +52,7 @@ def query_context(
     bundle = index.build_bundle(query, workspace_id=workspace_id, token_budget=token_budget,
                                 limit=limit, source_owners=owners, source_refs=allowed_refs)
     evidence = []
+    full_contents: list[str] = []
     # Excerpts share the caller's token budget (about four characters per token), bounded by MAX_RETRIEVAL_RESULT_CHARS.
     remaining_chars = min(token_budget * 4, MAX_RETRIEVAL_RESULT_CHARS)
     truncated = any(m.outcome == "dropped_budget" for m in bundle.evidence_manifest)
@@ -68,6 +71,7 @@ def query_context(
         if len(content) > max_item_chars:
             truncated = True
         remaining_chars -= len(excerpt)
+        full_contents.append(content)
         evidence.append({
             "source_ref": item.source_ref.model_dump(mode="json"),
             "content_digest": item.content_digest,
@@ -75,6 +79,61 @@ def query_context(
             "validation": "current",
             "excerpt": excerpt,
         })
+
+    if grant is not None:
+        try:
+            from app.modules.agents.hermes.ip_boundary import is_local_route
+            is_local = is_local_route(grant=grant)
+        except Exception:
+            is_local = False
+    elif is_local is None:
+        # Direct local navigation has no Hermes external route context.
+        is_local = True
+
+    withheld_count = 0
+    active_mode = None
+    if not is_local:
+        from app.modules.agents.hermes.ip_boundary import (
+            CLOUD_IP_MODE_NO_CLOUD,
+            CLOUD_IP_MODE_SANITIZED,
+            filter_or_sanitize_text,
+            log_cloud_boundary_event,
+            resolve_cloud_ip_mode,
+            sanitize_record,
+        )
+        active_mode = resolve_cloud_ip_mode()
+        kept_evidence = []
+        for ev, full_content in zip(evidence, full_contents, strict=True):
+            allowed, _, _ = filter_or_sanitize_text(full_content, active_mode)
+            ev_excerpt = ev.get("excerpt")
+            if not isinstance(ev_excerpt, str):
+                ev_excerpt = ""
+            if allowed:
+                _, out_excerpt, _ = filter_or_sanitize_text(ev_excerpt, active_mode)
+            else:
+                out_excerpt = ""
+            if allowed:
+                candidate = dict(ev)
+                candidate["excerpt"] = out_excerpt
+                allowed, safe_ev, _ = sanitize_record(candidate, active_mode)
+                if allowed:
+                    kept_evidence.append(safe_ev)
+            if not allowed:
+                withheld_count += 1
+
+        evidence = kept_evidence
+        if withheld_count > 0:
+            reason_code = ("egress_pack_blocked" if active_mode == CLOUD_IP_MODE_NO_CLOUD
+                           else "egress_sanitization_required")
+            log_cloud_boundary_event(
+                tool_name="jarvis_retrieval_query",
+                op="query",
+                egress_mode=active_mode,
+                withheld_count=withheld_count,
+                reason_code=reason_code,
+                workspace_id=workspace_id,
+            )
+
     result: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "query": query,
@@ -86,6 +145,15 @@ def query_context(
         "evidence": evidence,
         "truncated": truncated,
     }
+    if not is_local:
+        result["query"] = ""
+        result["withheld_count"] = withheld_count
+        result["egress_mode"] = active_mode
+        if active_mode == CLOUD_IP_MODE_SANITIZED:
+            result["sanitized"] = True
+        # Bundle refs and manifest entries can describe withheld sources.
+        result["bundle"] = {"items": []}
+        result["freshness"] = {}
     while evidence and len(json.dumps(result, ensure_ascii=False)) > MAX_RETRIEVAL_RESULT_CHARS:
         result["truncated"] = True
         last = evidence[-1]
@@ -95,7 +163,7 @@ def query_context(
             last["excerpt"] = last_excerpt[:-overhead]
         else:
             evidence.pop()
-    if len(json.dumps(result, ensure_ascii=False)) > MAX_RETRIEVAL_RESULT_CHARS:
+    if is_local and len(json.dumps(result, ensure_ascii=False)) > MAX_RETRIEVAL_RESULT_CHARS:
         items_list = list(bundle.items)
         manifest_list = list(bundle.evidence_manifest)
         bundle_modified = False

@@ -1,6 +1,6 @@
 # 345 — JARVIS-CLOUD-IP-BOUNDARY-1: IP egress boundary for chat read tools on cloud routes
 
-Status: ready
+Status: in_review
 Depends on: 344
 
 ## Goal
