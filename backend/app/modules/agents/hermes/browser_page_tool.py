@@ -13,10 +13,13 @@ import html
 import ipaddress
 import os
 import re
+import select
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
+import time
 import urllib.parse
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
@@ -252,23 +255,71 @@ def _get_runner(
 
 
 def _default_subprocess_runner(argv: list[str], timeout: float) -> tuple[int, str, str]:
-    """Execute Chromium as explicit argv subprocess with bounded capture."""
+    """Execute Chromium as explicit argv subprocess with bounded incremental stdout capture."""
     proc = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
+    chunks: list[bytes] = []
+    total_bytes = 0
+    deadline = time.monotonic() + timeout
+    assert proc.stdout is not None
+    fd = proc.stdout.fileno()
+
+    def _kill_group() -> None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _kill_group()
+                proc.wait(timeout=5)
+                raise subprocess.TimeoutExpired(argv, timeout)
+            ready, _, _ = select.select([fd], [], [], min(remaining, 0.25))
+            if not ready:
+                if proc.poll() is not None:
+                    break
+                continue
+            chunk = os.read(fd, min(65536, MAX_STDOUT_BYTES - total_bytes + 1))
+            if not chunk:
+                break
+            remaining_cap = MAX_STDOUT_BYTES - total_bytes
+            if len(chunk) > remaining_cap:
+                chunks.append(chunk[:remaining_cap])
+                total_bytes = MAX_STDOUT_BYTES
+                _kill_group()
+                break
+            chunks.append(chunk)
+            total_bytes += len(chunk)
+        proc.stdout.close()
+        remaining = max(0.1, deadline - time.monotonic())
+        try:
+            returncode = proc.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            _kill_group()
+            proc.wait(timeout=5)
+            raise
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.communicate()
+        raise
+    except Exception:
+        _kill_group()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
         raise
 
-    return proc.returncode, stdout, stderr
+    stdout = b"".join(chunks).decode("utf-8", errors="replace")
+    return returncode, stdout, ""
 
 
 def find_chromium_binary() -> str | None:
@@ -399,19 +450,34 @@ def execute_browser_page_read(
         if not _is_safe_global_ip(ip_str):
             return {"error": "private_ip_refused", "status": "error"}
 
-    # 4. Egress sanitization checks on URL
-    if _KNOWN_SECRET_RE.search(clean_url):
-        return {"error": "egress_blocked_private_content", "status": "error"}
-    if sanitize_text(clean_url) != clean_url:
-        return {"error": "egress_blocked_private_content", "status": "error"}
-    if check_sensitivity_floor(clean_url) in {"S2", "S3", "S4"}:
-        return {"error": "egress_blocked_private_content", "status": "error"}
-    if packs.mentions_pack_term(clean_url):
-        return {"error": "egress_blocked_private_content", "status": "error"}
-    if blocked_tokens:
-        for tok in blocked_tokens:
-            if tok and tok in clean_url:
-                return {"error": "egress_blocked_private_content", "status": "error"}
+    # 4. Egress sanitization checks on URL (raw and iteratively URL-decoded forms)
+    url_variants: list[str] = [clean_url]
+    cur = clean_url
+    for _ in range(3):
+        dec_pct = urllib.parse.unquote(cur)
+        dec_plus = urllib.parse.unquote_plus(cur)
+        added = False
+        for candidate in (dec_pct, dec_plus):
+            if candidate not in url_variants:
+                url_variants.append(candidate)
+                added = True
+        cur = dec_plus
+        if not added:
+            break
+    for variant in url_variants:
+        norm_variant = " ".join(variant.split())
+        if _KNOWN_SECRET_RE.search(variant):
+            return {"error": "egress_blocked_private_content", "status": "error"}
+        if sanitize_text(variant) != variant or sanitize_text(norm_variant) != norm_variant:
+            return {"error": "egress_blocked_private_content", "status": "error"}
+        if check_sensitivity_floor(variant) in {"S2", "S3", "S4"} or check_sensitivity_floor(norm_variant) in {"S2", "S3", "S4"}:
+            return {"error": "egress_blocked_private_content", "status": "error"}
+        if packs.mentions_pack_term(variant) or packs.mentions_pack_term(norm_variant):
+            return {"error": "egress_blocked_private_content", "status": "error"}
+        if blocked_tokens:
+            for tok in blocked_tokens:
+                if tok and (tok in variant or tok in norm_variant):
+                    return {"error": "egress_blocked_private_content", "status": "error"}
 
     # 5. Search term validation & egress checks (search_term is local only, never sent to network)
     clean_search_term: str | None = None

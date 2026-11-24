@@ -967,6 +967,9 @@ class HermesSupervisor:
                                                   "request_digest": (result.result or {}).get("request_digest")}
                                                  if result.capability_id == "jarvis.decide" and result.result
                                                  else {} if result.capability_id == "jarvis.decide"
+                                                 else ({"has_search_term": bool(arguments.get("search_term"))}
+                                                       if result.status == "succeeded" else {})
+                                                 if result.capability_id == "jarvis.browser_page_read"
                                                  else _safe_tool_arguments(arguments)),
                                    "result_digest": canonical_digest(result.model_dump(mode="json")),
                                    "evidence_refs": _tool_evidence_refs(result.model_dump(mode="json")),

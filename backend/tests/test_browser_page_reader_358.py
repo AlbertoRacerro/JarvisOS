@@ -154,9 +154,10 @@ def test_egress_sanitization_blocks_secrets_in_url() -> None:
     """URLs containing API keys or secrets are blocked by egress sanitization."""
     runner = _make_html_runner("<html><body>OK</body></html>")
     for secret_url in [
-        "https://example.com/api?token=sk-123456789012345678901234567890",
-        "https://example.com/api?key=ghp_123456789012345678901234567890",
-        "https://example.com/api?auth=AIza123456789012345678901234567890",
+        "https://example.com/api?token=" + "sk-" + "123456789012345678901234567890",
+        "https://example.com/api?key=" + "ghp_" + "123456789012345678901234567890",
+        "https://example.com/api?auth=" + "AIza" + "123456789012345678901234567890",
+        "https://example.com/api?token=" + "sk%2D" + "123456789012345678901234567890",
     ]:
         res = execute_browser_page_read(secret_url, runner=runner, dns_resolver=_public_dns)
         assert res.get("status") == "error"
@@ -164,17 +165,21 @@ def test_egress_sanitization_blocks_secrets_in_url() -> None:
 
 
 def test_egress_sanitization_blocks_pack_terms_in_url(monkeypatch) -> None:
-    """URLs containing private pack sensitivity terms are blocked."""
+    """URLs containing private pack sensitivity terms (raw or URL-encoded) are blocked."""
     monkeypatch.setattr(packs, "sensitivity_terms", lambda: ("supersecretproject", "falconpropulsion"))
     runner = _make_html_runner("<html><body>OK</body></html>")
 
-    res = execute_browser_page_read(
+    for url in (
         "https://example.com/docs/falconpropulsion-spec.html",
-        runner=runner,
-        dns_resolver=_public_dns,
-    )
-    assert res.get("status") == "error"
-    assert res.get("error") == "egress_blocked_private_content"
+        "https://example.com/docs/%66alconpropulsion-spec.html",
+    ):
+        res = execute_browser_page_read(
+            url,
+            runner=runner,
+            dns_resolver=_public_dns,
+        )
+        assert res.get("status") == "error"
+        assert res.get("error") == "egress_blocked_private_content"
 
 
 def test_egress_sanitization_blocks_secrets_and_pack_terms_in_search_term(monkeypatch) -> None:
@@ -184,7 +189,7 @@ def test_egress_sanitization_blocks_secrets_and_pack_terms_in_search_term(monkey
 
     res_secret = execute_browser_page_read(
         "https://example.com/spec",
-        search_term="sk-123456789012345678901234567890",
+        search_term="sk-" + "123456789012345678901234567890",
         runner=runner,
         dns_resolver=_public_dns,
     )
