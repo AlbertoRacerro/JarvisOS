@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 if "relay_continuity_common" not in sys.modules:
     _SPEC = importlib.util.spec_from_file_location(
@@ -369,12 +368,18 @@ def default_reachable(host: str = "github.com", port: int = 443, timeout: float 
 
 def format_offline_window(start: datetime | None, end: datetime, *, tz: Any = None) -> tuple[str, str]:
     """Format offline window as local/readable HH:MM (or YYYY-MM-DD HH:MM if spanning dates)."""
+    end_aware = end if end.tzinfo else end.replace(tzinfo=UTC)
     if tz is None:
         try:
-            tz = ZoneInfo("Europe/Rome")
-        except Exception:  # noqa: BLE001
             tz = end.astimezone().tzinfo or UTC
-    end_aware = end if end.tzinfo else end.replace(tzinfo=UTC)
+        except Exception:  # noqa: BLE001
+            tz = UTC
+    elif isinstance(tz, str):
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(tz)
+        except Exception:  # noqa: BLE001
+            pass
     try:
         end_local = end_aware.astimezone(tz)
     except Exception:  # noqa: BLE001
@@ -748,9 +753,10 @@ class Supervisor:
             return  # a manual cap stays until `release --clear-cooldown`; no reclassification shortens it
         if isinstance(existing, dict) and report.turn_id and existing.get("turn") == report.turn_id:
             return  # this turn's cooldown is already recorded: a restart re-deciding it neither extends nor backs off
-        if self.state.get("network_outage", False):
+        is_network_like = (report.outcome in ("transient", "unknown", "timeout") or report.timed_out)
+        if self.state.get("network_outage", False) and is_network_like:
             return
-        if report.outcome in ("transient", "unknown", "timeout") or report.timed_out:
+        if is_network_like:
             reachable_fn = getattr(self.host, "reachable", None) or default_reachable
             try:
                 is_reachable = bool(reachable_fn())
@@ -1056,24 +1062,25 @@ class Supervisor:
             return (agent, prompt) if agent is not None else self._wait_or_hold(lambda _agent: prompt)
 
         is_network_like = (report.outcome in ("transient", "unknown", "timeout") or report.timed_out)
-        reachable_fn = getattr(self.host, "reachable", None) or default_reachable
-        try:
-            is_reachable = bool(reachable_fn())
-        except Exception:  # noqa: BLE001
-            is_reachable = False
+        if is_network_like:
+            reachable_fn = getattr(self.host, "reachable", None) or default_reachable
+            try:
+                is_reachable = bool(reachable_fn())
+            except Exception:  # noqa: BLE001
+                is_reachable = False
 
-        if is_network_like and not is_reachable:
-            if not self.state.get("network_outage", False):
-                self.state["network_outage"] = True
-                self.record("finding", "relay-continuity: host offline mid-turn; waiting for network")
-            if not self.state.get("network_outage_since"):
-                self.state["network_outage_since"] = iso(self.host.now())
-            self.host.log(f"turn ended with {report.outcome} while host offline; waiting without cooldown or strikes")
-            self.state["phase"] = "waiting"
-            self.save()
-            return "waiting"
+            if not is_reachable:
+                if not self.state.get("network_outage", False):
+                    self.state["network_outage"] = True
+                    self.record("finding", "relay-continuity: host offline mid-turn; waiting for network")
+                if not self.state.get("network_outage_since"):
+                    self.state["network_outage_since"] = iso(self.host.now())
+                self.host.log(f"turn ended with {report.outcome} while host offline; waiting without cooldown or strikes")
+                self.state["phase"] = "waiting"
+                self.save()
+                return "waiting"
 
-        from_outage = bool(self.state.get("network_outage", False))
+        from_outage = bool(self.state.get("network_outage", False)) and is_network_like
 
         if not from_outage and counters["consecutive_failures"] >= self.limits.max_consecutive_failures:
             return self.hold("circuit_failures")
