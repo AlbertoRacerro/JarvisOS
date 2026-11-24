@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -754,3 +755,178 @@ def test_free_model_omitted_when_below_index_or_coding_threshold(
     assert wr.temp_pool_read(entries[0], now=NOW).reason == "below_index"
     assert wr.temp_pool_read(entries[1], now=NOW).reason == "below_coding_index"
     assert wr.temp_pool_read(entries[2], now=NOW).reason == "unindexed"
+
+
+def test_codex_stderr_auth_error_returns_auth_required(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    empty_snapshot = tmp_path / "empty-quota.json"
+    monkeypatch.setenv("JARVISOS_WORKER_QUOTA_FILE", str(empty_snapshot))
+
+    fake_codex = tmp_path / "fake-codex"
+    fake_codex.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "sys.stderr.write('not logged in / authentication required\\n')\n"
+        "sys.stderr.flush()\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("JARVISOS_CODEX_BIN", str(fake_codex))
+
+    res, err = pq.read_codex_limits()
+    assert res is None
+    assert err == "auth_required"
+
+
+def test_missing_coding_scores_fails_closed_in_panel_and_router(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("secret-token", encoding="utf-8")
+    now_str = NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    pool = {
+        "name": "pool-without-coding-scores",
+        "provider": "TestProvider",
+        "model": "model/good:free",
+        "key_file": str(key_file),
+        "free_list": "openai_models",
+        "base_url": "https://api.test.invalid/v1",
+        "index_score": 40,
+        "coding_index": 45,
+        "rate_limits": "free",
+        "data_policy": "public",
+        "live_probe": {"status": "ok", "live_ok_at": now_str},
+    }
+
+    # Top-level doc has "scores" and "reference", but NO "coding_scores"
+    pools_data = {
+        "reference": "luna",
+        "scores": {"luna": 28, "sol": 40},
+        "coding_reference": "luna",
+        # missing coding_scores, and no reference_coding_index
+        "pools": [pool],
+    }
+    pools_file = tmp_path / "temp-pools.json"
+    pools_file.write_text(json.dumps(pools_data), encoding="utf-8")
+
+    lists_doc = {
+        "sources": {
+            "https://api.test.invalid/v1": {
+                "ids": ["model/good:free"],
+                "read_at": now_str,
+            }
+        },
+        "probes": {
+            "model/good:free": {"status": "ok", "live_ok_at": now_str},
+        },
+    }
+    lists_file = tmp_path / "temp-pool-lists.json"
+    lists_file.write_text(json.dumps(lists_doc), encoding="utf-8")
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
+
+    # read_free_models must fail closed and return empty
+    assert pq.read_free_models(tmp_path, now=NOW) == []
+
+    # temp_pool_read must fail closed with reason "no_reference"
+    entries = wr.load_temp_pools(pools_file)
+    assert len(entries) == 1
+    p = wr.temp_pool_read(entries[0], now=NOW)
+    assert p.free is None
+    assert p.reason == "no_reference"
+
+
+def test_free_model_proof_precedence_and_temp_prefix(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("secret-token", encoding="utf-8")
+    now_str = NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+    older_str = (NOW - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # 1. Pool with "live_status: ok" in temp-pools.json, but "probes" has 404 under "temp-{pool_name}"
+    pool_404 = {
+        "name": "pool-temp-404",
+        "provider": "TestProvider",
+        "model": "model/temp-404:free",
+        "key_file": str(key_file),
+        "free_list": "openai_models",
+        "base_url": "https://api.test.invalid/v1",
+        "index_score": 40,
+        "coding_index": 45,
+        "rate_limits": "free",
+        "data_policy": "public",
+        "live_status": "ok",
+        "live_ok_at": now_str,
+    }
+
+    # 2. Pool with older OK (10m ago) and newer error (now)
+    pool_err = {
+        "name": "pool-newer-error",
+        "provider": "TestProvider",
+        "model": "model/newer-err:free",
+        "key_file": str(key_file),
+        "free_list": "openai_models",
+        "base_url": "https://api.test.invalid/v1",
+        "index_score": 40,
+        "coding_index": 45,
+        "rate_limits": "free",
+        "data_policy": "public",
+        "live_status": "ok",
+        "live_ok_at": older_str,
+    }
+
+    # 3. Pool with older error (10m ago) and newer OK (now)
+    pool_recovered = {
+        "name": "pool-recovered",
+        "provider": "TestProvider",
+        "model": "model/recovered:free",
+        "key_file": str(key_file),
+        "free_list": "openai_models",
+        "base_url": "https://api.test.invalid/v1",
+        "index_score": 40,
+        "coding_index": 45,
+        "rate_limits": "free",
+        "data_policy": "public",
+        "live_status": "ok",
+        "live_ok_at": now_str,
+    }
+
+    lists_doc = {
+        "sources": {
+            "https://api.test.invalid/v1": {
+                "ids": ["model/temp-404:free", "model/newer-err:free", "model/recovered:free"],
+                "read_at": now_str,
+            }
+        },
+        "probes": {
+            "temp-pool-temp-404": {"status": "404", "status_code": 404, "live_ok_at": now_str},
+            "model/newer-err:free": {"status": "error", "at": now_str},
+            "model/recovered:free": {"status": "error", "at": older_str},
+        },
+    }
+
+    pools_file, _ = _setup_free_pools_fixture(tmp_path, [pool_404, pool_err, pool_recovered], lists_doc)
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
+
+    # Only recovered pool is admitted in read_free_models
+    admitted = pq.read_free_models(tmp_path, now=NOW)
+    assert len(admitted) == 1
+    assert admitted[0]["id"] == "pool-recovered"
+
+    # Router checks:
+    entries = wr.load_temp_pools(pools_file)
+    assert len(entries) == 3
+    # 1. 404 fails closed with probe_404 despite live_status: ok
+    p_404 = wr.temp_pool_read(entries[0], now=NOW)
+    assert p_404.free is None and p_404.reason == "probe_404"
+
+    # 2. Newer error beats older ok
+    p_err = wr.temp_pool_read(entries[1], now=NOW)
+    assert p_err.free is None and p_err.reason == "error"
+
+    # 3. Newer ok beats older error
+    p_rec = wr.temp_pool_read(entries[2], now=NOW)
+    assert p_rec.free == 1.0 and p_rec.reason is None

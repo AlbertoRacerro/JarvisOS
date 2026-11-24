@@ -365,8 +365,9 @@ def _query_codex_app_server(codex_home: str | None) -> tuple[dict[str, Any] | No
         return None, "not_found"
 
     messages: queue.Queue[dict[str, Any] | None] = queue.Queue()
+    stderr_lines: list[str] = []
 
-    def collect() -> None:
+    def collect_stdout() -> None:
         assert proc.stdout is not None
         try:
             for line in proc.stdout:
@@ -376,10 +377,45 @@ def _query_codex_app_server(codex_home: str | None) -> tuple[dict[str, Any] | No
         finally:
             messages.put(None)
 
-    reader = threading.Thread(target=collect, daemon=True)
+    def collect_stderr() -> None:
+        assert proc.stderr is not None
+        try:
+            for line in proc.stderr:
+                stderr_lines.append(line)
+        except Exception:
+            pass
+
+    reader = threading.Thread(target=collect_stdout, daemon=True)
     reader.start()
+    stderr_reader = threading.Thread(target=collect_stderr, daemon=True)
+    stderr_reader.start()
+
     deadline = time.monotonic() + READ_TIMEOUT_S
     detected_error: list[str] = []
+
+    def _check_stderr_auth() -> bool:
+        text = "".join(stderr_lines).lower()
+        return any(w in text for w in ("auth", "login", "unauthorized", "unauthenticated", "token", "credential"))
+
+    def _stop_proc_and_drain() -> None:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=1)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=1)
+                except Exception:
+                    pass
+        stderr_reader.join(timeout=1)
+        reader.join(timeout=1)
+
+    def _decide_error(default: str = "no_json") -> str:
+        _stop_proc_and_drain()
+        if "auth_required" in detected_error or _check_stderr_auth():
+            return "auth_required"
+        return detected_error[0] if detected_error else default
 
     def send(message: dict[str, Any]) -> None:
         assert proc.stdin is not None
@@ -409,20 +445,18 @@ def _query_codex_app_server(codex_home: str | None) -> tuple[dict[str, Any] | No
     try:
         send({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "jarvisos_usage", "version": "0.1.0"}}})
         if response(1) is None:
-            err = detected_error[0] if detected_error else "no_json"
-            return None, err
+            return None, _decide_error("no_json")
         send({"method": "initialized", "params": {}})
         send({"id": 2, "method": "account/rateLimits/read", "params": {}})
         result = response(2)
         if result is None:
-            err = detected_error[0] if detected_error else "no_json"
-            return None, err
+            return None, _decide_error("no_json")
         buckets = result.get("rateLimitsByLimitId")
         limits = buckets.get("codex") if isinstance(buckets, dict) else None
         if not isinstance(limits, dict):
             limits = result.get("rateLimits")
         if not isinstance(limits, dict):
-            return None, "no_json"
+            return None, _decide_error("no_json")
         windows = []
         for key in ("primary", "secondary"):
             window = limits.get(key)
@@ -436,33 +470,31 @@ def _query_codex_app_server(codex_home: str | None) -> tuple[dict[str, Any] | No
             windows.append({"id": key, "window_minutes": window.get("windowDurationMins"),
                             "used_percent": window.get("usedPercent"), "resets_at": resets_at})
         if not windows:
-            return None, "no_json"
+            return None, _decide_error("no_json")
         return {"status": "ok", "as_of": _iso(datetime.now(UTC)), "windows": windows}, None
     except queue.Empty:
-        return None, "timeout"
+        return None, _decide_error("timeout")
     except (OSError, ValueError):
-        return None, "no_json"
+        return None, _decide_error("no_json")
     finally:
         if proc.poll() is None:
-            proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        reader.join(timeout=1)
-        if proc.stderr is not None:
             try:
-                stderr_text = proc.stderr.read()
-                if stderr_text and any(w in stderr_text.lower() for w in ("auth", "login", "unauthorized", "unauthenticated", "token", "credential")):
-                    detected_error.insert(0, "auth_required")
-                proc.stderr.close()
+                proc.terminate()
+                proc.wait(timeout=2)
             except Exception:
-                pass
-        if proc.stdin is not None:
-            proc.stdin.close()
-        if proc.stdout is not None:
-            proc.stdout.close()
+                try:
+                    proc.kill()
+                    proc.wait()
+                except Exception:
+                    pass
+        reader.join(timeout=1)
+        stderr_reader.join(timeout=1)
+        for s in (proc.stdin, proc.stdout, proc.stderr):
+            if s is not None:
+                try:
+                    s.close()
+                except Exception:
+                    pass
 
 
 def _find_snapshot_paths() -> list[Path]:
@@ -632,7 +664,7 @@ def _resolve_coding_reference_score(data: dict[str, Any]) -> float | None:
     if isinstance(val, (int, float)) and not isinstance(val, bool):
         return float(val)
     coding_ref = data.get("coding_reference") or data.get("reference")
-    coding_scores = data.get("coding_scores") or data.get("scores")
+    coding_scores = data.get("coding_scores")
     if isinstance(coding_ref, str) and isinstance(coding_scores, dict):
         v = coding_scores.get(coding_ref)
         if isinstance(v, (int, float)) and not isinstance(v, bool):
@@ -762,7 +794,7 @@ def _verify_free_pool_liveness_and_quality(
         candidates.append({"status": raw["live_status"], "at": raw["live_ok_at"]})
     for d in (lists_doc.get("probes"), lists_doc.get("live_probes"), matching_source.get("probes"), lists_doc.get("bridge")):
         if isinstance(d, dict):
-            for k in (model_id, pool_name):
+            for k in (model_id, pool_name, f"temp-{pool_name}"):
                 val = d.get(k)
                 if isinstance(val, dict):
                     candidates.append(val)
@@ -770,25 +802,53 @@ def _verify_free_pool_liveness_and_quality(
     if not candidates:
         return False
 
-    has_valid_fresh = False
+    # Fail closed immediately if ANY candidate proof reports 404 or 402 with fresh or missing timestamp
     for proof in candidates:
         p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
         p_code = proof.get("status_code") or proof.get("code")
-        if p_code in (404, 402, 500) or p_status in ("404", "payment_required", "payment_response", "error", "timeout", "failed", "unusable"):
+        ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+        proof_dt = _ts(ts_raw)
+        is_fresh = proof_dt is not None and (-60 <= (now - proof_dt).total_seconds() <= 3600)
+        if p_code in (404, "404") or p_status in ("404", "not_found"):
+            if proof_dt is None or is_fresh:
+                return False
+        if p_code in (402, "402") or p_status in ("402", "payment_required", "payment_response"):
+            if proof_dt is None or is_fresh:
+                return False
+
+    # Find the most recent fresh OK proof
+    newest_ok_dt: datetime | None = None
+    has_fresh_ok = False
+    for proof in candidates:
+        p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
+        p_code = proof.get("status_code") or proof.get("code")
+        if p_code in (404, 402, 500, 502, 503, 504) or p_status in (
+            "404", "not_found", "402", "payment_required", "payment_response", "error", "timeout", "failed", "unusable"
+        ):
             continue
         if p_status not in ("ok", "success", "active", "throttled", "exhausted"):
             continue
-
         ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
         proof_dt = _ts(ts_raw)
-        if proof_dt is None:
-            continue
-        if not (-60 <= (now - proof_dt).total_seconds() <= 3600):
-            continue
-        has_valid_fresh = True
-        break
+        if proof_dt is not None and (-60 <= (now - proof_dt).total_seconds() <= 3600):
+            has_fresh_ok = True
+            if newest_ok_dt is None or proof_dt > newest_ok_dt:
+                newest_ok_dt = proof_dt
 
-    return has_valid_fresh
+    if not has_fresh_ok:
+        return False
+
+    # Check if any error/unusable proof beats the newest OK proof
+    for proof in candidates:
+        p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
+        p_code = proof.get("status_code") or proof.get("code")
+        if p_code in (500, 502, 503, 504) or p_status in ("error", "timeout", "failed", "unusable"):
+            ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+            proof_dt = _ts(ts_raw)
+            if proof_dt is None or newest_ok_dt is None or proof_dt >= newest_ok_dt:
+                return False
+
+    return True
 
 
 def normalize_free_model(
@@ -834,7 +894,12 @@ def normalize_free_model(
         coding_index = int(round(float(coding_val)))
 
     bridge = bridge_states or {}
-    bridge_st = bridge.get(pool_id) or bridge.get(str(raw_id))
+    bridge_st = (
+        bridge.get(pool_id)
+        or bridge.get(str(raw_id))
+        or bridge.get(f"temp-{pool_id}")
+        or bridge.get(f"temp-{raw_id}")
+    )
     raw_status = str(raw.get("status") or "").lower()
 
     rem = raw.get("remaining_percent")

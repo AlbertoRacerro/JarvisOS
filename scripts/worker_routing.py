@@ -231,7 +231,7 @@ def _admission(document: Any) -> tuple[int | None, int | None, dict[str, int]]:
     raw = document.get("scores")
     scores = {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)} \
         if isinstance(raw, dict) else {}
-    coding_raw = document.get("coding_scores") or document.get("scores")
+    coding_raw = document.get("coding_scores")
     coding_scores = {k: v for k, v in coding_raw.items() if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)} \
         if isinstance(coding_raw, dict) else {}
 
@@ -518,40 +518,62 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
     if not candidates:
         return unreadable(name, "missing_proof")
 
-    has_valid_fresh = False
-    has_404 = False
-    has_payment = False
-    has_stale = False
+    # If ANY fresh/recent candidate proof reports 404 or 402, fail closed immediately.
+    for proof in candidates:
+        p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
+        p_code = proof.get("status_code") or proof.get("code")
+        ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+        proof_dt = _parse_iso_zone(ts_raw)
+        is_fresh = proof_dt is not None and (-60 <= (moment - proof_dt).total_seconds() <= 3600)
+        if p_code in (404, "404") or p_status in ("404", "not_found"):
+            if proof_dt is None or is_fresh:
+                return unreadable(name, "probe_404")
+        if p_code in (402, "402") or p_status in ("402", "payment_required", "payment_response"):
+            if proof_dt is None or is_fresh:
+                return unreadable(name, "payment_required")
+
+    # Find the newest fresh OK proof
+    newest_ok_dt: datetime | None = None
+    has_fresh_ok = False
+    has_stale_ok = False
+    has_error_proof: str | None = None
 
     for proof in candidates:
         p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
         p_code = proof.get("status_code") or proof.get("code")
-        if p_code in (404,) or p_status in ("404", 404):
-            has_404 = True
+        if p_code in (500, 502, 503, 504) or p_status in ("error", "timeout", "failed", "unusable"):
+            has_error_proof = p_status or "unusable"
             continue
-        if p_code in (402,) or p_status in ("payment_required", "payment_response", 402):
-            has_payment = True
+        if p_code in (404, 402, "404", "402") or p_status in ("404", "not_found", "402", "payment_required", "payment_response"):
             continue
         if p_status not in ("ok", "success", "active", "throttled", "exhausted"):
             continue
-        p_time_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
-        p_time = _parse_iso_zone(p_time_raw)
-        if p_time is None:
+        ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+        proof_dt = _parse_iso_zone(ts_raw)
+        if proof_dt is None or not (-60 <= (moment - proof_dt).total_seconds() <= 3600):
+            has_stale_ok = True
             continue
-        if not (-60 <= (moment - p_time).total_seconds() <= 3600):
-            has_stale = True
-            continue
-        has_valid_fresh = True
-        break
+        has_fresh_ok = True
+        if newest_ok_dt is None or proof_dt > newest_ok_dt:
+            newest_ok_dt = proof_dt
 
-    if not has_valid_fresh:
-        if has_404:
-            return unreadable(name, "probe_404")
-        if has_payment:
-            return unreadable(name, "payment_required")
-        if has_stale:
+    if not has_fresh_ok:
+        if has_error_proof:
+            return unreadable(name, has_error_proof if has_error_proof in ("timeout", "error", "unusable") else "unusable")
+        if has_stale_ok:
             return unreadable(name, "stale_proof")
         return unreadable(name, "missing_proof")
+
+    # Check if any error proof beats newest_ok_dt
+    for proof in candidates:
+        p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
+        p_code = proof.get("status_code") or proof.get("code")
+        if p_code in (500, 502, 503, 504) or p_status in ("error", "timeout", "failed", "unusable"):
+            ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+            proof_dt = _parse_iso_zone(ts_raw)
+            if proof_dt is None or newest_ok_dt is None or proof_dt >= newest_ok_dt:
+                err_reason = p_status if p_status in ("timeout", "error", "unusable") else "unusable"
+                return unreadable(name, err_reason)
 
     b_state = bridge_state(name)
     if b_state == "suspect":
