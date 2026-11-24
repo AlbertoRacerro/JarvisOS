@@ -94,6 +94,9 @@ export default function LocalModelPanel() {
     <div className="final-fusion__toolbar-line">{(["start", "stop", "restart"] as const).map(action => <button key={action} type="button" disabled={!enabled[action]} onClick={() => void act(action)}>{action[0].toUpperCase() + action.slice(1)}</button>)}</div>
     {models?.registry_present ? <div aria-label="Registered local models">
       <h4>Registered models</h4>
+      {models.fallback_active ? <div role="status" className="local-model-fallback-notice">
+        <p>Ripristino automatico attivo: {models.fallback_reason || "avvio modello standard non riuscito"}.</p>
+      </div> : null}
       <ul>{models.models.map(entry => {
         const stateLabel = entry.state ? (stateLabels[entry.state] ?? entry.state) : "fermo";
         return <li key={entry.id}>

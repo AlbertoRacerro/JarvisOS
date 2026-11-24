@@ -368,7 +368,18 @@ def run_governed_inference(
         return {"status": "refused"}
     if envelope.is_expired(datetime.now(UTC)) or (cancelled and envelope.cancellation_id and cancelled(envelope.cancellation_id)):
         return {"status": "cancelled"}
-    temperature = 0.3 if envelope.task_kind == "general" else None
+    active_entry = None
+    try:
+        from app.modules.local_ai.runtime.model_registry import get_active_model_entry
+
+        active_entry = get_active_model_entry()
+    except Exception:
+        active_entry = None
+
+    if active_entry is not None and active_entry.temperature is not None:
+        temperature = None
+    else:
+        temperature = 0.3 if envelope.task_kind == "general" else None
     runner_kwargs = run_ai_task_kwargs(
         envelope,
         structured_output_schema=structured_output_schema,
