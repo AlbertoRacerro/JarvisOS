@@ -1,6 +1,6 @@
 # 354 — AGENT-EVAL-GATE-1: Repeatable agent regression eval for the local default and the Hermes harness
 
-Status: ready
+Status: merged
 Depends on: 352
 
 ## Goal

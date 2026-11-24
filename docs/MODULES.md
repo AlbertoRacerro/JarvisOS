@@ -71,6 +71,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `schemas` | live | JSON schemas for BLUECAD specs, results and tool registry, and Jarvis records. | `bluecad_geometry_spec_v0_1.schema.json` | <100 |
 | `scripts` | live | Repository tooling: CI gates, spec-status check, frontend contract codegen, module-table generator, code index and code-facts check, launcher, supervisor (Relay continuity, jobs, observer, host ops), worker routing, Copilot CLI delegation and control-room recovery (devctx). | `relay_continuity.py`, `devctx.py`, `worker_routing.py`, `copilot_worker.py`, `jarvisos_launcher.py`, `check_spec_status.py` | 25500 |
 | `scripts/benchmarks` | in-development | Solver benchmarks against real OpenFOAM, DWSIM and process libraries; today scripts that record evidence, to be turned into pinned regression tests. | `README.md` | 2400 |
+| `scripts/benchmarks/agent_eval` | in-development | Repeatable agent regression eval for the local default and the Hermes harness, driving chat interactions and scoring deterministic answers. | `runner.py`, `example_tasks.json` | 600 |
 | `tests` | live | Tests for the Relay supervisor's output parser and diagnostics (outside the backend suite). | `relay_reliability/` | 500 |
 
-Totals: 58 live, 4 in-development, 2 backlog-candidate.
+Totals: 58 live, 5 in-development, 2 backlog-candidate.
