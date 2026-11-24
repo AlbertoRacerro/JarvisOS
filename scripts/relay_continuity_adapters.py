@@ -68,12 +68,12 @@ class RelayAdapter:
         self._outputs: dict[int, tuple[Any, Any]] = {}
         self._argon_leases: dict[int, Any] = {}
         self._resolved_models: dict[int, str] = {}
-        self._model_launches: dict[int, tuple[str | None, str | None]] = {}
+        self._model_launches: dict[int, tuple[str | None, str | None, str]] = {}
 
     def conversation_store(self) -> Path:
         return relay_argon.conversation_store()
 
-    def limits(self) -> dict[str, Any] | None:
+    def limits(self, coordinator_profile: str = "standard") -> dict[str, Any] | None:
         try:
             proc = subprocess.run([self.binary, "--json", "limits", "--refresh"], capture_output=True, text=True,
                                   timeout=90, check=False, cwd="/tmp")
@@ -88,9 +88,12 @@ class RelayAdapter:
             try:
                 if binary is None:
                     raise relay_argon.account_models.Refused("catalog_unavailable")
-                relay_argon.account_models.resolve("coordinator_codex", binary, {**os.environ, **(self.env or {})})
+                role = relay_argon.account_models.coordinator_role_name("codex", coordinator_profile)
+                relay_argon.account_models.resolve(role, binary, {**os.environ, **(self.env or {})})
             except relay_argon.account_models.Refused:
                 found.pop("codex", None)
+        elif coordinator_profile == "specialist":
+            found.pop("codex", None)
         return found
 
     def argon_limits(self, agent: str = "argon") -> dict[str, Any] | None:
@@ -124,10 +127,17 @@ class RelayAdapter:
         return result
 
     def start(self, agent: str, parent: str | None, task: str, turns: int,
-              resume: str | None = None, resume_model: str | None = None) -> subprocess.Popen:
+              resume: str | None = None, resume_model: str | None = None,
+              coordinator_profile: str = "standard") -> subprocess.Popen:
         # A mission's first task has no parent: Relay opens a new session for it.
         lease = None
         env = {**os.environ, **self.env} if self.env else dict(os.environ)
+        try:
+            role_name = relay_argon.account_models.coordinator_role_name(agent, coordinator_profile)
+        except relay_argon.account_models.Refused as exc:
+            raise CatalogRefused(exc.reason) from exc
+        if role_name.endswith("_specialist") and not relay_argon.account_models.enabled(env):
+            raise CatalogRefused("catalog_unavailable")
         resolved_model = None
         if agent in NATIVE_AGENTS:
             if relay_argon.account_models.enabled(env):
@@ -170,15 +180,19 @@ class RelayAdapter:
                         previous = json.loads((self.sessions_dir() / parent / "selected-model.json").read_text())
                         if not isinstance(previous, dict):
                             raise CatalogRefused("resume_model_missing")
+                        if previous.get("coordinator_profile", "standard") != coordinator_profile:
+                            raise CatalogRefused("resume_profile_mismatch")
                         candidate_model = previous.get("model")
                         if not isinstance(candidate_model, str) or not candidate_model.strip():
                             raise CatalogRefused("resume_model_missing")
                         resume_model = candidate_model
+                    except CatalogRefused:
+                        raise
                     except (OSError, ValueError, KeyError, TypeError) as exc:
                         raise CatalogRefused("resume_model_missing") from exc
                 try:
                     resolved_model = relay_argon.account_models.resolve(
-                        "coordinator_codex", binary, env, exact=resume_model)
+                        role_name, binary, env, exact=resume_model)
                 except relay_argon.account_models.Refused as exc:
                     raise CatalogRefused(exc.reason) from exc
             args = [self.binary, "--json", "run", agent, *(["--continue", parent] if parent else []), "-t", task,
@@ -203,7 +217,7 @@ class RelayAdapter:
         if resolved_model is not None and agent not in NATIVE_AGENTS:
             self._resolved_models[id(proc)] = resolved_model
             marker = re.search(r"\[relay-continuity (?:attempt|resume) (rc-[0-9TZ]+-[0-9a-f]+)\]", task)
-            self._model_launches[id(proc)] = (marker.group(1) if marker else None, parent)
+            self._model_launches[id(proc)] = (marker.group(1) if marker else None, parent, coordinator_profile)
         if lease:
             self._argon_leases[id(proc)] = lease
         return proc
@@ -303,7 +317,7 @@ class RelayAdapter:
             pass
 
         selected = self._resolved_models.pop(id(proc), None)
-        launch_nonce, launch_parent = self._model_launches.pop(id(proc), (None, None))
+        launch_nonce, launch_parent, coordinator_profile = self._model_launches.pop(id(proc), (None, None, "standard"))
         if selected is not None and (not isinstance(session_id, str)
                                      or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session_id)):
             return RunResult(None, getattr(proc, "returncode", None), False, "model_record_failed")
@@ -320,12 +334,15 @@ class RelayAdapter:
                 if len(own_turns) != 1:
                     raise ValueError("launch_nonce_mismatch")
                 target = session / "selected-model.json"
+                record = {"model": selected}
+                if coordinator_profile != "standard":
+                    record["coordinator_profile"] = coordinator_profile
                 if launch_parent is not None:
-                    if json.loads(target.read_text(encoding="utf-8")) != {"model": selected}:
+                    if json.loads(target.read_text(encoding="utf-8")) != record:
                         raise ValueError("resume_model_mismatch")
                 else:
                     with target.open("x", encoding="utf-8") as handle:
-                        handle.write(json.dumps({"model": selected}) + "\n")
+                        handle.write(json.dumps(record) + "\n")
             except (OSError, ValueError):
                 return RunResult(session_id, getattr(proc, "returncode", None), False, "model_record_failed")
 

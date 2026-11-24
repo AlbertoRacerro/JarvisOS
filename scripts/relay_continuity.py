@@ -207,15 +207,16 @@ def command_submit(args: argparse.Namespace) -> int:
     except (OSError, json.JSONDecodeError) as exc:
         print(f"mission file unreadable: {type(exc).__name__}", file=sys.stderr)
         return 2
-    if not isinstance(spec, dict) or set(spec) - {"authority", "tasks"}:
-        print("mission file takes only authority and tasks", file=sys.stderr)
+    if not isinstance(spec, dict) or set(spec) - {"authority", "tasks", "coordinator_profile"}:
+        print("mission file takes only authority, tasks and coordinator_profile", file=sys.stderr)
         return 2
     if any(isinstance(t, dict) and (t.get("check") or {}).get("kind") == "coordinator_cycle" for t in spec.get("tasks") or []):
         print("coordinator_cycle checks are only for roadmap cycles (spec 203); use pr_merged, spec_merged or path_exists",
               file=sys.stderr)
         return 2
     mission, problem = submit_mission(root, repo, spec.get("authority"), spec.get("tasks"),
-                                      session=args.continue_session)
+                                      session=args.continue_session,
+                                      coordinator_profile=spec.get("coordinator_profile", "standard"))
     if mission is None:
         print(f"mission refused: {problem}", file=sys.stderr)
         return 2

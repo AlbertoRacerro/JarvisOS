@@ -48,6 +48,7 @@ ROLES: dict[str, Role] = {
     "coordinator_neon": Role("agy", "gemini-neon", "medium"),
     "coordinator_agy_opus": Role("agy", "claude-opus", "medium"),
     "coordinator_codex": Role("codex", "gpt-sol"),
+    "coordinator_codex_specialist": Role("codex", "gpt-astra"),
     "coordinator_claude": Role("claude", "claude-opus"),
     "worker_flash": Role("agy", "gemini-flash", "low"),
     "worker_flash-medium": Role("agy", "gemini-flash", "medium"),
@@ -66,6 +67,16 @@ ROLES: dict[str, Role] = {
     "worker_haiku": Role("claude", "claude-haiku"),
     "worker_sonnet": Role("claude", "claude-sonnet"),
 }
+
+
+def coordinator_role_name(agent: str, profile: str = "standard") -> str:
+    if profile not in ("standard", "specialist"):
+        raise Refused("profile_not_allowed")
+    standard = f"coordinator_{agent}"
+    if standard not in ROLES:
+        raise Refused("role_not_allowed")
+    specialist = f"{standard}_specialist"
+    return specialist if profile == "specialist" and specialist in ROLES else standard
 
 
 def _pattern(role: Role) -> re.Pattern[str]:
@@ -246,6 +257,11 @@ def resolve(role_name: str, binary: str, env: dict[str, str], *, exact: str | No
     role = ROLES.get(role_name)
     if role is None:
         raise Refused("role_not_allowed")
+    if role_name == "coordinator_codex_specialist" and "JARVISOS_COORDINATOR_SPECIALIST_STEM" in env:
+        stem = env["JARVISOS_COORDINATOR_SPECIALIST_STEM"]
+        if not re.fullmatch(r"gpt-[a-z][a-z0-9]{1,24}", stem):
+            raise Refused("role_stem_not_allowed")
+        role = Role(role.cli, stem, role.effort, role.preview)
     ids = catalog(role.cli, binary, env, now=now)
     pattern = _pattern(role)
     matches: list[tuple[tuple[int, int, int], str]] = []

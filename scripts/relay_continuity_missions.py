@@ -90,6 +90,8 @@ def validate_mission(data: Any) -> str | None:
         return "bad submitted_at"
     if data.get("session") is not None and not re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{6}", str(data["session"])):
         return "bad session"
+    if data.get("coordinator_profile", "standard") not in ("standard", "specialist"):
+        return "bad coordinator_profile"
     tasks = data.get("tasks")
     if not isinstance(tasks, list) or not 1 <= len(tasks) <= MAX_TASKS:
         return f"tasks must be a list of 1-{MAX_TASKS} entries"
