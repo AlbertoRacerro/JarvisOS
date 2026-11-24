@@ -2,13 +2,15 @@ import { useEffect, useState } from "react";
 import { designTarget } from "../app/designTargets";
 import { getDraft, listDrafts, type DraftProjection, type DraftSummary } from "../api/processDraft";
 import DynamicPanel from "../components/dynamic/DynamicPanel";
+import AxialOxygenPanel from "../components/design/AxialOxygenPanel";
 
 // Design › Dynamic: the time simulation of a Process draft, as its own stage instead of a fold at the bottom of the
 // Process editor. It opens the version's Plant draft; another draft of the version is one choice away and the choice
 // lives in the URL (&draft=<id>), so Back, Forward and the Process editor's link reach the same draft.
-export default function DesignDynamicPanel({ workspaceId, plantDraftIds, requestedDraftId, onChooseDraft, onOpenPlant }: Readonly<{
+export default function DesignDynamicPanel({ workspaceId, plantDraftIds, requestedDraftId, onChooseDraft, onOpenPlant, openAxial = false }: Readonly<{
   workspaceId: string; plantDraftIds: readonly string[]; requestedDraftId: string | null;
   onChooseDraft(draftId: string | null, replace?: boolean): void; onOpenPlant(): void;
+  openAxial?: boolean;
 }>) {
   const [drafts, setDrafts] = useState<DraftSummary[] | null>(null);
   const [draft, setDraft] = useState<DraftProjection | null>(null);
@@ -58,6 +60,7 @@ export default function DesignDynamicPanel({ workspaceId, plantDraftIds, request
     </div> : null}
     {linkMissed ? <p role="status">The requested Process draft is not in this version; showing {nameOf(chosenId)} instead.</p> : null}
     {chosenId && !draft && !error ? <p role="status">Loading the Process draft…</p> : null}
+    <AxialOxygenPanel key={`axial-${chosenId ?? "default"}`} workspaceId={workspaceId} draft={draft} initialOpen={openAxial} />
     {draft ? <DynamicPanel key={draft.draft_id} workspaceId={workspaceId} draft={draft} guided
       onUpdated={(next) => setDraft((current) => (current?.draft_id === next.draft_id ? next : current))} /> : null}
   </section>;
