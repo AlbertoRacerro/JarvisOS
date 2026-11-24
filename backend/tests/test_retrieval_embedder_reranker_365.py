@@ -475,6 +475,49 @@ def test_owner_catch_up_reembeds_documents_when_embedder_changes(
         assert len(vec) == 32
 
 
+def test_owner_catch_up_reembeds_only_the_given_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JARVISOS_DATA_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    initialize_database()
+    seed_default_workspace()
+    create_decision("main", DecisionCreate(title="Decision 1", decision_text="Decision details one"))
+
+    default_store = SQLiteIndexStore(embedder=HashingEmbedder(dimensions=128))
+    owner_catch_up(default_store)
+    other = SQLiteIndexStore(embedder=HashingEmbedder(dimensions=128), documents=lambda: (),
+                             db_path=tmp_path / "other.db")
+    other.upsert([IndexDocument(
+        source_ref=SourceRef(authority_owner="modeling", object_type="decision", object_id="other-1",
+                             workspace_id="main", content_digest=canonical_digest("other")),
+        title="Other", text="other store text")])
+
+    other.embedder = HashingEmbedder(dimensions=32)
+    owner_catch_up(other)
+
+    assert other.has_compatible_embedder()
+    with other._open_connection() as db:
+        assert len(json.loads(db.execute("SELECT vector FROM docs WHERE object_id='other-1'").fetchone()[0])) == 32
+    # The default index keeps its own embedder and vectors.
+    assert default_store.has_compatible_embedder()
+
+    read_only = SQLiteIndexStore(embedder=HashingEmbedder(dimensions=16), documents=lambda: (),
+                                 db_path=tmp_path / "other.db", read_only=True)
+    owner_catch_up(read_only)
+    assert not read_only.has_compatible_embedder()
+
+
+def test_search_hybrid_with_reranker_keeps_limits_above_the_rerank_pool() -> None:
+    docs = [IndexDocument(
+        source_ref=SourceRef(authority_owner="modeling", object_type="decision", object_id=f"d{i:03d}",
+                             workspace_id="ws1", content_digest=canonical_digest(f"pump {i}")),
+        title=f"Pump {i}", text=f"pump sizing note {i}") for i in range(90)]
+    plain = SQLiteIndexStore(embedder=HashingEmbedder(), reranker=None, documents=lambda: ())
+    plain.upsert(docs)
+    reranked = SQLiteIndexStore(embedder=HashingEmbedder(), reranker=StubReranker({}), documents=lambda: ())
+    assert len(plain.search_hybrid("pump", limit=80)) == 80
+    assert len(reranked.search_hybrid("pump", limit=80)) == 80
+
+
 # ---------------------------------------------------------------------------
 # Criterion 5: retrieval.eval recording embedder/reranker & rank improvement
 # ---------------------------------------------------------------------------

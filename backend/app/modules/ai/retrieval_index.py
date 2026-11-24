@@ -1602,7 +1602,8 @@ class SQLiteIndexStore:
         if limit <= 0:
             return []
         do_rerank = rerank and self.reranker is not None
-        candidate_limit = min(max(limit * 3, 24), 64) if do_rerank else limit
+        rerank_pool = min(max(limit * 3, 24), 64) if do_rerank else 0
+        candidate_limit = max(limit, rerank_pool)
 
         lexical_hits = self.search_lexical(query, limit=candidate_limit, workspace_id=workspace_id)
         vector_hits = self.search_vector(query, limit=candidate_limit, workspace_id=workspace_id)
@@ -1636,10 +1637,12 @@ class SQLiteIndexStore:
         if not do_rerank:
             return [ranked[key].model_copy(update={"fused_score": ranked_score(key)}) for key in ordered[:limit]]
 
-        candidate_keys = [
+        in_scope = [
             key for key in ordered
             if workspace_id is None or ranked[key].source_ref.workspace_id == workspace_id
-        ][:candidate_limit]
+        ]
+        # Only the top of the fused list is reranked; the rest keeps its fused order below it.
+        candidate_keys = in_scope[:rerank_pool]
         if not candidate_keys:
             return []
 
@@ -1667,7 +1670,10 @@ class SQLiteIndexStore:
             scored_candidates.append((penalized, is_hermes, k, updated_hit))
 
         scored_candidates.sort(key=lambda t: (-t[0], t[1], t[2]))
-        return [item[3] for item in scored_candidates[:limit]]
+        reranked = [item[3] for item in scored_candidates]
+        tail = [ranked[key].model_copy(update={"fused_score": ranked_score(key)})
+                for key in in_scope[rerank_pool:]]
+        return (reranked + tail)[:limit]
 
     def resolve_authoritative(self, ref: SourceRef) -> AuthoritativeResolution:
         doc: IndexDocument | None = None

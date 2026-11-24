@@ -347,8 +347,8 @@ def owner_catch_up(store: SQLiteIndexStore) -> dict[str, dict[str, int]]:
     if not workspaces_ready:
         return {owner: {"changed": 0, "deleted": 0, "embedded": 0} for owner in fingerprints}
     reembedded_by_owner: dict[str, int] = defaultdict(int)
-    if not store.has_compatible_embedder():
-        with open_retrieval_index_connection() as db:
+    if not store.read_only and not store.has_compatible_embedder():
+        with store._open_connection() as db:
             db.execute("BEGIN IMMEDIATE")
             if store.use_sqlite_vec:
                 from app.modules.ai.retrieval_index import _load_vector_extension
