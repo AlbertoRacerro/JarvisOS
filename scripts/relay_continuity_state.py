@@ -45,6 +45,7 @@ def default_state() -> dict[str, Any]:
         "notify": {"sent": {}, "window": [], "last_digest": None, "failures": 0, "retry": None, "dropped": 0},
         "watch": {"seen": {}, "master": None}, "acknowledged": None, "spend_caps": {}, "updated_at": None,
         "parked_turns": [], "wait": None, "resumes": 0, "last_checkpoint_at": None, "network_outage": False,
+        "network_outage_since": None,
         "unreadable_alerts": [],
     }
 
@@ -59,7 +60,7 @@ STATE_TYPES: dict[str, tuple[type, ...]] = {
 }
 # Keys added after the first schema: a state written by an older release lacks them and gets their defaults on load.
 # A new key of `default_state()` goes here; any other absent key means a damaged file.
-ADDED_STATE_KEYS = ("parked_turns", "wait", "resumes", "last_checkpoint_at", "network_outage", "unreadable_alerts")
+ADDED_STATE_KEYS = ("parked_turns", "wait", "resumes", "last_checkpoint_at", "network_outage", "network_outage_since", "unreadable_alerts")
 PENDING_KEYS = ("nonce", "agent", "parent", "started_at", "pid", "pid_start", "fingerprint", "attempt")
 
 
@@ -97,6 +98,11 @@ def validate_state(data: dict[str, Any]) -> str | None:
         return "bad type for diagnostics"
     if not isinstance(data.get("unreadable_alerts", []), list):
         return "bad type for unreadable_alerts"
+    if not isinstance(data.get("network_outage", False), bool):
+        return "bad network_outage"
+    nos = data.get("network_outage_since")
+    if nos is not None and (not isinstance(nos, str) or parse_ts(nos) is None):
+        return "bad network_outage_since"
     resumes = data.get("resumes")
     if isinstance(resumes, bool) or not isinstance(resumes, int) or resumes < 0:
         return "bad resumes"

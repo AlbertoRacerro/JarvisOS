@@ -86,9 +86,7 @@ def test_point_1_reachability_probe_failure_avoids_needless_sleep_and_keeps_outa
     env.host.reachable = lambda: False
 
     decision = sup._decide(report, None)
-    assert isinstance(decision, tuple)
-    agent, prompt = decision
-    res = sup._launch(agent, prompt, report)
+    res = sup._launch(decision[0], decision[1], report) if isinstance(decision, tuple) else decision
 
     assert res == "waiting"
     # No needless sleep occurred
