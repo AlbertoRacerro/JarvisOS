@@ -19,6 +19,7 @@ import signal
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Iterable
@@ -172,13 +173,335 @@ def _is_safe_global_ip(ip_str: str) -> bool:
     if isinstance(ip, ipaddress.IPv6Address):
         if ip.ipv4_mapped:
             mapped = ip.ipv4_mapped
-            if (mapped.is_loopback or mapped.is_private or mapped.is_link_local
-                    or mapped.is_multicast or mapped.is_reserved or mapped.is_unspecified or not mapped.is_global):
+            if not _is_safe_global_ip(str(mapped)):
+                return False
+        # RFC 6052 NAT64 Well-Known Prefix 64:ff9b::/96 embeds an IPv4 in the lower 32 bits
+        if ip in ipaddress.IPv6Network("64:ff9b::/96"):
+            embedded = ipaddress.IPv4Address(ip._ip & 0xFFFFFFFF)
+            if not _is_safe_global_ip(str(embedded)):
                 return False
         if ip.is_site_local:
             return False
 
     return True
+
+
+def _is_numeric_ip(host: str) -> list[str]:
+    """Return list of canonical IP strings if host is a numeric IP literal (IPv4 or IPv6), else empty."""
+    clean = host.strip("[]")
+    try:
+        ip = ipaddress.ip_address(clean)
+        return [str(ip)]
+    except ValueError:
+        pass
+
+    try:
+        gai = socket.getaddrinfo(clean, None, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_NUMERICHOST)
+        return [str(sa[4][0]) for sa in gai]
+    except (socket.gaierror, OSError):
+        pass
+
+    return []
+
+
+class _ValidatingProxyServer:
+    """Ephemeral, localhost-bound forward HTTP CONNECT proxy for headless Chromium.
+
+    Enforces network containment:
+    1. Blocks any plain HTTP requests (only CONNECT method allowed).
+    2. Enforces destination port == 443 (standard HTTPS only).
+    3. Blocks any connection attempts to loopback, private, link-local, multicast,
+       unspecified, or non-global IP addresses (IPv4 and IPv6).
+    4. Handles IP literals (IPv4 dotted-quad, octal, hex, int, IPv6, IPv4-mapped, NAT64).
+    5. Resolves hostnames via the provided DNS resolver; blocks if resolution fails
+       or if ANY resolved IP address is private/loopback/non-global.
+    6. Verifies hostnames against egress pack terms, sensitivity terms, and blocked tokens.
+    7. Upstream TCP connection connects directly to the validated IP literal,
+       preventing DNS rebinding (TOCTOU) at the TCP connection layer.
+    8. Records any blocked SSRF attempts.
+    """
+
+    def __init__(
+        self,
+        *,
+        dns_resolver: Callable[[str], list[str]] | None = None,
+        blocked_tokens: Iterable[str] | None = None,
+        upstream_connector: Callable[[str, int], socket.socket] | None = None,
+    ) -> None:
+        self.dns_resolver = _get_dns_resolver(dns_resolver)
+        self.blocked_tokens = set(blocked_tokens or ())
+        self.upstream_connector = upstream_connector
+        self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_sock.bind(("127.0.0.1", 0))
+        self.port: int = self.server_sock.getsockname()[1]
+        self.server_sock.listen(128)
+        self.running = False
+        self.open_sockets: set[socket.socket] = set()
+        self.lock = threading.Lock()
+        self.thread: threading.Thread | None = None
+        self.ssrf_blocked = False
+        self.ssrf_block_reasons: list[str] = []
+
+    def start(self) -> _ValidatingProxyServer:
+        self.running = True
+        self.thread = threading.Thread(target=self._accept_loop, daemon=True, name="jarvis-proxy-accept")
+        self.thread.start()
+        return self
+
+    def _record_ssrf_block(self, reason: str) -> None:
+        with self.lock:
+            self.ssrf_blocked = True
+            self.ssrf_block_reasons.append(reason)
+
+    def _register_socket(self, s: socket.socket) -> None:
+        with self.lock:
+            self.open_sockets.add(s)
+
+    def _unregister_socket(self, s: socket.socket) -> None:
+        with self.lock:
+            self.open_sockets.discard(s)
+
+    def _accept_loop(self) -> None:
+        while self.running:
+            try:
+                self.server_sock.settimeout(0.25)
+                client_sock, _ = self.server_sock.accept()
+            except (TimeoutError, OSError):
+                continue
+            with self.lock:
+                if not self.running:
+                    try:
+                        client_sock.close()
+                    except OSError:
+                        pass
+                    break
+                self.open_sockets.add(client_sock)
+            t = threading.Thread(
+                target=self._handle_client, args=(client_sock,), daemon=True, name="jarvis-proxy-conn"
+            )
+            t.start()
+
+    def _handle_client(self, client_sock: socket.socket) -> None:
+        upstream_sock: socket.socket | None = None
+        try:
+            client_sock.settimeout(5.0)
+            req_data = b""
+            while b"\r\n\r\n" not in req_data and len(req_data) < 8192:
+                try:
+                    chunk = client_sock.recv(4096)
+                except (TimeoutError, OSError):
+                    break
+                if not chunk:
+                    break
+                req_data += chunk
+            if not req_data:
+                return
+
+            first_line = req_data.split(b"\r\n")[0].decode("utf-8", errors="replace").strip()
+            parts = first_line.split()
+            if len(parts) < 2 or parts[0].upper() != "CONNECT":
+                self._record_ssrf_block("plain_http_refused")
+                try:
+                    client_sock.sendall(
+                        b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nBlocked: HTTPS (CONNECT) required.\r\n"
+                    )
+                except OSError:
+                    pass
+                return
+
+            target = parts[1]
+            if target.startswith("["):
+                idx = target.find("]")
+                if idx == -1:
+                    self._record_ssrf_block("invalid_ipv6_target")
+                    client_sock.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                    return
+                host = target[1:idx]
+                rest = target[idx + 1:]
+                if not rest.startswith(":"):
+                    self._record_ssrf_block("missing_port")
+                    client_sock.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                    return
+                port_str = rest[1:]
+            else:
+                if ":" not in target:
+                    self._record_ssrf_block("missing_port")
+                    client_sock.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                    return
+                host, port_str = target.split(":", 1)
+
+            try:
+                port = int(port_str)
+            except ValueError:
+                self._record_ssrf_block("invalid_port")
+                client_sock.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+                return
+
+            if port != 443:
+                self._record_ssrf_block(f"non_443_port_{port}")
+                try:
+                    client_sock.sendall(
+                        b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nBlocked: only port 443 allowed.\r\n"
+                    )
+                except OSError:
+                    pass
+                return
+
+            # Check if host is numeric IP literal
+            numeric_ips = _is_numeric_ip(host)
+            target_ip: str | None = None
+            if numeric_ips:
+                for nip in numeric_ips:
+                    if not _is_safe_global_ip(nip):
+                        self._record_ssrf_block(f"private_ip_literal_{nip}")
+                        try:
+                            client_sock.sendall(
+                                b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nBlocked: private IP refused.\r\n"
+                            )
+                        except OSError:
+                            pass
+                        return
+                target_ip = numeric_ips[0]
+            else:
+                # Egress checks on hostname
+                if (
+                    _KNOWN_SECRET_RE.search(host)
+                    or sanitize_text(host) != host
+                    or check_sensitivity_floor(host) in {"S2", "S3", "S4"}
+                    or packs.mentions_pack_term(host)
+                ):
+                    self._record_ssrf_block(f"egress_term_{host}")
+                    try:
+                        client_sock.sendall(
+                            b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nBlocked: sensitive term in host.\r\n"
+                        )
+                    except OSError:
+                        pass
+                    return
+                if self.blocked_tokens:
+                    for tok in self.blocked_tokens:
+                        if tok and tok in host:
+                            self._record_ssrf_block(f"blocked_token_{host}")
+                            try:
+                                client_sock.sendall(
+                                    b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nBlocked: token in host.\r\n"
+                                )
+                            except OSError:
+                                pass
+                            return
+
+                # Resolve hostname
+                resolved = self.dns_resolver(host)
+                if not resolved:
+                    self._record_ssrf_block(f"dns_resolution_failed_{host}")
+                    try:
+                        client_sock.sendall(
+                            b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nDNS resolution failed.\r\n"
+                        )
+                    except OSError:
+                        pass
+                    return
+
+                for rip in resolved:
+                    if not _is_safe_global_ip(rip):
+                        self._record_ssrf_block(f"resolved_private_ip_{rip}")
+                        try:
+                            client_sock.sendall(
+                                b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nBlocked: resolved private IP refused.\r\n"
+                            )
+                        except OSError:
+                            pass
+                        return
+                target_ip = resolved[0]
+
+            assert target_ip is not None
+            # Connect upstream directly to verified IP literal (curing DNS rebinding)
+            try:
+                if self.upstream_connector is not None:
+                    upstream_sock = self.upstream_connector(target_ip, port)
+                else:
+                    family = socket.AF_INET6 if ":" in target_ip else socket.AF_INET
+                    upstream_sock = socket.socket(family, socket.SOCK_STREAM)
+                    self._register_socket(upstream_sock)
+                    upstream_sock.settimeout(10.0)
+                    upstream_sock.connect((target_ip, port))
+            except Exception:
+                try:
+                    client_sock.sendall(
+                        b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nUpstream connect failed.\r\n"
+                    )
+                except OSError:
+                    pass
+                return
+
+            try:
+                client_sock.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            except OSError:
+                return
+
+            self._pipe(client_sock, upstream_sock, timeout=CHROMIUM_TIMEOUT_SECONDS)
+        except Exception:
+            pass
+        finally:
+            self._unregister_socket(client_sock)
+            try:
+                client_sock.close()
+            except OSError:
+                pass
+            if upstream_sock is not None:
+                self._unregister_socket(upstream_sock)
+                try:
+                    upstream_sock.close()
+                except OSError:
+                    pass
+
+    def _pipe(self, s1: socket.socket, s2: socket.socket, timeout: float = CHROMIUM_TIMEOUT_SECONDS) -> None:
+        deadline = time.monotonic() + timeout
+        s1.setblocking(False)
+        s2.setblocking(False)
+        socks = [s1, s2]
+        bufsize = 65536
+        while self.running and socks:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                r, _, _ = select.select(socks, [], [], min(remaining, 0.5))
+            except (OSError, ValueError):
+                break
+            for s in r:
+                other = s2 if s is s1 else s1
+                try:
+                    data = s.recv(bufsize)
+                except (BlockingIOError, InterruptedError):
+                    continue
+                except OSError:
+                    data = b""
+                if not data:
+                    socks.clear()
+                    break
+                try:
+                    other.sendall(data)
+                except OSError:
+                    socks.clear()
+                    break
+
+    def stop(self) -> None:
+        self.running = False
+        try:
+            self.server_sock.close()
+        except OSError:
+            pass
+        with self.lock:
+            for s in list(self.open_sockets):
+                try:
+                    s.close()
+                except OSError:
+                    pass
+            self.open_sockets.clear()
+        if self.thread is not None:
+            self.thread.join(timeout=1.0)
 
 
 def _default_dns_resolver(hostname: str) -> list[str]:
@@ -409,6 +732,7 @@ def execute_browser_page_read(
     runner: Callable[[list[str], float], tuple[int, str, str]] | None = None,
     dns_resolver: Callable[[str], list[str]] | None = None,
     blocked_tokens: Iterable[str] | None = None,
+    upstream_connector: Callable[[str, int], socket.socket] | None = None,
 ) -> dict[str, Any]:
     """Perform pre-flight safety checks and execute headless Chromium page read."""
     now_iso = datetime.now(UTC).isoformat()
@@ -436,19 +760,28 @@ def execute_browser_page_read(
     if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
         return {"error": "invalid_url", "status": "error"}
 
+    if parsed.port is not None and parsed.port != 443:
+        return {"error": "invalid_url", "status": "error"}
+
     hostname = parsed.hostname
     if not hostname or not hostname.strip():
         return {"error": "invalid_url", "status": "error"}
 
     # 3. DNS resolution & IP safety check
-    resolver = _get_dns_resolver(dns_resolver)
-    resolved_ips = resolver(hostname)
-    if not resolved_ips:
-        return {"error": "dns_resolution_failed", "status": "error"}
+    numeric_ips = _is_numeric_ip(hostname)
+    if numeric_ips:
+        for nip in numeric_ips:
+            if not _is_safe_global_ip(nip):
+                return {"error": "private_ip_refused", "status": "error"}
+    else:
+        resolver = _get_dns_resolver(dns_resolver)
+        resolved_ips = resolver(hostname)
+        if not resolved_ips:
+            return {"error": "dns_resolution_failed", "status": "error"}
 
-    for ip_str in resolved_ips:
-        if not _is_safe_global_ip(ip_str):
-            return {"error": "private_ip_refused", "status": "error"}
+        for ip_str in resolved_ips:
+            if not _is_safe_global_ip(ip_str):
+                return {"error": "private_ip_refused", "status": "error"}
 
     # 4. Egress sanitization checks on URL (raw and iteratively URL-decoded forms)
     url_variants: list[str] = [clean_url]
@@ -521,7 +854,14 @@ def execute_browser_page_read(
         chromium_bin = find_chromium_binary() or "chromium"
         run_func = active_runner
 
-    # 7. Ephemeral headless Chromium execution
+    # 7. Ephemeral headless Chromium execution with validating proxy
+    resolver = _get_dns_resolver(dns_resolver)
+    proxy_server = _ValidatingProxyServer(
+        dns_resolver=resolver,
+        blocked_tokens=blocked_tokens,
+        upstream_connector=upstream_connector,
+    )
+    proxy_server.start()
     temp_dir = tempfile.mkdtemp(prefix="jarvis_browser_")
     try:
         argv = [
@@ -529,8 +869,20 @@ def execute_browser_page_read(
             "--headless=new",
             "--disable-gpu",
             "--no-first-run",
+            "--no-default-browser-check",
             "--disable-extensions",
             "--disable-background-networking",
+            "--disable-component-update",
+            "--disable-sync",
+            "--disable-default-apps",
+            "--mute-audio",
+            "--disable-quic",
+            "--disable-webrtc",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+            "--blink-settings=imagesEnabled=false",
+            f"--proxy-server=http://127.0.0.1:{proxy_server.port}",
+            "--proxy-bypass-list=<-loopback>",
+            "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
             f"--user-data-dir={temp_dir}",
             "--dump-dom",
             clean_url,
@@ -560,6 +912,17 @@ def execute_browser_page_read(
         # Cap stdout capture at 2 MB
         if len(stdout) > MAX_STDOUT_BYTES:
             stdout = stdout[:MAX_STDOUT_BYTES]
+
+        if proxy_server.ssrf_blocked and not stdout.strip():
+            return {
+                "status": "error",
+                "error": "private_ip_refused",
+                "url": clean_url,
+                "title": "",
+                "text": "",
+                "truncated": False,
+                "observed_at": now_iso,
+            }
 
         if not stdout and returncode != 0:
             return {
@@ -594,6 +957,7 @@ def execute_browser_page_read(
             "observed_at": now_iso,
         }
     finally:
+        proxy_server.stop()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -606,6 +970,7 @@ def dispatch_browser_page_tool(
     runner: Any = None,
     dns_resolver: Any = None,
     live_grants: dict[str, CapabilityGrantRef] | None = None,
+    upstream_connector: Any = None,
 ) -> tuple[dict[str, Any] | None, str]:
     """Broker dispatch for jarvis.browser_page_read capability."""
     raw_args = call.arguments
@@ -650,6 +1015,7 @@ def dispatch_browser_page_tool(
         runner=runner,
         dns_resolver=dns_resolver,
         blocked_tokens=blocked_tokens,
+        upstream_connector=upstream_connector,
     )
 
     if result.get("error"):

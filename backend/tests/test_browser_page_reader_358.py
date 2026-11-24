@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
+import threading
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -21,7 +23,9 @@ from typing import Any
 from app.core import packs
 from app.modules.agents.hermes import broker_mcp, browser_page_tool, supervisor, worker_shim
 from app.modules.agents.hermes.browser_page_tool import (
+    _is_numeric_ip,
     _is_safe_global_ip,
+    _ValidatingProxyServer,
     execute_browser_page_read,
     override_dns_resolver,
 )
@@ -637,3 +641,260 @@ def test_worker_shim_completion_message_promotes_browser_page_read() -> None:
     assert len(msg["tool_calls"]) == 1
     promoted = msg["tool_calls"][0]
     assert promoted["function"]["name"] == "mcp__jarvis__jarvis_browser_page_read"
+
+
+# ==============================================================================
+# Criterion 4: Robust SSRF containment across the entire causal family
+# ==============================================================================
+
+def test_browser_proxy_containment_flags_in_argv() -> None:
+    """Chromium argv must strictly include all proxy, resolver rule, and egress containment flags."""
+    captured_argv: list[str] = []
+
+    def mock_runner(argv: list[str], timeout: float) -> tuple[int, str, str]:
+        captured_argv.extend(argv)
+        return 0, "<html><head><title>Spec</title></head><body>Content</body></html>", ""
+
+    res = execute_browser_page_read(
+        "https://example.com/datasheet",
+        runner=mock_runner,
+        dns_resolver=_public_dns,
+    )
+    assert res["status"] == "succeeded"
+
+    # Proxy server flag present and pointing to 127.0.0.1
+    proxy_flag = next((a for a in captured_argv if a.startswith("--proxy-server=http://127.0.0.1:")), None)
+    assert proxy_flag is not None
+
+    # Proxy bypass list must explicitly include <-loopback> to remove default localhost bypass
+    assert "--proxy-bypass-list=<-loopback>" in captured_argv
+
+    # Host resolver rules must block direct DNS in Chromium
+    assert "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1" in captured_argv
+
+    # Protocols and features that bypass proxy must be disabled
+    assert "--disable-quic" in captured_argv
+    assert "--disable-webrtc" in captured_argv
+    assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in captured_argv
+    assert "--blink-settings=imagesEnabled=false" in captured_argv
+
+    # Ephemeral profile flag
+    assert any(a.startswith("--user-data-dir=") for a in captured_argv)
+
+    # URL must remain the final argument
+    assert captured_argv[-1] == "https://example.com/datasheet"
+
+
+def test_initial_dns_rebinding_blocked_by_proxy() -> None:
+    """If an attacker domain rebinds from public to private IP after preflight, proxy blocks connection."""
+    query_count = 0
+
+    def rebinding_dns(hostname: str) -> list[str]:
+        nonlocal query_count
+        query_count += 1
+        if query_count == 1:
+            return ["93.184.216.34"]  # Preflight passes
+        return ["127.0.0.1"]  # Rebound to loopback
+
+    def mock_runner_rebinding(argv: list[str], timeout: float) -> tuple[int, str, str]:
+        # Extract proxy port from argv
+        proxy_arg = next(a for a in argv if a.startswith("--proxy-server=http://127.0.0.1:"))
+        proxy_port = int(proxy_arg.split(":")[-1])
+
+        # Connect to proxy and issue CONNECT for the rebound domain
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2.0)
+        s.connect(("127.0.0.1", proxy_port))
+        s.sendall(b"CONNECT rebind.attacker.test:443 HTTP/1.1\r\nHost: rebind.attacker.test:443\r\n\r\n")
+        resp = s.recv(1024)
+        s.close()
+
+        # Proxy must reject with 403 Forbidden
+        assert b"403 Forbidden" in resp
+        return 0, "", ""  # Empty DOM returned when proxy blocks navigation
+
+    res = execute_browser_page_read(
+        "https://rebind.attacker.test/exploit",
+        runner=mock_runner_rebinding,
+        dns_resolver=rebinding_dns,
+    )
+    assert res["status"] == "error"
+    assert res["error"] == "private_ip_refused"
+
+
+def test_redirects_to_internal_targets_blocked_by_proxy() -> None:
+    """Proxy blocks HTTP/HTTPS redirects to loopback, private IPv4/IPv6, link-local, and metadata."""
+    proxy = _ValidatingProxyServer(dns_resolver=_public_dns).start()
+    try:
+        targets_to_block = [
+            # IPv4 loopback & private
+            "127.0.0.1:443",
+            "127.0.0.2:443",
+            "10.0.0.1:443",
+            "172.16.0.1:443",
+            "192.168.1.1:443",
+            "169.254.169.254:443",  # AWS/GCP metadata
+            "0.0.0.0:443",
+            # IPv6 loopback, link-local, unique local
+            "[::1]:443",
+            "[fe80::1]:443",
+            "[fc00::1]:443",
+            "[fd00::1]:443",
+            # IPv4-mapped IPv6
+            "[::ffff:127.0.0.1]:443",
+            "[::ffff:10.0.0.1]:443",
+            # NAT64 embedded IPv4
+            "[64:ff9b::127.0.0.1]:443",
+            "[64:ff9b::169.254.169.254]:443",
+            # Alternative representations (octal, int)
+            "0177.0.0.1:443",
+            "2130706433:443",
+        ]
+
+        for target in targets_to_block:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2.0)
+            s.connect(("127.0.0.1", proxy.port))
+            req = f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode()
+            s.sendall(req)
+            resp = s.recv(1024)
+            s.close()
+            assert b"403 Forbidden" in resp, f"Expected 403 Forbidden for target {target}, got {resp!r}"
+            assert proxy.ssrf_blocked is True
+    finally:
+        proxy.stop()
+
+
+def test_plain_http_and_non_443_ports_blocked_by_proxy() -> None:
+    """Proxy blocks any plain HTTP requests (subresources) and non-443 destination ports."""
+    proxy = _ValidatingProxyServer(dns_resolver=_public_dns).start()
+    try:
+        # 1. Plain HTTP subresource requests
+        for plain_req in [
+            b"GET http://127.0.0.1:8000/secret HTTP/1.1\r\nHost: 127.0.0.1:8000\r\n\r\n",
+            b"GET http://169.254.169.254/latest/meta-data HTTP/1.1\r\nHost: 169.254.169.254\r\n\r\n",
+            b"POST http://10.0.0.1/admin/reset HTTP/1.1\r\nHost: 10.0.0.1\r\n\r\n",
+        ]:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2.0)
+            s.connect(("127.0.0.1", proxy.port))
+            s.sendall(plain_req)
+            resp = s.recv(1024)
+            s.close()
+            assert b"403 Forbidden" in resp
+
+        # 2. Non-443 destination ports
+        for non_443_port in [80, 8000, 8080, 8443, 6443, 22]:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2.0)
+            s.connect(("127.0.0.1", proxy.port))
+            req = f"CONNECT example.com:{non_443_port} HTTP/1.1\r\nHost: example.com:{non_443_port}\r\n\r\n".encode()
+            s.sendall(req)
+            resp = s.recv(1024)
+            s.close()
+            assert b"403 Forbidden" in resp
+    finally:
+        proxy.stop()
+
+
+def test_proxy_blocks_sensitive_terms_and_tokens_in_host(monkeypatch) -> None:
+    """Proxy rejects connection attempts to hostnames containing egress pack terms or secrets."""
+    monkeypatch.setattr(packs, "sensitivity_terms", lambda: ("zephyraerospace",))
+    proxy = _ValidatingProxyServer(
+        dns_resolver=_public_dns,
+        blocked_tokens={"session-token-xyz"},
+    ).start()
+    try:
+        for bad_host in [
+            "zephyraerospace.attacker.test:443",
+            "session-token-xyz.evil.test:443",
+            "sk-123456789012345678901234567890.evil.test:443",
+        ]:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2.0)
+            s.connect(("127.0.0.1", proxy.port))
+            s.sendall(f"CONNECT {bad_host} HTTP/1.1\r\nHost: {bad_host}\r\n\r\n".encode())
+            resp = s.recv(1024)
+            s.close()
+            assert b"403 Forbidden" in resp
+            assert proxy.ssrf_blocked is True
+    finally:
+        proxy.stop()
+
+
+def test_initial_url_numeric_ip_and_port_validation() -> None:
+    """Preflight catches IP literals in initial URL and non-443 ports before subprocess launch."""
+    runner = _make_html_runner("<html><body>OK</body></html>")
+
+    # Private IP literals in initial URL rejected even with public mock DNS
+    for bad_url in [
+        "https://127.0.0.1/datasheet",
+        "https://[::1]/datasheet",
+        "https://0177.0.0.1/datasheet",
+        "https://2130706433/datasheet",
+        "https://169.254.169.254/metadata",
+        "https://10.0.0.1/admin",
+    ]:
+        res = execute_browser_page_read(bad_url, runner=runner, dns_resolver=_public_dns)
+        assert res["status"] == "error"
+        assert res["error"] == "private_ip_refused"
+
+    # Non-443 port in initial URL rejected
+    res_port = execute_browser_page_read("https://example.com:8000/datasheet", runner=runner, dns_resolver=_public_dns)
+    assert res_port["status"] == "error"
+    assert res_port["error"] == "invalid_url"
+
+
+def test_numeric_ip_detector_coverage() -> None:
+    """_is_numeric_ip accurately detects all IPv4 and IPv6 literal variations."""
+    assert _is_numeric_ip("127.0.0.1") == ["127.0.0.1"]
+    assert _is_numeric_ip("[::1]") == ["::1"]
+    assert _is_numeric_ip("0177.0.0.1") == ["127.0.0.1"]
+    assert _is_numeric_ip("2130706433") == ["127.0.0.1"]
+    assert _is_numeric_ip("example.com") == []
+    assert _is_numeric_ip("internal.lan") == []
+
+
+def test_proxy_tunnel_success_and_bidirectional_data() -> None:
+    """Legitimate public HTTPS CONNECT through proxy establishes tunnel and relays data."""
+    # Create mock upstream echo server
+    mock_upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    mock_upstream.bind(("127.0.0.1", 0))
+    up_port = mock_upstream.getsockname()[1]
+    mock_upstream.listen(1)
+
+    def upstream_handler() -> None:
+        conn, _ = mock_upstream.accept()
+        data = conn.recv(1024)
+        conn.sendall(b"ECHO:" + data)
+        conn.close()
+
+    t_up = threading.Thread(target=upstream_handler, daemon=True)
+    t_up.start()
+
+    # Connector redirecting to mock upstream
+    def mock_connector(target_ip: str, port: int) -> socket.socket:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(("127.0.0.1", up_port))
+        return sock
+
+    proxy = _ValidatingProxyServer(
+        dns_resolver=_public_dns,
+        upstream_connector=mock_connector,
+    ).start()
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2.0)
+        s.connect(("127.0.0.1", proxy.port))
+        s.sendall(b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+        resp = s.recv(1024)
+        assert b"200 Connection Established" in resp
+
+        # Send payload through the established tunnel
+        s.sendall(b"PING")
+        echo_data = s.recv(1024)
+        assert echo_data == b"ECHO:PING"
+        s.close()
+    finally:
+        proxy.stop()
+        mock_upstream.close()
