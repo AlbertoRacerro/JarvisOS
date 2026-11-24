@@ -39,7 +39,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `backend/app/modules/workspace_actions` | live | Typed, governed assistant actions over Process and BLUECAD owners, with apply and undo. | `/workspaces/{id}/actions`, `service.py` | 2400 |
 | `backend/app/modules/workspaces` | live | Workspaces (create, archive, restore, rename), design versions and design components; seeds the default workspace. | `/workspaces`, `/workspaces/{id}/design-versions`, `service.py` | 1800 |
 | `backend/app/schemas` | backlog-candidate | One shared dataclass (ServiceStatus) with no consumer in the app; delete it or give it a purpose. | `common.py` | <100 |
-| `backend/tests` | live | Backend test suite (pytest): offline, fake providers, isolated data root, a fake project pack. | `conftest.py`, `scripts/test_backend_sharded.sh` | 138100 |
+| `backend/tests` | live | Backend test suite (pytest): offline, fake providers, isolated data root, a fake project pack. | `conftest.py`, `scripts/test_backend_sharded.sh` | 138800 |
 | `configs` | live | Declarative configuration: AI provider catalog, cloud escalation and egress policy, architecture-enforcement rules, BLUECAD tool registry, relay gateway. | `ai_providers.yaml`, `ai_egress_policy.json`, `architecture_enforcement.json` | <100 |
 | `e2e` | in-development | End-to-end browser walks (Playwright) over the built frontend; the required check for UI-changing PRs. Seed suite, to be developed (shared runner, CI, generated app path map). | `README.md`, `design_discovery_walk.mjs`, `case_walk.mjs` | 9200 |
 | `eval` | in-development | Local-model re-evaluation: classification and intake quality, latency, llama.cpp qualification and the second-brain retrieval benchmark. Everything here is marked to improve. | `local/README.md`, `local/llamacpp_qualification.py` | 1000 |
@@ -71,6 +71,7 @@ nested modules listed separately, rounded to the nearest 100.
 | `schemas` | live | JSON schemas for BLUECAD specs, results and tool registry, and Jarvis records. | `bluecad_geometry_spec_v0_1.schema.json` | <100 |
 | `scripts` | live | Repository tooling: CI gates, spec-status check, frontend contract codegen, module-table generator, code index and code-facts check, launcher, supervisor (Relay continuity, jobs, observer, host ops), worker routing, Copilot CLI delegation and control-room recovery (devctx). | `relay_continuity.py`, `devctx.py`, `worker_routing.py`, `copilot_worker.py`, `jarvisos_launcher.py`, `check_spec_status.py` | 25100 |
 | `scripts/benchmarks` | in-development | Solver benchmarks against real OpenFOAM, DWSIM and process libraries; today scripts that record evidence, to be turned into pinned regression tests. | `README.md` | 2400 |
+| `scripts/benchmarks/agent_eval` | in-development | Repeatable agent regression eval for the local default and the Hermes harness, driving chat interactions and scoring deterministic answers. | `runner.py`, `example_tasks.json` | 600 |
 | `tests` | live | Tests for the Relay supervisor's output parser and diagnostics (outside the backend suite). | `relay_reliability/` | 500 |
 
-Totals: 58 live, 4 in-development, 2 backlog-candidate.
+Totals: 58 live, 5 in-development, 2 backlog-candidate.
