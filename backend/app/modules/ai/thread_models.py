@@ -135,6 +135,21 @@ class LiveStepRead(BaseModel):
     status: str = "running"
 
 
+class NumberProvenanceEntry(BaseModel):
+    raw: str = Field(min_length=1, max_length=48)
+    value: float
+    status: Literal["verified", "unverified"]
+    source_ref: str | None = Field(default=None, max_length=120)
+    tool_name: str | None = Field(default=None, max_length=80)
+    route_hint: str | None = Field(default=None, max_length=120)
+
+
+class NumberProvenanceRead(BaseModel):
+    verified_count: int = 0
+    unverified_count: int = 0
+    entries: list[NumberProvenanceEntry] = Field(default_factory=list, max_length=40)
+
+
 class AIThreadInteractionRead(BaseModel):
     id: str
     request_id: str
@@ -171,6 +186,7 @@ class AIThreadInteractionRead(BaseModel):
     turn_plan: TurnPlanRead | None = None
     live_steps: list[LiveStepRead] = Field(default_factory=list)
     verification_summary: dict[str, Any] | None = None
+    number_provenance: NumberProvenanceRead | None = None
     surface_summary: str | None = None
     surface_digest: str | None = None
     # Bubu: screenshots attached to this turn; unsupported = the selected model never saw them.
