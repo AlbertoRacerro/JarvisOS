@@ -42,11 +42,17 @@ DEFAULT_WORKSPACE_DESCRIPTION = "Default workspace."
 
 _ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
-_KNOWN_KEYS = {"id", "workspace", "sensitivity", "ui_labels", "studio", "hermes_roles", "readiness"}
+_KNOWN_KEYS = {"id", "workspace", "sensitivity", "ui_labels", "studio", "hermes_roles", "readiness", "search_guard"}
 
 
 class PackError(RuntimeError):
     """A pack directory or manifest is invalid."""
+
+
+@dataclass(frozen=True)
+class SearchGuardConfig:
+    groups: tuple[tuple[str, ...], ...] = ()
+    min_groups: int = 4
 
 
 @dataclass(frozen=True)
@@ -60,6 +66,7 @@ class Pack:
     studio_examples_dir: Path | None = None
     hermes_roles: dict[str, str] = field(default_factory=dict)
     readiness_cases_file: Path | None = None
+    search_guard: SearchGuardConfig = field(default_factory=SearchGuardConfig)
 
 
 def _table(data: dict, key: str, manifest: Path) -> dict:
@@ -124,6 +131,28 @@ def read_pack(directory: Path) -> Pack:
         cases_file = (root / cases).resolve()
         if not cases_file.is_file() or root not in cases_file.parents:
             raise PackError(f"{manifest}: readiness.cases {cases!r} must be a file inside the pack")
+    search_guard_config = SearchGuardConfig()
+    if "search_guard" in data:
+        guard_table = _table(data, "search_guard", manifest)
+        unknown_guard_keys = sorted(set(guard_table) - {"groups", "min_groups"})
+        if unknown_guard_keys:
+            raise PackError(f"{manifest}: unknown search_guard keys {unknown_guard_keys}")
+        raw_groups = guard_table.get("groups")
+        groups_list: list[tuple[str, ...]] = []
+        if raw_groups is not None:
+            if not isinstance(raw_groups, list):
+                raise PackError(f"{manifest}: search_guard.groups must be a list of lists of non-empty strings")
+            for g in raw_groups:
+                if not isinstance(g, list) or not g or not all(isinstance(term, str) and term.strip() for term in g):
+                    raise PackError(f"{manifest}: search_guard.groups must be a list of lists of non-empty strings")
+                groups_list.append(tuple(term.strip() for term in g))
+        raw_min = guard_table.get("min_groups", 4)
+        if isinstance(raw_min, bool) or not isinstance(raw_min, int) or raw_min <= 0:
+            raise PackError(f"{manifest}: search_guard.min_groups must be a positive integer")
+        search_guard_config = SearchGuardConfig(
+            groups=tuple(groups_list),
+            min_groups=raw_min,
+        )
     return Pack(
         id=pack_id,
         root=root,
@@ -134,6 +163,7 @@ def read_pack(directory: Path) -> Pack:
         studio_examples_dir=examples_dir,
         hermes_roles=dict(roles),
         readiness_cases_file=cases_file,
+        search_guard=search_guard_config,
     )
 
 
@@ -208,3 +238,13 @@ def hermes_role_pack_defaults() -> dict[str, str]:
 def readiness_case_files() -> tuple[Path, ...]:
     return tuple(pack.readiness_cases_file for pack in load_packs() if pack.readiness_cases_file)
 
+
+def search_guard() -> SearchGuardConfig:
+    """Combine loaded pack groups using the strictest configured threshold."""
+    all_groups: list[tuple[str, ...]] = []
+    thresholds: list[int] = []
+    for pack in load_packs():
+        if pack.search_guard.groups:
+            all_groups.extend(pack.search_guard.groups)
+            thresholds.append(pack.search_guard.min_groups)
+    return SearchGuardConfig(groups=tuple(all_groups), min_groups=min(thresholds, default=4))
