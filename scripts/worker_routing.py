@@ -224,15 +224,30 @@ def temp_pool_lists_file() -> Path:
     return temp_pools_file().parent / "temp-pool-lists.json"
 
 
-def _admission(document: Any) -> tuple[int | None, dict[str, int]]:
-    """(reference score, worker key -> index score) from the top level of temp-pools.json; malformed values drop."""
+def _admission(document: Any) -> tuple[int | None, int | None, dict[str, int]]:
+    """(reference score, coding reference score, worker key -> index score) from top level of temp-pools.json."""
     if not isinstance(document, dict):
-        return None, {}
+        return None, None, {}
     raw = document.get("scores")
     scores = {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)} \
         if isinstance(raw, dict) else {}
-    reference = document.get("reference")
-    return (scores.get(reference) if isinstance(reference, str) else None), scores
+    coding_raw = document.get("coding_scores") or document.get("scores")
+    coding_scores = {k: v for k, v in coding_raw.items() if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)} \
+        if isinstance(coding_raw, dict) else {}
+
+    ref = document.get("reference")
+    ref_score = document.get("reference_score")
+    if ref_score is None and isinstance(ref, str):
+        ref_score = scores.get(ref)
+
+    coding_ref = document.get("coding_reference") or document.get("reference")
+    ref_coding = document.get("reference_coding_index") or document.get("coding_reference_score")
+    if ref_coding is None and isinstance(coding_ref, str):
+        ref_coding = coding_scores.get(coding_ref)
+
+    ref_score_int = ref_score if isinstance(ref_score, int) and not isinstance(ref_score, bool) else None
+    ref_coding_int = ref_coding if isinstance(ref_coding, int) and not isinstance(ref_coding, bool) else None
+    return ref_score_int, ref_coding_int, scores
 
 
 def start_tier(score: int, scores: dict[str, int]) -> int:
@@ -250,7 +265,7 @@ def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
     entries = document if isinstance(document, list) else document.get("pools") if isinstance(document, dict) else None
     if not isinstance(entries, list):
         return []
-    reference, scores = _admission(document)
+    reference, ref_coding, scores = _admission(document)
     valid: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, raw in enumerate(entries):
@@ -264,6 +279,7 @@ def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
         key_file = raw.get("key_file")
         free_list = raw.get("free_list")
         score = raw.get("index_score")
+        coding = raw.get("coding_index") if raw.get("coding_index") is not None else raw.get("coding_score")
         expires = _parse_iso_zone(raw.get("expires_at"))
         # Zen needs neither URL nor key; OpenRouter reads its list without a key but calls with one.
         needs_url = free_list != "opencode_zen"
@@ -276,6 +292,7 @@ def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
                 or (needs_key and (not isinstance(key_file, str) or not Path(key_file).is_absolute()))
                 or (raw.get("expires_at") is not None and expires is None)
                 or (score is not None and (not isinstance(score, int) or isinstance(score, bool)))
+                or (coding is not None and (not isinstance(coding, int) or isinstance(coding, bool)))
                 or "rate_limits" not in raw or "data_policy" not in raw
                 or name in seen):
             # Kept, so pick shows why it is skipped; never raised, never routed.
@@ -283,14 +300,26 @@ def load_temp_pools(path: Path | None = None) -> list[dict[str, Any]]:
             valid.append({"name": f"invalid#{index}", "model": str(raw.get("model") or ""), "invalid": "malformed entry"})
             continue
         seen.add(name)
-        admission = ("unindexed" if score is None else "no_reference" if reference is None
-                     else "below_index" if score < reference else None)
+        admission = None
+        if score is None or coding is None:
+            admission = "unindexed"
+        elif reference is None or ref_coding is None:
+            admission = "no_reference"
+        elif score < reference:
+            admission = "below_index"
+        elif coding < ref_coding:
+            admission = "below_coding_index"
+
         valid.append({
             "name": name, "provider": provider.strip(), "free_list": free_list,
             "base_url": base_url if needs_url else None, "model": model.strip(),
             "key_file": Path(key_file).expanduser() if needs_key else None, "expires_at": expires,
-            "index_score": score, "admission": admission,
+            "index_score": score, "coding_index": coding, "admission": admission,
             "start_tier": start_tier(score, scores) if admission is None and score is not None else 0,
+            "pricing": raw.get("pricing"),
+            "live_probe": raw.get("live_probe") or raw.get("probe"),
+            "live_status": raw.get("live_status"),
+            "live_ok_at": raw.get("live_ok_at"),
         })
     return valid
 
@@ -426,12 +455,12 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
     name = f"temp-{entry['name']}"
     if entry.get("invalid"):
         return unreadable(name, "invalid")
-    expires = entry["expires_at"]
+    expires = entry.get("expires_at")
     if expires is not None and moment >= expires:
         return unreadable(name, "expired")
-    if entry["admission"]:
+    if entry.get("admission"):
         return unreadable(name, entry["admission"])
-    if entry["key_file"] is not None:
+    if entry.get("key_file") is not None:
         try:
             exists = entry["key_file"].is_file()
         except OSError:
@@ -443,8 +472,94 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
         return unreadable(name, "list_unreadable")
     if entry["model"] not in ids:
         return unreadable(name, "not_listed")
-    if bridge_state(name) == "suspect":
+
+    doc = _load_lists()
+    source = list_source(entry)
+    source_data = (doc.get("sources") or {}).get(source) or {}
+
+    # Zero price check
+    pricing = (
+        entry.get("pricing")
+        or source_data.get("pricing", {}).get(entry["model"])
+        or source_data.get("prices", {}).get(entry["model"])
+        or doc.get("pricing", {}).get(entry["model"])
+        or doc.get("prices", {}).get(entry["model"])
+    )
+    if pricing is not None:
+        if not isinstance(pricing, dict):
+            return unreadable(name, "nonzero_price")
+        p = pricing.get("prompt") if "prompt" in pricing else pricing.get("prompt_price")
+        c = pricing.get("completion") if "completion" in pricing else pricing.get("completion_price")
+        def _is_zero(val: Any) -> bool:
+            if isinstance(val, bool) or val is None:
+                return False
+            try:
+                return float(val) == 0.0
+            except (ValueError, TypeError):
+                return False
+        if not _is_zero(p) or not _is_zero(c):
+            return unreadable(name, "nonzero_price")
+
+    # Response proof check
+    candidates: list[dict[str, Any]] = []
+    if isinstance(entry.get("live_probe"), dict):
+        candidates.append(entry["live_probe"])
+    if isinstance(entry.get("probe"), dict):
+        candidates.append(entry["probe"])
+    if entry.get("live_status") and entry.get("live_ok_at"):
+        candidates.append({"status": entry["live_status"], "at": entry["live_ok_at"]})
+    for d in (doc.get("probes"), doc.get("live_probes"), source_data.get("probes"), doc.get("bridge")):
+        if isinstance(d, dict):
+            for k in (entry["model"], entry["name"], name):
+                val = d.get(k)
+                if isinstance(val, dict):
+                    candidates.append(val)
+
+    if not candidates:
+        return unreadable(name, "missing_proof")
+
+    has_valid_fresh = False
+    has_404 = False
+    has_payment = False
+    has_stale = False
+
+    for proof in candidates:
+        p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
+        p_code = proof.get("status_code") or proof.get("code")
+        if p_code in (404,) or p_status in ("404", 404):
+            has_404 = True
+            continue
+        if p_code in (402,) or p_status in ("payment_required", "payment_response", 402):
+            has_payment = True
+            continue
+        if p_status not in ("ok", "success", "active", "throttled", "exhausted"):
+            continue
+        p_time_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+        p_time = _parse_iso_zone(p_time_raw)
+        if p_time is None:
+            continue
+        if not (-60 <= (moment - p_time).total_seconds() <= 3600):
+            has_stale = True
+            continue
+        has_valid_fresh = True
+        break
+
+    if not has_valid_fresh:
+        if has_404:
+            return unreadable(name, "probe_404")
+        if has_payment:
+            return unreadable(name, "payment_required")
+        if has_stale:
+            return unreadable(name, "stale_proof")
+        return unreadable(name, "missing_proof")
+
+    b_state = bridge_state(name)
+    if b_state == "suspect":
         return unreadable(name, "bridge_suspect")
+    if b_state == "exhausted":
+        return unreadable(name, "exhausted")
+    if b_state == "throttled":
+        return unreadable(name, "throttled")
     return Pool(name, {"free": 1.0}, 1.0, None, "live", {"expires": expires} if expires is not None else {})
 
 

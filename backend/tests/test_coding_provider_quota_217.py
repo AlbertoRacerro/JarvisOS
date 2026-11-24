@@ -31,6 +31,7 @@ def isolate_sandbox_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("JARVISOS_CODEX_HOME", raising=False)
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.setenv("JARVISOS_WORKER_QUOTA_FILE", str(sandbox_home / "nonexistent-quota.json"))
 
 
 def iso(value: datetime) -> str:

@@ -1919,23 +1919,31 @@ def _temp_file(tmp_path: Path, pools: list[object], scores: dict[str, int] | Non
     target.write_text(json.dumps({
         "index": {"name": "public intelligence index", "url": "https://example.invalid/index"},
         "reference": "luna", "scores": {"luna": 28, "sol": 40} if scores is None else scores,
+        "coding_reference": "luna", "coding_scores": {"luna": 35, "sol": 45},
         "read_at": "2026-11-20", "pools": pools,
     }), encoding="utf-8")
     return target
 
 
-def _pool(name: str, key: Path, score: int | None = 43, **extra: object) -> dict[str, object]:
+def _pool(name: str, key: Path, score: int | None = 43, coding_score: int | None = 45, **extra: object) -> dict[str, object]:
     entry: dict[str, object] = {"name": name, "provider": "free", "base_url": "https://example.invalid/v1",
                                 "model": f"{name}:free", "key_file": str(key), "free_list": "openai_models",
-                                "rate_limits": "free", "data_policy": "public", **extra}
+                                "rate_limits": "free", "data_policy": "public",
+                                "live_status": "ok", "live_ok_at": "2026-11-20T10:00:00Z", **extra}
     if score is not None:
         entry["index_score"] = score
+    if coding_score is not None:
+        entry["coding_index"] = coding_score
     return entry
 
 
 def _fresh_lists(tmp_path: Path, ids: list[str], now: datetime, source: str = "https://example.invalid/v1") -> None:
-    (tmp_path / "temp-pool-lists.json").write_text(json.dumps({"sources": {source: {
-        "ids": ids, "read_at": now.strftime("%Y-%m-%dT%H:%M:%SZ")}}}), encoding="utf-8")
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    probes = {i: {"status": "ok", "live_ok_at": now_str} for i in ids}
+    (tmp_path / "temp-pool-lists.json").write_text(json.dumps({
+        "sources": {source: {"ids": ids, "read_at": now_str}},
+        "probes": probes,
+    }), encoding="utf-8")
 
 
 def _refuse(*_args: object) -> object:
@@ -2011,7 +2019,8 @@ def test_temporary_pool_malformed_and_zen_entries(monkeypatch: pytest.MonkeyPatc
     key = tmp_path / "pool.key"
     key.write_text("secret", encoding="utf-8")
     zen = {"name": "zen", "provider": "OpenCode Zen", "model": "some-model-free", "free_list": "opencode_zen",
-           "index_score": 33, "rate_limits": "", "data_policy": ""}
+           "index_score": 33, "coding_index": 38, "rate_limits": "", "data_policy": "",
+           "live_status": "ok", "live_ok_at": "2026-11-20T10:00:00Z"}
     target = _temp_file(tmp_path, [
         _pool("broken", key, base_url="http://plain.invalid/v1"),
         zen,
