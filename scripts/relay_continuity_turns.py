@@ -1217,6 +1217,7 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
             role = relay_argon.account_models.ROLES.get(f"coordinator_{agent}") if verified else None
             model_valid = (isinstance(recorded, str) and
                            (bool(relay_argon.account_models._pattern(role).fullmatch(recorded))
+                            and (role.preview or not recorded.endswith("-preview"))
                             if role is not None else recorded in allowed_models))
             if not isinstance(init, dict) or init.get("model") != recorded or not model_valid:
                 report.bad_lines += 1
