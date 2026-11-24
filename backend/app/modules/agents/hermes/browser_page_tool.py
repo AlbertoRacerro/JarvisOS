@@ -177,7 +177,7 @@ def _is_safe_global_ip(ip_str: str) -> bool:
                 return False
         # RFC 6052 NAT64 Well-Known Prefix 64:ff9b::/96 embeds an IPv4 in the lower 32 bits
         if ip in ipaddress.IPv6Network("64:ff9b::/96"):
-            embedded = ipaddress.IPv4Address(ip._ip & 0xFFFFFFFF)
+            embedded = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
             if not _is_safe_global_ip(str(embedded)):
                 return False
         if ip.is_site_local:
