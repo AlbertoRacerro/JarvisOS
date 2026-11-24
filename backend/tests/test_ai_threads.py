@@ -270,9 +270,11 @@ def test_hermes_retrieval_grant_is_limited_to_submitted_exact_refs() -> None:
     instructions = thread_service._install_hermes_retrieval_grant(
         worker, payload, "workspace-a", "thread-a")
     assert instructions is not None and "allowed source_scope=['test-owner']" in instructions
-    assert len(worker.live_grants) == 6
+    assert len(worker.live_grants) == 7
     paper_search_grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.paper_search")
     assert paper_search_grant.scope.workspace_id == "workspace-a"
+    browser_page_grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.browser_page_read")
+    assert browser_page_grant.scope.workspace_id == "workspace-a"
     grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.retrieval_query")
     decision_grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.decide")
     dev_read_grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.dev_read")

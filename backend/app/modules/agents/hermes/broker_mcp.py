@@ -342,12 +342,26 @@ _JARVIS_PAPER_SEARCH_TOOL = {
         "additionalProperties": False,
     },
 }
+_JARVIS_BROWSER_PAGE_TOOL = {
+    "name": "jarvis_browser_page_read",
+    "description": "Read bounded plain text of a public HTTPS web page using headless Chromium.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "grant_id": {"type": "string", "maxLength": 128},
+            "url": {"type": "string", "maxLength": 1024},
+            "search_term": {"type": "string", "maxLength": 160},
+        },
+        "required": ["grant_id", "url"],
+        "additionalProperties": False,
+    },
+}
 _TOOLS = [_TOOL, _RETRIEVAL_TOOL, _DECISION_TOOL, _DEV_READ_TOOL, _REPO_READ_TOOL, _KNOWLEDGE_READ_TOOL,
           _PROCESS_READ_TOOL, _PROCESS_ACT_TOOL,
           _BLUECAD_READ_TOOL, _BLUECAD_ACT_TOOL, _STUDIO_READ_TOOL, _STUDIO_ACT_TOOL,
           _BENCH_READ_TOOL, _BENCH_RUN_TOOL,
-          _JARVIS_PAPER_SEARCH_TOOL]
-_NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL} | {"paper_search"}
+          _JARVIS_PAPER_SEARCH_TOOL, _JARVIS_BROWSER_PAGE_TOOL]
+_NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL} | {"paper_search", "browser_page_read"}
 
 
 class _DenyRedirects(HTTPRedirectHandler):
@@ -368,7 +382,7 @@ def _reply(message: dict[str, Any]) -> dict[str, Any] | None:
         return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": _TOOLS}}
     if method == "tools/call":
         params = message.get("params") or {}
-        if params.get("name") not in {tool["name"] for tool in _TOOLS} and params.get("name") != "paper_search":
+        if params.get("name") not in {tool["name"] for tool in _TOOLS} and params.get("name") not in {"paper_search", "browser_page_read"}:
             return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "unknown tool"}}
         body = params.get("arguments") or {}
         if params.get("name") in _NAMED and isinstance(body, dict):
