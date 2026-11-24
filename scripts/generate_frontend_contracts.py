@@ -37,6 +37,7 @@ ENGINEERING_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "eng
 EDITOR_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "dwsimEditor.ts"
 PROJECT_KNOWLEDGE_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "projectKnowledge.ts"
 ACTIVITY_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "activity.ts"
+NUMBER_PROVENANCE_TARGET = REPO_ROOT / "frontend" / "src" / "api" / "generated" / "numberProvenance.ts"
 HEADER = (
     "// GENERATED FILE — DO NOT EDIT.\n"
     f"// Source: {SOURCE_LABEL}\n"
@@ -216,7 +217,6 @@ def render_activity_contracts() -> str:
         ActivityRead,
         ActivityRow,
     )
-
     models = [ActivityProgress, ActivityLink, ActivityRow, ActivityGroup, ActivityQuotaPool, ActivityQuota,
               ActivityRead, ActivityDetailRead]
     return "\n".join(
@@ -224,6 +224,16 @@ def render_activity_contracts() -> str:
         for index, model in enumerate(models)
     )
 
+
+def render_number_provenance_contracts() -> str:
+    from app.modules.ai.thread_models import NumberProvenanceEntry, NumberProvenanceRead
+
+    header = HEADER.replace(SOURCE_LABEL, "backend/app/modules/ai/thread_models.py")
+    return (
+        render_model(NumberProvenanceEntry, "NumberProvenanceEntry", header=header)
+        + "\n"
+        + render_model(NumberProvenanceRead, "NumberProvenance", header="")
+    )
 
 def _matches(path: Path, expected: str, *, report: bool = False) -> bool:
     try:
@@ -326,6 +336,7 @@ def main() -> int:
     editor_expected = render_editor_contracts()
     project_knowledge_expected = render_project_knowledge_contracts()
     activity_expected = render_activity_contracts()
+    number_provenance_expected = render_number_provenance_contracts()
     if args.check:
         if (
             _matches(TARGET, expected, report=True)
@@ -333,6 +344,7 @@ def main() -> int:
             and _matches(EDITOR_TARGET, editor_expected, report=True)
             and _matches(PROJECT_KNOWLEDGE_TARGET, project_knowledge_expected, report=True)
             and _matches(ACTIVITY_TARGET, activity_expected, report=True)
+            and _matches(NUMBER_PROVENANCE_TARGET, number_provenance_expected, report=True)
         ):
             print("frontend generated contracts are current")
             return 0
@@ -347,6 +359,7 @@ def main() -> int:
     PROJECT_KNOWLEDGE_TARGET.parent.mkdir(parents=True, exist_ok=True)
     PROJECT_KNOWLEDGE_TARGET.write_text(project_knowledge_expected, encoding="utf-8", newline="\n")
     ACTIVITY_TARGET.write_text(activity_expected, encoding="utf-8", newline="\n")
+    NUMBER_PROVENANCE_TARGET.write_text(number_provenance_expected, encoding="utf-8", newline="\n")
     print(f"wrote {TARGET.relative_to(REPO_ROOT)}")
     return 0
 

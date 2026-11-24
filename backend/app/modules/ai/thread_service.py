@@ -29,6 +29,8 @@ from app.modules.ai.thread_models import (
     AIThreadSubmitRead,
     AIThreadSummary,
     LiveStepRead,
+    NumberProvenanceEntry,
+    NumberProvenanceRead,
     PersistenceState,
     TurnPlanFinding,
     TurnPlanRead,
@@ -549,6 +551,19 @@ def _submit_hermes_interaction(
             verification = {"status": "passed", "warning_count": 0, "checks": []}
         bounded, truncated = _assistant_snapshot(final_text)
         now = utc_now()
+        # The provenance check is advisory: its failure must never lose the answer.
+        provenance_payload: dict[str, Any] | None
+        try:
+            from app.modules.agents.hermes.provenance import compute_number_provenance
+            provenance_payload = compute_number_provenance(
+                bounded,
+                result.get("evidence_ledger") or [],
+                interaction_id=interaction_id,
+                workspace_id=workspace_id,
+            )
+        except Exception:
+            _LOGGER.warning("Hermes number provenance unavailable for %s", interaction_id)
+            provenance_payload = None
         with open_sqlite_connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -581,6 +596,11 @@ def _submit_hermes_interaction(
                               workspace_id=workspace_id, payload=verification)
                 except Exception:
                     _LOGGER.warning("Hermes verification event unavailable for %s", interaction_id)
+                if provenance_payload is not None:
+                    log_event(connection, event_type="hermes.number_provenance", actor="jarvis",
+                              target_type="ai_thread_interaction", target_id=interaction_id,
+                              workspace_id=workspace_id,
+                              payload=provenance_payload)
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -1596,6 +1616,56 @@ def interaction_live_steps(
     return result
 
 
+def interaction_number_provenance(
+    connection: sqlite3.Connection, interaction_id: str
+) -> NumberProvenanceRead | None:
+    row = connection.execute(
+        """
+        SELECT payload
+        FROM events
+        WHERE event_type = 'hermes.number_provenance'
+          AND (target_id = ? OR json_extract(payload, '$.interaction_id') = ?)
+        ORDER BY rowid DESC LIMIT 1
+        """,
+        (interaction_id, interaction_id),
+    ).fetchone()
+    if row is None or not row["payload"]:
+        return None
+    try:
+        data = json.loads(row["payload"])
+        entries_raw = data.get("entries") or []
+        if not entries_raw:
+            return None
+        entries: list[NumberProvenanceEntry] = []
+        for e in entries_raw[:40]:
+            if not isinstance(e, dict) or "raw" not in e or "value" not in e:
+                continue
+            status = e.get("status")
+            if status not in {"verified", "unverified"}:
+                continue
+            entries.append(
+                NumberProvenanceEntry(
+                    raw=str(e["raw"])[:48],
+                    value=float(e["value"]),
+                    status=status,
+                    source_ref=str(e["source_ref"])[:120] if e.get("source_ref") else None,
+                    tool_name=str(e["tool_name"])[:80] if e.get("tool_name") else None,
+                    route_hint=str(e["route_hint"])[:120] if e.get("route_hint") else None,
+                )
+            )
+        if not entries:
+            return None
+        verified_count = int(data.get("verified_count", sum(1 for item in entries if item.status == "verified")))
+        unverified_count = int(data.get("unverified_count", sum(1 for item in entries if item.status == "unverified")))
+        return NumberProvenanceRead(
+            verified_count=verified_count,
+            unverified_count=unverified_count,
+            entries=entries,
+        )
+    except Exception:
+        return None
+
+
 def interaction_activity(connection: sqlite3.Connection, interaction_id: str) -> str:
     """Status of a running turn from its latest recorded tool event; never invented."""
     row = connection.execute(
@@ -1693,9 +1763,11 @@ def _interaction_from_row(
     turn_plan = None
     live_steps = []
     verification_summary = None
+    number_provenance = None
     if connection is not None:
         turn_plan = interaction_turn_plan(connection, str(row["id"]))
         live_steps = interaction_live_steps(connection, str(row["id"]))
+        number_provenance = interaction_number_provenance(connection, str(row["id"]))
         try:
             verification_row = connection.execute(
                 "SELECT payload FROM events WHERE event_type = 'hermes.verification_pass' "
@@ -1770,6 +1842,7 @@ def _interaction_from_row(
         turn_plan=turn_plan,
         live_steps=live_steps,
         verification_summary=verification_summary,
+        number_provenance=number_provenance,
         id=str(row["id"]),
         request_id=str(row["request_id"]),
         interaction_index=int(row["interaction_index"]),

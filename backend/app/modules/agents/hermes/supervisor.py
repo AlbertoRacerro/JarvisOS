@@ -807,6 +807,8 @@ class HermesSupervisor:
         self.active_turn_plan: dict[str, Any] = {"steps": [], "findings": []}
         self.turn_step_count: int = 0
         self.turn_cap: int = DEFAULT_TURN_CAP
+        self.turn_evidence_ledger: list[Any] = []
+        self.evidence_lock = threading.Lock()
         self.paper_search_opener: Any = None
         self.patent_read_opener: Any = None
         self.browser_page_runner: Any = None
@@ -1054,6 +1056,20 @@ class HermesSupervisor:
                         "steps": list(raw_steps) if isinstance(raw_steps, list) else [],
                         "findings": list(raw_findings) if isinstance(raw_findings, list) else [],
                     }
+            if result.status == "succeeded" and result.result is not None:
+                from app.modules.agents.hermes.provenance import extract_tool_numeric_evidence
+
+                extracted_evidence = extract_tool_numeric_evidence(
+                    tool_name=tool_name,
+                    call_id=call_id,
+                    arguments=arguments,
+                    result=result.result,
+                )
+                if extracted_evidence:
+                    with self.evidence_lock:
+                        self.turn_evidence_ledger.extend(extracted_evidence)
+                        if len(self.turn_evidence_ledger) > 1000:
+                            self.turn_evidence_ledger = self.turn_evidence_ledger[:1000]
         except (ValueError, KeyError, sqlite3.Error):
             result = StructuredToolResult(
                 call_id=call_id, capability_id=capability_id,
@@ -1200,6 +1216,8 @@ class HermesSupervisor:
         self.turn_tool_outputs.clear()
         self.active_turn_plan = {"steps": [], "findings": []}
         self.turn_step_count = 0
+        with self.evidence_lock:
+            self.turn_evidence_ledger = []
         prompt = _assemble_turn_prompt(prompt, context_blocks or [])
         request_id = str(uuid4())
         try:
@@ -1213,10 +1231,14 @@ class HermesSupervisor:
                     raise RuntimeError("Hermes turn lacks a durable Jarvis inference flow")
                 response["flow_id"] = flow_id
                 response["relay_flow_ids"] = list(dict.fromkeys(self.turn_flow_ids.get(self.session.hermes_session_id, [])))
+                with self.evidence_lock:
+                    response["evidence_ledger"] = list(self.turn_evidence_ledger)
             return response
         finally:
             self.active_interaction_id = None
             self.active_role_route = None
+            with self.evidence_lock:
+                self.turn_evidence_ledger = []
 
     def status(self) -> dict[str, str | int | None]:
         return {"worker_pid": self.process.pid if self.process and self.process.poll() is None else None,

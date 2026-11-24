@@ -4,6 +4,7 @@ import { ArrowUp, ChatCircleDots, Info, X } from "@phosphor-icons/react";
 import type { KnowledgeContextPreview } from "../../api/knowledgeActions";
 import { applyWorkspaceAction, dismissWorkspaceAction, getSurfaceBrief, getWorkspaceAction, undoWorkspaceAction, WorkspaceActionRequestError, type ActionOutcome, type SurfaceRef } from "../../api/workspaceActions";
 import { currentProcessSurface, listenForProcessSurface, publishWorkspaceAction } from "../../app/workspaceActionSurface";
+import { pushHistoryEntry } from "../../app/navHistory";
 import type { StageSelection } from "../../app/selection";
 import {
   ThreadsRequestError,
@@ -35,7 +36,9 @@ import {
   type ThreadInteraction,
   type ThreadSummary,
   type TurnPlan,
-  type LiveStep
+  type LiveStep,
+  type NumberProvenance,
+  type NumberProvenanceEntry
 } from "../../api/threads";
 import { publishBubuConversation, publishBubuFailedPrompt, publishBubuRelayEnabled, registerBubuHandlers, type BubuExtras, type BubuTurn } from "../bubu/conversationStore";
 import { useGuidedTourActive } from "../bubu/guidedTourActivity";
@@ -1077,6 +1080,60 @@ export function useJarvisSidecar(
     );
   };
 
+  const renderNumberProvenance = (provenance: NumberProvenance | null | undefined) => {
+    if (!provenance || !provenance.entries || provenance.entries.length === 0) return null;
+    return (
+      <details className="jarvis-number-provenance" data-testid="jarvis-number-provenance">
+        <summary className="jarvis-provenance-summary" aria-label="Provenienza numeri">
+          <span className="jarvis-provenance-summary__title">Provenienza numeri:</span>
+          <span className="jarvis-provenance-badge jarvis-provenance-badge--verified" data-testid="provenance-summary-verified">
+            {provenance.verified_count} verificat{provenance.verified_count === 1 ? "o" : "i"}
+          </span>
+          {provenance.unverified_count > 0 ? (
+            <span className="jarvis-provenance-badge jarvis-provenance-badge--unverified" data-testid="provenance-summary-unverified">
+              {provenance.unverified_count} non verificat{provenance.unverified_count === 1 ? "o" : "i"}
+            </span>
+          ) : null}
+        </summary>
+        <div className="jarvis-provenance-chips" data-testid="jarvis-provenance-chips">
+          {provenance.entries.map((entry, idx) => (
+            <div
+              key={`${entry.raw}-${idx}`}
+              className={`jarvis-provenance-chip jarvis-provenance-chip--${entry.status}`}
+              data-testid={`provenance-chip-${entry.status}`}
+            >
+              <strong className="jarvis-provenance-chip__raw">{entry.raw}</strong>
+              {entry.status === "verified" ? (
+                entry.route_hint ? (
+                  <a
+                    href={entry.route_hint}
+                    className="jarvis-provenance-chip__link"
+                    data-testid="provenance-chip-link"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      pushHistoryEntry({}, entry.route_hint!);
+                      window.dispatchEvent(new Event("popstate"));
+                    }}
+                  >
+                    {entry.source_ref || entry.tool_name || "fonte"}
+                  </a>
+                ) : (
+                  <span className="jarvis-provenance-chip__ref" data-testid="provenance-chip-ref">
+                    {entry.source_ref || entry.tool_name || "verificato"}
+                  </span>
+                )
+              ) : (
+                <span className="jarvis-provenance-chip__warning" data-testid="provenance-chip-warning">
+                  Non verificato
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </details>
+    );
+  };
+
   const renderInteraction = (interaction: ThreadInteraction) => {
     const running = !TERMINAL_FLOW_STATES.has(interaction.flow_state);
     const notice = outcomeNotice(interaction);
@@ -1123,6 +1180,7 @@ export function useJarvisSidecar(
           <WorkspaceActionCards actions={interaction.actions ?? []} onApply={applyAction} onDismiss={dismissAction} onUndo={undoAction}
             technicalDetails={interaction.technical_details}
             technicalInfo={unsafeAssistantText ? interaction.assistant_text : undefined} />
+          {!running && renderNumberProvenance(interaction.number_provenance)}
           {notice ? <p className="jarvis-bubble__notice" role="status">{notice}</p> : null}
           {interaction.assistant_text_truncated ? <p className="jarvis-bubble__notice">This saved answer was shortened for storage.</p> : null}
           {(interaction.verification_summary?.warning_count ?? 0) > 0 ? <span className="jarvis-verification-warning" role="status" title="Check the answer's units, magnitudes, and physical bounds">⚠ {interaction.verification_summary?.warning_count} verification warning{interaction.verification_summary?.warning_count === 1 ? "" : "s"}</span> : null}
