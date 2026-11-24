@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import math
 import os
 import re
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -15,6 +18,7 @@ from app.modules.bluecad.print_handoff import _to_windows_path
 FREECAD_ALLOWLIST = ("ping", "list_documents", "get_objects", "get_object", "edit_object")
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _RELAY = Path(__file__).with_name("freecad_relay.py")
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 class FreecadBridgeError(RuntimeError):
@@ -57,6 +61,38 @@ def _relay_path(executable: Path) -> str:
     return str(_RELAY)
 
 
+def _token() -> tuple[str | None, str | None]:
+    path = Path(os.environ.get("JARVISOS_FREECAD_MCP_TOKEN_FILE", "~/.config/jarvis/freecad_mcp_token")).expanduser()
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+                return None, "FREECAD_MCP_TOKEN_UNSAFE"
+            if info.st_size > 4096:
+                return None, "FREECAD_MCP_TOKEN_UNSAFE"
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                value = stream.read(4097).decode("utf-8").strip()
+        finally:
+            os.close(fd)
+        if len(value) > 4096:
+            return None, "FREECAD_MCP_TOKEN_UNSAFE"
+        if not value or any(ord(char) < 33 or ord(char) > 126 for char in value):
+            return None, "FREECAD_MCP_TOKEN_MISSING"
+        return value, None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return None, "FREECAD_MCP_TOKEN_UNSAFE"
+        return None, "FREECAD_MCP_TOKEN_MISSING"
+    except UnicodeError:
+        return None, "FREECAD_MCP_TOKEN_MISSING"
+
+
+def _validate_identifier(value: Any) -> None:
+    if not isinstance(value, str) or len(value) > 128 or _IDENTIFIER.fullmatch(value) is None:
+        raise FreecadBridgeError("FREECAD_INVALID_IDENTIFIER", "Nome FreeCAD non valido.", 400)
+
+
 def _property_info(obj: dict[str, Any], name: str) -> tuple[bool, Any, bool]:
     properties = obj.get("Properties", obj.get("properties", {}))
     if not isinstance(properties, dict) or name not in properties:
@@ -83,6 +119,7 @@ def _unit_suffix(value: str) -> str | None:
 
 
 def validate_edit(obj: dict[str, Any], property_name: str, value: Any) -> Any:
+    _validate_identifier(property_name)
     exists, old, readonly = _property_info(obj, property_name)
     if not exists:
         raise FreecadBridgeError("FREECAD_PROPERTY_NOT_FOUND", "La proprietà non esiste in questo oggetto.")
@@ -90,26 +127,37 @@ def validate_edit(obj: dict[str, Any], property_name: str, value: Any) -> Any:
         raise FreecadBridgeError("FREECAD_PROPERTY_READ_ONLY", "La proprietà è di sola lettura.")
     if not _same_value(old, value):
         raise FreecadBridgeError("FREECAD_PROPERTY_TYPE_MISMATCH", "Il nuovo valore deve essere dello stesso tipo di quello attuale.")
+    if any(isinstance(item, float) and not math.isfinite(item) for item in (old, value)):
+        raise FreecadBridgeError("FREECAD_INVALID_EDIT", "Il valore deve essere finito.", 400)
     if isinstance(old, str) and _unit_suffix(old) != _unit_suffix(value):
         raise FreecadBridgeError("FREECAD_PROPERTY_UNIT_MISMATCH", "Il nuovo valore deve mantenere la stessa unità di misura.")
     return old
 
 
 class FreecadBridge:
-    def __init__(self, timeout_s: float = 10.0) -> None:
+    def __init__(self, timeout_s: float = 50.0) -> None:
         self.timeout_s = timeout_s
 
     def configuration(self) -> dict[str, Any]:
         path, _, reason = _configured_runtime()
+        if reason is None:
+            _, reason = _token()
         return {"configured": reason is None, "code": reason, "path": path}
 
     def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
         if method not in FREECAD_ALLOWLIST:
             raise FreecadBridgeError("FREECAD_METHOD_NOT_ALLOWED", "Operazione non consentita verso FreeCAD.", 400)
+        params = params or {}
+        for key in ("doc_name", "obj_name", "property"):
+            if key in params:
+                _validate_identifier(params[key])
         executable, _, reason = _configured_runtime()
         if reason or executable is None:
             raise FreecadBridgeError(reason or "FREECAD_BRIDGE_UNAVAILABLE", "Il collegamento a FreeCAD non è configurato.")
-        request = {"id": 1, "method": method, "params": params or {}}
+        token, token_reason = _token()
+        if token_reason or token is None:
+            raise FreecadBridgeError(token_reason or "FREECAD_MCP_TOKEN_MISSING", "Token MCP FreeCAD non disponibile.")
+        request = {"id": 1, "method": method, "params": params, "token": token}
         try:
             process = subprocess.Popen(
                 [str(executable), _relay_path(executable)],
@@ -137,12 +185,28 @@ class FreecadBridge:
             code = str(error.get("code") or "FREECAD_ADDON_ERROR")
             if code == "FREECAD_ADDON_NOT_RUNNING":
                 raise FreecadBridgeError(
-                    code, "L'add-on di FreeCAD non è in esecuzione: avvia il suo server in FreeCAD e riprova.", 503
+                    code, "L'add-on MCP Bridge è spento: attiva MCP On in FreeCAD e riprova.", 503
                 )
+            if code == "FREECAD_MCP_UNAUTHORIZED":
+                raise FreecadBridgeError(code, "Il token MCP non è stato accettato da FreeCAD.", 401)
+            if code == "FREECAD_MCP_DECLINED":
+                raise FreecadBridgeError(code, "Lo script Jarvis è stato rifiutato in FreeCAD.")
+            if code == "FREECAD_MCP_PENDING":
+                raise FreecadBridgeError(code, "Lo script Jarvis attende ancora conferma in FreeCAD: se lo confermi ora non modificherà il documento.", 504)
+            if code == "FREECAD_STALE_PREVIEW":
+                raise FreecadBridgeError(code, "Il valore in FreeCAD è cambiato dopo l'anteprima: rifai l'anteprima.")
+            if code == "FREECAD_EDIT_EXPIRED":
+                raise FreecadBridgeError(
+                    code, "La conferma in FreeCAD è arrivata troppo tardi: il documento non è stato modificato.", 409
+                )
+            if code == "FREECAD_ROLLBACK_FAILED":
+                raise FreecadBridgeError(code, "FreeCAD non ha confermato il ripristino del valore precedente.", 502)
             raise FreecadBridgeError(code, "FreeCAD ha rifiutato la richiesta.", 502)
         return response.get("result")
 
     def get_object(self, document: str, obj_name: str) -> dict[str, Any]:
+        _validate_identifier(document)
+        _validate_identifier(obj_name)
         result = self.request("get_object", {"doc_name": document, "obj_name": obj_name})
         if not isinstance(result, dict) or result.get("success") is False or not isinstance(result.get("Name"), str):
             raise FreecadBridgeError("FREECAD_OBJECT_NOT_FOUND", "Oggetto non trovato nel documento FreeCAD.", 404)
@@ -155,4 +219,6 @@ class FreecadBridge:
 def validate_request(bridge: FreecadBridge, document: str, obj_name: str, property_name: str, value: Any) -> Any:
     if not document or not obj_name or not property_name:
         raise FreecadBridgeError("FREECAD_INVALID_EDIT", "Scegli documento, oggetto e proprietà.", 400)
+    for name in (document, obj_name, property_name):
+        _validate_identifier(name)
     return bridge.validate_edit(document, obj_name, property_name, value)
