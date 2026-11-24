@@ -17,7 +17,6 @@ from app.modules.agents.hermes.supervisor import (
     HermesSupervisor,
     compact_tool_schemas,
     infer_envelope,
-    prompt_tokens_estimate,
     run_governed_inference,
     step_deadline_from_rows,
     tool_response_schema,
@@ -39,7 +38,7 @@ from scripts.benchmarks.agent_eval.runner import build_parser, main, read_job_me
 
 
 @pytest.mark.parametrize("surface", ["none", "process", "bluecad", "studio"])
-def test_first_step_uses_real_broker_schemas_within_budget(surface: str) -> None:
+def test_first_step_uses_real_broker_schemas_size_guard(surface: str) -> None:
     names = _turn_tools(surface, "What is the result?")
     assert len(names) <= 7
     tools = [
@@ -53,7 +52,21 @@ def test_first_step_uses_real_broker_schemas_within_budget(surface: str) -> None
                                        "\n\n" + COMPACT_METHODOLOGY},
                                       {"role": "user", "content": "What is the result?\n\n" + "x" * 2500}],
                          "tools": compact}, separators=(",", ":")) + RELAY_TOOL_PROTOCOL
-    assert prompt_tokens_estimate(prompt) <= 4000
+    # This is a size regression guard, not a model token count.
+    assert len(prompt) < 14000
+    session = {"jarvis_thread_id": "thread-1", "hermes_session_id": "session-1", "profile_id": "isaac",
+               "workspace_id": "default", "generation": 1, "upstream_revision": "test"}
+    frame = {"id": "relay-1", "session_ref": session, "messages": [{"role": "user", "content": "Hi"}],
+             "tools": compact, "allowed_tools": names}
+    envelope = infer_envelope(frame, route_class="local:llamacpp")
+    payload = json.loads(envelope.prompt.removesuffix(RELAY_TOOL_PROTOCOL))
+    assert payload["tools"] == [tool["function"] for tool in compact]
+    cloud_envelope = infer_envelope(frame, route_class="external:cheap")
+    cloud_payload = json.loads(cloud_envelope.prompt.removesuffix(RELAY_TOOL_PROTOCOL))
+    assert cloud_payload["tools"] == compact
+    assert len(envelope.prompt) < len(json.dumps({"messages": frame["messages"], "tools": compact},
+                                                   separators=(",", ":")) + RELAY_TOOL_PROTOCOL)
+    assert len(tool_response_schema(compact)["oneOf"][1]["properties"]["tool_calls"]["items"]["anyOf"]) == len(names)
     assert all("description" not in prop for tool in compact
                for prop in tool["function"]["parameters"].get("properties", {}).values())
 
@@ -215,17 +228,21 @@ def test_eval_metrics_read_proof_jobs_only(tmp_path: Path) -> None:
     db_file = tmp_path / "jarvisos.db"
     with sqlite3.connect(db_file) as db:
         db.execute("CREATE TABLE ai_jobs (created_at TEXT, status TEXT, selected_route_class TEXT, "
-                   "route_reason_json TEXT, input_tokens INTEGER, output_tokens INTEGER, latency_ms INTEGER)")
+                   "normalized_usage_source TEXT, input_tokens INTEGER, output_tokens INTEGER, latency_ms INTEGER)")
         for n in (100, 200, 300):
             db.execute("INSERT INTO ai_jobs VALUES ('2026-01-01T00:00:00Z', 'success', 'local:fake', ?, ?, ?, ?)",
-                       (json.dumps({"prompt_tokens_estimate": 1200}), 1000, n, (20 + n / 10) * 1000))
+                       ("actual", n * 10, n, (20 + n / 10) * 1000))
     import datetime
 
     start = datetime.datetime(2025, 12, 31, tzinfo=datetime.UTC).timestamp()
     end = datetime.datetime(2026, 1, 2, tzinfo=datetime.UTC).timestamp()
     metrics = read_job_metrics(tmp_path, start, end)
-    assert metrics == {"prompt_tokens_estimate": 1200, "input_tokens": 3000,
+    assert metrics == {"first_actual_input_tokens": 1000, "max_actual_input_tokens": 3000, "input_tokens": 6000,
                        "output_tokens": 600, "decode_tps": 10.0}
+    with sqlite3.connect(db_file) as db:
+        db.execute("UPDATE ai_jobs SET normalized_usage_source = 'estimated' WHERE output_tokens = 100")
+    assert read_job_metrics(tmp_path, start, end)["first_actual_input_tokens"] is None
+    assert read_job_metrics(tmp_path, start, end)["max_actual_input_tokens"] is None
 
 
 def test_local_system_message_is_replaced_and_keeps_saved_plan() -> None:

@@ -264,8 +264,13 @@ class LocalLlamaCppAdapter:
         completion_tokens = _positive_int(usage_raw.get("completion_tokens"))
         timings_value = body.get("timings")
         timings: dict[str, Any] = timings_value if isinstance(timings_value, dict) else {}
-        prompt_tokens = prompt_tokens or _positive_int(timings.get("prompt_n"))
-        completion_tokens = completion_tokens or _positive_int(timings.get("predicted_n"))
+        prompt_supplied = any(_valid_count(value) for value in (usage_raw.get("prompt_tokens"), timings.get("prompt_n")))
+        completion_supplied = any(_valid_count(value) for value in (
+            usage_raw.get("completion_tokens"), timings.get("predicted_n")))
+        if not _valid_count(usage_raw.get("prompt_tokens")):
+            prompt_tokens = _positive_int(timings.get("prompt_n"))
+        if not _valid_count(usage_raw.get("completion_tokens")):
+            completion_tokens = _positive_int(timings.get("predicted_n"))
         if completion_tokens and reasoning_tokens:
             completion_tokens = max(0, completion_tokens - reasoning_tokens)
         elif reasoning_tokens == 0:
@@ -281,7 +286,9 @@ class LocalLlamaCppAdapter:
             usage=AIUsage(provider_id=self.provider_id, model_id=model_id,
                           input_tokens=prompt_tokens, output_tokens=completion_tokens + reasoning_tokens,
                           total_tokens=total if total else None,
-                          usage_source=AIUsageSource.actual if usage_raw or timings else AIUsageSource.estimated),
+                          usage_source=(AIUsageSource.actual if prompt_supplied and completion_supplied
+                                        else AIUsageSource.mixed if prompt_supplied or completion_supplied
+                                        else AIUsageSource.estimated)),
             finish_reason=finish, safety_status="allowed",
             raw_provider_metadata={"reasoning_char_count": len(reasoning or think),
                                    "reasoning_tokens": reasoning_tokens,
@@ -294,6 +301,10 @@ class LocalLlamaCppAdapter:
 
     def stream(self, request: AIRequest) -> object:
         raise NotImplementedError("Local llama.cpp adapter streaming is not implemented.")
+
+
+def _valid_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _positive_int(value: object) -> int:

@@ -400,10 +400,6 @@ def compact_system_message(messages: Any, system_prompt: str) -> Any:
     return [{**messages[0], "content": system_prompt + tail}, *messages[1:]]
 
 
-def prompt_tokens_estimate(prompt: str) -> int:
-    return math.ceil(len(prompt) / 3.5)
-
-
 def step_deadline_from_rows(rows: list[Any], max_output_tokens: int) -> int:
     """Fit elapsed seconds to output tokens; sparse or degenerate data uses 240 s."""
     samples = [(float(row["output_tokens"]), float(row["latency_ms"]) / 1000)
@@ -454,7 +450,9 @@ def infer_envelope(frame: dict[str, Any], *, deadline_seconds: int = 120,
         envelope_id=str(uuid4()), correlation_id=str(frame["id"]),
         task_kind=str(frame.get("task_kind", "general")),
         workspace_id=ref.workspace_id,
-        prompt=json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False, separators=separators) + RELAY_TOOL_PROTOCOL
+        prompt=json.dumps({"messages": messages, "tools": ([tool["function"] for tool in tools]
+                                                        if route_class and route_class.startswith("local:") else tools)},
+                          ensure_ascii=False, separators=separators) + RELAY_TOOL_PROTOCOL
                if tools else json.dumps(messages, ensure_ascii=False, separators=separators),
         route_class=route_class,
         model_candidate=str(frame["model_candidate"])[:256] if frame.get("model_candidate") else None,
@@ -519,8 +517,7 @@ def run_governed_inference(
     while True:
         runner_kwargs = run_ai_task_kwargs(current, structured_output_schema=structured_output_schema,
                                            temperature=temperature)
-        runner_kwargs["metadata"] = {"prompt_tokens_estimate": prompt_tokens_estimate(current.prompt),
-                                      **({"reasoning_phase": reasoning_phase} if reasoning_phase else {})}
+        runner_kwargs["metadata"] = {"reasoning_phase": reasoning_phase} if reasoning_phase else {}
         outcome = runner(**runner_kwargs)
         if on_outcome is not None:
             on_outcome(outcome)
@@ -1063,20 +1060,6 @@ class HermesSupervisor:
                 result = {"status": "refused"}
             else:
                 def record_flow(outcome: AiTaskOutcome) -> None:
-                    if outcome.ledger_id:
-                        try:
-                            with open_sqlite_connection() as connection:
-                                row = connection.execute("SELECT route_reason_json FROM ai_jobs WHERE id = ?",
-                                                         (outcome.ledger_id,)).fetchone()
-                                if row:
-                                    metadata = json.loads(row["route_reason_json"])
-                                    metadata["prompt_tokens_estimate"] = prompt_tokens_estimate(envelope.prompt)
-                                    connection.execute("UPDATE ai_jobs SET route_reason_json = ? WHERE id = ?",
-                                                       (json.dumps(metadata, sort_keys=True), outcome.ledger_id))
-                                    connection.commit()
-                        except sqlite3.OperationalError as exc:
-                            if "no such table: ai_jobs" not in str(exc):
-                                raise
                     if outcome.flow_id and envelope.agent_session is not None:
                         self.turn_flow_ids.setdefault(envelope.agent_session.hermes_session_id, []).append(outcome.flow_id)
                         if envelope.task_kind == "general":

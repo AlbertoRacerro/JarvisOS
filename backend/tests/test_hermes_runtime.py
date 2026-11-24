@@ -192,6 +192,39 @@ def test_text_tool_proposal_requires_the_registered_broker() -> None:
         infer_envelope(_frame() | {"tools": [{"function": {"name": "terminal"}}]})
 
 
+def test_compact_relay_proposal_executes_turn_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _connection()
+    connection.commit()
+    monkeypatch.setattr(hermes_supervisor_module, "open_sqlite_connection", lambda: _existing_connection(connection))
+    tool_def = next(tool for tool in _TOOLS if tool["name"] == "jarvis_turn_plan")
+    tool = {"type": "function", "function": {"name": "mcp__jarvis__jarvis_turn_plan",
+            "description": tool_def["description"], "parameters": tool_def["inputSchema"]}}
+    proposal = json.dumps({"tool_calls": [{"name": tool["function"]["name"],
+                                           "arguments": {"op": "read_plan"}}]})
+    def runner(**kwargs: Any) -> Any:
+        payload = json.loads(kwargs["user_prompt"].removesuffix(RELAY_TOOL_PROTOCOL))
+        assert payload["tools"][0]["name"] == tool["function"]["name"]
+        assert payload["tools"][0]["parameters"] == hermes_supervisor_module.compact_tool_schemas([tool])[0]["function"]["parameters"]
+        branches = kwargs["structured_output_schema"]["oneOf"][1]["properties"]["tool_calls"]["items"]["anyOf"]
+        assert branches[0]["properties"]["arguments"] == payload["tools"][0]["parameters"]
+        assert "description" not in json.dumps(branches[0]["properties"]["arguments"])
+        return SimpleNamespace(status="success", response=SimpleNamespace(text=proposal, finish_reason="stop"),
+                               flow_id=None)
+
+    supervisor = HermesSupervisor("unused", runner=runner)
+    supervisor.session = SESSION
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(supervisor, "_send", sent.append)
+    supervisor._handle_relay(_frame() | {"tools": [tool], "allowed_tools": [tool["function"]["name"]]})
+    relay = sent[-1]
+    assert relay["status"] == "success", relay
+    message = completion_message(relay["text"], [tool])
+    call = message["tool_calls"][0]["function"]
+    supervisor._handle_tool({"id": "call-1", "session_ref": SESSION.model_dump(mode="json"),
+                             "arguments": {"tool_name": call["name"], **json.loads(call["arguments"])}})
+    assert sent[-1]["tool_result"]["status"] == "succeeded"
+
+
 def test_per_turn_tool_filter_and_schema_only_admit_surface_tools() -> None:
     general = {"function": {"name": "mcp__jarvis__jarvis_retrieval_query", "parameters": {
         "type": "object", "properties": {"grant_id": {"type": "string"}},
