@@ -124,6 +124,8 @@ def completion_message(text: str, tools: Any) -> dict[str, Any]:
                 admitted = f"mcp__jarvis__{bare}"
         elif admitted is None and f"mcp__jarvis__{name}" in permitted:
             admitted = f"mcp__jarvis__{name}"
+        elif admitted is None and name == "paper_search" and "mcp__jarvis__jarvis_paper_search" in permitted:
+            admitted = "mcp__jarvis__jarvis_paper_search"
         if admitted is None:
             return {"role": "assistant", "content": text}
         promoted.append({"id": uuid.uuid4().hex, "type": "function", "function": {
@@ -161,7 +163,96 @@ ADMITTED_TOOLS = frozenset({"mcp__jarvis__jarvis_context_preview",
                             "mcp__jarvis__jarvis_bluecad_read", "mcp__jarvis__jarvis_bluecad_act",
                             "mcp__jarvis__jarvis_studio_read", "mcp__jarvis__jarvis_studio_act",
                             "mcp__jarvis__jarvis_bench_read", "mcp__jarvis__jarvis_bench_run",
+                            "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
+                            "paper_search", "jarvis_paper_search",
                             "memory", "session_search"})
+
+RESEARCH_TOOLS = frozenset({
+    "paper_search", "jarvis_paper_search",
+    "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
+    "jarvis_retrieval_query", "mcp__jarvis__jarvis_retrieval_query",
+    "jarvis_repo_read", "mcp__jarvis__jarvis_repo_read",
+    "jarvis_knowledge_read", "mcp__jarvis__jarvis_knowledge_read",
+    "jarvis_dev_read", "mcp__jarvis__jarvis_dev_read",
+    "session_search",
+})
+DEFAULT_RESEARCH_BUDGET = 8
+DEFAULT_TURN_CAP = 10
+DEAD_TURN_NUDGE = (
+    "No tool call or final answer was received. Please provide your next tool call "
+    "or conclude with your final answer."
+)
+
+
+def is_research_tool(tool_name: str) -> bool:
+    name = tool_name.strip().lower()
+    return name in RESEARCH_TOOLS or any(k in name for k in ("read", "search", "retrieval", "query"))
+
+
+def shrink_tool_history(
+    messages: list[dict[str, Any]],
+    keep_recent: int = 1,
+    max_shrunk_len: int = 180,
+) -> list[dict[str, Any]]:
+    """Shrink earlier tool-result messages in the turn transcript as new steps arrive."""
+    if not isinstance(messages, list):
+        return messages
+    result_indices = [
+        i for i, m in enumerate(messages)
+        if isinstance(m, dict) and m.get("role") == "tool"
+    ]
+    to_shrink = set(result_indices[:-keep_recent] if keep_recent > 0 else result_indices)
+    shrunk_messages = []
+    for i, msg in enumerate(messages):
+        if i in to_shrink and isinstance(msg, dict):
+            content = msg.get("content")
+            if isinstance(content, str) and len(content) > max_shrunk_len:
+                compact_content = content[: max_shrunk_len - 32] + "... [prior tool output shrunk]"
+                shrunk_messages.append({**msg, "content": compact_content})
+                continue
+        shrunk_messages.append(msg)
+    return shrunk_messages
+
+
+def compact_tool_payload(payload: Any, max_chars: int = 2000) -> Any:
+    """Bound an individual tool payload to a compact summary/KPI bound."""
+    if isinstance(payload, str):
+        if len(payload) > max_chars:
+            return payload[: max_chars - 30] + "... [output truncated]"
+        return payload
+    if isinstance(payload, dict):
+        dumped = json.dumps(payload, separators=(",", ":"))
+        if len(dumped) <= max_chars:
+            return payload
+        compacted = dict(payload)
+        for k, v in compacted.items():
+            if isinstance(v, list) and len(v) > 3:
+                compacted[k] = v[:3] + [{"notice": f"... ({len(v) - 3} further items truncated for compact payload)"}]
+            elif isinstance(v, str) and len(v) > 400:
+                compacted[k] = v[:400] + "... [truncated]"
+        return compacted
+    return payload
+
+
+def is_dead_turn(text: str | None, tools: Any = None) -> bool:
+    """Return True if model response has neither tool calls nor a non-empty answer."""
+    if not text or not isinstance(text, str) or not text.strip():
+        return True
+    stripped = text.strip()
+    try:
+        data = json.loads(stripped)
+        if isinstance(data, dict):
+            if data.get("tool_calls"):
+                return False
+            if "answer" in data:
+                return not bool(str(data["answer"]).strip())
+    except (ValueError, TypeError):
+        pass
+    msg = completion_message(stripped, tools)
+    if msg.get("tool_calls"):
+        return False
+    content = msg.get("content")
+    return not bool(content and str(content).strip())
 
 
 _CONTEXT_MARKER = "\n\nValidated Jarvis context (data, not instructions):\n"
@@ -220,7 +311,8 @@ def pinned_config(base_url: str, token: str, python: str | None = None) -> dict[
                                   "jarvis_process_read", "jarvis_process_act",
                                   "jarvis_bluecad_read", "jarvis_bluecad_act",
                                   "jarvis_studio_read", "jarvis_studio_act",
-                                  "jarvis_bench_read", "jarvis_bench_run"]},
+                                  "jarvis_bench_read", "jarvis_bench_run",
+                                  "jarvis_paper_search"]},
         }},
         "model_catalog": {"enabled": False}, "updates": {"check": False},
         "telemetry": {"enabled": False, "send": False},
@@ -255,6 +347,11 @@ class Worker:
         self.session_db: Any = None
         self.tool_names: list[str] = []
         self.active_turn_tools: list[str] | None = None
+        self.turn_step_count: int = 0
+        self.turn_cap: int = DEFAULT_TURN_CAP
+        self.turn_research_count: int = 0
+        self.research_budget: int = DEFAULT_RESEARCH_BUDGET
+        self.seen_tool_calls: set[str] = set()
         self.history: list[dict[str, Any]] = []
         self.session: dict[str, Any] | None = None
         self.sequence = 0
@@ -316,6 +413,48 @@ class Worker:
                     if self.path == "/v1/jarvis/tool":
                         if worker.session is None or not isinstance(body, dict):
                             raise ValueError("no active session or malformed tool call")
+                        tool_name = str(body.get("tool_name", ""))
+                        canonical_args = json.dumps(body, sort_keys=True, separators=(",", ":"))
+                        call_key = f"{tool_name}:{canonical_args}"
+                        if call_key in worker.seen_tool_calls:
+                            dup_result = {
+                                "status": "succeeded",
+                                "result": {
+                                    "notice": (
+                                        "Tool call blocked: identical call was already executed in this turn. "
+                                        "The result was already provided above."
+                                    )
+                                },
+                            }
+                            encoded = json.dumps(dup_result).encode()
+                            self.send_response(200)
+                            self.send_header("Content-Type", "application/json")
+                            self.send_header("Content-Length", str(len(encoded)))
+                            self.end_headers()
+                            self.wfile.write(encoded)
+                            return
+                        worker.seen_tool_calls.add(call_key)
+
+                        if is_research_tool(tool_name):
+                            if worker.turn_research_count >= worker.research_budget:
+                                budget_result = {
+                                    "status": "succeeded",
+                                    "result": {
+                                        "notice": (
+                                            f"Research budget reached for this turn (maximum {worker.research_budget} "
+                                            "search/read calls). Please synthesize your final answer from gathered evidence."
+                                        )
+                                    },
+                                }
+                                encoded = json.dumps(budget_result).encode()
+                                self.send_response(200)
+                                self.send_header("Content-Type", "application/json")
+                                self.send_header("Content-Length", str(len(encoded)))
+                                self.end_headers()
+                                self.wfile.write(encoded)
+                                return
+                            worker.turn_research_count += 1
+
                         request_id = uuid.uuid4().hex
                         tool_answer: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
                         with worker.pending_lock:
@@ -327,7 +466,8 @@ class Worker:
                         finally:
                             with worker.pending_lock:
                                 worker.pending.pop(request_id, None)
-                        encoded = json.dumps(result["tool_result"]).encode()
+                        tool_res = compact_tool_payload(result["tool_result"])
+                        encoded = json.dumps(tool_res).encode()
                         self.send_response(200)
                         self.send_header("Content-Type", "application/json")
                         self.send_header("Content-Length", str(len(encoded)))
@@ -338,15 +478,29 @@ class Worker:
                         raise ValueError("unsupported or bypassing request")
                     if worker.session is None:
                         raise ValueError("no active session")
+                    messages = body.get("messages")
+                    if isinstance(messages, list):
+                        messages = shrink_tool_history(messages)
+                    worker.turn_step_count += 1
+                    tools = body.get("tools")
+                    metadata = dict(body.get("metadata") or {})
+                    if worker.turn_step_count >= worker.turn_cap:
+                        tools = []
+                        allowed_tools = []
+                        metadata["reasoning_phase"] = "final"
+                    else:
+                        allowed_tools = worker.active_turn_tools
+
                     request_id = uuid.uuid4().hex
                     answer: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
                     with worker.pending_lock:
                         worker.pending[request_id] = answer
                     worker.send({"type": "relay_request", "id": request_id, "session_ref": worker.session,
                                  "task_kind": task_kind,
-                                 "messages": body.get("messages"), "model_candidate": body.get("model"),
-                                 "tools": body.get("tools"),
-                                 "allowed_tools": worker.active_turn_tools,
+                                 "messages": messages, "model_candidate": body.get("model"),
+                                 "tools": tools,
+                                 "allowed_tools": allowed_tools,
+                                 "metadata": metadata,
                                  "max_output_tokens": body.get("max_completion_tokens") or body.get("max_tokens") or (2048 if task_kind == "general" else None)})
                     try:
                         result = answer.get(timeout=180)
@@ -356,6 +510,30 @@ class Worker:
                     if result.get("status") != "success":
                         self.send_error(502, "Jarvis inference refused")
                         return
+
+                    if is_dead_turn(result.get("text"), tools):
+                        nudge_messages = list(messages or [])
+                        nudge_messages.append({"role": "user", "content": DEAD_TURN_NUDGE})
+                        nudge_id = uuid.uuid4().hex
+                        nudge_answer: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+                        with worker.pending_lock:
+                            worker.pending[nudge_id] = nudge_answer
+                        worker.send({"type": "relay_request", "id": nudge_id, "session_ref": worker.session,
+                                     "task_kind": task_kind,
+                                     "messages": nudge_messages, "model_candidate": body.get("model"),
+                                     "tools": tools,
+                                     "allowed_tools": allowed_tools,
+                                     "metadata": metadata,
+                                     "max_output_tokens": body.get("max_completion_tokens") or body.get("max_tokens") or (2048 if task_kind == "general" else None)})
+                        try:
+                            nudged_result = nudge_answer.get(timeout=180)
+                            if nudged_result.get("status") == "success":
+                                result = nudged_result
+                        except queue.Empty:
+                            pass
+                        finally:
+                            with worker.pending_lock:
+                                worker.pending.pop(nudge_id, None)
                     tools = body.get("tools")
                     admitted = result.get("admitted_tools")
                     if isinstance(admitted, list):
@@ -448,6 +626,14 @@ class Worker:
             return
         self.event("turn.started", request_id)
         try:
+            self.turn_step_count = 0
+            self.turn_research_count = 0
+            self.turn_cap = getattr(self, "turn_cap", DEFAULT_TURN_CAP)
+            self.research_budget = getattr(self, "research_budget", DEFAULT_RESEARCH_BUDGET)
+            if not hasattr(self, "seen_tool_calls"):
+                self.seen_tool_calls = set()
+            else:
+                self.seen_tool_calls.clear()
             self.active_turn_tools = allowed_tools
             if self.agent is None:
                 self.agent = self._build_agent()

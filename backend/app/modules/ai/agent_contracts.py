@@ -251,6 +251,7 @@ class InferenceEnvelope(_Deadline):
     agent_session: AgentSessionRef | None = None
     provenance_refs: tuple[SourceRef, ...] = Field(default=(), max_length=MAX_REFS)
     requested_at: UtcDatetime
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_envelope(self) -> InferenceEnvelope:
@@ -288,6 +289,7 @@ def run_ai_task_kwargs(
         "existing_flow_id": envelope.flow_id,
         "structured_output_schema": structured_output_schema,
         "temperature": temperature,
+        "metadata": dict(envelope.metadata) if envelope.metadata else None,
     }
 
 
