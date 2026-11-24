@@ -51,6 +51,19 @@ export type ProviderSettings = {
   spend_month_to_date_usd: number;
 };
 
+export type SearchGuardBlockedEntry = {
+  ts: string;
+  sha256_prefix: string;
+  reason_code: string;
+  reason_it: string;
+  rule_index?: number | null;
+};
+
+export type SearchGuardBlockedSummary = {
+  total_blocked: number;
+  recent_blocked: SearchGuardBlockedEntry[];
+};
+
 export class SettingsApiError extends Error {
   readonly status: number;
   readonly code: string | null;
@@ -121,6 +134,10 @@ export function loadSecretStatus(): Promise<SettingsSecretStatus> {
 
 export function loadSystemInfo(): Promise<SystemInfoResponse> {
   return requestJson<SystemInfoResponse>("/system/info");
+}
+
+export function loadSearchGuardBlockedSummary(): Promise<SearchGuardBlockedSummary> {
+  return requestJson<SearchGuardBlockedSummary>("/ai/search-guard/blocked");
 }
 
 export function saveAISetting(payload: Record<string, number | boolean | Record<string, string>>): Promise<AISettings> {

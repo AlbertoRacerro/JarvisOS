@@ -6,12 +6,14 @@ import {
   loadAISettings,
   loadAIStatus,
   loadProviderSettings,
+  loadSearchGuardBlockedSummary,
   loadSecretStatus,
   loadSystemInfo,
   removeScalewayCredential,
   replaceScalewayCredential,
   saveAISetting,
   type ProviderSettings,
+  type SearchGuardBlockedSummary,
   type SettingsSecretStatus
 } from "../api/settings";
 import InlineNotice from "../components/ui/InlineNotice";
@@ -48,6 +50,7 @@ type CanonicalSnapshot = {
   providers: ProviderSettings;
   secret: SettingsSecretStatus;
   system: SystemInfoResponse;
+  searchGuard: SearchGuardBlockedSummary | null;
 };
 
 const numericKeys: NumericKey[] = [
@@ -123,6 +126,7 @@ function Settings() {
   const [providers, setProviders] = useState<ProviderSettings | null>(null);
   const [secret, setSecret] = useState<SettingsSecretStatus | null>(null);
   const [system, setSystem] = useState<SystemInfoResponse | null>(null);
+  const [searchGuard, setSearchGuard] = useState<SearchGuardBlockedSummary | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [roleRouteDraft, setRoleRouteDraft] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -142,6 +146,7 @@ function Settings() {
     setProviders(null);
     setSecret(null);
     setSystem(null);
+    setSearchGuard(null);
     setDraft(null);
     setRoleRouteDraft({});
   }, []);
@@ -157,12 +162,13 @@ function Settings() {
     if (projectFailure) setError(null);
 
     try {
-      const [nextSettings, nextStatus, nextProviders, nextSecret, nextSystem] = await Promise.all([
+      const [nextSettings, nextStatus, nextProviders, nextSecret, nextSystem, nextSearchGuard] = await Promise.all([
         loadAISettings(),
         loadAIStatus(),
         loadProviderSettings(),
         loadSecretStatus(),
-        loadSystemInfo()
+        loadSystemInfo(),
+        loadSearchGuardBlockedSummary().catch(() => null)
       ]);
       if (!mounted.current || owner !== generation.current) return false;
 
@@ -171,13 +177,15 @@ function Settings() {
         status: nextStatus,
         providers: nextProviders,
         secret: nextSecret,
-        system: nextSystem
+        system: nextSystem,
+        searchGuard: nextSearchGuard
       };
       setSettings(snapshot.settings);
       setStatus(snapshot.status);
       setProviders(snapshot.providers);
       setSecret(snapshot.secret);
       setSystem(snapshot.system);
+      setSearchGuard(snapshot.searchGuard);
       setDraft((current) => {
         const canonicalDraft = draftFrom(snapshot.settings);
         if (!preserveDraft || !current) return canonicalDraft;
@@ -493,6 +501,32 @@ function Settings() {
             <div><dt>Default provider</dt><dd>{providerName(providers?.default_provider_id ?? status?.provider_id ?? "checking")}</dd></div>
           </dl>
           <details><summary>Technical details</summary><p>Budget status code · {status?.budget_status ?? "checking"}</p><p>Default provider code · {providers?.default_provider_id ?? status?.provider_id ?? "checking"}</p></details>
+        </Surface>
+
+        <Surface className="settings-card" data-search-guard-panel>
+          <h2>Filtro ricerche</h2>
+          <p className="settings-card__summary">Ricerche bloccate dal filtro di protezione IP ed egress. Mostra i motivi in formato chiaro senza esporre query o segreti.</p>
+          <dl className="settings-facts">
+            <div><dt>Ricerche bloccate</dt><dd>{searchGuard ? searchGuard.total_blocked : (loading ? "Caricamento" : "—")}</dd></div>
+            <div><dt>Eventi recenti</dt><dd>{searchGuard ? searchGuard.recent_blocked.length : (loading ? "Caricamento" : "—")}</dd></div>
+          </dl>
+          {searchGuard && searchGuard.recent_blocked.length > 0 ? (
+            <details>
+              <summary>Ultime ricerche bloccate ({searchGuard.recent_blocked.length})</summary>
+              <div className="settings-fields">
+                {searchGuard.recent_blocked.map((entry, idx) => (
+                  <div key={`${entry.ts}-${entry.sha256_prefix}-${idx}`} className="settings-muted">
+                    <strong>{entry.reason_it}</strong>
+                    <p>{entry.ts} · SHA: {entry.sha256_prefix} · Regola: {entry.reason_code}{entry.rule_index != null ? ` #${entry.rule_index}` : ""}</p>
+                  </div>
+                ))}
+              </div>
+            </details>
+          ) : searchGuard ? (
+            <p className="settings-muted">Nessuna ricerca bloccata registrata.</p>
+          ) : (
+            <p className="settings-muted">Riepilogo del filtro non disponibile.</p>
+          )}
         </Surface>
 
         <Surface className="settings-card">

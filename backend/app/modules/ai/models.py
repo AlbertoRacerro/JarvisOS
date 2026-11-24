@@ -410,3 +410,16 @@ class SupervisorPublicTestResponse(BaseModel):
     external_call_attempted: bool
     external_call_succeeded: bool
     limitations: list[str] = Field(default_factory=list)
+
+
+class SearchGuardBlockedEntryRead(BaseModel):
+    ts: str
+    sha256_prefix: str
+    reason_code: str
+    reason_it: str
+    rule_index: int | None = None
+
+
+class SearchGuardBlockedSummaryRead(BaseModel):
+    total_blocked: int
+    recent_blocked: list[SearchGuardBlockedEntryRead]

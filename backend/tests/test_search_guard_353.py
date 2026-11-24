@@ -124,7 +124,11 @@ def test_blocked_categories_and_no_query_echo(tmp_path):
     assert not FakeConnection.calls
     lines = (tmp_path / "guard.log").read_text().splitlines()
     assert len(lines) == 3
-    assert all(len(line.split()) == 3 and line.split()[1] == "blocked" for line in lines)
+    assert all(
+        (len(line.split()) == 3 and line.split()[1] == "blocked")
+        or (json.loads(line).get("status") == "blocked")
+        for line in lines
+    )
     assert all(query not in "\n".join(lines) for query in ("zephyr", "apple", "password"))
 
 
