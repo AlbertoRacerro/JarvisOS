@@ -25,11 +25,8 @@ if (process.argv.includes("--help")) {
   process.exit(0);
 }
 
-const pwModule = process.env.PLAYWRIGHT_MODULE ?? (
-  existsSync("/home/thera/.npm/_npx/fd3bca3c548369c0/node_modules/playwright/index.mjs")
-    ? "/home/thera/.npm/_npx/fd3bca3c548369c0/node_modules/playwright/index.mjs"
-    : "playwright"
-);
+const npxPw = join(process.env.HOME ?? "", ".npm/_npx/fd3bca3c548369c0/node_modules/playwright/index.mjs");
+const pwModule = process.env.PLAYWRIGHT_MODULE ?? (existsSync(npxPw) ? npxPw : "playwright");
 
 const pw = await import(pwModule);
 const chromium = pw.chromium ?? pw.default?.chromium;
@@ -40,7 +37,7 @@ const python = resolve(
   process.env.JARVISOS_PROOF_PYTHON ??
     (existsSync(join(backend, ".venv/bin/python"))
       ? join(backend, ".venv/bin/python")
-      : "/home/thera/src/JarvisOS/backend/.venv/bin/python")
+      : resolve(root, "../../JarvisOS/backend/.venv/bin/python"))
 );
 
 const port = Number(process.env.JARVISOS_PROOF_PORT ?? 8350);
@@ -246,7 +243,7 @@ try {
   // Ensure Axial O2 drawer is open
   const axialDrawer = page.locator("details.design-dynamic__axial-drawer");
   await axialDrawer.waitFor();
-  if (!(await axialDrawer.getAttribute("open"))) {
+  if ((await axialDrawer.getAttribute("open")) === null) {
     await axialDrawer.locator("summary").click();
   }
   await shot("axial-o2-drawer-opened");
@@ -266,10 +263,10 @@ try {
   await stageNav.getByRole("button", { name: "Motion/Mechanics", exact: true }).click();
   const versionsFold = page.locator("details.design-project__fold", { hasText: "Versions" });
   await versionsFold.waitFor();
-  if (!(await versionsFold.getAttribute("open"))) {
+  if ((await versionsFold.getAttribute("open")) === null) {
     await versionsFold.locator("summary").click();
   }
-  const variantVerdicts = page.locator(".variant-verdicts-summary");
+  const variantVerdicts = page.locator(".design-project__variant-summary, .variant-verdicts-summary");
   await variantVerdicts.waitFor();
   const stageVerdictsText = await variantVerdicts.innerText();
   assert(stageVerdictsText.includes("Motion/Mechanics"), "Variant verdicts should include Motion/Mechanics");

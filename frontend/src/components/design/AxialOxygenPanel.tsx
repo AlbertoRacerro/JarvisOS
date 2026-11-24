@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { designTarget } from "../../app/designTargets";
 import {
   createBenchRun,
@@ -14,6 +14,8 @@ import NumericInput from "../ui/NumericInput";
 import { DesignStatus } from "./DesignStatus";
 import {
   deriveAxialO2Defaults,
+  extractNumber,
+  isTubularUnit,
   type AxialO2Defaults,
   type ProvenanceSource,
 } from "./physicsHandoff";
@@ -35,8 +37,8 @@ export default function AxialOxygenPanel({
   initialOpen = true,
 }: Readonly<AxialOxygenPanelProps>) {
   const [isOpen, setIsOpen] = useState(initialOpen);
-  const [innerDiameterMm, setInnerDiameterMm] = useState("50");
-  const [temperatureC, setTemperatureC] = useState("20");
+  const [innerDiameterEdit, setInnerDiameterEdit] = useState<string | null>(null);
+  const [temperatureEdit, setTemperatureEdit] = useState<string | null>(null);
 
   const [edits, setEdits] = useState<Partial<Record<keyof AxialO2Defaults, number>>>({});
   const [defaults, setDefaults] = useState<AxialO2Defaults>(() =>
@@ -47,6 +49,12 @@ export default function AxialOxygenPanel({
   const [activeRun, setActiveRun] = useState<BenchRunDetail | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const initialAutoSelectDone = useRef(false);
+
+  useEffect(() => {
+    initialAutoSelectDone.current = false;
+  }, [workspaceId]);
 
   // When draft, unit or user edits change, recalculate defaults
   useEffect(() => {
@@ -62,18 +70,63 @@ export default function AxialOxygenPanel({
         (r) => r.evaluator_id === EVALUATOR_ID || r.evaluator_id === EVALUATOR_ALT,
       );
       setRuns(tubeRuns);
-      if (tubeRuns.length > 0 && !activeRun) {
+      if (tubeRuns.length > 0 && !initialAutoSelectDone.current) {
+        initialAutoSelectDone.current = true;
         const first = await getBenchRun(workspaceId, tubeRuns[0].run_id);
         setActiveRun(first);
       }
     } catch {
       // Best effort load
     }
-  }, [workspaceId, activeRun]);
+  }, [workspaceId]);
 
   useEffect(() => {
     void reloadRuns();
   }, [reloadRuns]);
+
+  const chosenUnit =
+    selectedUnit ?? draft?.objects?.find((item) => item.kind === "unit" && isTubularUnit(item));
+
+  const diamInfo = (() => {
+    if (innerDiameterEdit !== null) {
+      return { value: innerDiameterEdit, source: "manual" as ProvenanceSource };
+    }
+    if (chosenUnit) {
+      const raw =
+        extractNumber(chosenUnit.params, "tube_inner_diameter") ??
+        extractNumber(chosenUnit.params, "inner_diameter") ??
+        extractNumber(chosenUnit.params, "diameter");
+      if (raw != null && raw > 0) {
+        const mm = raw <= 1.0 ? raw * 1000 : raw;
+        return {
+          value: String(Math.round(mm * 10) / 10),
+          source: "from Process" as ProvenanceSource,
+        };
+      }
+    }
+    return { value: "50", source: "manual" as ProvenanceSource };
+  })();
+
+  const tempInfo = (() => {
+    if (temperatureEdit !== null) {
+      return { value: temperatureEdit, source: "manual" as ProvenanceSource };
+    }
+    if (chosenUnit) {
+      const raw =
+        extractNumber(chosenUnit.params, "temperature") ??
+        extractNumber(chosenUnit.params, "liquid_temperature") ??
+        extractNumber(chosenUnit.params, "temperature_c") ??
+        extractNumber(chosenUnit.params, "temp_c");
+      if (raw != null) {
+        const c = raw > 100 ? raw - 273.15 : raw;
+        return {
+          value: String(Math.round(c * 10) / 10),
+          source: "from Process" as ProvenanceSource,
+        };
+      }
+    }
+    return { value: "20", source: "manual" as ProvenanceSource };
+  })();
 
   const handleFieldChange = (key: keyof AxialO2Defaults, val: number) => {
     setEdits((prev) => ({ ...prev, [key]: val }));
@@ -196,14 +249,12 @@ export default function AxialOxygenPanel({
                   <div className="design-field-control">
                     <NumericInput
                       id="input-axial-diam"
-                      value={innerDiameterMm}
+                      value={diamInfo.value}
                       min={1}
                       max={1000}
-                      onValueChange={setInnerDiameterMm}
+                      onValueChange={(val) => setInnerDiameterEdit(val)}
                     />
-                    <span className="design-project__provenance design-project__provenance--from-process">
-                      from Process
-                    </span>
+                    {provenanceBadge(diamInfo.source)}
                   </div>
                 </div>
 
@@ -226,14 +277,12 @@ export default function AxialOxygenPanel({
                   <div className="design-field-control">
                     <NumericInput
                       id="input-axial-temp"
-                      value={temperatureC}
+                      value={tempInfo.value}
                       min={0}
                       max={50}
-                      onValueChange={setTemperatureC}
+                      onValueChange={(val) => setTemperatureEdit(val)}
                     />
-                    <span className="design-project__provenance design-project__provenance--from-process">
-                      from Process
-                    </span>
+                    {provenanceBadge(tempInfo.source)}
                   </div>
                 </div>
 

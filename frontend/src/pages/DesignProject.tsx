@@ -390,7 +390,7 @@ export default function DesignProject({ projectId, onProjectChange, search, navi
     </details>
     <details className="design-project__fold">
       <summary>Versions</summary>
-      <div className="design-project__variant-summary">
+      <div className="design-project__variant-summary variant-verdicts-summary">
         <h4>Variant stage verdicts</h4>
         <ul className="design-project__stage-verdicts">
           {buildVariantStageSummary({

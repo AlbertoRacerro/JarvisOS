@@ -63,7 +63,7 @@ export interface OpticsDefaults {
   tube_inner_diameter_m: ParameterWithProvenance;
 }
 
-function extractNumber(obj: unknown, key: string): number | null {
+export function extractNumber(obj: unknown, key: string): number | null {
   if (!obj || typeof obj !== "object") return null;
   const record = obj as Record<string, unknown>;
   const val = record[key];
@@ -116,9 +116,6 @@ export function deriveMotionDefaults(
       waveAmpVal = raw / 2.0;
       waveAmpSource = "from Environment";
     }
-  } else if (envProfile?.channels?.wave_height) {
-    waveAmpVal = 1.25;
-    waveAmpSource = "from Environment";
   }
 
   // Wave period: from environment wave_period if available, else default 8.0
@@ -133,9 +130,6 @@ export function deriveMotionDefaults(
       wavePeriodVal = raw;
       wavePeriodSource = "from Environment";
     }
-  } else if (envProfile?.channels?.wave_period) {
-    wavePeriodVal = 8.0;
-    wavePeriodSource = "from Environment";
   }
 
   // Mass: from component properties or Process draft if present, else default 500,000 kg

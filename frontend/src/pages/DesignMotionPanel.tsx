@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { designTarget } from "../app/designTargets";
 import {
   createBenchRun,
@@ -48,6 +48,12 @@ export default function DesignMotionPanel({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const initialAutoSelectDone = useRef(false);
+
+  useEffect(() => {
+    initialAutoSelectDone.current = false;
+  }, [workspaceId]);
+
   // Load environment profiles
   useEffect(() => {
     let live = true;
@@ -73,7 +79,7 @@ export default function DesignMotionPanel({
     if (selectedProfile) {
       void environmentApi<ProfileValues>(
         workspaceId,
-        `/profiles/${encodeURIComponent(selectedProfile.digest)}/values?offset=0&limit=5`,
+        `/profiles/${encodeURIComponent(selectedProfile.digest)}?offset=0&limit=5`,
       )
         .then((vals) => {
           if (live) setProfileValues(vals);
@@ -101,14 +107,15 @@ export default function DesignMotionPanel({
       const res = await listBenchRuns(workspaceId);
       const motionRuns = res.runs.filter((r) => r.evaluator_id === EVALUATOR_ID);
       setRuns(motionRuns);
-      if (motionRuns.length > 0 && !activeRun) {
+      if (motionRuns.length > 0 && !initialAutoSelectDone.current) {
+        initialAutoSelectDone.current = true;
         const first = await getBenchRun(workspaceId, motionRuns[0].run_id);
         setActiveRun(first);
       }
-    } catch (cause) {
+    } catch {
       // Best effort load
     }
-  }, [workspaceId, activeRun]);
+  }, [workspaceId]);
 
   useEffect(() => {
     setLoading(true);

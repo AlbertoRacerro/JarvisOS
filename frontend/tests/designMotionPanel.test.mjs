@@ -63,6 +63,11 @@ const editedMotion = deriveMotionDefaults(envProfile, envValues, null, { wave_am
 assert.equal(editedMotion.wave_amplitude_m.value, 3.0, "user edit preserved");
 assert.equal(editedMotion.wave_amplitude_m.source, "manual", "user edit provenance must be manual");
 
+// Fallback provenance when envValues does not supply wave channels
+const fallbackMotion = deriveMotionDefaults(envProfile, null, null, {});
+assert.equal(fallbackMotion.wave_amplitude_m.source, "manual", "fallback wave amplitude provenance must be manual");
+assert.equal(fallbackMotion.wave_period_s.source, "manual", "fallback wave period provenance must be manual");
+
 // Axial O2 defaults
 const mockUnit = { id: "u1", kind: "unit", type: "PhotobioreactorT1", tag: "PBR-01", params: { tube_length: { value: 65, unit: "m" }, velocity: { value: 0.8, unit: "m/s" }, oxygen_production_rate: { value: 0.004, unit: "mol/(m3*s)" } } };
 const axialDefaults = deriveAxialO2Defaults({ draft_id: "d1", name: "D1", revision: "1", seq: 1, objects: [mockUnit] }, mockUnit, null, null, {});
