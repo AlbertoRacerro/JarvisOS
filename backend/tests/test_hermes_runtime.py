@@ -165,7 +165,7 @@ def test_mcp_protocol_discloses_only_broker_tool() -> None:
         "jarvis_repo_read", "jarvis_knowledge_read",
         "jarvis_process_read", "jarvis_process_act", "jarvis_bluecad_read", "jarvis_bluecad_act",
         "jarvis_studio_read", "jarvis_studio_act", "jarvis_bench_read", "jarvis_bench_run",
-        "jarvis_paper_search", "jarvis_browser_page_read"]
+        "jarvis_paper_search", "jarvis_patent_read", "jarvis_browser_page_read"]
     for name in ("jarvis_process_read", "jarvis_bluecad_read", "jarvis_studio_read"):
         schema = next(tool["inputSchema"] for tool in _TOOLS if tool["name"] == name)
         assert schema["required"] == ["grant_id"]

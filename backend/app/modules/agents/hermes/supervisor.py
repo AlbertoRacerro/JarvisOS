@@ -57,6 +57,8 @@ HERMES_TOOL_ALLOWLIST = frozenset({"mcp__jarvis__jarvis_context_preview",
                                   "mcp__jarvis__jarvis_bench_read", "mcp__jarvis__jarvis_bench_run",
                                   "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
                                   "paper_search", "jarvis_paper_search",
+                                  "mcp__jarvis__patent_read", "mcp__jarvis__jarvis_patent_read",
+                                  "patent_read", "jarvis_patent_read",
                                   "mcp__jarvis__browser_page_read", "mcp__jarvis__jarvis_browser_page_read",
                                   "browser_page_read", "jarvis_browser_page_read",
                                   "memory", "session_search"})
@@ -124,6 +126,10 @@ _HERMES_PAPER_SEARCH_CAPABILITY = JarvisCapabilityDescriptor(
     capability_id="jarvis.paper_search", route_id="ai-threads", action_class="READ",
     label="Search public scientific literature metadata via Europe PMC and Crossref",
 )
+_HERMES_PATENT_READ_CAPABILITY = JarvisCapabilityDescriptor(
+    capability_id="jarvis.patent_read", route_id="ai-threads", action_class="READ",
+    label="Look up public patent publications via Google Patents and official registers",
+)
 _HERMES_BROWSER_PAGE_CAPABILITY = JarvisCapabilityDescriptor(
     capability_id="jarvis.browser_page_read", route_id="ai-threads", action_class="READ",
     label="Read public HTTPS web pages via headless Chromium",
@@ -136,6 +142,8 @@ _TOOL_CAPABILITIES = {
     "jarvis_knowledge_read": "jarvis.knowledge_read",
     "jarvis_paper_search": "jarvis.paper_search",
     "paper_search": "jarvis.paper_search",
+    "jarvis_patent_read": "jarvis.patent_read",
+    "patent_read": "jarvis.patent_read",
     "jarvis_browser_page_read": "jarvis.browser_page_read",
     "browser_page_read": "jarvis.browser_page_read",
     "jarvis_process_read": "jarvis.process_read",
@@ -154,6 +162,7 @@ for _descriptor in (_HERMES_PROCESS_READ_CAPABILITY, _HERMES_PROCESS_ACT_CAPABIL
                     _HERMES_DEV_READ_CAPABILITY, _HERMES_REPO_READ_CAPABILITY,
                     _HERMES_KNOWLEDGE_READ_CAPABILITY,
                     _HERMES_PAPER_SEARCH_CAPABILITY,
+                    _HERMES_PATENT_READ_CAPABILITY,
                     _HERMES_BROWSER_PAGE_CAPABILITY):
     if _descriptor not in PRODUCTION_CAPABILITY_REGISTRY.for_route("ai-threads"):
         PRODUCTION_CAPABILITY_REGISTRY.register(_descriptor)
@@ -268,6 +277,8 @@ RELAY_TOOL_PROTOCOL = (
 RESEARCH_TOOLS = frozenset({
     "paper_search", "jarvis_paper_search",
     "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
+    "patent_read", "jarvis_patent_read",
+    "mcp__jarvis__patent_read", "mcp__jarvis__jarvis_patent_read",
     "browser_page_read", "jarvis_browser_page_read",
     "mcp__jarvis__browser_page_read", "mcp__jarvis__jarvis_browser_page_read",
     "jarvis_retrieval_query", "mcp__jarvis__jarvis_retrieval_query",
@@ -429,6 +440,7 @@ def dispatch_tool(
     call: StructuredToolCall, *, live_grants: dict[str, CapabilityGrantRef],
     interaction_id: str | None = None,
     paper_search_opener: Any = None,
+    patent_read_opener: Any = None,
     browser_page_runner: Any = None,
 ) -> StructuredToolResult:
     now = datetime.now(UTC)
@@ -548,6 +560,12 @@ def dispatch_tool(
 
                     result, error = dispatch_paper_search_tool(
                         call, scope.workspace_id, error, grant=grant, opener=paper_search_opener, live_grants=live_grants
+                    )
+                elif call.capability_id == "jarvis.patent_read":
+                    from app.modules.agents.hermes.patent_read_tool import dispatch_patent_read_tool
+
+                    result, error = dispatch_patent_read_tool(
+                        call, scope.workspace_id, error, grant=grant, opener=patent_read_opener, live_grants=live_grants
                     )
                 elif call.capability_id == "jarvis.browser_page_read":
                     from app.modules.agents.hermes.browser_page_tool import dispatch_browser_page_tool
@@ -730,6 +748,7 @@ class HermesSupervisor:
         self.turn_step_count: int = 0
         self.turn_cap: int = DEFAULT_TURN_CAP
         self.paper_search_opener: Any = None
+        self.patent_read_opener: Any = None
         self.browser_page_runner: Any = None
 
     def _read_worker(self, process: subprocess.Popen[str]) -> None:
@@ -945,6 +964,7 @@ class HermesSupervisor:
             result = dispatch_tool(call, live_grants=self.live_grants,
                                    interaction_id=self.active_interaction_id,
                                    paper_search_opener=self.paper_search_opener,
+                                   patent_read_opener=self.patent_read_opener,
                                    browser_page_runner=self.browser_page_runner)
         except (ValueError, KeyError, sqlite3.Error):
             result = StructuredToolResult(
