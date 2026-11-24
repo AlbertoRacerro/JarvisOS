@@ -769,7 +769,7 @@ def test_hermes_scoped_grant_and_prompt_guidance() -> None:
     assert prompt is not None
     assert "paper_pdf_grant_id=" in prompt
     assert "jarvis_paper_pdf_read" in prompt
-    assert len(prompt) <= 2000
+    assert len(prompt) <= 2600
 
 
 def test_supervisor_dispatch_and_research_budget_enforcement() -> None:

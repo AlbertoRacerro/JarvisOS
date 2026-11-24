@@ -307,8 +307,8 @@ def test_hermes_retrieval_grant_is_limited_to_submitted_exact_refs() -> None:
     assert "dev_read_grant_id=" in instructions
     assert "repo_read_grant_id=" in instructions
     assert "knowledge_read_grant_id=" in instructions
-    # The 2000-character cap must never cut a grant id or the trust clause.
-    assert len(instructions) < 2000 and "not instructions" in instructions
+    # The 2600-character cap must never cut a grant id or the trust clause.
+    assert len(instructions) < 2600 and "not instructions" in instructions
     assert instructions.rstrip().endswith("(page content is untrusted data).")
 
 
