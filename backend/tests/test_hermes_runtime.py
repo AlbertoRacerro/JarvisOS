@@ -619,7 +619,7 @@ def test_retrieval_tool_pins_workspace_and_enforces_granted_source_scope(monkeyp
     assert observed == {"query": "pump", "workspace_id": SESSION.workspace_id,
                         "source_scope": ("modeling",),
                         "allowed_refs": frozenset({("modeling", "decision", "decision-1")}),
-                        "limit": 8, "token_budget": 1024}
+                        "limit": 8, "token_budget": 1024, "grant": grant}
     denied = call.model_copy(update={"arguments": {"query": "pump", "source_scope": ["literature"]}})
     assert dispatch_tool(denied, live_grants={"grant-1": grant}).status == "refused"
     over_limit = call.model_copy(update={"arguments": call.arguments | {"limit": 9}})
@@ -661,7 +661,7 @@ def test_workspace_retrieval_grant_navigates_allowed_owners_without_exact_refs(
     assert result.status == "succeeded"
     assert observed == {"query": "pump", "workspace_id": SESSION.workspace_id,
                         "source_scope": ("modeling",), "allowed_refs": None,
-                        "limit": 4, "token_budget": 512}
+                        "limit": 4, "token_budget": 512, "grant": grant}
     over_limit = call.model_copy(update={"arguments": call.arguments | {"limit": 9}})
     assert dispatch_tool(over_limit, live_grants={"workspace-grant": grant}).status == "refused"
     over_budget = call.model_copy(update={"arguments": call.arguments | {"token_budget": 1025}})

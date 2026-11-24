@@ -411,10 +411,8 @@ def dispatch_tool(
                                         "allowed_refs": None if workspace_scoped else granted_refs,
                                         "limit": raw_limit,
                                         "token_budget": raw_token_budget,
+                                        "grant": grant,
                                     }
-                                    if grant is not None and grant.constraints:
-                                        if grant.constraints.get("is_local") is not None:
-                                            qc_kwargs["is_local"] = bool(grant.constraints["is_local"])
                                     result = query_context(raw_query, **qc_kwargs)
                             else:
                                 error = "scope_denied"

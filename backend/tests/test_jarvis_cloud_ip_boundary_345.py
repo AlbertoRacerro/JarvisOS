@@ -136,7 +136,7 @@ def fake_zephyr_pack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         encoding="utf-8",
     )
     (pack_dir / "tokens_doc.txt").write_text(
-        "API access credential: api_key = sk-supersecretkey12345678901234567890\nLine 2.\n",
+        "API access credential: api_key = sk-live-1234567890abcdef1234567890\nLine 2.\n",
         encoding="utf-8",
     )
     monkeypatch.setenv(packs.PACK_PATH_ENV, str(pack_dir))
@@ -332,8 +332,8 @@ def test_cloud_route_no_cloud_knowledge_read_withholds_s2_s3_s4(
             "VALUES ('a-s0', 'ws-345', 'Standard public engineering assumption', 'active', 'high', '2026-01-01', '2026-01-01'), "
             "       ('a-s2', 'ws-345', 'confidential partner-only under NDA', 'active', 'high', '2026-01-01', '2026-01-01'), "
             "       ('a-s3', 'ws-345', 'zephyr geometry correlation and process parameter', 'active', 'high', '2026-01-01', '2026-01-01'), "
-            "       ('a-s4', 'ws-345', 'secret api_key = sk-12345678901234567890', 'active', 'high', '2026-01-01', '2026-01-01'), "
-            "       ('a-s4-token', 'ws-345', 'sk-12345678901234567890', 'active', 'high', '2026-01-01', '2026-01-01')"
+            "       ('a-s4', 'ws-345', 'secret api_key = sk-live-1234567890abcdef1234567890', 'active', 'high', '2026-01-01', '2026-01-01'), "
+            "       ('a-s4-token', 'ws-345', 'sk-live-1234567890abcdef1234567890', 'active', 'high', '2026-01-01', '2026-01-01')"
         )
         conn.commit()
 
@@ -415,6 +415,103 @@ def test_cloud_route_no_cloud_retrieval_query_withholds_s2_s3(
     assert result["evidence"][0]["content_digest"] == "d-s0"
     assert result["bundle"] == {"items": []}
     assert "zephyr geometry" not in str(result)
+
+
+@pytest.mark.parametrize("constraints", [
+    {},
+    {"is_local": True},
+    {"route_class": "local:llamacpp"},
+    {"route_class": 42, "is_local": True},
+    {"route_class": "local:", "is_local": True},
+    {"route_class": "local:llamacpp", "is_local": "true"},
+    {"route_class": "cloud:openai", "is_local": True},
+])
+def test_incomplete_grant_cannot_read_pack_with_local_provider(
+    fake_zephyr_pack: Path, constraints: dict[str, Any]
+) -> None:
+    grant = _make_grant("jarvis.repo_read").model_copy(update={"constraints": constraints})
+    call = _make_call(
+        {"op": "read", "scope": "pack", "path": "zephyr_design.txt"},
+        capability_id="jarvis.repo_read",
+    )
+    result, error = dispatch_repo_read_tool(
+        call, "ws-345", "err", grant=grant, route_class="local:llamacpp",
+    )
+    assert result is None
+    assert error == "egress_pack_blocked"
+
+
+def test_missing_grant_route_withholds_knowledge_with_local_provider() -> None:
+    with open_sqlite_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workspaces (id, name, slug, status, created_at, updated_at) "
+            "VALUES ('ws-345', 'Test WS', 'test-ws', 'active', '2026-01-01', '2026-01-01')"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO assumptions (id, workspace_id, statement, status, confidence, created_at, updated_at) "
+            "VALUES ('sensitive', 'ws-345', 'confidential partner-only under NDA', 'active', 'high', '2026-01-01', '2026-01-01')"
+        )
+        conn.commit()
+    grant = _make_grant("jarvis.knowledge_read").model_copy(update={"constraints": {}})
+    call = _make_call(
+        {"view": "memory_records", "workspace_id": "ws-345"},
+        capability_id="jarvis.knowledge_read",
+    )
+    result, error = dispatch_knowledge_read_tool(call, "ws-345", "err", grant=grant)
+    assert error == "err"
+    assert result is not None
+    assert result["egress_mode"] == "no_cloud"
+    assert result["withheld_count"] == 1
+    assert result["memory_records"] == []
+
+
+def test_missing_grant_route_withholds_retrieval_with_local_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensitive = SimpleNamespace(
+        source_ref=SimpleNamespace(model_dump=lambda mode="json": {"id": "sensitive"}),
+        content_digest="digest-sensitive", token_estimate=10,
+    )
+
+    class FakeStore:
+        def freshness(self) -> Any:
+            return SimpleNamespace(model_dump=lambda mode="json": {})
+
+        def build_bundle(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(
+                evidence_manifest=(), items=(sensitive,),
+                model_dump=lambda mode="json": {"items": []},
+            )
+
+        def resolve_authoritative(self, ref: Any) -> Any:
+            return SimpleNamespace(
+                state="current", content="confidential partner-only under NDA",
+                current_content_digest="digest-sensitive",
+            )
+
+    grant = _make_grant("jarvis.retrieval_query").model_copy(update={"constraints": {}})
+    result = query_context(
+        "test", workspace_id="ws-345", store=FakeStore(), grant=grant, is_local=True,
+    )
+    assert result["egress_mode"] == "no_cloud"
+    assert result["withheld_count"] == 1
+    assert result["evidence"] == []
+
+    seen: dict[str, Any] = {}
+
+    def fake_query_context(query: str, **kwargs: Any) -> dict[str, Any]:
+        seen.update(kwargs)
+        return {"evidence": []}
+
+    monkeypatch.setattr("app.modules.ai.retrieval_query.query_context", fake_query_context)
+    call = _make_call(
+        {"query": "test", "source_scope": ["modeling"]},
+        capability_id="jarvis.retrieval_query", grant_id=grant.grant_id,
+    )
+    dispatched = dispatch_tool(call, live_grants={grant.grant_id: grant})
+    assert dispatched.status == "succeeded"
+    assert seen["grant"] is grant
+    assert "is_local" not in seen
 
 
 # ===========================================================================

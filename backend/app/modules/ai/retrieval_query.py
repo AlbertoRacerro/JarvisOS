@@ -80,15 +80,15 @@ def query_context(
             "excerpt": excerpt,
         })
 
-    if is_local is None and grant is None:
-        # Direct local navigation has no Hermes external route context.
-        is_local = True
-    if is_local is None:
+    if grant is not None:
         try:
             from app.modules.agents.hermes.ip_boundary import is_local_route
             is_local = is_local_route(grant=grant)
         except Exception:
             is_local = False
+    elif is_local is None:
+        # Direct local navigation has no Hermes external route context.
+        is_local = True
 
     withheld_count = 0
     active_mode = None
@@ -105,7 +105,9 @@ def query_context(
         kept_evidence = []
         for ev, full_content in zip(evidence, full_contents, strict=True):
             allowed, _, _ = filter_or_sanitize_text(full_content, active_mode)
-            ev_excerpt = ev.get("excerpt") or ""
+            ev_excerpt = ev.get("excerpt")
+            if not isinstance(ev_excerpt, str):
+                ev_excerpt = ""
             if allowed:
                 _, out_excerpt, _ = filter_or_sanitize_text(ev_excerpt, active_mode)
             else:

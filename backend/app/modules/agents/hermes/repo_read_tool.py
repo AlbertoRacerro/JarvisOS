@@ -10,6 +10,7 @@ from app.modules.agents.hermes.ip_boundary import (
     CLOUD_IP_MODE_NO_CLOUD,
     CLOUD_IP_MODE_SANITIZED,
     check_sensitivity_floor,
+    is_local_route,
     log_cloud_boundary_event,
     resolve_cloud_ip_mode,
     sanitize_record,
@@ -63,11 +64,6 @@ def _is_secret_like(name: str) -> bool:
     return False
 
 
-_LOCAL_PROVIDER_MODES = frozenset(
-    {"fake", "local", "local_llamacpp", "local_ollama", "ollama", "llamacpp"}
-)
-
-
 def _is_binary_file(file_path: Path) -> bool:
     try:
         with open(file_path, "rb") as f:
@@ -103,25 +99,7 @@ def _is_local_route(
     route_class: str | None,
     grant: CapabilityGrantRef | None,
 ) -> bool:
-    candidate_route: Any = route_class
-    if candidate_route is None and grant is not None:
-        candidate_route = grant.constraints.get("route_class")
-        if candidate_route is None:
-            is_local = grant.constraints.get("is_local")
-            if is_local is not None:
-                return bool(is_local)
-    if candidate_route is not None:
-        if isinstance(candidate_route, str):
-            return candidate_route.startswith("local:") or candidate_route == "fake"
-        return False
-    try:
-        from app.modules.ai.settings import get_ai_settings
-
-        settings = get_ai_settings()
-        provider_mode = str(getattr(settings, "provider_mode", "") or "").lower()
-        return provider_mode in _LOCAL_PROVIDER_MODES
-    except Exception:
-        return False
+    return is_local_route(route_class=route_class, grant=grant)
 
 
 def _resolve_relative_path(

@@ -68,13 +68,16 @@ def is_local_route(
     role_id: str | None = None,
 ) -> bool:
     """Strictly server-owned route classification: local routes bypass cloud egress restrictions."""
-    if grant is not None and grant.constraints:
-        is_local_constraint = grant.constraints.get("is_local")
-        if isinstance(is_local_constraint, bool):
-            return is_local_constraint
+    if grant is not None:
+        # A Hermes grant must carry an explicit, consistent server-owned route.
+        # Neither provider defaults nor a caller-supplied route can repair it.
         grant_route = grant.constraints.get("route_class")
-        if grant_route is not None:
-            route_class = str(grant_route)
+        is_local_constraint = grant.constraints.get("is_local")
+        return (isinstance(grant_route, str)
+                and (grant_route == "fake" or
+                     (grant_route.startswith("local:") and bool(grant_route[6:].strip())
+                      and grant_route == grant_route.strip()))
+                and is_local_constraint is True)
 
     if route_class is not None:
         if isinstance(route_class, str):
@@ -163,6 +166,8 @@ def filter_or_sanitize_text(text: str, mode: str) -> tuple[bool, str, str | None
             return False, "", "egress_sanitization_required"
         return True, redacted, None
 
+    return False, "", "egress_pack_blocked"
+
 
 
 def _record_text_recursive(value: Any) -> str:
@@ -213,6 +218,8 @@ def sanitize_record(record: dict[str, Any], mode: str) -> tuple[bool, dict[str, 
         if isinstance(sanitized, dict):
             sanitized["sanitized"] = True
         return True, sanitized, None
+
+    return False, {}, "egress_pack_blocked"
 
 
 

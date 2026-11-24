@@ -78,7 +78,10 @@ def _make_grant(
         capability_id=capability_id,
         issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
-        constraints={"route_class": route_class},
+        constraints={
+            "route_class": route_class,
+            "is_local": route_class.startswith("local:") or route_class == "fake",
+        },
         issued_at=issued,
         expires_at=expires,
     )
