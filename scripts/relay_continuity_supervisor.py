@@ -1680,7 +1680,8 @@ class Supervisor:
                             try:
                                 prior = json.loads((self.host.relay.sessions_dir() / session_id / "turns" /
                                                     turn_name / "native-result.json").read_text(encoding="utf-8"))
-                                if prior.get("catalog_verified") is True and isinstance(prior.get("model"), str):
+                                if (isinstance(prior, dict) and prior.get("catalog_verified") is True
+                                        and isinstance(prior.get("model"), str) and prior["model"].strip()):
                                     resume_model = prior["model"]
                             except (OSError, ValueError, AttributeError):
                                 resume_model = None

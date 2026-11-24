@@ -3669,6 +3669,7 @@ def _preflight_release(release_dir: Path, paths: Paths) -> None:
         "devctx.py",
         "worker_routing.py",
         "free_model_monitor.py",
+        "account_model_resolution.py",
     ):
         if not (release_dir / "scripts" / name).is_file():
             raise Refused(f"release missing {name}")

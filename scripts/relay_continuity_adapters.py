@@ -137,7 +137,7 @@ class RelayAdapter:
                 try:
                     relay_argon.prepare_login()
                     relay_argon.subscription_settings()
-                    if resume is not None and resume_model is None:
+                    if resume is not None and (not isinstance(resume_model, str) or not resume_model.strip()):
                         raise relay_argon.Refused("resume_model_missing")
                     resolved_model = relay_argon.resolved_model_for(agent, binary, env, exact=resume_model)
                 except relay_argon.Refused as exc:
@@ -168,9 +168,14 @@ class RelayAdapter:
                 if parent:
                     try:
                         previous = json.loads((self.sessions_dir() / parent / "selected-model.json").read_text())
-                        resume_model = previous["model"]
+                        if not isinstance(previous, dict):
+                            raise CatalogRefused("resume_model_missing")
+                        candidate_model = previous.get("model")
+                        if not isinstance(candidate_model, str) or not candidate_model.strip():
+                            raise CatalogRefused("resume_model_missing")
+                        resume_model = candidate_model
                     except (OSError, ValueError, KeyError, TypeError) as exc:
-                        raise OSError("resume_model_missing") from exc
+                        raise CatalogRefused("resume_model_missing") from exc
                 try:
                     resolved_model = relay_argon.account_models.resolve(
                         "coordinator_codex", binary, env, exact=resume_model)

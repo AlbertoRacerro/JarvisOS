@@ -145,9 +145,11 @@ def catalog(cli: str, binary: str, env: dict[str, str], *, now: float | None = N
         # Relay discovery and Claude aliases are not account entitlement evidence.
         raise Refused("catalog_unavailable")
     try:
-        proc = subprocess.Popen([binary, "models"], env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen([binary, "models"], env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except OSError as exc:
         raise Refused("catalog_unreadable") from exc
+    deadline = time.monotonic() + TIMEOUT
     output: list[bytes] = []
 
     def read() -> None:
@@ -156,13 +158,13 @@ def catalog(cli: str, binary: str, env: dict[str, str], *, now: float | None = N
 
     reader = threading.Thread(target=read, daemon=True)
     reader.start()
-    reader.join(TIMEOUT)
+    reader.join(max(0.0, deadline - time.monotonic()))
     if reader.is_alive() or not output or len(output[0]) > MAX_BYTES:
         proc.kill()
         proc.wait()
         raise Refused("catalog_unreadable")
     try:
-        proc.wait(timeout=max(0.1, TIMEOUT))
+        proc.wait(timeout=max(0.1, deadline - time.monotonic()))
     except subprocess.TimeoutExpired as exc:
         proc.kill()
         proc.wait()

@@ -75,8 +75,9 @@ def resolved_model_for(agent: str, binary: str, env: dict[str, str], *, exact: s
     override = env.get(names[agent])
     if exact is not None and override is not None and exact != override:
         raise Refused("model_override_conflict")
+    pin = exact if exact is not None else override
     try:
-        return account_models.resolve(f"coordinator_{agent}", binary, env, exact=exact or override)
+        return account_models.resolve(f"coordinator_{agent}", binary, env, exact=pin)
     except account_models.Refused as exc:
         raise Refused(exc.reason) from exc
 
@@ -342,7 +343,7 @@ def run(repo: Path, session: str, agent: str = "argon") -> int:
                     selected = json.loads((turn / "selected-model.json").read_text(encoding="utf-8"))["model"]
                 except (OSError, ValueError, KeyError, TypeError) as exc:
                     raise Refused("selected_model_missing") from exc
-                if not isinstance(selected, str):
+                if not isinstance(selected, str) or not selected.strip():
                     raise Refused("selected_model_missing")
                 resume_record = turn / "resume.json"
                 resume_model = None
@@ -351,7 +352,7 @@ def run(repo: Path, session: str, agent: str = "argon") -> int:
                         resume_model = json.loads(resume_record.read_text(encoding="utf-8"))["model"]
                     except (OSError, ValueError, KeyError, TypeError) as exc:
                         raise Refused("resume_model_missing") from exc
-                    if not isinstance(resume_model, str):
+                    if not isinstance(resume_model, str) or not resume_model.strip():
                         raise Refused("resume_model_missing")
                 if resume_model is not None and resume_model != selected:
                     raise Refused("resume_model_changed")

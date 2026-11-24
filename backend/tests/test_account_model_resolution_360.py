@@ -182,6 +182,7 @@ def test_codex_app_server_catalog_is_metadata_only(tmp_path: Path) -> None:
 
 def test_worker_router_selects_verified_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     wr = rc.worker_routing
+    monkeypatch.setenv("JARVISOS_CODEX_BIN", "/fake/codex")
     pools = {"gemini": wr.Pool("gemini", {"5h": .9}, .9),
              "codex": wr.Pool("codex", {"5h": .9}, .9)}
 
@@ -196,6 +197,18 @@ def test_worker_router_selects_verified_fallback(monkeypatch: pytest.MonkeyPatch
     assert decision["worker"] == "luna" and decision["model"] == "gpt-7-luna"
     assert "--model gpt-7-luna" in decision["command"]
     assert decision["pool"] == "codex" and decision["review"] == "tests_only"
+
+
+def test_worker_router_skips_codex_when_binary_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    wr = rc.worker_routing
+    monkeypatch.delenv("JARVISOS_CODEX_BIN", raising=False)
+    monkeypatch.setattr(wr.shutil, "which", lambda _name: None)
+    pools = {"codex": wr.Pool("codex", {"5h": .9}, .9)}
+
+    decision = wr.decide("low", "low", pools, model_resolver=lambda model: "gpt-7-luna")
+    assert decision["status"] == "no_worker"
+    assert any(s.get("worker") == "luna" and s.get("skipped") == "catalog_unavailable"
+               for s in decision["skipped"])
 
 
 def test_existing_nonversioned_worker_fallback_remains_available(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -290,3 +303,24 @@ def test_native_evidence_accepts_only_recorded_exact_id(tmp_path: Path) -> None:
     events[0]["init"]["model"] = "gemini-5.3-argon-low"
     (turn / "output.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
     assert rc.classify_turn(turn).outcome != "success"
+
+
+@pytest.mark.parametrize("payload", ['{"model": null}', '{"model": ""}', '{"model": "   "}', '[]'])
+def test_codex_resume_refuses_malformed_selected_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                       payload: str) -> None:
+    monkeypatch.setenv("JARVISOS_ACCOUNT_MODEL_RESOLUTION", "1")
+    monkeypatch.setattr(rc.RelayAdapter.start.__globals__["shutil"], "which", lambda _name: "/fake/codex")
+    repo = tmp_path / "repo"
+    session = repo / ".agent-relay/sessions/test-session"
+    session.mkdir(parents=True)
+    (session / "selected-model.json").write_text(payload)
+    adapter = rc.RelayAdapter(repo)
+    with pytest.raises(rc.CatalogRefused, match="resume_model_missing"):
+        adapter.start("codex", "test-session", "resume", 1)
+
+
+def test_resolved_model_for_refuses_empty_exact(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(rc.relay_argon.account_models, "catalog",
+                        lambda *a, **kw: frozenset({"gemini-4-argon-low"}))
+    with pytest.raises(rc.relay_argon.Refused, match="model_not_authorized"):
+        rc.relay_argon.resolved_model_for("argon", "unused", {}, exact="")

@@ -2215,30 +2215,33 @@ def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | 
     decision: dict[str, Any] = {"difficulty": difficulty, "risk": risk, "required_tier": required,
                                 "kind": kind, "review": REVIEW[risk], "reserves": RESERVES}
     by_key = {m.key: m for m in models}
-    if model_resolver is not None or account_models.enabled(dict(os.environ)):
+    use_catalog = model_resolver is not None or account_models.enabled(dict(os.environ))
+    if use_catalog:
         resolver = model_resolver or resolve_worker_catalog
         verified = []
         for candidate in eligible:
             try:
-                exact = resolver(by_key[candidate["worker"]])
+                model_obj = by_key[candidate["worker"]]
+                exact = resolver(model_obj)
+                cmd = launch_command(model_obj, exact)
             except account_models.Refused as exc:
                 skipped.append({**candidate, "skipped": exc.reason})
                 continue
-            verified.append({**candidate, "model": exact})
+            verified.append({**candidate, "model": exact, "_command": cmd})
         eligible = verified
     if not eligible:
         reason = "wait_for_escalation_pool" if any(s.get("skipped") == "escalated_from_family" for s in skipped) else "no_worker"
         return {**decision, "status": "no_worker", "reason": reason, "skipped": skipped}
     chosen = eligible[0]
     low = chosen["pool"] == "claude" and chosen["free"] < CLAUDE_LOW_FREE
+    command = chosen.get("_command") or launch_command(by_key[chosen["worker"]])
+    alternatives = [{k: v for k, v in item.items() if k != "_command"} for item in eligible[1:]]
     return {**decision, "status": "ok", "worker": chosen["worker"], "model": chosen["model"], "pool": chosen["pool"],
-            "source": chosen["source"], "command": launch_command(by_key[chosen["worker"]], chosen["model"]
-                                                         if model_resolver is not None or account_models.enabled(dict(os.environ))
-                                                         else None),
+            "source": chosen["source"], "command": command,
             "claude_pool_low": low, **({"note": CLAUDE_LOW_NOTE} if low else {}),
             "measured_cost": chosen.get("measured_cost"), "record_count": chosen.get("record_count", 0),
             **({"pacing": chosen["pacing"]} if chosen.get("pacing") else {}),
-            "alternatives": eligible[1:], "skipped": skipped}
+            "alternatives": alternatives, "skipped": skipped}
 
 
 def summary_line(pools: dict[str, Pool], outcomes: list[dict[str, Any]] | None = None) -> str:

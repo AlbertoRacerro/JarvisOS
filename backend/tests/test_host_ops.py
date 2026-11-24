@@ -48,6 +48,7 @@ _RELEASE_SCRIPTS = (
     "devctx.py",
     "worker_routing.py",
     "free_model_monitor.py",
+    "account_model_resolution.py",
 )
 
 
