@@ -377,38 +377,45 @@ def dispatch_tool(
                         error = "invalid_arguments"
                 elif call.capability_id == "jarvis.retrieval_query":
                     try:
-                        requested = dict(call.arguments)
-                        requested_owners = requested.pop("source_scope", None)
-                        allowed_owners = {ref.authority_owner for ref in scope.object_refs}
-                        granted_refs = frozenset((ref.authority_owner, ref.object_type, ref.object_id)
-                                                 for ref in scope.object_refs)
-                        raw_query = requested.pop("query", None)
-                        raw_limit = requested.pop("limit", 8)
-                        raw_token_budget = requested.pop("token_budget", 1_024)
-                        workspace_scoped = not scope.object_refs
-                        if workspace_scoped:
-                            from app.modules.ai.retrieval_query import WORKSPACE_SCOPED_OWNERS
-
-                            allowed_owners = set(WORKSPACE_SCOPED_OWNERS)
-                            if scope.jarvis_thread_id != call.session_ref.jarvis_thread_id:
-                                error = "scope_denied"
-                        if (isinstance(requested_owners, list) and requested_owners
-                                and all(isinstance(owner, str) for owner in requested_owners)
-                                and set(requested_owners) <= allowed_owners
-                                and (not workspace_scoped or scope.jarvis_thread_id == call.session_ref.jarvis_thread_id)):
-                            from app.modules.ai.retrieval_query import query_context
-                            if (not requested and isinstance(raw_query, str)
-                                    and isinstance(raw_limit, int) and not isinstance(raw_limit, bool)
-                                    and 1 <= raw_limit <= 8
-                                    and isinstance(raw_token_budget, int) and not isinstance(raw_token_budget, bool)
-                                    and 1 <= raw_token_budget <= 1_024):
-                                result = query_context(raw_query, workspace_id=scope.workspace_id,
-                                                       source_scope=tuple(str(owner) for owner in requested_owners),
-                                                       allowed_refs=None if workspace_scoped else granted_refs,
-                                                       limit=raw_limit,
-                                                       token_budget=raw_token_budget)
+                        if any(k in call.arguments for k in ("cloud_ip_mode", "egress_mode", "mode")):
+                            error = "invalid_arguments"
                         else:
-                            error = "scope_denied"
+                            requested = dict(call.arguments)
+                            requested_owners = requested.pop("source_scope", None)
+                            allowed_owners = {ref.authority_owner for ref in scope.object_refs}
+                            granted_refs = frozenset((ref.authority_owner, ref.object_type, ref.object_id)
+                                                     for ref in scope.object_refs)
+                            raw_query = requested.pop("query", None)
+                            raw_limit = requested.pop("limit", 8)
+                            raw_token_budget = requested.pop("token_budget", 1_024)
+                            workspace_scoped = not scope.object_refs
+                            if workspace_scoped:
+                                from app.modules.ai.retrieval_query import WORKSPACE_SCOPED_OWNERS
+
+                                allowed_owners = set(WORKSPACE_SCOPED_OWNERS)
+                                if scope.jarvis_thread_id != call.session_ref.jarvis_thread_id:
+                                    error = "scope_denied"
+                            if (isinstance(requested_owners, list) and requested_owners
+                                    and all(isinstance(owner, str) for owner in requested_owners)
+                                    and set(requested_owners) <= allowed_owners
+                                    and (not workspace_scoped or scope.jarvis_thread_id == call.session_ref.jarvis_thread_id)):
+                                from app.modules.ai.retrieval_query import query_context
+                                if (not requested and isinstance(raw_query, str)
+                                        and isinstance(raw_limit, int) and not isinstance(raw_limit, bool)
+                                        and 1 <= raw_limit <= 8
+                                        and isinstance(raw_token_budget, int) and not isinstance(raw_token_budget, bool)
+                                        and 1 <= raw_token_budget <= 1_024):
+                                    qc_kwargs: dict[str, Any] = {
+                                        "workspace_id": scope.workspace_id,
+                                        "source_scope": tuple(str(owner) for owner in requested_owners),
+                                        "allowed_refs": None if workspace_scoped else granted_refs,
+                                        "limit": raw_limit,
+                                        "token_budget": raw_token_budget,
+                                        "grant": grant,
+                                    }
+                                    result = query_context(raw_query, **qc_kwargs)
+                            else:
+                                error = "scope_denied"
                     except (TypeError, ValueError):
                         error = "invalid_arguments"
                 elif call.capability_id == "jarvis.decide":

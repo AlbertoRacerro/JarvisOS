@@ -6,6 +6,16 @@ from pathlib import Path
 from typing import Any
 
 from app.core import packs
+from app.modules.agents.hermes.ip_boundary import (
+    CLOUD_IP_MODE_NO_CLOUD,
+    CLOUD_IP_MODE_SANITIZED,
+    check_sensitivity_floor,
+    is_local_route,
+    log_cloud_boundary_event,
+    resolve_cloud_ip_mode,
+    sanitize_record,
+    sanitize_text,
+)
 from app.modules.ai.agent_contracts import CapabilityGrantRef, StructuredToolCall
 from app.modules.coding import relay_monitor
 
@@ -54,11 +64,6 @@ def _is_secret_like(name: str) -> bool:
     return False
 
 
-_LOCAL_PROVIDER_MODES = frozenset(
-    {"fake", "local", "local_llamacpp", "local_ollama", "ollama", "llamacpp"}
-)
-
-
 def _is_binary_file(file_path: Path) -> bool:
     try:
         with open(file_path, "rb") as f:
@@ -94,25 +99,7 @@ def _is_local_route(
     route_class: str | None,
     grant: CapabilityGrantRef | None,
 ) -> bool:
-    candidate_route: Any = route_class
-    if candidate_route is None and grant is not None:
-        candidate_route = grant.constraints.get("route_class")
-        if candidate_route is None:
-            is_local = grant.constraints.get("is_local")
-            if is_local is not None:
-                return bool(is_local)
-    if candidate_route is not None:
-        if isinstance(candidate_route, str):
-            return candidate_route.startswith("local:") or candidate_route == "fake"
-        return False
-    try:
-        from app.modules.ai.settings import get_ai_settings
-
-        settings = get_ai_settings()
-        provider_mode = str(getattr(settings, "provider_mode", "") or "").lower()
-        return provider_mode in _LOCAL_PROVIDER_MODES
-    except Exception:
-        return False
+    return is_local_route(route_class=route_class, grant=grant)
 
 
 def _resolve_relative_path(
@@ -282,9 +269,8 @@ def _handle_search(
     }, "ok"
 
 
-def _handle_read(
-    scope_root: Path,
-    target_path: Path,
+def _slice_text_content(
+    raw_text: str,
     clean_rel: str,
     start_line: int,
     max_lines: int,
@@ -292,16 +278,6 @@ def _handle_read(
     pack_id: str | None,
     confidentiality: str,
 ) -> tuple[dict[str, Any] | None, str]:
-    if not clean_rel or not target_path.is_file():
-        return None, "invalid_arguments"
-    if _is_secret_like(target_path.name) or _is_binary_file(target_path):
-        return None, "invalid_arguments"
-
-    try:
-        raw_text = target_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None, "invalid_arguments"
-
     lines = raw_text.splitlines()
     total_lines = len(lines)
 
@@ -340,6 +316,29 @@ def _handle_read(
     }, "ok"
 
 
+def _handle_read(
+    scope_root: Path,
+    target_path: Path,
+    clean_rel: str,
+    start_line: int,
+    max_lines: int,
+    scope: str,
+    pack_id: str | None,
+    confidentiality: str,
+) -> tuple[dict[str, Any] | None, str]:
+    if not clean_rel or not target_path.is_file():
+        return None, "invalid_arguments"
+    if _is_secret_like(target_path.name) or _is_binary_file(target_path):
+        return None, "invalid_arguments"
+
+    try:
+        raw_text = target_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None, "invalid_arguments"
+
+    return _slice_text_content(raw_text, clean_rel, start_line, max_lines, scope, pack_id, confidentiality)
+
+
 def dispatch_repo_read_tool(
     call: StructuredToolCall,
     workspace_id: str,
@@ -372,9 +371,21 @@ def dispatch_repo_read_tool(
     if pack_id is not None and (not isinstance(pack_id, str) or not pack_id.strip() or len(pack_id) > 64):
         return None, "invalid_arguments"
 
+    is_local = _is_local_route(route_class, grant)
+    egress_mode = resolve_cloud_ip_mode() if not is_local else None
+
     if scope == "pack":
-        if not _is_local_route(route_class, grant):
-            return None, "pack_cloud_egress_blocked"
+        if not is_local:
+            if egress_mode == CLOUD_IP_MODE_NO_CLOUD:
+                log_cloud_boundary_event(
+                    tool_name="jarvis_repo_read",
+                    op=op,
+                    egress_mode="no_cloud",
+                    withheld_count=1,
+                    reason_code="egress_pack_blocked",
+                    workspace_id=workspace_id,
+                )
+                return None, "egress_pack_blocked"
 
         loaded_packs = packs.load_packs()
         if not loaded_packs:
@@ -430,6 +441,43 @@ def dispatch_repo_read_tool(
         if isinstance(limit, bool) or not isinstance(limit, int) or not (1 <= limit <= 200):
             return None, "invalid_arguments"
         res, err = _handle_list(scope_root, target_path, clean_rel, limit, scope, pack_id, confidentiality)
+        if res is not None and not is_local and scope == "pack":
+            files = res.get("files", [])
+            kept_files = []
+            withheld_count = 0
+            if egress_mode == CLOUD_IP_MODE_SANITIZED:
+                for f in files:
+                    redacted = sanitize_text(f)
+                    if check_sensitivity_floor(redacted) in {"S2", "S3", "S4"}:
+                        withheld_count += 1
+                    else:
+                        kept_files.append(redacted)
+                res["files"] = kept_files
+                res["path"] = sanitize_text(clean_rel)
+                res["pack_id"] = sanitize_text(pack_id or "")
+                res["count"] = len(kept_files)
+                res["withheld_count"] = withheld_count
+                res["sanitized"] = True
+                res["egress_mode"] = "sanitized"
+                if withheld_count > 0:
+                    log_cloud_boundary_event(
+                        tool_name="jarvis_repo_read",
+                        op="list",
+                        egress_mode="sanitized",
+                        withheld_count=withheld_count,
+                        reason_code="egress_sanitization_required",
+                        workspace_id=workspace_id,
+                    )
+        if res is not None and not is_local and scope == "pack" and egress_mode == CLOUD_IP_MODE_SANITIZED:
+            allowed, safe_res, _ = sanitize_record(res, egress_mode)
+            if not allowed:
+                log_cloud_boundary_event(
+                    tool_name="jarvis_repo_read", op=op, egress_mode=egress_mode,
+                    withheld_count=1, reason_code="egress_sanitization_required",
+                    workspace_id=workspace_id,
+                )
+                return None, "egress_sanitization_required"
+            res = safe_res
         return (res, default_error) if res is not None else (None, err)
 
     if op == "search":
@@ -440,6 +488,60 @@ def dispatch_repo_read_tool(
         if isinstance(limit, bool) or not isinstance(limit, int) or not (1 <= limit <= 50):
             return None, "invalid_arguments"
         res, err = _handle_search(scope_root, target_path, clean_rel, query, limit, scope, pack_id, confidentiality)
+        if res is not None and not is_local and scope == "pack":
+            matches = res.get("matches", [])
+            kept_matches = []
+            withheld_count = 0
+            if egress_mode == CLOUD_IP_MODE_SANITIZED:
+                for match in matches:
+                    snippet = match.get("snippet", "")
+                    source_path, _ = _resolve_relative_path(match.get("path"), scope_root)
+                    if source_path is None or not source_path.is_file():
+                        withheld_count += 1
+                        continue
+                    try:
+                        source_text = source_path.read_text(encoding="utf-8", errors="replace")
+                    except OSError:
+                        withheld_count += 1
+                        continue
+                    redacted = sanitize_text(snippet)
+                    redacted_source = sanitize_text(source_text)
+                    if (check_sensitivity_floor(source_text) != "S4"
+                            and check_sensitivity_floor(redacted_source) in {"S0", "S1", None}
+                            and check_sensitivity_floor(redacted) in {"S0", "S1", None}):
+                        m = dict(match)
+                        m["snippet"] = redacted
+                        m["path"] = sanitize_text(str(m.get("path", "")))
+                        m["sanitized"] = True
+                        kept_matches.append(m)
+                    else:
+                        withheld_count += 1
+                res["matches"] = kept_matches
+                res["path"] = sanitize_text(clean_rel)
+                res["pack_id"] = sanitize_text(pack_id or "")
+                res["count"] = len(kept_matches)
+                res["withheld_count"] = withheld_count
+                res["sanitized"] = True
+                res["egress_mode"] = "sanitized"
+                if withheld_count > 0:
+                    log_cloud_boundary_event(
+                        tool_name="jarvis_repo_read",
+                        op="search",
+                        egress_mode="sanitized",
+                        withheld_count=withheld_count,
+                        reason_code="egress_sanitization_required",
+                        workspace_id=workspace_id,
+                    )
+        if res is not None and not is_local and scope == "pack" and egress_mode == CLOUD_IP_MODE_SANITIZED:
+            allowed, safe_res, _ = sanitize_record(res, egress_mode)
+            if not allowed:
+                log_cloud_boundary_event(
+                    tool_name="jarvis_repo_read", op=op, egress_mode=egress_mode,
+                    withheld_count=1, reason_code="egress_sanitization_required",
+                    workspace_id=workspace_id,
+                )
+                return None, "egress_sanitization_required"
+            res = safe_res
         return (res, default_error) if res is not None else (None, err)
 
     if op == "read":
@@ -451,6 +553,62 @@ def dispatch_repo_read_tool(
         max_lines = raw_args.get("max_lines", 150)
         if isinstance(max_lines, bool) or not isinstance(max_lines, int) or not (1 <= max_lines <= 300):
             return None, "invalid_arguments"
+
+        if not is_local and scope == "pack":
+            if not clean_rel or not target_path.is_file():
+                return None, "invalid_arguments"
+            if _is_secret_like(target_path.name) or _is_binary_file(target_path):
+                return None, "invalid_arguments"
+            try:
+                raw_text = target_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return None, "invalid_arguments"
+
+            if egress_mode == CLOUD_IP_MODE_SANITIZED:
+                if check_sensitivity_floor(raw_text) == "S4":
+                    log_cloud_boundary_event(
+                        tool_name="jarvis_repo_read",
+                        op="read",
+                        egress_mode="sanitized",
+                        withheld_count=1,
+                        reason_code="egress_sanitization_required",
+                        workspace_id=workspace_id,
+                    )
+                    return None, "egress_sanitization_required"
+                redacted_text = sanitize_text(raw_text)
+                post_floor = check_sensitivity_floor(redacted_text)
+                if post_floor in {"S2", "S3", "S4"}:
+                    log_cloud_boundary_event(
+                        tool_name="jarvis_repo_read",
+                        op="read",
+                        egress_mode="sanitized",
+                        withheld_count=1,
+                        reason_code="egress_sanitization_required",
+                        workspace_id=workspace_id,
+                    )
+                    return None, "egress_sanitization_required"
+
+                res, err = _slice_text_content(
+                    redacted_text, clean_rel, start_line, max_lines, scope, pack_id, confidentiality
+                )
+                if res is not None:
+                    res["sanitized"] = True
+                    res["path"] = sanitize_text(clean_rel)
+                    res["pack_id"] = sanitize_text(pack_id or "")
+                    res["egress_mode"] = "sanitized"
+                    res["withheld_count"] = 0
+                if res is not None:
+                    allowed, safe_res, _ = sanitize_record(res, egress_mode)
+                    if not allowed:
+                        log_cloud_boundary_event(
+                            tool_name="jarvis_repo_read", op=op, egress_mode=egress_mode,
+                            withheld_count=1, reason_code="egress_sanitization_required",
+                            workspace_id=workspace_id,
+                        )
+                        return None, "egress_sanitization_required"
+                    res = safe_res
+                return (res, default_error) if res is not None else (None, err)
+
         res, err = _handle_read(scope_root, target_path, clean_rel, start_line, max_lines, scope, pack_id, confidentiality)
         return (res, default_error) if res is not None else (None, err)
 

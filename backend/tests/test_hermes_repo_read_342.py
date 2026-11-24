@@ -78,7 +78,10 @@ def _make_grant(
         capability_id=capability_id,
         issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
-        constraints={"route_class": route_class},
+        constraints={
+            "route_class": route_class,
+            "is_local": route_class.startswith("local:") or route_class == "fake",
+        },
         issued_at=issued,
         expires_at=expires,
     )
@@ -403,14 +406,14 @@ def test_op_pack_cloud_egress_fail_closed(tmp_path: Path, monkeypatch: pytest.Mo
         call = _make_call({"op": "list", "scope": "pack"})
         res, err = dispatch_repo_read_tool(call, "workspace-test", "err", grant=grant)
         assert res is None
-        assert err == "pack_cloud_egress_blocked"
+        assert err == "egress_pack_blocked"
 
         # Direct argument route_class also refuses
         res_direct, err_direct = dispatch_repo_read_tool(
             call, "workspace-test", "err", route_class=cloud_route
         )
         assert res_direct is None
-        assert err_direct == "pack_cloud_egress_blocked"
+        assert err_direct == "egress_pack_blocked"
 
     # Public scope remains allowed on cloud route
     repo = tmp_path / "repo"
@@ -597,7 +600,7 @@ def test_dispatch_tool_enforces_repo_read_grant(tmp_path: Path, monkeypatch: pyt
     call_cloud = _make_call({"op": "list", "scope": "pack"}, grant_id="grant-cloud")
     res_cloud = dispatch_tool(call_cloud, live_grants={"grant-cloud": cloud_grant})
     assert res_cloud.status == "refused"
-    assert res_cloud.error_code == "pack_cloud_egress_blocked"
+    assert res_cloud.error_code == "egress_pack_blocked"
 
 
 # ---------------------------------------------------------------------------
@@ -747,4 +750,4 @@ def test_install_hermes_retrieval_grant_resolves_role_route_for_hermes_agent(
         grant=cloud_grant,
     )
     assert res_blocked is None
-    assert err_blocked == "pack_cloud_egress_blocked"
+    assert err_blocked == "egress_pack_blocked"
