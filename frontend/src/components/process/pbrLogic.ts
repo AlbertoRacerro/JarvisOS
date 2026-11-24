@@ -71,7 +71,7 @@ export function toSi(kind: string, unit: string, value: number): number | null {
 export type PbrEntry = { text: string; unit: string };
 export type PbrFormValues = Record<string, PbrEntry | undefined>;
 export const OPTICS_V2_KEYS: string[] = ["tube_outer_diameter", "wall_absorption"];
-export const T2_OPTICS_KEYS = new Set(["tubes_across", "layers", "pitch_h", "pitch_v", "stagger_offset", "axis_azimuth", "centre_height_above_sea", "n_wall", "n_water", "sea_albedo", "tube_outer_diameter", "wall_absorption"]);
+export const T2_OPTICS_KEYS = new Set(["tubes_across", "layers", "pitch_h", "pitch_v", "stagger_offset", "axis_azimuth", "centre_height_above_surface", "n_wall", "n_water", "surface_albedo", "tube_outer_diameter", "wall_absorption"]);
 
 /** Parse an operator entry into SI; null when empty, not a finite number or in an unknown unit. */
 export function entrySi(kind: string, entry: PbrEntry | undefined): number | null {
@@ -101,10 +101,10 @@ export const PBR_RULES: Record<string, Rule> = {
   pitch_v: { kind: "length", ok: (v) => v > 0, message: "Vertical pitch must be positive" },
   stagger_offset: { kind: "length", ok: (v) => Number.isFinite(v), message: "Stagger must be finite" },
   axis_azimuth: { kind: "dimensionless", ok: (v) => v >= 0 && v <= 360, message: "Axis azimuth must be 0–360°" },
-  centre_height_above_sea: { kind: "length", ok: (v) => v >= 0, message: "Tube centre height cannot be negative" },
+  centre_height_above_surface: { kind: "length", ok: (v) => v >= 0, message: "Tube centre height cannot be negative" },
   n_wall: { kind: "dimensionless", ok: (v) => v >= 1 && v <= 5, message: "Wall index must be 1–5" },
   n_water: { kind: "dimensionless", ok: (v) => v >= 1 && v <= 5, message: "Water index must be 1–5" },
-  sea_albedo: { kind: "dimensionless", ok: (v) => v >= 0 && v <= 1, message: "Sea albedo must be 0–1" },
+  surface_albedo: { kind: "dimensionless", ok: (v) => v >= 0 && v <= 1, message: "Albedo of the surface below (ground or water) must be 0–1" },
   tube_outer_diameter: { kind: "length", ok: (v) => v > 0, message: "Tube outer diameter must be positive" },
   wall_absorption: { kind: "inverse_length", ok: (v) => v >= 0, message: "Wall absorption must be zero or greater" },
 };
@@ -128,7 +128,7 @@ export function pbrFieldError(key: string, entry: PbrEntry | undefined, current:
   const silhouette = outer !== null && (diameter === null || outer > diameter) ? outer : diameter;
   if ((key === "pitch_h" || key === "pitch_v") && silhouette !== null && si < silhouette) return "Pitch must be at least the tube diameter";
   if (key === "tube_outer_diameter" && diameter !== null && si <= diameter) return "Outer diameter must exceed the inner diameter";
-  if (key === "centre_height_above_sea" && silhouette !== null && si < silhouette / 2) return "Lowest tube centre must be above the sea by at least one radius";
+  if (key === "centre_height_above_surface" && silhouette !== null && si < silhouette / 2) return "Lowest tube centre must be above the surface below by at least one radius";
   if (key === "stagger_offset" && current("pitch_h") !== null && Math.abs(si) > current("pitch_h")!) return "Stagger must not exceed horizontal pitch";
   if (key === "tubes_across" || key === "layers") {
     const other = current(key === "tubes_across" ? "layers" : "tubes_across");

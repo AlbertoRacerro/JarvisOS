@@ -1,6 +1,6 @@
 # 353 — SEARCH-HOST-SERVICES-1: Local metasearch and query guard as managed host services
 
-Status: ready
+Status: merged
 Depends on: 352
 
 ## Goal

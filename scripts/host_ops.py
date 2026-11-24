@@ -540,6 +540,24 @@ UNIT_TEMPLATES = {
         "ExecStart=%h/.local/bin/jarvis-sandbox python3 %h/.local/share/jarvisos/hostops/current/scripts/relay_continuity.py serve --interval 60\n"
         "KillMode=process\nRestart=on-failure\nRestartPreventExitStatus=2 3\nRestartSec=120\n"
         "[Install]\nWantedBy=default.target\n"),
+    "jarvisos-searxng": (
+        "[Unit]\nDescription=JarvisOS SearXNG metasearch engine (spec 353)\n"
+        "[Service]\nWorkingDirectory=%h/tools/searxng\n"
+        "Environment=SEARXNG_SETTINGS_PATH=%h/.config/jarvisos-hostops/searxng/settings.yml\n"
+        "ExecStart=%h/tools/searxng/.venv/bin/python -m searx.webapp\n"
+        "Restart=on-failure\nRestartSec=10\n"
+        "MemoryMax=2G\nCPUQuota=200%\n"
+        "[Install]\nWantedBy=default.target\n"),
+    "jarvisos-search-guard": (
+        "[Unit]\nDescription=JarvisOS search query guard proxy (spec 353)\n"
+        "After=jarvisos-searxng.service\nWants=jarvisos-searxng.service\n"
+        "[Service]\nWorkingDirectory=%h/src/JarvisOS\n"
+        "EnvironmentFile=-%h/.config/jarvisos-hostops/search-guard.env\n"
+        "Environment=PYTHONPATH=%h/.local/share/jarvisos-hostops/current/backend\n"
+        "ExecStart=%h/src/JarvisOS/backend/.venv/bin/python %h/.local/share/jarvisos-hostops/current/scripts/search_guard.py\n"
+        "Restart=on-failure\nRestartSec=10\n"
+        "NoNewPrivileges=yes\n"
+        "[Install]\nWantedBy=default.target\n"),
 }
 
 
@@ -557,6 +575,8 @@ def op_service_install(ctx: Context) -> dict[str, Any]:
             current = read_regular(fd, unit, 1 << 16)
         except FileNotFoundError:
             current = None
+        previous_state = _unit_state(ctx, unit) if current is not None else {}
+        was_active = previous_state.get("ActiveState") == "active"
         if current is not None and current != body:
             sfd = open_dir(ctx.paths.state / "unit-backups", create=True)
             try:
@@ -567,15 +587,61 @@ def op_service_install(ctx: Context) -> dict[str, Any]:
             write_at(fd, unit, body)
     finally:
         os.close(fd)
-    reload = _systemctl(ctx, "daemon-reload")
-    enable = _systemctl(ctx, "enable", "--now", unit)
-    time.sleep(3)
-    state = _unit_state(ctx, unit)
-    detail = {"unit": unit, "unit_sha256": hashlib.sha256(body).hexdigest(), "changed": current != body,
-              "returncodes": [reload.returncode, enable.returncode], "state": state}
-    if reload.returncode != 0 or enable.returncode != 0 or state.get("ActiveState") != "active":
-        raise Failed(f"{unit} is {state.get('ActiveState')} after install", detail)
-    return detail
+    changed = current != body
+    detail: dict[str, Any] = {"unit": unit, "unit_sha256": hashlib.sha256(body).hexdigest(),
+                              "changed": changed, "returncodes": [], "state": {}}
+    try:
+        reload = _systemctl(ctx, "daemon-reload")
+        detail["returncodes"].append(reload.returncode)
+        if reload.returncode != 0:
+            raise Failed(f"{unit} daemon reload failed", detail)
+        enable = _systemctl(ctx, "enable", "--now", unit)
+        detail["returncodes"].append(enable.returncode)
+        if enable.returncode != 0:
+            raise Failed(f"{unit} enable failed", detail)
+        # enable --now leaves an already active service running with its old unit body.
+        if was_active:
+            restart = _systemctl(ctx, "restart", unit)
+            detail["returncodes"].append(restart.returncode)
+            if restart.returncode != 0:
+                raise Failed(f"{unit} restart failed", detail)
+        time.sleep(3)
+        state = _unit_state(ctx, unit)
+        detail["state"] = state
+        if state.get("ActiveState") != "active":
+            raise Failed(f"{unit} is {state.get('ActiveState')} after install", detail)
+        return detail
+    except Exception:
+        if changed:
+            # A failed install must not leave a replacement or newly created unit.
+            try:
+                restore_fd = open_dir(ctx.paths.units, create=True)
+                try:
+                    if current is None:
+                        unlink_at(restore_fd, unit)
+                    else:
+                        write_at(restore_fd, unit, current)
+                finally:
+                    os.close(restore_fd)
+            except Exception:
+                pass
+            try:
+                _systemctl(ctx, "daemon-reload")
+            except Exception:
+                pass
+            try:
+                if current is None:
+                    _systemctl(ctx, "disable", "--now", unit)
+                else:
+                    if previous_state.get("UnitFileState") not in {"enabled", "enabled-runtime"}:
+                        _systemctl(ctx, "disable", unit)
+                    if was_active:
+                        _systemctl(ctx, "restart", unit)
+                    else:
+                        _systemctl(ctx, "stop", unit)
+            except Exception:
+                pass
+        raise
 
 
 _WIN_PATH_RE = re.compile(r"^[A-Za-z]:\\[A-Za-z0-9 ._\\-]{1,240}$")
@@ -2146,6 +2212,7 @@ def write_release_pending(
     attempts: int = 0,
     watcher_active: bool = False,
     owner_active: bool = False,
+    search_guard_active: bool = False,
     now: datetime | None = None,
     kind: str | None = None,
     guard_source: str | None = None,
@@ -2163,6 +2230,8 @@ def write_release_pending(
     }
     if owner_active:
         marker["owner_active"] = True
+    if search_guard_active:
+        marker["search_guard_active"] = True
     if kind is not None:
         marker["kind"] = kind
     if guard_source is not None:
@@ -2331,6 +2400,33 @@ def return_release(
     if not is_return_marker:
         restore_release_links(paths, previous_sha)
 
+    # The query guard imports code from the installed release. A rollback must
+    # replace a running candidate process; on restart failure stop it closed.
+    guard_unit = "jarvisos-search-guard.service"
+    guard_restored: bool | None = None
+    if (paths.units / guard_unit).is_file():
+        guard_active = False
+        if marker and marker.get("search_guard_active") is not None:
+            guard_active = bool(marker.get("search_guard_active"))
+        else:
+            try:
+                check = run(["systemctl", "--user", "is-active", guard_unit], timeout=10)
+                guard_active = check.returncode == 0
+            except Exception:  # noqa: BLE001
+                guard_active = False
+
+        if guard_active:
+            try:
+                guard_restart = run(["systemctl", "--user", "restart", guard_unit], timeout=60)
+                guard_restored = guard_restart.returncode == 0
+            except Exception:  # noqa: BLE001
+                guard_restored = False
+            if not guard_restored:
+                try:
+                    run(["systemctl", "--user", "stop", guard_unit], timeout=60)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
     # Restore watcher if it was active
     if marker and marker.get("watcher_active"):
         unit = "jarvisos-relay-watch.service"
@@ -2376,6 +2472,8 @@ def return_release(
         "returned_at": iso(current_time),
         "notified": notified,
     })
+    if guard_restored is not None:
+        entry["search_guard_restored"] = guard_restored
     state_fd = open_dir(paths.state, create=True)
     try:
         with open(paths.release_history, "a", encoding="utf-8") as handle:
@@ -2398,6 +2496,7 @@ def return_release(
         write_release_pending(paths, previous_sha=None, candidate_sha=previous_sha,
                               deadline=deadline, request_id=None,
                               attempts=0, watcher_active=bool(marker and marker.get("watcher_active")),
+                              search_guard_active=bool(marker and marker.get("search_guard_active")),
                               now=current_time, kind="return")
 
     return True
@@ -3380,15 +3479,23 @@ DEFAULT_POLICY: dict[str, Any] = {
         "release.install": {"trust_master": False},
         "slack.deliver": {"max_per_hour": 6},
         "service.status": {"units": ["jarvisos-relay-watch.service", "jarvisos-mission-owner.service",
-                                     "jarvisos-hostops.service", "agent-relay.service"]},
-        "service.control": {"units": ["jarvisos-relay-watch.service", "jarvisos-mission-owner.service"],
+                                     "jarvisos-hostops.service", "agent-relay.service",
+                                     "jarvisos-searxng.service", "jarvisos-search-guard.service"]},
+        "service.control": {"units": ["jarvisos-relay-watch.service", "jarvisos-mission-owner.service",
+                                      "jarvisos-searxng.service", "jarvisos-search-guard.service"],
                             "actions": OWNER_ACTIONS},
-        "service.install": {"templates": ["jarvisos-relay-watch", "jarvisos-mission-owner"]},
+        "service.install": {"templates": ["jarvisos-relay-watch", "jarvisos-mission-owner",
+                                          "jarvisos-searxng", "jarvisos-search-guard"]},
         "wsl.probe": {},
         "wsl.handoff": {"dir": "/mnt/c/Users/user/JarvisOS-print", "open": True, "max_bytes": 200 << 20,
                         "extensions": [".3mf", ".stl", ".step", ".glb", ".png", ".pdf"]},
         "browser.screenshot": {"chrome": os.path.expanduser("~/.cache/ms-playwright/chromium-1187/chrome-linux/chrome")},
-        "http.smoke": {"targets": {"backend-health": {"url": "http://127.0.0.1:8000/health", "expect": 200}}},
+        "http.smoke": {
+            "targets": {
+                "backend-health": {"url": "http://127.0.0.1:8000/health", "expect": 200},
+                "search-guard": {"url": "http://127.0.0.1:8889/healthz", "expect": 200},
+            }
+        },
         "bench.run": {"benchmarks": {
             "relay-observe-tests": {"cwd": "backend", "timeout_s": 900, "memory_max": "4G", "cpu_quota": "200%",
                                     "argv": [os.path.expanduser("~/src/JarvisOS/backend/.venv/bin/python"), "-m", "pytest",
@@ -3654,7 +3761,8 @@ def _release_has_guard(release_dir: Path) -> bool:
 
 
 def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
-                    watcher_active: bool = False, owner_active: bool = False, now: datetime | None = None) -> None:
+                    watcher_active: bool = False, owner_active: bool = False,
+                    search_guard_active: bool = False, now: datetime | None = None) -> None:
     if os.environ.get("JARVIS_SANDBOX") or socket.gethostname() == "jarvis-sandbox":
         raise Refused("installation is host-only")
     if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
@@ -3716,7 +3824,7 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
                 parts = Path(member.name).parts
                 if member.name.startswith("/") or ".." in parts or not (member.isdir() or member.isfile()):
                     raise Refused("unsafe release archive member")
-                if len(parts) < 2 or parts[1] != "scripts":
+                if len(parts) < 2 or not (parts[1] == "scripts" or parts[1:3] == ("backend", "app")):
                     continue
                 target = stage.joinpath(*parts[1:])
                 if member.isdir():
@@ -3774,6 +3882,7 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
     p_attempts = (pending.get("attempts", 0) if pending and pending.get("candidate_sha") == sha else 0)
     p_watch = bool(watcher_active or (pending and pending.get("watcher_active")))
     p_owner = bool(owner_active or (pending and pending.get("owner_active")))
+    p_guard = bool(search_guard_active or (pending and pending.get("search_guard_active")))
 
     pending_written = False
     install_switched = False
@@ -3782,7 +3891,7 @@ def install_release(paths: Paths, sha: str, *, request_id: str | None = None,
         write_release_pending(paths, previous_sha=p_prev, candidate_sha=sha,
                               deadline=deadline, request_id=p_req,
                               attempts=p_attempts, watcher_active=p_watch,
-                              owner_active=p_owner, now=ts,
+                              owner_active=p_owner, search_guard_active=p_guard, now=ts,
                               guard_source=guard_source, guard_reason=guard_reason)
         pending_written = True
 
@@ -3812,6 +3921,8 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
         raise Refused("release.install requires trust_master: true in the host policy")
     unit = "jarvisos-relay-watch.service"
     watcher_active = _unit_state(ctx, unit).get("ActiveState") == "active"
+    guard_unit = "jarvisos-search-guard.service"
+    guard_active = _unit_state(ctx, guard_unit).get("ActiveState") == "active"
     owner_active = (ctx.request.get("requester") == "relay-continuity:owner"
                     or (ctx.request.get("args") or {}).get("owner_active") is True)
     kwargs: dict[str, Any] = {"request_id": ctx.request.get("id"),
@@ -3819,6 +3930,8 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
                               "now": ctx.now()}
     if owner_active:
         kwargs["owner_active"] = True
+    if guard_active:
+        kwargs["search_guard_active"] = True
 
     current_link = ctx.paths.install / "current"
     installed_before = None
@@ -3839,6 +3952,14 @@ def op_release_install(ctx: Context) -> dict[str, Any]:
         else:
             restore_release_links(ctx.paths, installed_before)
         raise Failed("watcher restart failed")
+
+    if guard_active and _systemctl(ctx, "restart", guard_unit).returncode:
+        # If guard restart failed, the install request failed.
+        if ctx.paths.release_pending.exists():
+            guard(ctx.paths, force_return=True, reason="search-guard restart failed", post=ctx.post, run=ctx.run, now=ctx.now())
+        else:
+            restore_release_links(ctx.paths, installed_before)
+        raise Failed("search-guard restart failed")
 
     return {"sha": args["sha"], "executor_restart": True}
 
