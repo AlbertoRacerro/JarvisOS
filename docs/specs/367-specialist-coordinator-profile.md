@@ -18,7 +18,7 @@ Directive `L20261124085849-d342` (item 2): after spec 360 replaced hardcoded ver
 - `scripts/relay_continuity_adapters.py::RelayAdapter.start` resolves `coordinator_codex` (or native agent roles) when `JARVISOS_ACCOUNT_MODEL_RESOLUTION=1` and launches the coordinator process.
 - `scripts/relay_continuity_missions.py::validate_mission` validates immutable submitted mission definitions.
 - `scripts/relay_continuity_missions.py::serve_step` schedules queued missions one at a time.
-- `scripts/relay_continuity_turns.py::task_marker` and `scripts/relay_continuity_turns.py` record turn metadata and verify init/session events.
+- `scripts/relay_continuity_adapters.py::task_marker` extracts the attempt nonce from turn prompts and `scripts/relay_continuity_turns.py` records turn metadata and verifies init/session events.
 
 ## Scope
 
