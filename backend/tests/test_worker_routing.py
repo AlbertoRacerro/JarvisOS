@@ -1919,23 +1919,32 @@ def _temp_file(tmp_path: Path, pools: list[object], scores: dict[str, int] | Non
     target.write_text(json.dumps({
         "index": {"name": "public intelligence index", "url": "https://example.invalid/index"},
         "reference": "luna", "scores": {"luna": 28, "sol": 40} if scores is None else scores,
+        "coding_reference": "luna", "coding_scores": {"luna": 35, "sol": 45},
         "read_at": "2026-11-20", "pools": pools,
     }), encoding="utf-8")
     return target
 
 
-def _pool(name: str, key: Path, score: int | None = 43, **extra: object) -> dict[str, object]:
+def _pool(name: str, key: Path, score: int | None = 43, coding_score: int | None = 45, **extra: object) -> dict[str, object]:
     entry: dict[str, object] = {"name": name, "provider": "free", "base_url": "https://example.invalid/v1",
                                 "model": f"{name}:free", "key_file": str(key), "free_list": "openai_models",
-                                "rate_limits": "free", "data_policy": "public", **extra}
+                                "rate_limits": "free", "data_policy": "public",
+                                "live_status": "ok", "live_ok_at": "2026-11-20T10:00:00Z", **extra}
     if score is not None:
         entry["index_score"] = score
+    if coding_score is not None:
+        entry["coding_index"] = coding_score
     return entry
 
 
 def _fresh_lists(tmp_path: Path, ids: list[str], now: datetime, source: str = "https://example.invalid/v1") -> None:
-    (tmp_path / "temp-pool-lists.json").write_text(json.dumps({"sources": {source: {
-        "ids": ids, "read_at": now.strftime("%Y-%m-%dT%H:%M:%SZ")}}}), encoding="utf-8")
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    pricing = {i: {"prompt": 0, "completion": 0} for i in ids}
+    probes = {i: {"status": "ok", "code": 200, "answered": True, "at": now_str} for i in ids}
+    (tmp_path / "temp-pool-lists.json").write_text(json.dumps({
+        "sources": {source: {"ids": ids, "pricing": pricing, "read_at": now_str}},
+        "probes": probes,
+    }), encoding="utf-8")
 
 
 def _refuse(*_args: object) -> object:
@@ -1995,12 +2004,25 @@ def test_temporary_pool_liveness_follows_the_free_list(monkeypatch: pytest.Monke
 
     def opener(url: str, headers: dict[str, str], timeout: float) -> object:
         seen.append((url, headers))
-        return {"data": [{"id": "a:free"}, {"id": "a"}, {"id": "paid-model"}]}
+        if url.endswith("/models"):
+            return {"data": [{"id": "a:free", "pricing": {"prompt": 0, "completion": 0}}, {"id": "a"}, {"id": "paid-model"}]}
+        return {"choices": [{"message": {"content": "OK"}}]}
 
     assert wr.temp_pool_read(entries[0], now, opener=opener).free == 1.0
-    assert seen == [("https://example.invalid/v1/models", {"Authorization": "Bearer secret"})]
+    assert seen == [
+        ("https://example.invalid/v1/models", {"Authorization": "Bearer secret"}),
+        ("https://example.invalid/v1/chat/completions", {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "jarvisos-worker-routing/1",
+            "Authorization": "Bearer secret",
+        }),
+    ]
     cache = json.loads((tmp_path / "temp-pool-lists.json").read_text(encoding="utf-8"))
     assert cache["sources"]["https://example.invalid/v1"]["ids"] == ["a:free"]
+    assert cache["probes"]["a:free"]["status"] == "ok"
+    assert cache["probes"]["a:free"]["code"] == 200
+    assert cache["probes"]["a:free"]["answered"] is True
     assert "secret" not in (tmp_path / "temp-pool-lists.json").read_text(encoding="utf-8")
     assert wr.temp_pool_read(entries[0], now + timedelta(minutes=30), opener=_refuse).free == 1.0  # cached
     key.unlink()
@@ -2011,7 +2033,8 @@ def test_temporary_pool_malformed_and_zen_entries(monkeypatch: pytest.MonkeyPatc
     key = tmp_path / "pool.key"
     key.write_text("secret", encoding="utf-8")
     zen = {"name": "zen", "provider": "OpenCode Zen", "model": "some-model-free", "free_list": "opencode_zen",
-           "index_score": 33, "rate_limits": "", "data_policy": ""}
+           "index_score": 33, "coding_index": 38, "rate_limits": "", "data_policy": "",
+           "live_status": "ok", "live_ok_at": "2026-11-20T10:00:00Z"}
     target = _temp_file(tmp_path, [
         _pool("broken", key, base_url="http://plain.invalid/v1"),
         zen,
@@ -2029,11 +2052,17 @@ def test_temporary_pool_malformed_and_zen_entries(monkeypatch: pytest.MonkeyPatc
 
     def opener(url: str, headers: dict[str, str], timeout: float) -> object:
         seen.append(url)
-        assert headers == {}
-        return {"data": [{"id": "some-model-free"}, {"id": "some-model"}]}
+        if url.endswith("/models"):
+            assert headers == {}
+            return {"data": [{"id": "some-model-free", "pricing": {"prompt": 0, "completion": 0}}, {"id": "some-model"}]}
+        assert "Authorization" not in headers
+        return {"choices": [{"message": {"content": "OK"}}]}
 
     pools = {f"temp-{e['name']}": wr.temp_pool_read(e, now, opener=opener) for e in entries}
-    assert pools["temp-zen"].free == 1.0 and seen == [wr.ZEN_MODELS_URL]
+    assert pools["temp-zen"].free == 1.0 and seen == [
+        wr.ZEN_MODELS_URL,
+        "https://opencode.ai/zen/v1/chat/completions",
+    ]
     _, skipped = wr.rank(1, pools, models=wr.temp_models([]), now=now)
     assert {s["worker"]: s["skipped"] for s in skipped} == {
         "temp-invalid#0": "invalid", "temp-invalid#2": "invalid", "temp-invalid#3": "invalid",
@@ -2062,3 +2091,152 @@ def test_free_list_read_refuses_plain_http_and_redirects() -> None:
     request = wr.urllib.request.Request("https://example.invalid/models", headers={"Authorization": "Bearer k"})
     with pytest.raises(wr.urllib.error.HTTPError):
         wr._NoRedirect().redirect_request(request, None, 302, "Found", {}, "https://elsewhere.invalid/")
+
+
+def test_nonzero_source_price_disqualifies_pool_even_if_pool_claims_price_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key = tmp_path / "pool.key"
+    key.write_text("secret", encoding="utf-8")
+    target = _temp_file(tmp_path, [_pool("a", key, pricing={"prompt": 0, "completion": 0})])
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
+    now = datetime(2026, 11, 20, 10, 0, tzinfo=UTC)
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    lists_file = tmp_path / "temp-pool-lists.json"
+    lists_file.write_text(json.dumps({
+        "sources": {
+            "https://example.invalid/v1": {
+                "ids": ["a:free"],
+                "read_at": now_str,
+                "pricing": {"a:free": {"prompt": 0.002, "completion": 0.002}},
+            }
+        },
+        "probes": {"a:free": {"status": "ok", "code": 200, "answered": True, "at": now_str}},
+    }), encoding="utf-8")
+    entry = wr.load_temp_pools()[0]
+    res = wr.temp_pool_read(entry, now, opener=_refuse)
+    assert res.free is None
+    assert res.reason == "nonzero_price"
+
+
+def test_active_throttled_exhausted_alone_do_not_satisfy_live_response_proof(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key = tmp_path / "pool.key"
+    key.write_text("secret", encoding="utf-8")
+    target = _temp_file(tmp_path, [
+        _pool("active_pool", key, live_status="active", live_ok_at="2026-11-20T10:00:00Z"),
+        _pool("throttled_pool", key, live_status="throttled", live_ok_at="2026-11-20T10:00:00Z"),
+        _pool("exhausted_pool", key, live_status="exhausted", live_ok_at="2026-11-20T10:00:00Z"),
+    ])
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
+    now = datetime(2026, 11, 20, 10, 0, tzinfo=UTC)
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    lists_file = tmp_path / "temp-pool-lists.json"
+    lists_file.write_text(json.dumps({
+        "sources": {
+            "https://example.invalid/v1": {
+                "ids": ["active_pool:free", "throttled_pool:free", "exhausted_pool:free"],
+                "read_at": now_str,
+                "pricing": {
+                    "active_pool:free": {"prompt": 0, "completion": 0},
+                    "throttled_pool:free": {"prompt": 0, "completion": 0},
+                    "exhausted_pool:free": {"prompt": 0, "completion": 0},
+                },
+            }
+        },
+        "probes": {
+            "active_pool:free": {"status": "active", "at": now_str},
+            "throttled_pool:free": {"status": "throttled", "at": now_str},
+            "exhausted_pool:free": {"status": "exhausted", "at": now_str},
+        },
+    }), encoding="utf-8")
+    entries = wr.load_temp_pools()
+    for e in entries:
+        res = wr.temp_pool_read(e, now, opener=_refuse)
+        assert res.free is None
+        assert res.reason == "missing_proof"
+
+
+def test_temp_pool_rejected_live_never_restored_from_snapshot_and_not_persisted(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    key = tmp_path / "pool.key"
+    key.write_text("secret", encoding="utf-8")
+    target = _temp_file(tmp_path, [_pool("zen", key, 43)])
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(target))
+    now = datetime.now(UTC)
+    now_str = wr._iso(now)
+
+    # 1. temp pool rejected live (probe 404)
+    (tmp_path / "temp-pool-lists.json").write_text(json.dumps({
+        "sources": {
+            "https://example.invalid/v1": {
+                "ids": ["zen:free"],
+                "pricing": {"zen:free": {"prompt": 0, "completion": 0}},
+                "read_at": now_str,
+            }
+        },
+        "probes": {
+            "zen:free": {"status": "error", "code": 404, "answered": False, "at": now_str},
+        },
+    }), encoding="utf-8")
+
+    quota = tmp_path / "quota.json"
+    quota.write_text(json.dumps({
+        "schema": wr.SNAPSHOT_SCHEMA,
+        "as_of": now_str,
+        "pools": {
+            "codex": {"as_of": now_str, "windows": {"5h": 1.0, "weekly": 0.8}},
+            "temp-zen": {"as_of": now_str, "windows": {"main": 1.0}},
+        },
+    }), encoding="utf-8")
+
+    # apply_snapshot: temp pool rejected live with fresh snapshot entry stays unreadable
+    # normal subscription pool (codex) still falls back to fresh snapshot
+    live = {
+        "temp-zen": wr.unreadable("temp-zen", "probe_404"),
+        "codex": wr.unreadable("codex", "timeout"),
+        "gemini": pool("gemini", 0.0),
+    }
+    snap = wr.load_snapshot([quota])
+    resolved = wr.apply_snapshot(live, snap, now)
+    assert resolved["temp-zen"].free is None
+    assert resolved["temp-zen"].reason == "probe_404"
+    assert resolved["codex"].source == "snapshot"
+    assert resolved["codex"].free == pytest.approx(0.8)
+
+    # resolve_pools: rejected live pool stays unreadable, codex falls back to snapshot
+    entries = wr.load_temp_pools()
+    assert len(entries) == 1
+    monkeypatch.setattr(wr, "read_pools", lambda: {
+        "temp-zen": wr.temp_pool_read(entries[0], now, opener=_refuse),
+        "codex": wr.unreadable("codex", "timeout"),
+        "gemini": pool("gemini", 0.0),
+    })
+    resolved_pools = wr.resolve_pools([quota], now=now)
+    assert resolved_pools["temp-zen"].free is None
+    assert resolved_pools["temp-zen"].reason == "probe_404"
+    assert resolved_pools["codex"].source == "snapshot"
+    assert resolved_pools["codex"].free == pytest.approx(0.8)
+
+    # cmd_pick: temp pool rejected live is not picked; codex (terra) is chosen via snapshot fallback
+    wr._cache.update(at=None, line=None, ttl=0.0)
+    assert wr.main(["pick", "--difficulty", "medium", "--risk", "low", "--json", "--quota-file", str(quota)]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["worker"] == "terra"
+    assert data["source"] == "snapshot"
+    assert not any(a["worker"] == "temp-zen" for a in data.get("alternatives", []))
+    assert any(s["worker"] == "temp-zen" and s["skipped"] == "probe_404" for s in data.get("skipped", []))
+    wr._cache.update(at=None, line=None, ttl=0.0)
+
+    # write_snapshot: never persists temporary pools even when live
+    snap_out = tmp_path / "snap_out.json"
+    live_pools = {
+        "temp-zen": wr.Pool("temp-zen", {"main": 1.0}, 1.0, None, "live"),
+        "codex": wr.Pool("codex", {"5h": 0.8}, 0.8, None, "live"),
+    }
+    assert wr.write_snapshot(snap_out, live_pools, now)
+    persisted = json.loads(snap_out.read_text(encoding="utf-8"))
+    assert "temp-zen" not in persisted["pools"]
+    assert "codex" in persisted["pools"]
+
+    # write_snapshot with only temp pools live writes nothing and returns False
+    snap_only_temp = tmp_path / "only_temp.json"
+    assert not wr.write_snapshot(snap_only_temp, {"temp-zen": live_pools["temp-zen"]}, now)
+    assert not snap_only_temp.exists()
