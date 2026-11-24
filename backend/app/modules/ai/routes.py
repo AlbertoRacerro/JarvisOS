@@ -24,6 +24,7 @@ from app.modules.ai.models import (
     ModelingDraftResponse,
     ProviderSmokeRequest,
     ProviderSmokeResponse,
+    SearchGuardBlockedSummaryRead,
     SmokeConsoleRequest,
     SmokeConsoleResponse,
     SmokeTestRequest,
@@ -31,6 +32,7 @@ from app.modules.ai.models import (
     SupervisorPublicTestRequest,
     SupervisorPublicTestResponse,
 )
+from app.modules.ai.search_guard_summary import read_search_guard_blocked_summary
 from app.modules.ai.settings import (
     ProviderSettingsRead,
     ensure_ai_settings,
@@ -74,6 +76,11 @@ def read_ai_status() -> AIStatusRead:
 def read_ai_provider_settings() -> ProviderSettingsRead:
     ensure_ai_settings()
     return get_provider_settings(AIGateway().status())
+
+
+@router.get("/search-guard/blocked", response_model=SearchGuardBlockedSummaryRead)
+def read_search_guard_blocked_summary_endpoint() -> SearchGuardBlockedSummaryRead:
+    return read_search_guard_blocked_summary()
 
 
 @router.post("/modeling/draft", response_model=ModelingDraftResponse)

@@ -9,6 +9,7 @@ cases = "readiness_cases.toml"
 
 [search_guard]
 min_groups = 4
+allow_generic_ranges = true
 groups = [
     ["apple", "malus"],
     ["banana", "musa"],
@@ -16,3 +17,12 @@ groups = [
     ["date", "phoenix"],
     ["elderberry", "sambucus"],
 ]
+exact_combinations = [
+    ["apple", "banana", "cherry", "date"],
+    ["alpha", "beta", "gamma"],
+]
+
+[[search_guard.protected_dimensions]]
+value = 50.0
+unit = "mm"
+tolerance_rel = 0.02

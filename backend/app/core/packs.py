@@ -26,6 +26,7 @@ An invalid pack raises :class:`PackError`; ``app.main`` loads the packs at start
 the application instead of silently disappearing.
 """
 
+import math
 import os
 import re
 import tomllib
@@ -45,14 +46,39 @@ _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 _KNOWN_KEYS = {"id", "workspace", "sensitivity", "ui_labels", "studio", "hermes_roles", "readiness", "search_guard"}
 
 
+KNOWN_SEARCH_GUARD_UNITS = frozenset({
+    "mm", "cm", "m", "um", "µm", "nm", "km", "in", "inch", "inches", "ft", "feet", "yd",
+    "mg", "g", "kg", "t", "oz", "lb",
+    "ml", "l", "liter", "liters", "m3", "cm3", "mm3", "m2", "cm2", "mm2",
+    "s", "sec", "min", "h", "hr", "hz", "khz", "mhz", "ghz", "rpm",
+    "pa", "kpa", "mpa", "gpa", "bar", "mbar", "psi", "atm", "torr",
+    "k", "c", "°c", "degc", "f", "degf",
+    "n", "kn", "j", "kj", "mj", "w", "kw", "mw", "gw", "hp",
+    "m/s", "mm/s", "km/h", "mph", "l/min", "l/s", "l/h", "m3/s", "m3/h",
+    "deg", "degree", "degrees", "rad", "mrad",
+    "v", "mv", "kv", "a", "ma", "ohm", "kohm", "mohm",
+    "uf", "nf", "pf", "mh", "%", "pct",
+})
+
+
 class PackError(RuntimeError):
     """A pack directory or manifest is invalid."""
+
+
+@dataclass(frozen=True)
+class ProtectedDimension:
+    value: float
+    unit: str
+    tolerance_rel: float = 0.02
 
 
 @dataclass(frozen=True)
 class SearchGuardConfig:
     groups: tuple[tuple[str, ...], ...] = ()
     min_groups: int = 4
+    exact_combinations: tuple[tuple[str, ...], ...] = ()
+    protected_dimensions: tuple[ProtectedDimension, ...] = ()
+    allow_generic_ranges: bool = True
 
 
 @dataclass(frozen=True)
@@ -134,7 +160,9 @@ def read_pack(directory: Path) -> Pack:
     search_guard_config = SearchGuardConfig()
     if "search_guard" in data:
         guard_table = _table(data, "search_guard", manifest)
-        unknown_guard_keys = sorted(set(guard_table) - {"groups", "min_groups"})
+        unknown_guard_keys = sorted(
+            set(guard_table) - {"groups", "min_groups", "exact_combinations", "protected_dimensions", "allow_generic_ranges"}
+        )
         if unknown_guard_keys:
             raise PackError(f"{manifest}: unknown search_guard keys {unknown_guard_keys}")
         raw_groups = guard_table.get("groups")
@@ -149,9 +177,52 @@ def read_pack(directory: Path) -> Pack:
         raw_min = guard_table.get("min_groups", 4)
         if isinstance(raw_min, bool) or not isinstance(raw_min, int) or raw_min <= 0:
             raise PackError(f"{manifest}: search_guard.min_groups must be a positive integer")
+
+        raw_combinations = guard_table.get("exact_combinations")
+        combinations_list: list[tuple[str, ...]] = []
+        if raw_combinations is not None:
+            if not isinstance(raw_combinations, list):
+                raise PackError(f"{manifest}: search_guard.exact_combinations must be a list of lists of non-empty strings")
+            for c in raw_combinations:
+                if not isinstance(c, list) or not c or not all(isinstance(term, str) and term.strip() for term in c):
+                    raise PackError(f"{manifest}: search_guard.exact_combinations must be a list of lists of non-empty strings")
+                combinations_list.append(tuple(term.strip() for term in c))
+
+        raw_dimensions = guard_table.get("protected_dimensions")
+        dimensions_list: list[ProtectedDimension] = []
+        if raw_dimensions is not None:
+            if not isinstance(raw_dimensions, list):
+                raise PackError(f"{manifest}: search_guard.protected_dimensions must be a list of tables")
+            for d in raw_dimensions:
+                if not isinstance(d, dict):
+                    raise PackError(f"{manifest}: search_guard.protected_dimensions entries must be tables")
+                unknown_dim_keys = sorted(set(d) - {"value", "unit", "tolerance_rel"})
+                if unknown_dim_keys:
+                    raise PackError(f"{manifest}: unknown search_guard.protected_dimensions keys {unknown_dim_keys}")
+                val = d.get("value")
+                if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(val) or val <= 0:
+                    raise PackError(f"{manifest}: search_guard.protected_dimensions value must be a positive number")
+                unit = d.get("unit")
+                if not isinstance(unit, str) or not unit.strip():
+                    raise PackError(f"{manifest}: search_guard.protected_dimensions unit must be a non-empty string")
+                unit_clean = unit.strip().lower()
+                if unit_clean not in KNOWN_SEARCH_GUARD_UNITS:
+                    raise PackError(f"{manifest}: search_guard.protected_dimensions unknown unit {unit!r}")
+                tol = d.get("tolerance_rel", 0.02)
+                if isinstance(tol, bool) or not isinstance(tol, (int, float)) or not math.isfinite(tol) or tol < 0 or tol >= 1.0:
+                    raise PackError(f"{manifest}: search_guard.protected_dimensions tolerance_rel must be a non-negative float < 1.0")
+                dimensions_list.append(ProtectedDimension(value=float(val), unit=unit_clean, tolerance_rel=float(tol)))
+
+        raw_generic_ranges = guard_table.get("allow_generic_ranges", True)
+        if not isinstance(raw_generic_ranges, bool):
+            raise PackError(f"{manifest}: search_guard.allow_generic_ranges must be a boolean")
+
         search_guard_config = SearchGuardConfig(
             groups=tuple(groups_list),
             min_groups=raw_min,
+            exact_combinations=tuple(combinations_list),
+            protected_dimensions=tuple(dimensions_list),
+            allow_generic_ranges=raw_generic_ranges,
         )
     return Pack(
         id=pack_id,
@@ -240,11 +311,26 @@ def readiness_case_files() -> tuple[Path, ...]:
 
 
 def search_guard() -> SearchGuardConfig:
-    """Combine loaded pack groups using the strictest configured threshold."""
+    """Combine loaded pack rules using the strictest configured thresholds."""
     all_groups: list[tuple[str, ...]] = []
     thresholds: list[int] = []
+    all_combinations: list[tuple[str, ...]] = []
+    all_dimensions: list[ProtectedDimension] = []
+    allow_generic_ranges = True
     for pack in load_packs():
         if pack.search_guard.groups:
             all_groups.extend(pack.search_guard.groups)
             thresholds.append(pack.search_guard.min_groups)
-    return SearchGuardConfig(groups=tuple(all_groups), min_groups=min(thresholds, default=4))
+        if pack.search_guard.exact_combinations:
+            all_combinations.extend(pack.search_guard.exact_combinations)
+        if pack.search_guard.protected_dimensions:
+            all_dimensions.extend(pack.search_guard.protected_dimensions)
+        if not pack.search_guard.allow_generic_ranges:
+            allow_generic_ranges = False
+    return SearchGuardConfig(
+        groups=tuple(all_groups),
+        min_groups=min(thresholds, default=4),
+        exact_combinations=tuple(all_combinations),
+        protected_dimensions=tuple(all_dimensions),
+        allow_generic_ranges=allow_generic_ranges,
+    )

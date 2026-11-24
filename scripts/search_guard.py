@@ -14,6 +14,7 @@ import http.client
 import http.server
 import json
 import os
+import re
 import sys
 import urllib.parse
 from datetime import UTC, datetime
@@ -30,6 +31,7 @@ from app.modules.agents.hermes.ip_boundary import (  # noqa: E402
     check_sensitivity_floor,
     sanitize_text,
 )
+from app.modules.ai.search_guard_summary import REASON_MESSAGES_IT  # noqa: E402
 
 DEFAULT_GUARD_PORT = 8889
 DEFAULT_UPSTREAM_PORT = 8888
@@ -73,42 +75,174 @@ def matches_min_groups(
     return matched_count >= min_groups
 
 
-def evaluate_query(query: str) -> tuple[bool, str]:
+_UNIT_PATTERN = r"[a-zA-Z°µ%][a-zA-Z°µ%0-9]*(?:/[a-zA-Z°µ%][a-zA-Z°µ%0-9]*)?"
+_RANGE_RE_A = re.compile(
+    rf"(?<![\w.])(\d+(?:\.\d+)?)\s*(?:-|–|—|\bto\b)\s*(\d+(?:\.\d+)?)\s*({_UNIT_PATTERN})",
+    re.IGNORECASE,
+)
+_RANGE_RE_B = re.compile(
+    rf"\b(?:between|from)\s+(\d+(?:\.\d+)?)\s*(?:and|to|-|–|—)\s*(\d+(?:\.\d+)?)\s*({_UNIT_PATTERN})",
+    re.IGNORECASE,
+)
+_RANGE_RE_C = re.compile(
+    rf"(?<![\w.])(\d+(?:\.\d+)?)\s*({_UNIT_PATTERN})\s*(?:-|–|—|\bto\b)\s*(\d+(?:\.\d+)?)\s*({_UNIT_PATTERN})",
+    re.IGNORECASE,
+)
+_DIM_RE = re.compile(
+    rf"(?<![\w.])(\d+(?:\.\d+)?)\s*({_UNIT_PATTERN})",
+    re.IGNORECASE,
+)
+
+
+def _normalize_unit(unit: str) -> str:
+    u = unit.strip().lower()
+    return "um" if u == "µm" else u
+
+
+def _mask_generic_ranges(text: str) -> str:
+    """Mask out numeric ranges spanning > 20% relative width so their endpoints aren't mistaken for exact dimensions."""
+    masked = list(text)
+
+    def mask_span(start: int, end: int, v1_str: str, v2_str: str) -> None:
+        try:
+            v1 = float(v1_str)
+            v2 = float(v2_str)
+            low = min(v1, v2)
+            high = max(v1, v2)
+            if low > 0 and (high - low) / low > 0.20:
+                for idx in range(start, end):
+                    masked[idx] = " "
+        except (ValueError, ZeroDivisionError):
+            pass
+
+    for m in _RANGE_RE_B.finditer(text):
+        mask_span(m.start(), m.end(), m.group(1), m.group(2))
+
+    for m in _RANGE_RE_C.finditer(text):
+        if _normalize_unit(m.group(2)) == _normalize_unit(m.group(4)):
+            mask_span(m.start(), m.end(), m.group(1), m.group(3))
+
+    for m in _RANGE_RE_A.finditer(text):
+        mask_span(m.start(), m.end(), m.group(1), m.group(2))
+
+    return "".join(masked)
+
+
+def _matches_exact_combination(
+    lowered_query: str,
+    combinations: tuple[tuple[str, ...], ...],
+) -> int | None:
+    """Check if query matches ALL terms in any single protected combination."""
+    for idx, combination in enumerate(combinations):
+        if not combination:
+            continue
+        if all(" ".join(term.lower().split()) in lowered_query for term in combination if term.strip()):
+            return idx
+    return None
+
+
+def _matches_protected_dimension(
+    query: str,
+    guard_cfg: packs.SearchGuardConfig,
+) -> int | None:
+    """Check if query mentions an exact protected dimension within tolerance alongside a context group."""
+    if not guard_cfg.protected_dimensions:
+        return None
+
+    lowered = " ".join(query.lower().split())
+
+    if guard_cfg.groups:
+        has_context = any(
+            any(" ".join(term.lower().split()) in lowered for term in group if term.strip())
+            for group in guard_cfg.groups
+        )
+        if not has_context:
+            return None
+
+    searchable_text = _mask_generic_ranges(query) if guard_cfg.allow_generic_ranges else query
+
+    for m in _DIM_RE.finditer(searchable_text):
+        try:
+            val = float(m.group(1))
+            unit = _normalize_unit(m.group(2))
+        except (ValueError, IndexError):
+            continue
+
+        for idx, dim in enumerate(guard_cfg.protected_dimensions):
+            if _normalize_unit(dim.unit) == unit:
+                min_val = dim.value * (1.0 - dim.tolerance_rel) - 1e-9
+                max_val = dim.value * (1.0 + dim.tolerance_rel) + 1e-9
+                if min_val <= val <= max_val:
+                    return idx
+
+    return None
+
+
+def evaluate_query(query: str) -> tuple[bool, str, int | None]:
     """Evaluate whether a search query is allowed or blocked.
 
-    Returns (allowed, reason_code).
+    Returns (allowed, reason_code, rule_index).
     """
     if not pack_is_ready():
-        return False, "pack_load_error"
+        return False, "pack_load_error", None
     try:
         normalized = " ".join(query.split())
         if packs.mentions_pack_term(normalized):
-            return False, "pack_term"
-        guard_cfg = packs.search_guard()
-        if matches_min_groups(normalized, guard_cfg.groups, guard_cfg.min_groups):
-            return False, "guard_groups"
-        if sanitize_text(query) != query:
-            return False, "sanitized_diff"
-        if check_sensitivity_floor(query) in {"S2", "S3", "S4"}:
-            return False, "sensitivity_floor"
-    except Exception:  # noqa: BLE001 - any guard failure must fail closed
-        return False, "guard_error"
+            return False, "pack_term", None
 
-    return True, "ok"
+        for pack in packs.load_packs():
+            guard_cfg = pack.search_guard
+            if guard_cfg.exact_combinations or guard_cfg.protected_dimensions:
+                comb_idx = _matches_exact_combination(normalized.lower(), guard_cfg.exact_combinations)
+                if comb_idx is not None:
+                    return False, "exact_combination", comb_idx
+
+                dim_idx = _matches_protected_dimension(normalized, guard_cfg)
+                if dim_idx is not None:
+                    return False, "protected_dimension", dim_idx
+            elif matches_min_groups(normalized, guard_cfg.groups, guard_cfg.min_groups):
+                return False, "guard_groups", None
+
+        if sanitize_text(query) != query:
+            return False, "sanitized_diff", None
+        if check_sensitivity_floor(query) in {"S2", "S3", "S4"}:
+            return False, "sensitivity_floor", None
+    except Exception:  # noqa: BLE001 - any guard failure must fail closed
+        return False, "guard_error", None
+
+    return True, "ok", None
 
 
 def resolve_log_file() -> Path:
     return paths.build_paths().search_guard_log_file
 
 
-def log_query(query: str, status: str, log_file: Path | None = None) -> bool:
-    """Log one line per query: timestamp, ok/blocked, and sha256 prefix. Never query text."""
+def log_query(
+    query: str,
+    status: str,
+    log_file: Path | None = None,
+    *,
+    reason_code: str = "ok",
+    reason_it: str | None = None,
+    rule_index: int | None = None,
+) -> bool:
+    """Log one structured JSONL line per query: ts, status, sha256_prefix, reason_code, reason_it, optional rule_index.
+    Never query text or pack literals."""
     try:
         target_path = log_file or resolve_log_file()
         target_path.parent.mkdir(parents=True, exist_ok=True)
         now_ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         sha_prefix = hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16]
-        line = f"{now_ts} {status} {sha_prefix}\n"
+        entry: dict[str, Any] = {
+            "ts": now_ts,
+            "status": status,
+            "sha256_prefix": sha_prefix,
+            "reason_code": reason_code,
+            "reason_it": reason_it or REASON_MESSAGES_IT.get(reason_code, "Consentito" if status == "ok" else reason_code),
+        }
+        if rule_index is not None:
+            entry["rule_index"] = rule_index
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
         with open(target_path, "a", encoding="utf-8") as handle:
             handle.write(line)
             handle.flush()
@@ -208,8 +342,25 @@ class SearchGuardHandler(http.server.BaseHTTPRequestHandler):
                            and "query" not in query_params and len(query_params.get("format", [])) <= 1
                            and all(32 <= ord(char) < 127 or ord(char) >= 160
                                    for values in query_params.values() for value in values for char in value))
-            allowed, _reason = evaluate_query(urllib.parse.unquote_plus(parsed.query)) if valid_query else (False, "invalid_query")
-            if not log_query(query_text, "ok" if allowed else "blocked", self.server.log_file):
+            if valid_query:
+                # Evaluate every parameter value, not only q: the whole request is forwarded upstream.
+                allowed, reason_code, rule_index = evaluate_query(
+                    " ".join(value for values in query_params.values() for value in values)
+                )
+            else:
+                allowed, reason_code, rule_index = False, "invalid_query", None
+
+            status_str = "ok" if allowed else "blocked"
+            reason_it = REASON_MESSAGES_IT.get(reason_code, reason_code)
+
+            if not log_query(
+                query_text,
+                status_str,
+                self.server.log_file,
+                reason_code=reason_code,
+                reason_it=reason_it,
+                rule_index=rule_index,
+            ):
                 self.send_error_502("query log unavailable")
                 return
 
