@@ -152,6 +152,9 @@ def freecad_edit_apply_endpoint(workspace_id: str, payload: FreecadApplyRequest)
         )
         if live_old != payload.old_value:
             raise FreecadBridgeError("FREECAD_STALE_PREVIEW", "Il valore in FreeCAD è cambiato dopo l'anteprima: rifai l'anteprima.", 409)
+    except FreecadBridgeError as exc:
+        raise _freecad_error(exc) from exc
+    try:
         outcome = bridge.request(
             "edit_object",
             {
@@ -163,18 +166,28 @@ def freecad_edit_apply_endpoint(workspace_id: str, payload: FreecadApplyRequest)
             },
         )
     except FreecadBridgeError as exc:
+        if exc.code in ("FREECAD_MCP_PENDING", "FREECAD_ROLLBACK_FAILED"):
+            # The document may have changed: record that the outcome is not known.
+            _log_freecad_edit(workspace_id, payload, {"success": False, "mutation_outcome": "unknown", "code": exc.code})
         raise _freecad_error(exc) from exc
     success = isinstance(outcome, dict) and outcome.get("success") is True
+    # FreeCAD may coerce the value; show the one it read back after the edit.
+    applied = outcome.get("applied_value", payload.value) if success else payload.value
     # Only the typed outcome leaves the bridge: add-on error text can carry local file names.
     mutation = outcome.get("mutation_outcome") if isinstance(outcome, dict) else None
     outcome = {"success": success, "mutation_outcome": mutation if isinstance(mutation, str) else None}
     result: dict[str, Any] = {
         "document": payload.document, "object": payload.object, "property": payload.property,
-        "old_value": payload.old_value, "new_value": payload.value, "outcome": outcome,
+        "old_value": payload.old_value, "new_value": applied, "outcome": outcome,
         "document_unchanged": not success,
     }
     if not success:
         result["message"] = "Il documento non è stato modificato."
+    _log_freecad_edit(workspace_id, payload, outcome)
+    return result
+
+
+def _log_freecad_edit(workspace_id: str, payload: FreecadApplyRequest, outcome: dict[str, Any]) -> None:
     with open_sqlite_connection() as connection:
         log_event(
             connection,
@@ -193,7 +206,6 @@ def freecad_edit_apply_endpoint(workspace_id: str, payload: FreecadApplyRequest)
             },
         )
         connection.commit()
-    return result
 
 
 def _reference_error(exc: ReferenceError) -> HTTPException:

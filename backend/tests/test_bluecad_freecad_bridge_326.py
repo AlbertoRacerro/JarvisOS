@@ -13,6 +13,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.core.bootstrap import initialize_storage
+from app.core.database import open_sqlite_connection
 from app.modules.bluecad import freecad_relay, routes
 from app.modules.bluecad.freecad_bridge import FreecadBridge, FreecadBridgeError
 from app.modules.workspaces.service import list_workspaces
@@ -35,6 +36,15 @@ class FakeObject:
         if name == "Length" and value == 99:
             super().__setattr__(name, 99)
             raise ValueError("simulated failing set")
+        if name == "Length" and value == 77:
+            # Fails after writing, and its restore silently coerces the old value.
+            super().__setattr__(name, 77)
+            self.coerce_restore = True
+            raise ValueError("simulated failing set")
+        if name == "Length" and getattr(self, "coerce_restore", False):
+            super().__setattr__("coerce_restore", False)
+            super().__setattr__(name, value + 1)
+            return
         super().__setattr__(name, value)
 
 
@@ -271,7 +281,7 @@ def test_relay_guard_and_no_xmlrpc() -> None:
     value = '20"; __import__("os").system("false")\n'
     script = freecad_relay._script("edit_object", {
         "doc_name": "Demo", "obj_name": "Box", "property": "Length", "old_value": 10, "value": value,
-    })
+    }, expires_at=0.0)
     literal = script.split("_params = json.loads(", 1)[1].split("\n", 1)[0].removesuffix(")")
     assert json.loads(json.loads(literal))["value"] == value
     assert script.count("json.loads(") == 1
@@ -279,3 +289,30 @@ def test_relay_guard_and_no_xmlrpc() -> None:
         freecad_relay._script("edit_object", {
             "doc_name": "Demo", "obj_name": "Box", "property": "Length", "old_value": 10, "value": float("nan"),
         })
+
+
+def test_late_approval_never_applies_and_unconfirmed_rollback_is_unknown(
+    peer, isolated_data_root: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _, _, _, _ = peer
+    initialize_storage()
+    workspace_id = list_workspaces()[0].id
+    box = app.doc.Objects[0]
+    apply = {"document": "Demo", "object": "Box", "property": "Length", "value": 20, "old_value": 10}
+    # The edit window has closed by the time FreeCAD runs the script (a late approval).
+    monkeypatch.setattr(freecad_relay, "_EDIT_WINDOW_S", -1.0)
+    with pytest.raises(HTTPException) as expired:
+        routes.freecad_edit_apply_endpoint(workspace_id, routes.FreecadApplyRequest(**apply))
+    assert expired.value.detail["code"] == "FREECAD_EDIT_EXPIRED"
+    assert box.Length == 10
+    monkeypatch.setattr(freecad_relay, "_EDIT_WINDOW_S", 30.0)
+    with pytest.raises(HTTPException) as unknown:
+        routes.freecad_edit_apply_endpoint(workspace_id, routes.FreecadApplyRequest(**{**apply, "value": 77}))
+    assert unknown.value.detail["code"] == "FREECAD_ROLLBACK_FAILED"
+    assert box.Length == 11
+    with open_sqlite_connection() as connection:
+        rows = connection.execute(
+            "SELECT payload FROM events WHERE event_type = 'FreecadPropertyEditApplied'"
+        ).fetchall()
+    outcomes = [json.loads(row[0])["outcome"] for row in rows]
+    assert {"success": False, "mutation_outcome": "unknown", "code": "FREECAD_ROLLBACK_FAILED"} in outcomes

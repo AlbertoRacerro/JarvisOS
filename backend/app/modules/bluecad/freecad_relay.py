@@ -21,6 +21,8 @@ _PREFIX = "JARVIS_FREECAD_RESULT:"
 _MAX_BODY = 256 * 1024
 _MAX_OUTPUT = 256 * 1024
 _DEADLINE_S = 45.0
+# A fixed edit refuses to run after this window, well before the relay stops waiting.
+_EDIT_WINDOW_S = 30.0
 
 _COMMON = '''import json
 _params = json.loads(PARAMETERS)
@@ -64,12 +66,16 @@ _emit([_describe(obj) for obj in doc.Objects])
 _emit(_describe(_object()))
 ''',
     "edit_object": '''# Jarvis FreeCAD: edit_object
+import time
 obj = _object()
 name = _params["property"]
 if name not in obj.PropertiesList or obj.getEditorMode(name) != 0:
     raise ValueError("FREECAD_PROPERTY_NOT_EDITABLE")
 old = getattr(obj, name)
-if _value(old) != _params["old_value"]:
+if time.time() > _params["expires_at"]:
+    # Approved after Jarvis stopped waiting: never apply a late edit.
+    _emit({"success": False, "code": "FREECAD_EDIT_EXPIRED", "mutation_outcome": "unchanged"})
+elif _value(old) != _params["old_value"]:
     _emit({"success": False, "code": "FREECAD_STALE_PREVIEW", "mutation_outcome": "unchanged"})
 else:
     try:
@@ -77,12 +83,15 @@ else:
     except Exception:
         try:
             setattr(obj, name, old)
+            restored = _value(getattr(obj, name)) == _value(old)
         except Exception:
-            _emit({"success": False, "code": "FREECAD_ROLLBACK_FAILED", "mutation_outcome": "unknown"})
-        else:
+            restored = False
+        if restored:
             _emit({"success": False, "mutation_outcome": "rolled_back"})
+        else:
+            _emit({"success": False, "code": "FREECAD_ROLLBACK_FAILED", "mutation_outcome": "unknown"})
     else:
-        _emit({"success": True, "mutation_outcome": "applied"})
+        _emit({"success": True, "mutation_outcome": "applied", "applied_value": _value(getattr(obj, name))})
 ''',
 }
 
@@ -110,8 +119,12 @@ def _validate(method: str, params: dict[str, Any]) -> None:
                 raise ValueError("FREECAD_INVALID_EDIT")
 
 
-def _script(method: str, params: dict[str, Any]) -> str:
+def _script(method: str, params: dict[str, Any], expires_at: float | None = None) -> str:
     _validate(method, params)
+    if method == "edit_object":
+        if expires_at is None:
+            raise ValueError("FREECAD_INVALID_EDIT")
+        params = {**params, "expires_at": expires_at}
     # This is the only parameter-bearing literal in the source sent to FreeCAD.
     literal = json.dumps(json.dumps(params, ensure_ascii=True), ensure_ascii=True)
     return _COMMON.replace("PARAMETERS", literal, 1) + _TEMPLATES[method]
@@ -175,7 +188,8 @@ def _http_call(token: str, name: str, arguments: dict[str, Any], deadline: float
 
 
 def _call(method: str, params: dict[str, Any], token: str) -> Any:
-    script = _script(method, params)
+    # The relay runs on the FreeCAD host, so both sides read the same wall clock.
+    script = _script(method, params, expires_at=time.time() + _EDIT_WINDOW_S)
     deadline = time.monotonic() + _DEADLINE_S
     page = _http_call(token, "execute_python", {"code": script}, deadline)
     output = ""
@@ -202,7 +216,7 @@ def _call(method: str, params: dict[str, Any], token: str) -> Any:
     for line in reversed(output.splitlines()):
         if line.startswith(_PREFIX):
             result = json.loads(line[len(_PREFIX):])
-            if isinstance(result, dict) and result.get("code") in ("FREECAD_STALE_PREVIEW", "FREECAD_ROLLBACK_FAILED"):
+            if isinstance(result, dict) and result.get("code") in ("FREECAD_STALE_PREVIEW", "FREECAD_ROLLBACK_FAILED", "FREECAD_EDIT_EXPIRED"):
                 raise ValueError(result["code"])
             return result
     raise ValueError("FREECAD_BRIDGE_PROTOCOL_ERROR")

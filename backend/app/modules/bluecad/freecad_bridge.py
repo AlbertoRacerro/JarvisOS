@@ -192,9 +192,13 @@ class FreecadBridge:
             if code == "FREECAD_MCP_DECLINED":
                 raise FreecadBridgeError(code, "Lo script Jarvis è stato rifiutato in FreeCAD.")
             if code == "FREECAD_MCP_PENDING":
-                raise FreecadBridgeError(code, "Lo script Jarvis attende ancora conferma in FreeCAD.", 504)
+                raise FreecadBridgeError(code, "Lo script Jarvis attende ancora conferma in FreeCAD: se lo confermi ora non modificherà il documento.", 504)
             if code == "FREECAD_STALE_PREVIEW":
                 raise FreecadBridgeError(code, "Il valore in FreeCAD è cambiato dopo l'anteprima: rifai l'anteprima.")
+            if code == "FREECAD_EDIT_EXPIRED":
+                raise FreecadBridgeError(
+                    code, "La conferma in FreeCAD è arrivata troppo tardi: il documento non è stato modificato.", 409
+                )
             if code == "FREECAD_ROLLBACK_FAILED":
                 raise FreecadBridgeError(code, "FreeCAD non ha confermato il ripristino del valore precedente.", 502)
             raise FreecadBridgeError(code, "FreeCAD ha rifiutato la richiesta.", 502)
