@@ -626,7 +626,7 @@ def test_prompt_advertisement_and_thread_instructions() -> None:
     assert "jarvis.repo_read" in [g.capability_id for g in worker.live_grants.values()]
 
     # 3. _turn_tools includes mcp__jarvis__jarvis_repo_read
-    tools = thread_service._turn_tools("workspace")
+    tools = thread_service._turn_tools("workspace", "Where is the coefficient in the repository?")
     assert "mcp__jarvis__jarvis_repo_read" in tools
 
 

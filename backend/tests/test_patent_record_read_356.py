@@ -692,7 +692,7 @@ def test_thread_service_installs_patent_read_grant_and_guidance() -> None:
     assert "jarvis_patent_read" in instructions
 
     # Turn tools list includes mcp__jarvis__jarvis_patent_read
-    turn_tools = thread_service._turn_tools("general")
+    turn_tools = thread_service._turn_tools("general", "Read patent EP1234567")
     assert "mcp__jarvis__jarvis_patent_read" in turn_tools
 
 

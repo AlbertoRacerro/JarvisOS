@@ -549,6 +549,7 @@ def test_successful_turn_returns_relay_flow_without_creating_a_second_interactio
                         lambda: _existing_connection(connection))
     supervisor = HermesSupervisor("unused")
     supervisor.session = SESSION
+    monkeypatch.setattr("app.modules.agents.hermes.roles.get_role_instructions", lambda *_args, **_kwargs: "test role")
 
     class Alive:
         def poll(self) -> None:

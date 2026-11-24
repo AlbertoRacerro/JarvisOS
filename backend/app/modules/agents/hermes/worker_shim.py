@@ -204,6 +204,12 @@ DEAD_TURN_NUDGE = (
     "or conclude with your final answer."
 )
 TURN_CAP_REACHED_MESSAGE = "Turn cap reached."
+COMPACT_METHODOLOGY = (
+    "Ground numbers in tool outputs or label estimates and confidence. Calculate physics with deterministic tools; "
+    "state uncertain input ranges. Read sources before citing; never invent a DOI. For multi-step work, use "
+    "jarvis_turn_plan and save findings with source refs. If an exact source is unavailable, give a labelled "
+    "engineering estimate and state what remains unconfirmed."
+)
 
 
 def extract_capped_text(text: str) -> str:
@@ -656,6 +662,8 @@ class Worker:
         self.active_turn_plan: dict[str, Any] | None = None
         self.turn_step_count: int = 0
         self.turn_cap: int = DEFAULT_TURN_CAP
+        self.step_deadline_seconds: int = 240
+        self.general_output_cap: int = 2048
         self.turn_research_count: int = 0
         self.research_budget: int = DEFAULT_RESEARCH_BUDGET
         self.seen_tool_calls: set[str] = set()
@@ -775,7 +783,7 @@ class Worker:
                         worker.send({"type": "tool_call", "id": request_id,
                                      "session_ref": worker.session, "arguments": body})
                         try:
-                            result = tool_answer.get(timeout=120)
+                            result = tool_answer.get(timeout=worker.step_deadline_seconds)
                         finally:
                             with worker.pending_lock:
                                 worker.pending.pop(request_id, None)
@@ -833,9 +841,9 @@ class Worker:
                                  "tools": tools,
                                  "allowed_tools": allowed_tools,
                                  "metadata": metadata,
-                                 "max_output_tokens": body.get("max_completion_tokens") or body.get("max_tokens") or (2048 if task_kind == "general" else None)})
+                                 "max_output_tokens": body.get("max_completion_tokens") or body.get("max_tokens") or (worker.general_output_cap if task_kind == "general" else None)})
                     try:
-                        result = answer.get(timeout=180)
+                        result = answer.get(timeout=worker.step_deadline_seconds)
                     finally:
                         with worker.pending_lock:
                             worker.pending.pop(request_id, None)
@@ -960,6 +968,9 @@ class Worker:
             self.active_turn_tools = allowed_tools
             if self.agent is None:
                 self.agent = self._build_agent()
+            elif hasattr(self.agent, "clear_interrupt"):
+                # A turn interrupted at its deadline must not leave the next turn pre-cancelled.
+                self.agent.clear_interrupt()
             role_id = (self.session or {}).get("profile_id", "isaac")
             from app.modules.agents.hermes.roles import get_role_instructions
             instructions = get_role_instructions(role_id, sheldon_mode=sheldon_mode)
@@ -1033,8 +1044,11 @@ class Worker:
                     or any(name not in ADMITTED_TOOLS for name in allowed_tools)):
                 raise ValueError("invalid per-turn tools")
             sheldon_mode = bool(frame.get("sheldon_mode", False))
+            self.step_deadline_seconds = max(120, min(900, int(frame.get("step_deadline_seconds", 240))))
+            self.general_output_cap = max(1, min(8192, int(frame.get("general_output_cap", 2048))))
             threading.Thread(target=self.run_turn,
-                             args=(frame["id"], frame["prompt"], allowed_tools, sheldon_mode), daemon=True).start()
+                             args=(frame["id"], frame["prompt"], allowed_tools, sheldon_mode),
+                             daemon=True).start()
         elif kind == "interrupt":
             if self.agent is not None:
                 self.agent.interrupt(hard_cancel=True)

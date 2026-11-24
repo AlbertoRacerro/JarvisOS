@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import sqlite3
@@ -16,11 +17,15 @@ from uuid import uuid4
 from app.core.database import open_sqlite_connection
 from app.core.paths import build_paths
 from app.modules.agents.hermes.worker_shim import (
-    compact_tool_payload as compact_tool_payload,
+    _PLAN_HEADER,
+    COMPACT_METHODOLOGY,
+    PRESENTATION_INSTRUCTIONS,
+    inject_saved_plan,
+    repair_proposal,
+    shrink_tool_history,
 )
 from app.modules.agents.hermes.worker_shim import (
-    inject_saved_plan,
-    shrink_tool_history,
+    compact_tool_payload as compact_tool_payload,
 )
 from app.modules.ai.agent_contracts import (
     AgentControlCommand,
@@ -341,6 +346,86 @@ def is_dead_turn(text: str | None) -> bool:
     return False
 
 
+_ANNOUNCE_STARTS = ("let me", "i'll", "i will", "now i", "next, i", "i am going to", "i'm going to")
+
+
+def turn_guard_kind(text: str | None, *, tools_offered: bool, capped: bool = False) -> str | None:
+    if is_dead_turn(text):
+        return "empty"
+    if not tools_offered or capped or not isinstance(text, str):
+        return None
+    try:
+        value = json.loads(text)
+    except (ValueError, TypeError):
+        value = text
+    if isinstance(value, dict):
+        if value.get("tool_calls"):
+            return None
+        value = value.get("answer", "")
+    if not isinstance(value, str):
+        return None
+    answer = value.strip().lower()
+    if len(answer) < 400 and not any(char.isdigit() for char in answer) and answer.startswith(_ANNOUNCE_STARTS):
+        return "announcement"
+    return None
+
+
+def compact_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove descriptive prose only; keep every validation constraint."""
+    def compact(value: Any, *, property_schema: bool = False) -> Any:
+        if isinstance(value, list):
+            return [compact(item, property_schema=property_schema) for item in value]
+        if not isinstance(value, dict):
+            return value
+        result = {}
+        for key, item in value.items():
+            if key == "description":
+                if not property_schema and isinstance(item, str):
+                    result[key] = item.split(".", 1)[0][:160].strip() + ("." if "." in item[:161] else "")
+            else:
+                result[key] = compact(item, property_schema=property_schema or key == "properties")
+        return result
+    return [compact(tool) for tool in tools]
+
+
+def compact_system_message(messages: Any, system_prompt: str) -> Any:
+    """Replace the upstream Hermes system message on local routes, keeping a saved-plan tail."""
+    if not isinstance(messages, list) or not messages or not isinstance(messages[0], dict) \
+            or messages[0].get("role") != "system":
+        return messages
+    content = messages[0].get("content")
+    tail = ""
+    if isinstance(content, str) and _PLAN_HEADER in content:
+        tail = "\n\n" + _PLAN_HEADER + content.split(_PLAN_HEADER, 1)[1]
+    return [{**messages[0], "content": system_prompt + tail}, *messages[1:]]
+
+
+def prompt_tokens_estimate(prompt: str) -> int:
+    return math.ceil(len(prompt) / 3.5)
+
+
+def step_deadline_from_rows(rows: list[Any], max_output_tokens: int) -> int:
+    """Fit elapsed seconds to output tokens; sparse or degenerate data uses 240 s."""
+    samples = [(float(row["output_tokens"]), float(row["latency_ms"]) / 1000)
+               for row in rows if row["output_tokens"] and row["latency_ms"]]
+    if len(samples) < 3:
+        return 240
+    mean_tokens = sum(x for x, _ in samples) / len(samples)
+    mean_seconds = sum(y for _, y in samples) / len(samples)
+    variance = sum((x - mean_tokens) ** 2 for x, _ in samples)
+    if variance <= 0:
+        return 240
+    seconds_per_token = sum((x - mean_tokens) * (y - mean_seconds) for x, y in samples) / variance
+    if seconds_per_token <= 0:
+        return 240
+    prefill = max(0.0, mean_seconds - mean_tokens * seconds_per_token)
+    return max(120, min(900, math.ceil((prefill + max_output_tokens * seconds_per_token) * 1.5)))
+
+
+def turn_deadline(step_seconds: int, turn_cap: int) -> int:
+    return max(600, min(turn_cap * step_seconds + 120, 3600))
+
+
 def infer_envelope(frame: dict[str, Any], *, deadline_seconds: int = 120,
                    route_class: str | None = None) -> InferenceEnvelope:
     """Untrusted OpenAI request becomes a bounded frozen Jarvis envelope."""
@@ -364,12 +449,13 @@ def infer_envelope(frame: dict[str, Any], *, deadline_seconds: int = 120,
         raise ValueError("direct provider override refused")
     tools = _admitted_tools(frame)
     now = datetime.now(UTC)
+    separators = (",", ":") if route_class and route_class.startswith("local:") else None
     return InferenceEnvelope(
         envelope_id=str(uuid4()), correlation_id=str(frame["id"]),
         task_kind=str(frame.get("task_kind", "general")),
         workspace_id=ref.workspace_id,
-        prompt=json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False) + RELAY_TOOL_PROTOCOL
-               if tools else json.dumps(messages, ensure_ascii=False),
+        prompt=json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False, separators=separators) + RELAY_TOOL_PROTOCOL
+               if tools else json.dumps(messages, ensure_ascii=False, separators=separators),
         route_class=route_class,
         model_candidate=str(frame["model_candidate"])[:256] if frame.get("model_candidate") else None,
         max_output_tokens=frame.get("max_output_tokens"), agent_session=ref,
@@ -408,6 +494,7 @@ def run_governed_inference(
     on_outcome: Callable[[AiTaskOutcome], None] | None = None,
     max_nudges: int = 1,
     reasoning_phase: str | None = None,
+    on_guard: Callable[[str, bool | None], None] | None = None,
 ) -> dict[str, Any]:
     if envelope.agent_session is None:
         return {"status": "refused"}
@@ -425,35 +512,56 @@ def run_governed_inference(
         temperature = None
     else:
         temperature = 0.3 if envelope.task_kind == "general" else None
-    runner_kwargs = run_ai_task_kwargs(
-        envelope,
-        structured_output_schema=structured_output_schema,
-        temperature=temperature,
-    )
-    if reasoning_phase is not None:
-        runner_kwargs["metadata"] = {"reasoning_phase": reasoning_phase}
-    outcome = runner(**runner_kwargs)
-    if on_outcome is not None:
-        on_outcome(outcome)
-    if envelope.is_expired(datetime.now(UTC)) or (cancelled and envelope.cancellation_id and cancelled(envelope.cancellation_id)):
-        return {"status": "cancelled"}
-
-    # Dead-turn nudge: if response text is empty/stalled and nudges remaining, inject nudge and retry
-    if outcome.status == "success" and outcome.response and is_dead_turn(outcome.response.text) and max_nudges > 0:
-        nudged_prompt = f"{envelope.prompt}\n\n{DEAD_TURN_NUDGE}"
-        nudged_envelope = envelope.model_copy(update={"prompt": nudged_prompt})
-        nudged_kwargs = run_ai_task_kwargs(
-            nudged_envelope,
-            structured_output_schema=structured_output_schema,
-            temperature=temperature,
-        )
-        if reasoning_phase is not None:
-            nudged_kwargs["metadata"] = {"reasoning_phase": reasoning_phase}
-        outcome = runner(**nudged_kwargs)
+    offered = structured_output_schema is not None
+    current = envelope
+    nudges = 0
+    length_retries = 0
+    while True:
+        runner_kwargs = run_ai_task_kwargs(current, structured_output_schema=structured_output_schema,
+                                           temperature=temperature)
+        runner_kwargs["metadata"] = {"prompt_tokens_estimate": prompt_tokens_estimate(current.prompt),
+                                      **({"reasoning_phase": reasoning_phase} if reasoning_phase else {})}
+        outcome = runner(**runner_kwargs)
         if on_outcome is not None:
             on_outcome(outcome)
         if envelope.is_expired(datetime.now(UTC)) or (cancelled and envelope.cancellation_id and cancelled(envelope.cancellation_id)):
             return {"status": "cancelled"}
+        if outcome.status != "success" or outcome.response is None:
+            break
+        response_text = outcome.response.text
+        finish = getattr(outcome.response, "finish_reason", None)
+        if finish == "length":
+            try:
+                parsed = json.loads(response_text or "")
+            except (ValueError, TypeError):
+                parsed = repair_proposal(response_text or "") if response_text else None
+            usable = bool(isinstance(parsed, dict) and (parsed.get("tool_calls") or parsed.get("answer")))
+            if on_guard:
+                on_guard("length", usable)
+            if not usable and length_retries == 0:
+                length_retries = 1
+                current = current.model_copy(update={"max_output_tokens": min(8192, (current.max_output_tokens or 2048) * 2)})
+                continue
+            if not usable:
+                break
+        kind = turn_guard_kind(response_text, tools_offered=offered,
+                               capped=reasoning_phase == "final" or finish == "length")
+        if kind and nudges < max_nudges:
+            nudges += 1
+            if on_guard:
+                on_guard("nudge", None)
+            current = current.model_copy(update={"prompt": f"{envelope.prompt}\n\n{DEAD_TURN_NUDGE}"})
+            continue
+        if kind == "announcement" and nudges:
+            if on_guard:
+                on_guard("forced_final", None)
+            structured_output_schema = None
+            offered = False
+            reasoning_phase = "final"
+            current = envelope.model_copy(update={"prompt": f"{envelope.prompt}\n\nGive your final answer now."})
+            nudges = 0
+            continue
+        break
 
     if outcome.status != "success" or outcome.response is None or outcome.response.text is None:
         return {"status": "refused"}
@@ -461,7 +569,9 @@ def run_governed_inference(
     finish_reason = getattr(outcome.response, "finish_reason", None)
     if finish_reason is not None:
         result["finish_reason"] = finish_reason
-    if structured_output_schema is not None:
+    if reasoning_phase == "final":
+        result["admitted_tools"] = []
+    elif structured_output_schema is not None:
         try:
             branches = structured_output_schema["oneOf"][1]["properties"]["tool_calls"]["items"]["anyOf"]
             result["admitted_tools"] = [branch["properties"]["name"]["const"] for branch in branches]
@@ -807,6 +917,8 @@ class HermesSupervisor:
         self.active_turn_plan: dict[str, Any] = {"steps": [], "findings": []}
         self.turn_step_count: int = 0
         self.turn_cap: int = DEFAULT_TURN_CAP
+        self.step_deadline_seconds: int = 240
+        self.compact_system_prompt: str = f"{PRESENTATION_INSTRUCTIONS}\n\n{COMPACT_METHODOLOGY}"
         self.turn_evidence_ledger: list[Any] = []
         self.evidence_lock = threading.Lock()
         self.paper_search_opener: Any = None
@@ -936,19 +1048,54 @@ class HermesSupervisor:
                 frame["tools"] = []
                 frame["allowed_tools"] = []
 
+            if selected_route.startswith("local:"):
+                frame["messages"] = compact_system_message(frame.get("messages", []), self.compact_system_prompt)
             if self.active_turn_plan and (self.active_turn_plan.get("steps") or self.active_turn_plan.get("findings")):
                 frame["messages"] = inject_saved_plan(frame.get("messages", []), self.active_turn_plan)
 
             tools = _admitted_tools(frame)
-            envelope = infer_envelope(frame, route_class=selected_route)
+            if selected_route.startswith("local:"):
+                frame["tools"] = compact_tool_schemas(tools)
+                tools = frame["tools"]
+            envelope = infer_envelope(frame, deadline_seconds=self.step_deadline_seconds,
+                                      route_class=selected_route)
             if envelope.agent_session != self.session:
                 result = {"status": "refused"}
             else:
                 def record_flow(outcome: AiTaskOutcome) -> None:
+                    if outcome.ledger_id:
+                        try:
+                            with open_sqlite_connection() as connection:
+                                row = connection.execute("SELECT route_reason_json FROM ai_jobs WHERE id = ?",
+                                                         (outcome.ledger_id,)).fetchone()
+                                if row:
+                                    metadata = json.loads(row["route_reason_json"])
+                                    metadata["prompt_tokens_estimate"] = prompt_tokens_estimate(envelope.prompt)
+                                    connection.execute("UPDATE ai_jobs SET route_reason_json = ? WHERE id = ?",
+                                                       (json.dumps(metadata, sort_keys=True), outcome.ledger_id))
+                                    connection.commit()
+                        except sqlite3.OperationalError as exc:
+                            if "no such table: ai_jobs" not in str(exc):
+                                raise
                     if outcome.flow_id and envelope.agent_session is not None:
                         self.turn_flow_ids.setdefault(envelope.agent_session.hermes_session_id, []).append(outcome.flow_id)
                         if envelope.task_kind == "general":
                             self.last_flow[envelope.agent_session.hermes_session_id] = outcome.flow_id
+
+                def record_guard(kind: str, usable: bool | None) -> None:
+                    payload: dict[str, object] = {"kind": kind, "step": self.turn_step_count}
+                    if kind == "length":
+                        payload["parsed"] = bool(usable)
+                    try:
+                        with open_sqlite_connection() as connection:
+                            log_event(connection, event_type="hermes.turn_guard", actor="jarvis",
+                                      target_type="ai_thread_interaction", target_id=self.active_interaction_id,
+                                      workspace_id=self.session.workspace_id if self.session else None,
+                                      payload=payload)
+                            connection.commit()
+                    except sqlite3.OperationalError as exc:
+                        if "no such table: events" not in str(exc):
+                            raise
 
                 result = run_governed_inference(
                     envelope, runner=self.runner,
@@ -956,6 +1103,7 @@ class HermesSupervisor:
                     cancelled=lambda value: value in self.cancelled,
                     on_outcome=record_flow,
                     reasoning_phase=reasoning_phase,
+                    on_guard=record_guard,
                 )
                 if is_capped:
                     result["admitted_tools"] = []
@@ -1033,7 +1181,7 @@ class HermesSupervisor:
                 grant_id=grant_id, correlation_id=str(frame["id"]),
                 session_ref=ref, arguments=(arguments if capability_id != "jarvis.context_preview"
                                             else arguments["request"]),
-                requested_at=now, deadline_at=now + timedelta(seconds=120),
+                requested_at=now, deadline_at=now + timedelta(seconds=self.step_deadline_seconds),
             )
             result = dispatch_tool(call, live_grants=self.live_grants,
                                    interaction_id=self.active_interaction_id,
@@ -1208,6 +1356,26 @@ class HermesSupervisor:
             self._recover(self.session)
         if self.route_for_role is not None:
             self.active_role_route = self.route_for_role(self.session.profile_id)
+        from app.modules.local_ai.runtime.model_registry import get_active_model_entry
+        active_entry = get_active_model_entry()
+        output_cap = getattr(active_entry, "max_output_tokens", None) or 2048
+        try:
+            with open_sqlite_connection() as connection:
+                rows = connection.execute(
+                    "SELECT input_tokens, output_tokens, latency_ms FROM ai_jobs "
+                    "WHERE status = 'success' AND (model_id = ? OR "
+                    "json_extract(route_reason_json, '$.served_model_id') IN (?, ?)) AND input_tokens > 0 "
+                    "AND output_tokens > 0 AND latency_ms > 0 ORDER BY created_at DESC LIMIT 20",
+                    (active_entry.id if active_entry else "", active_entry.id if active_entry else "",
+                     active_entry.served_model if active_entry else ""),
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table: ai_jobs" not in str(exc):
+                raise
+            rows = []
+        self.step_deadline_seconds = step_deadline_from_rows(rows, output_cap)
+        if turn_timeout == 600:
+            turn_timeout = turn_deadline(self.step_deadline_seconds, self.turn_cap)
         self.last_flow.pop(self.session.hermes_session_id, None)
         self.turn_flow_ids[self.session.hermes_session_id] = []
         self.active_interaction_id = interaction_id
@@ -1218,12 +1386,30 @@ class HermesSupervisor:
         self.turn_step_count = 0
         with self.evidence_lock:
             self.turn_evidence_ledger = []
-        prompt = _assemble_turn_prompt(prompt, context_blocks or [])
+        prompt = _assemble_turn_prompt(prompt, context_blocks or [], include_rules=False)
+        from app.modules.agents.hermes.roles import get_role_instructions
+
+        role_instructions = get_role_instructions(self.session.profile_id, sheldon_mode=sheldon_mode)
+        self.compact_system_prompt = f"{role_instructions}\n\n{COMPACT_METHODOLOGY}"
         request_id = str(uuid4())
         try:
             self._send({"type": "turn", "id": request_id, "prompt": prompt,
-                        "allowed_tools": allowed_tools, "sheldon_mode": sheldon_mode})
-            response = self._await(request_id, timeout=turn_timeout)
+                        "allowed_tools": allowed_tools, "sheldon_mode": sheldon_mode,
+                        "step_deadline_seconds": self.step_deadline_seconds,
+                        "general_output_cap": output_cap})
+            try:
+                response = self._await(request_id, timeout=turn_timeout)
+            except RuntimeError as exc:
+                if str(exc) != "Hermes worker timed out":
+                    raise
+                try:
+                    self._send({"type": "interrupt", "id": str(uuid4())})
+                    self._await(request_id, timeout=30)
+                except RuntimeError:
+                    if self.process is not None and self.process.poll() is None:
+                        self.process.kill()
+                    self.worker_lost = True
+                return {"status": "failed", "error": "turn_deadline", "completed": False}
             if response.get("status") == "success" and response.get("completed") is True:
                 final = response.get("final_response")
                 flow_id = self.last_flow.get(self.session.hermes_session_id)
@@ -1266,8 +1452,9 @@ ENGINEERING_METHODOLOGY_RULES = (
 )
 
 
-def _assemble_turn_prompt(prompt: str, context_blocks: list[dict[str, str]] | None = None) -> str:
-    rules_suffix = f"\n\n{ENGINEERING_METHODOLOGY_RULES}"
+def _assemble_turn_prompt(prompt: str, context_blocks: list[dict[str, str]] | None = None,
+                          *, include_rules: bool = True) -> str:
+    rules_suffix = f"\n\n{ENGINEERING_METHODOLOGY_RULES}" if include_rules else ""
     clean_prompt = prompt
     if ENGINEERING_METHODOLOGY_RULES in clean_prompt:
         clean_prompt = clean_prompt.replace(f"\n\n{ENGINEERING_METHODOLOGY_RULES}", "")
