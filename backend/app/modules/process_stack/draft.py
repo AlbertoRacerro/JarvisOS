@@ -593,8 +593,8 @@ def apply_op(document: dict[str, Any], op: Any, resolve: studio_unit.Resolver | 
             values = dict(values)
             for old, new in T2_PARAMETER_ALIASES.items():
                 if old in values:
-                    param = next(item for item in PBR_T2_SPECS if item.key == new)
-                    if new in values and _si(values[old], param.kind, param.label)["si"] != _si(values[new], param.kind, param.label)["si"]:
+                    alias_param = next(item for item in PBR_T2_SPECS if item.key == new)
+                    if new in values and _si(values[old], alias_param.kind, alias_param.label)["si"] != _si(values[new], alias_param.kind, alias_param.label)["si"]:
                         raise DraftError("param_conflict", f"Conflicting values for {new}", field=new)
                     values.setdefault(new, values.pop(old))
         for key, quantity in values.items():
