@@ -102,6 +102,48 @@ def count_thread_tool_calls(data_root: Path | str, thread_id: str) -> int:
         conn.close()
 
 
+def read_job_metrics(data_root: Path | str, started_at: float, ended_at: float) -> dict[str, float | int | None]:
+    """Read token use from the isolated proof database for one serial repetition."""
+    root = Path(data_root)
+    db_file = root if root.is_file() else root / "jarvisos.db"
+    empty: dict[str, float | int | None] = {"prompt_tokens_estimate": None, "input_tokens": None,
+                                           "output_tokens": None, "decode_tps": None}
+    if not db_file.exists():
+        return empty
+    uri = f"file:{urllib.parse.quote(db_file.resolve().as_posix())}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT route_reason_json, input_tokens, output_tokens, latency_ms FROM ai_jobs "
+                "WHERE julianday(created_at) BETWEEN julianday(?, 'unixepoch') AND julianday(?, 'unixepoch') "
+                "AND selected_route_class LIKE 'local:%' AND status = 'success'",
+                (started_at, ended_at),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return empty
+        estimates = [value for raw, *_ in rows
+                     if isinstance((value := json.loads(raw or "{}").get("prompt_tokens_estimate")), (int, float))]
+        input_tokens = sum(int(row[1] or 0) for row in rows)
+        output_tokens = sum(int(row[2] or 0) for row in rows)
+        latency_s = sum(float(row[3] or 0) for row in rows) / 1000
+        samples = [(float(row[2]), float(row[3]) / 1000) for row in rows if row[2] and row[3]]
+        decode_tps = output_tokens / latency_s if latency_s > 0 else None
+        if len(samples) >= 3:
+            mean_x = sum(x for x, _ in samples) / len(samples)
+            mean_y = sum(y for _, y in samples) / len(samples)
+            spread = sum((x - mean_x) ** 2 for x, _ in samples)
+            if spread > 0:
+                seconds_per_token = sum((x - mean_x) * (y - mean_y) for x, y in samples) / spread
+                if seconds_per_token > 0:
+                    decode_tps = 1 / seconds_per_token
+        return {"prompt_tokens_estimate": round(sum(estimates) / len(estimates), 2) if estimates else None,
+                "input_tokens": input_tokens, "output_tokens": output_tokens,
+                "decode_tps": round(decode_tps, 2) if decode_tps is not None else None}
+    finally:
+        conn.close()
+
+
 def extract_numbers(text: str) -> list[float]:
     """Extract all numeric literals from text."""
     # Remove comma thousand separators within numbers (e.g. 20,000 -> 20000)
@@ -235,7 +277,7 @@ def run_eval(
     out_dir: Path | str,
     data_root: Path | str | None = None,
     reference: str | None = None,
-    timeout: float = 120.0,
+    timeout: float = 3600.0,
     workspace_id: str = "default",
     route_class: str | None = "hermes:agent",
     role_id: str | None = None,
@@ -277,6 +319,7 @@ def run_eval(
         rep_results: list[dict[str, Any]] = []
 
         for rep in range(reps):
+            started_at = time.time()
             start_wall = time.monotonic()
             deadline = start_wall + timeout
             thread_id: str | None = None
@@ -372,6 +415,9 @@ def run_eval(
                 "max_points": float(task.get("max_points", 2.0)),
                 "checks_passed": passed,
                 "checks_total": total_chk,
+                **(read_job_metrics(data_root, started_at, time.time()) if data_root and not reference else
+                   {"prompt_tokens_estimate": None, "input_tokens": None,
+                    "output_tokens": None, "decode_tps": None}),
             })
 
         points_list = [r["points"] for r in rep_results]
@@ -386,6 +432,10 @@ def run_eval(
             "total_tool_calls": sum(calls_list),
             "mean_wall_time_s": round(sum(walls_list) / len(walls_list), 3),
             "total_wall_time_s": round(sum(walls_list), 3),
+            "mean_prompt_tokens_estimate": _mean_present(rep_results, "prompt_tokens_estimate"),
+            "mean_input_tokens": _mean_present(rep_results, "input_tokens"),
+            "mean_output_tokens": _mean_present(rep_results, "output_tokens"),
+            "mean_decode_tps": _mean_present(rep_results, "decode_tps"),
             "repetitions": rep_results,
         }
 
@@ -541,6 +591,11 @@ def compare_runs(baseline_data: dict[str, Any], candidate_data: dict[str, Any]) 
     return (0, "\n".join(lines))
 
 
+def _mean_present(rows: list[dict[str, Any]], key: str) -> float | None:
+    values = [row[key] for row in rows if isinstance(row.get(key), (int, float))]
+    return round(sum(values) / len(values), 2) if values else None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent_eval",
@@ -550,7 +605,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     # run subcommand
-    run_parser = subparsers.add_parser("run", help="Run agent evaluation on a task set")
+    run_parser = subparsers.add_parser(
+        "run", help="Run agent evaluation on a task set",
+        description="The proof backend must run with the operator environment that provides the Hermes venv; "
+                    "otherwise every turn fails immediately.")
     run_parser.add_argument("--tasks", required=True, help="Path to task set JSON file")
     run_parser.add_argument("--label", required=True, help="Run label identifier")
     run_parser.add_argument("--reps", type=int, default=3, help="Repetitions per task (default 3)")
@@ -558,7 +616,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--out", required=True, help="Output directory for results")
     run_parser.add_argument("--data-root", help="Path to proof data-root copy")
     run_parser.add_argument("--reference", help="Reference model (e.g. haiku)")
-    run_parser.add_argument("--timeout", type=float, default=120.0, help="Per-task wall timeout in seconds")
+    run_parser.add_argument("--timeout", type=float, default=3600.0, help="Per-task wall timeout in seconds")
     run_parser.add_argument("--workspace-id", default="default", help="Workspace id (default 'default')")
     run_parser.add_argument("--route-class", default="hermes:agent", help="Route class (default 'hermes:agent')")
     run_parser.add_argument("--role-id", help="Hermes role id (e.g. 'isaac')")
@@ -576,6 +634,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.subcommand == "run":
+        if (not args.reference and args.route_class and args.route_class.startswith("hermes:")
+                and args.timeout < 660):
+            print("Error: Hermes --timeout must be at least 660 seconds (longer than the worker turn deadline)",
+                  file=sys.stderr)
+            return 1
         try:
             run_eval(
                 tasks_path=args.tasks,

@@ -549,6 +549,7 @@ def test_successful_turn_returns_relay_flow_without_creating_a_second_interactio
                         lambda: _existing_connection(connection))
     supervisor = HermesSupervisor("unused")
     supervisor.session = SESSION
+    monkeypatch.setattr("app.modules.agents.hermes.roles.get_role_instructions", lambda *_args, **_kwargs: "test role")
 
     class Alive:
         def poll(self) -> None:
@@ -969,7 +970,8 @@ def test_hermes_agent_gets_the_thread_formula_instruction(monkeypatch) -> None:
     shim.base_url, shim.token, shim.session_db = "http://127.0.0.1:1/v1", "t", object()
     shim.session = {"hermes_session_id": "h1"}
     shim._build_agent()
-    assert captured["ephemeral_system_prompt"] == worker_shim.PRESENTATION_INSTRUCTIONS
+    assert captured["ephemeral_system_prompt"].startswith(worker_shim.PRESENTATION_INSTRUCTIONS)
+    assert worker_shim.COMPACT_METHODOLOGY in captured["ephemeral_system_prompt"]
     assert captured["enabled_toolsets"] == ["mcp-jarvis", "memory", "session_search"]
 
 
