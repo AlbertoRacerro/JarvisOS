@@ -65,6 +65,7 @@ def test_free_models_parsing_and_secret_path_stripping(
                 "api_key": "sk-live-1234567890abcdef1234567890",
                 "token": "API_KEY_PLACEHOLDER_12345a",
                 "base_url": "https://api.nous.invalid/v1",
+                "free_list": "openai_models",
                 "index_score": 42,
                 "coding_index": 44,
                 "remaining_percent": 85.4,
@@ -74,6 +75,7 @@ def test_free_models_parsing_and_secret_path_stripping(
                 "name": "zen-pool",
                 "label": "OpenCode Zen Pool",
                 "provider": "OpenCode Zen",
+                "free_list": "opencode_zen",
                 "model": "zen-free",
                 "index_score": 35,
                 "coding_index": 38,
@@ -84,6 +86,7 @@ def test_free_models_parsing_and_secret_path_stripping(
                 "name": "exhausted-pool",
                 "label": "Exhausted Model",
                 "provider": "OpenRouter",
+                "free_list": "openrouter_public",
                 "model": "deepseek/deepseek-chat:free",
                 "index_score": 30,
                 "coding_index": 36,
@@ -94,6 +97,7 @@ def test_free_models_parsing_and_secret_path_stripping(
                 "name": "unqualified-pool",
                 "label": "Low Score Model",
                 "provider": "Public",
+                "free_list": "openai_models",
                 "model": "low-model",
                 "index_score": 20,
                 "coding_index": 22,
@@ -110,15 +114,18 @@ def test_free_models_parsing_and_secret_path_stripping(
     lists_file.write_text(
         json.dumps({
             "sources": {
-                "free": {
-                    "ids": [
-                        "nousresearch/hermes-3-llama-3.1-8b",
-                        "zen-free",
-                        "deepseek/deepseek-chat:free",
-                        "low-model",
-                    ],
+                "https://api.nous.invalid/v1": {
+                    "ids": ["nousresearch/hermes-3-llama-3.1-8b", "low-model"],
                     "read_at": now_str,
-                }
+                },
+                "opencode_zen": {
+                    "ids": ["zen-free"],
+                    "read_at": now_str,
+                },
+                "openrouter_public": {
+                    "ids": ["deepseek/deepseek-chat:free"],
+                    "read_at": now_str,
+                },
             },
             "probes": {
                 "high-pool": {"status": "ok", "live_ok_at": now_str},

@@ -910,8 +910,10 @@ def test_free_model_proof_precedence_and_temp_prefix(
         },
         "probes": {
             "temp-pool-temp-404": {"status": "404", "status_code": 404, "live_ok_at": now_str},
+            "pool-newer-error": {"status": "ok", "live_ok_at": older_str},
             "model/newer-err:free": {"status": "error", "at": now_str},
             "model/recovered:free": {"status": "error", "at": older_str},
+            "temp-pool-recovered": {"status": "ok", "code": 200, "at": now_str},
         },
     }
 
@@ -1190,3 +1192,260 @@ def test_active_throttled_exhausted_alone_do_not_satisfy_live_response_proof(
         p = wr.temp_pool_read(entry, now=NOW)
         assert p.free is None
         assert p.reason == "missing_proof"
+
+
+def test_models_fixture_with_nonzero_price_not_admitted_by_router_or_panel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("secret-token", encoding="utf-8")
+
+    pool = {
+        "name": "pool-zero-claim",
+        "provider": "TestProvider",
+        "model": "model/x:free",
+        "key_file": str(key_file),
+        "free_list": "openai_models",
+        "base_url": "https://api.test.invalid/v1",
+        "index_score": 40,
+        "coding_index": 45,
+        "rate_limits": "free",
+        "data_policy": "public",
+        "pricing": {"prompt": 0, "completion": 0},  # pool claims price 0
+    }
+    pools_file = tmp_path / "temp-pools.json"
+    pools_file.write_text(json.dumps({
+        "reference": "luna",
+        "scores": {"luna": 28},
+        "coding_reference": "luna",
+        "coding_scores": {"luna": 35},
+        "pools": [pool],
+    }), encoding="utf-8")
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
+
+    # /models fixture returns x:free with published nonzero price
+    def fake_opener(url: str, headers: dict[str, str], *args: Any) -> Any:
+        if url.endswith("/models"):
+            return {
+                "data": [
+                    {
+                        "id": "model/x:free",
+                        "pricing": {"prompt": "0.002", "completion": "0.002"},
+                    }
+                ]
+            }
+        return {"choices": [{"message": {"content": "OK"}}]}
+
+    entries = wr.load_temp_pools(pools_file)
+    p = wr.temp_pool_read(entries[0], now=NOW, opener=fake_opener)
+    # Not admitted by router
+    assert p.free is None
+    assert p.reason in ("not_listed", "nonzero_price")
+
+    # Cache carries published pricing under the source entry
+    cache = json.loads((tmp_path / "temp-pool-lists.json").read_text(encoding="utf-8"))
+    source_entry = cache["sources"]["https://api.test.invalid/v1"]
+    assert "model/x:free" not in source_entry["ids"]
+    assert source_entry["pricing"]["model/x:free"] == {"prompt": "0.002", "completion": "0.002"}
+
+    # Not admitted by quota panel
+    assert pq.read_free_models(tmp_path, now=NOW) == []
+
+
+def test_live_status_alone_rejected_cached_fresh_200_accepted_and_errors_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("secret-token", encoding="utf-8")
+    now_str = NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+    stale_str = (NOW - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def make_pool(name: str, model_id: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "name": name,
+            "provider": "TestProvider",
+            "model": model_id,
+            "key_file": str(key_file),
+            "free_list": "openai_models",
+            "base_url": "https://api.test.invalid/v1",
+            "index_score": 40,
+            "coding_index": 45,
+            "rate_limits": "free",
+            "data_policy": "public",
+            **kwargs,
+        }
+
+    pools = [
+        make_pool("pool-claim-only", "model/claim:free", live_status="ok", live_ok_at=now_str),
+        make_pool("pool-fresh-200", "model/fresh200:free"),
+        make_pool("pool-404", "model/err404:free"),
+        make_pool("pool-402", "model/err402:free"),
+        make_pool("pool-timeout", "model/timeout:free"),
+        make_pool("pool-stale", "model/stale:free"),
+    ]
+
+    lists_doc = {
+        "sources": {
+            "https://api.test.invalid/v1": {
+                "ids": [p["model"] for p in pools],
+                "read_at": now_str,
+            }
+        },
+        "probes": {
+            # Note: pool-claim-only has NO probe in lists_doc
+            "model/fresh200:free": {"status": "ok", "code": 200, "at": now_str},
+            "model/err404:free": {"status": "404", "code": 404, "at": now_str},
+            "model/err402:free": {"status": "402", "code": 402, "at": now_str},
+            "model/timeout:free": {"status": "timeout", "code": 408, "at": now_str},
+            "model/stale:free": {"status": "ok", "code": 200, "at": stale_str},
+        },
+    }
+
+    pools_file, _ = _setup_free_pools_fixture(tmp_path, pools, lists_doc)
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
+
+    # Panel check: ONLY fresh 200 is admitted
+    admitted = pq.read_free_models(tmp_path, now=NOW)
+    assert len(admitted) == 1
+    assert admitted[0]["id"] == "pool-fresh-200"
+
+    # Router checks:
+    entries = wr.load_temp_pools(pools_file)
+    assert len(entries) == 6
+
+    # 1. Pool-entry live_status alone is rejected
+    p_claim = wr.temp_pool_read(entries[0], now=NOW)
+    assert p_claim.free is None and p_claim.reason == "missing_proof"
+
+    # 2. Cached fresh 200 probe is accepted
+    p_fresh = wr.temp_pool_read(entries[1], now=NOW)
+    assert p_fresh.free == 1.0 and p_fresh.reason is None
+
+    # 3. 404 probe rejects
+    p_404 = wr.temp_pool_read(entries[2], now=NOW)
+    assert p_404.free is None and p_404.reason == "probe_404"
+
+    # 4. 402 probe rejects
+    p_402 = wr.temp_pool_read(entries[3], now=NOW)
+    assert p_402.free is None and p_402.reason == "payment_required"
+
+    # 5. timeout probe rejects
+    p_timeout = wr.temp_pool_read(entries[4], now=NOW)
+    assert p_timeout.free is None and p_timeout.reason == "timeout"
+
+    # 6. stale probe rejects
+    p_stale = wr.temp_pool_read(entries[5], now=NOW)
+    assert p_stale.free is None and p_stale.reason == "stale_proof"
+
+
+def test_bounded_probe_producer_behavior_on_refresh(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    key_file = tmp_path / "key.txt"
+    key_file.write_text("secret-token", encoding="utf-8")
+
+    pool = {
+        "name": "pool-probe-test",
+        "provider": "TestProvider",
+        "model": "model/probed:free",
+        "key_file": str(key_file),
+        "free_list": "openai_models",
+        "base_url": "https://api.test.invalid/v1",
+        "index_score": 40,
+        "coding_index": 45,
+        "rate_limits": "free",
+        "data_policy": "public",
+    }
+    pools_file = tmp_path / "temp-pools.json"
+    pools_file.write_text(json.dumps({
+        "reference": "luna",
+        "scores": {"luna": 28},
+        "coding_reference": "luna",
+        "coding_scores": {"luna": 35},
+        "pools": [pool],
+    }), encoding="utf-8")
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
+
+    calls: list[dict[str, Any]] = []
+
+    def mock_prober(entry: Any, model_id: str, url: str, headers: dict[str, str], payload: dict[str, Any], timeout: float) -> Any:
+        calls.append({
+            "model_id": model_id,
+            "url": url,
+            "headers": headers,
+            "payload": payload,
+        })
+        return {"choices": [{"message": {"content": "OK"}}]}
+
+    def mock_opener(url: str, headers: dict[str, str], *args: Any) -> Any:
+        assert url.endswith("/models")
+        return {"data": [{"id": "model/probed:free"}]}
+
+    entries = wr.load_temp_pools(pools_file)
+    p = wr.temp_pool_read(entries[0], now=NOW, opener=mock_opener, prober=mock_prober)
+    assert p.free == 1.0
+
+    # Probe details verified
+    assert len(calls) == 1  # bounded: exactly once per refresh
+    call = calls[0]
+    assert call["model_id"] == "model/probed:free"
+    assert call["url"] == "https://api.test.invalid/v1/chat/completions"
+    assert call["headers"]["Authorization"] == "Bearer secret-token"
+    assert call["payload"] == {
+        "model": "model/probed:free",
+        "messages": [{"role": "user", "content": "Reply with OK."}],
+        "max_tokens": 8,
+    }
+
+    # Lists cache contains probe
+    cache = json.loads((tmp_path / "temp-pool-lists.json").read_text(encoding="utf-8"))
+    probe = cache["probes"]["model/probed:free"]
+    assert probe["status"] == "ok"
+    assert probe["code"] == 200
+    assert probe["at"] == NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_pool_without_free_list_not_shown_even_if_free_source_lists_model_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    now_str = NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Pool without free_list
+    pool = {
+        "name": "pool-no-free-list",
+        "provider": "TestProvider",
+        "model": "model/nofreelist:free",
+        "base_url": "https://api.test.invalid/v1",
+        "index_score": 40,
+        "coding_index": 45,
+        "rate_limits": "free",
+        "data_policy": "public",
+        # NO free_list key
+    }
+
+    # Lists doc has a generic "free" source and provider listing model/nofreelist:free
+    lists_doc = {
+        "sources": {
+            "free": {
+                "ids": ["model/nofreelist:free"],
+                "read_at": now_str,
+            },
+            "TestProvider": {
+                "ids": ["model/nofreelist:free"],
+                "read_at": now_str,
+            },
+            "https://api.test.invalid/v1": {
+                "ids": ["model/nofreelist:free"],
+                "read_at": now_str,
+            },
+        },
+        "probes": {
+            "model/nofreelist:free": {"status": "ok", "code": 200, "at": now_str},
+        },
+    }
+
+    pools_file, _ = _setup_free_pools_fixture(tmp_path, [pool], lists_doc)
+    monkeypatch.setenv("TEMP_POOLS_FILE", str(pools_file))
+
+    # Must be excluded (fail closed)
+    assert pq.read_free_models(tmp_path, now=NOW) == []

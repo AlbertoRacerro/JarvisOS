@@ -374,9 +374,188 @@ def list_source(entry: dict[str, Any]) -> str:
     return entry["base_url"] if entry["free_list"] == "openai_models" else entry["free_list"]
 
 
-def fetch_free_ids(entry: dict[str, Any], opener: Callable[..., Any] | None = None) -> list[str]:
-    """Free model ids its source lists now. No prompt and no repository content; only `/models` of an
-    OpenAI-compatible base URL carries the key. Raises on any failure."""
+def _is_zero(val: Any) -> bool:
+    if isinstance(val, bool) or val is None:
+        return False
+    try:
+        return float(val) == 0.0
+    except (ValueError, TypeError):
+        return False
+
+
+_default_prober: Callable[..., Any] | None = None
+
+
+def pool_base_url(entry: dict[str, Any]) -> str | None:
+    if entry.get("base_url"):
+        return str(entry["base_url"]).rstrip("/")
+    if entry.get("free_list") == "opencode_zen":
+        return "https://opencode.ai/zen/v1"
+    if entry.get("free_list") == "openrouter_public":
+        return "https://openrouter.ai/api/v1"
+    return None
+
+
+def _http_post_json(url: str, headers: dict[str, str], payload: dict[str, Any], timeout: float) -> tuple[int, Any]:
+    if not url.startswith("https://"):
+        raise ValueError("probe URL must be https")
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    with opener.open(req, timeout=timeout) as response:
+        code = getattr(response, "status", 200) or 200
+        return code, json.loads(response.read().decode("utf-8"))
+
+
+def probe_pool_model(
+    entry: dict[str, Any],
+    model_id: str,
+    now: datetime,
+    prober: Callable[..., Any] | None = None,
+    opener: Callable[..., Any] | None = None,
+    timeout: float = LIST_TIMEOUT,
+) -> dict[str, Any]:
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    base_url = pool_base_url(entry)
+    if not base_url:
+        return {"status": "error", "code": None, "at": now_str}
+    key = _read_key(entry) if entry.get("key_file") is not None else None
+    if entry.get("free_list") == "openai_models" and key is None:
+        return {"status": "error", "code": None, "at": now_str}
+
+    url = f"{base_url}/chat/completions"
+    headers: dict[str, str] = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "jarvisos-worker-routing/1",
+    }
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    payload = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": "Reply with OK."}],
+        "max_tokens": 8,
+    }
+
+    custom_prober = prober or getattr(sys.modules.get(__name__), "_default_prober", None)
+    if custom_prober is not None:
+        try:
+            try:
+                res = custom_prober(entry, model_id, url, headers, payload, timeout)
+            except TypeError:
+                res = custom_prober(url, headers, payload, timeout)
+            if isinstance(res, dict) and "status" in res:
+                if "at" not in res:
+                    res["at"] = now_str
+                return res
+            if isinstance(res, dict) and "choices" in res:
+                choices = res.get("choices")
+                msg = choices[0].get("message", {}).get("content", "") if choices and isinstance(choices, list) and isinstance(choices[0], dict) else ""
+                if str(msg).strip():
+                    return {"status": "ok", "code": 200, "at": now_str}
+                return {"status": "error", "code": 200, "at": now_str}
+            if isinstance(res, tuple) and len(res) == 2:
+                code, data = res
+                if code == 200 and isinstance(data, dict):
+                    choices = data.get("choices")
+                    msg = choices[0].get("message", {}).get("content", "") if choices and isinstance(choices, list) and isinstance(choices[0], dict) else ""
+                    if str(msg).strip():
+                        return {"status": "ok", "code": 200, "at": now_str}
+                    return {"status": "error", "code": 200, "at": now_str}
+                if code == 404:
+                    return {"status": "404", "code": 404, "at": now_str}
+                if code == 402:
+                    return {"status": "402", "code": 402, "at": now_str}
+                if code in (408, 504):
+                    return {"status": "timeout", "code": code, "at": now_str}
+                return {"status": "error", "code": code, "at": now_str}
+            return {"status": "error", "code": 200, "at": now_str}
+        except urllib.error.HTTPError as err:
+            if err.code == 404:
+                return {"status": "404", "code": 404, "at": now_str}
+            if err.code == 402:
+                return {"status": "402", "code": 402, "at": now_str}
+            if err.code in (408, 504):
+                return {"status": "timeout", "code": err.code, "at": now_str}
+            return {"status": "error", "code": err.code, "at": now_str}
+        except TimeoutError:
+            return {"status": "timeout", "code": 408, "at": now_str}
+        except Exception:
+            return {"status": "error", "code": None, "at": now_str}
+
+    if opener is not None:
+        try:
+            try:
+                raw_resp = opener(url, headers, payload, timeout)
+            except TypeError:
+                raw_resp = opener(url, headers, timeout)
+            if isinstance(raw_resp, dict) and "choices" in raw_resp:
+                choices = raw_resp.get("choices")
+                msg = choices[0].get("message", {}).get("content", "") if choices and isinstance(choices, list) and isinstance(choices[0], dict) else ""
+                if str(msg).strip():
+                    return {"status": "ok", "code": 200, "at": now_str}
+                return {"status": "error", "code": 200, "at": now_str}
+            if isinstance(raw_resp, dict) and "status" in raw_resp:
+                if "at" not in raw_resp:
+                    raw_resp["at"] = now_str
+                return raw_resp
+            return {"status": "error", "code": 200, "at": now_str}
+        except urllib.error.HTTPError as err:
+            if err.code == 404:
+                return {"status": "404", "code": 404, "at": now_str}
+            if err.code == 402:
+                return {"status": "402", "code": 402, "at": now_str}
+            if err.code in (408, 504):
+                return {"status": "timeout", "code": err.code, "at": now_str}
+            return {"status": "error", "code": err.code, "at": now_str}
+        except TimeoutError:
+            return {"status": "timeout", "code": 408, "at": now_str}
+        except Exception:
+            return {"status": "error", "code": None, "at": now_str}
+
+    try:
+        code, resp = _http_post_json(url, headers, payload, timeout)
+        if code == 200 and isinstance(resp, dict):
+            choices = resp.get("choices")
+            msg = choices[0].get("message", {}).get("content", "") if choices and isinstance(choices, list) and isinstance(choices[0], dict) else ""
+            if str(msg).strip():
+                return {"status": "ok", "code": 200, "at": now_str}
+            return {"status": "error", "code": 200, "at": now_str}
+        return {"status": "error", "code": code, "at": now_str}
+    except urllib.error.HTTPError as err:
+        if err.code == 404:
+            return {"status": "404", "code": 404, "at": now_str}
+        if err.code == 402:
+            return {"status": "402", "code": 402, "at": now_str}
+        if err.code in (408, 504):
+            return {"status": "timeout", "code": err.code, "at": now_str}
+        return {"status": "error", "code": err.code, "at": now_str}
+    except TimeoutError:
+        return {"status": "timeout", "code": 408, "at": now_str}
+    except urllib.error.URLError as err:
+        if isinstance(getattr(err, "reason", None), TimeoutError):
+            return {"status": "timeout", "code": 408, "at": now_str}
+        return {"status": "error", "code": None, "at": now_str}
+    except Exception:
+        return {"status": "error", "code": None, "at": now_str}
+
+
+class FreeIds(list[str]):
+    """List of free model ids carrying extracted per-id pricing."""
+
+    def __init__(self, ids: list[str], pricing: dict[str, dict[str, Any]] | None = None) -> None:
+        super().__init__(ids)
+        self.pricing: dict[str, dict[str, Any]] = pricing or {}
+
+
+def fetch_free_ids(entry: dict[str, Any], opener: Callable[..., Any] | None = None) -> FreeIds:
+    """Free model ids its source lists now. When a source document publishes pricing,
+    per-id pricing is extracted and ids whose published price is nonzero are never listed as free."""
     get = opener or _http_get_json
     kind = entry["free_list"]
     if kind == "openai_models":
@@ -389,9 +568,40 @@ def fetch_free_ids(entry: dict[str, Any], opener: Callable[..., Any] | None = No
     data = document.get("data") if isinstance(document, dict) else None
     if not isinstance(data, list):
         raise ValueError("no model list")
-    ids = [item.get("id") for item in data if isinstance(item, dict) and isinstance(item.get("id"), str)]
+
     suffix = "-free" if kind == "opencode_zen" else ":free"
-    return sorted(i for i in ids if i.endswith(suffix))
+    free_ids: list[str] = []
+    pricing_map: dict[str, dict[str, Any]] = {}
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        mid = item.get("id")
+        if not isinstance(mid, str) or not mid:
+            continue
+
+        p_obj = item.get("pricing") if isinstance(item.get("pricing"), dict) else (
+            item.get("prices") if isinstance(item.get("prices"), dict) else None
+        )
+        prompt_p = None
+        comp_p = None
+        if p_obj is not None:
+            prompt_p = p_obj.get("prompt") if "prompt" in p_obj else p_obj.get("prompt_price")
+            comp_p = p_obj.get("completion") if "completion" in p_obj else p_obj.get("completion_price")
+        elif "prompt_price" in item or "completion_price" in item:
+            prompt_p = item.get("prompt_price")
+            comp_p = item.get("completion_price")
+
+        is_nonzero = False
+        if prompt_p is not None or comp_p is not None:
+            pricing_map[mid] = {"prompt": prompt_p, "completion": comp_p}
+            if (prompt_p is not None and not _is_zero(prompt_p)) or (comp_p is not None and not _is_zero(comp_p)):
+                is_nonzero = True
+
+        if mid.endswith(suffix) and not is_nonzero:
+            free_ids.append(mid)
+
+    return FreeIds(sorted(free_ids), pricing_map)
 
 
 def _load_lists() -> dict[str, Any]:
@@ -414,7 +624,8 @@ def _write_lists(document: dict[str, Any]) -> None:
         pass
 
 
-def listed_ids(entry: dict[str, Any], now: datetime, opener: Callable[..., Any] | None = None) -> list[str] | None:
+def listed_ids(entry: dict[str, Any], now: datetime, opener: Callable[..., Any] | None = None,
+               prober: Callable[..., Any] | None = None) -> list[str] | None:
     """The source's free ids from a cache younger than LIST_TTL, refreshed when older; None when unreadable."""
     source = list_source(entry)
     with _lists_lock:
@@ -424,12 +635,53 @@ def listed_ids(entry: dict[str, Any], now: datetime, opener: Callable[..., Any] 
         if read_at is not None and timedelta(0) <= now - read_at < LIST_TTL and isinstance(cached.get("ids"), list):
             return [i for i in cached["ids"] if isinstance(i, str)]
         try:
-            ids = fetch_free_ids(entry, opener)
+            fetched = fetch_free_ids(entry, opener)
+            ids = list(fetched)
+            pricing = getattr(fetched, "pricing", {})
         except Exception:  # noqa: BLE001 - an unreadable list only takes its pools out of routing
             return None
         sources = document.get("sources") if isinstance(document.get("sources"), dict) else {}
-        sources[source] = {"ids": ids, "read_at": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
+        sources[source] = {"ids": ids, "pricing": pricing, "read_at": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
         document["sources"] = sources
+
+        probes = document.get("probes") if isinstance(document.get("probes"), dict) else {}
+        pools_to_probe: list[dict[str, Any]] = [entry]
+        try:
+            for p in load_temp_pools():
+                if list_source(p) == source and p.get("model") not in [cp.get("model") for cp in pools_to_probe]:
+                    pools_to_probe.append(p)
+        except Exception:
+            pass
+
+        probed_models: set[str] = set()
+        for pool_entry in pools_to_probe:
+            mid = pool_entry.get("model")
+            if not isinstance(mid, str) or not mid:
+                continue
+            if mid not in ids:
+                continue
+            if not (mid.endswith(":free") or mid.endswith("-free")):
+                continue
+            pr = pricing.get(mid)
+            if pr is not None:
+                p_prompt = pr.get("prompt")
+                p_comp = pr.get("completion")
+                if not _is_zero(p_prompt) or not _is_zero(p_comp):
+                    continue
+            pool_pr = pool_entry.get("pricing")
+            if isinstance(pool_pr, dict):
+                p_prompt = pool_pr.get("prompt")
+                p_comp = pool_pr.get("completion")
+                if not _is_zero(p_prompt) or not _is_zero(p_comp):
+                    continue
+            if mid in probed_models:
+                continue
+            probed_models.add(mid)
+
+            probe_result = probe_pool_model(pool_entry, mid, now=now, prober=prober, opener=opener)
+            probes[mid] = probe_result
+
+        document["probes"] = probes
         _write_lists(document)
         return ids
 
@@ -450,7 +702,8 @@ def set_bridge_state(name: str, state: str, now: datetime | None = None) -> None
 
 
 def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
-                   opener: Callable[..., Any] | None = None) -> Pool:
+                   opener: Callable[..., Any] | None = None,
+                   prober: Callable[..., Any] | None = None) -> Pool:
     moment = now or datetime.now(UTC)
     name = f"temp-{entry['name']}"
     if entry.get("invalid"):
@@ -467,7 +720,7 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
             exists = False
         if not exists:
             return unreadable(name, "no_key")
-    ids = listed_ids(entry, moment, opener)
+    ids = listed_ids(entry, moment, opener=opener, prober=prober)
     if ids is None:
         return unreadable(name, "list_unreadable")
     if entry["model"] not in ids:
@@ -479,14 +732,6 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
 
     # Zero price check: source's published pricing is authoritative when present.
     # If the source publishes a nonzero price, reject immediately regardless of any local claim.
-    def _is_zero(val: Any) -> bool:
-        if isinstance(val, bool) or val is None:
-            return False
-        try:
-            return float(val) == 0.0
-        except (ValueError, TypeError):
-            return False
-
     source_pricing = None
     for pricing_dict in (source_data.get("pricing"), source_data.get("prices"), doc.get("pricing"), doc.get("prices")):
         if isinstance(pricing_dict, dict) and entry["model"] in pricing_dict:
@@ -512,12 +757,6 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
 
     # Response proof check
     candidates: list[dict[str, Any]] = []
-    if isinstance(entry.get("live_probe"), dict):
-        candidates.append(entry["live_probe"])
-    if isinstance(entry.get("probe"), dict):
-        candidates.append(entry["probe"])
-    if entry.get("live_status") and entry.get("live_ok_at"):
-        candidates.append({"status": entry["live_status"], "at": entry["live_ok_at"]})
     for d in (doc.get("probes"), doc.get("live_probes"), source_data.get("probes")):
         if isinstance(d, dict):
             for k in (entry["model"], entry["name"], name):
@@ -530,9 +769,9 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
 
     # If ANY fresh/recent candidate proof reports 404 or 402, fail closed immediately.
     for proof in candidates:
-        p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
-        p_code = proof.get("status_code") or proof.get("code")
-        ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+        p_status = str(proof.get("status") or proof.get("live_status") or proof.get("state") or "").lower()
+        p_code = proof.get("code") or proof.get("status_code")
+        ts_raw = proof.get("at") or proof.get("live_ok_at") or proof.get("timestamp") or proof.get("read_at")
         proof_dt = _parse_iso_zone(ts_raw)
         is_fresh = proof_dt is not None and (-60 <= (moment - proof_dt).total_seconds() <= 3600)
         if (p_code in (404, "404") or p_status in ("404", "not_found")) and (proof_dt is None or is_fresh):
@@ -547,8 +786,8 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
     has_error_proof: str | None = None
 
     for proof in candidates:
-        p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
-        p_code = proof.get("status_code") or proof.get("code")
+        p_status = str(proof.get("status") or proof.get("live_status") or proof.get("state") or "").lower()
+        p_code = proof.get("code") or proof.get("status_code")
         if p_code in (500, 502, 503, 504) or p_status in ("error", "timeout", "failed", "unusable"):
             has_error_proof = p_status or "unusable"
             continue
@@ -557,10 +796,12 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
         # Reject active, throttled, exhausted as live-response proof
         if p_status in ("active", "throttled", "exhausted"):
             continue
-        is_ok = (p_code in (200, "200")) or (p_status in ("ok", "success", "succeeded"))
+        is_ok = (p_code in (200, "200") and p_status not in ("error", "failed", "timeout", "unusable")) or (
+            p_status in ("ok", "success", "succeeded") and (p_code in (200, "200") or p_code is None)
+        )
         if not is_ok:
             continue
-        ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+        ts_raw = proof.get("at") or proof.get("live_ok_at") or proof.get("timestamp") or proof.get("read_at")
         proof_dt = _parse_iso_zone(ts_raw)
         if proof_dt is None or not (-60 <= (moment - proof_dt).total_seconds() <= 3600):
             has_stale_ok = True
@@ -578,10 +819,10 @@ def temp_pool_read(entry: dict[str, Any], now: datetime | None = None,
 
     # Check if any error proof beats newest_ok_dt
     for proof in candidates:
-        p_status = str(proof.get("live_status") or proof.get("status") or proof.get("state") or "").lower()
-        p_code = proof.get("status_code") or proof.get("code")
+        p_status = str(proof.get("status") or proof.get("live_status") or proof.get("state") or "").lower()
+        p_code = proof.get("code") or proof.get("status_code")
         if p_code in (500, 502, 503, 504) or p_status in ("error", "timeout", "failed", "unusable"):
-            ts_raw = proof.get("live_ok_at") or proof.get("at") or proof.get("timestamp") or proof.get("read_at")
+            ts_raw = proof.get("at") or proof.get("live_ok_at") or proof.get("timestamp") or proof.get("read_at")
             proof_dt = _parse_iso_zone(ts_raw)
             if proof_dt is None or newest_ok_dt is None or proof_dt >= newest_ok_dt:
                 err_reason = p_status if p_status in ("timeout", "error", "unusable") else "unusable"

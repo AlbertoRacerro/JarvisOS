@@ -764,21 +764,14 @@ def _verify_free_pool_liveness_and_quality(
     candidate_keys: list[str] = []
     fl = raw.get("free_list")
     bu = raw.get("base_url")
-    if fl == "openai_models" and bu:
+    if fl not in ("openai_models", "openrouter_public", "opencode_zen"):
+        return False
+    if fl == "openai_models":
+        if not bu:
+            return False
         candidate_keys.extend([str(bu), str(bu).rstrip("/")])
-    elif fl:
-        candidate_keys.append(str(fl))
     else:
-        src_prop = raw.get("source")
-        if src_prop:
-            candidate_keys.append(str(src_prop))
-        prov_prop = raw.get("provider")
-        if prov_prop and str(prov_prop) not in candidate_keys:
-            candidate_keys.append(str(prov_prop))
-        if bu and str(bu) not in candidate_keys:
-            candidate_keys.extend([str(bu), str(bu).rstrip("/")])
-        if "free" not in candidate_keys:
-            candidate_keys.append("free")
+        candidate_keys.append(str(fl))
 
     matching_source: dict[str, Any] | None = None
     for k in candidate_keys:
@@ -835,12 +828,6 @@ def _verify_free_pool_liveness_and_quality(
 
     # 5. Bounded recent free-only response proof exists and is fresh
     candidates: list[dict[str, Any]] = []
-    if isinstance(raw.get("live_probe"), dict):
-        candidates.append(raw["live_probe"])
-    if isinstance(raw.get("probe"), dict):
-        candidates.append(raw["probe"])
-    if raw.get("live_status") and raw.get("live_ok_at"):
-        candidates.append({"status": raw["live_status"], "at": raw["live_ok_at"]})
     for d in (lists_doc.get("probes"), lists_doc.get("live_probes"), matching_source.get("probes")):
         if isinstance(d, dict):
             for k in (model_id, pool_name, f"temp-{pool_name}"):

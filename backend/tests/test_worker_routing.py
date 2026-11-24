@@ -2003,12 +2003,23 @@ def test_temporary_pool_liveness_follows_the_free_list(monkeypatch: pytest.Monke
 
     def opener(url: str, headers: dict[str, str], timeout: float) -> object:
         seen.append((url, headers))
-        return {"data": [{"id": "a:free"}, {"id": "a"}, {"id": "paid-model"}]}
+        if url.endswith("/models"):
+            return {"data": [{"id": "a:free"}, {"id": "a"}, {"id": "paid-model"}]}
+        return {"choices": [{"message": {"content": "OK"}}]}
 
     assert wr.temp_pool_read(entries[0], now, opener=opener).free == 1.0
-    assert seen == [("https://example.invalid/v1/models", {"Authorization": "Bearer secret"})]
+    assert seen == [
+        ("https://example.invalid/v1/models", {"Authorization": "Bearer secret"}),
+        ("https://example.invalid/v1/chat/completions", {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "jarvisos-worker-routing/1",
+            "Authorization": "Bearer secret",
+        }),
+    ]
     cache = json.loads((tmp_path / "temp-pool-lists.json").read_text(encoding="utf-8"))
     assert cache["sources"]["https://example.invalid/v1"]["ids"] == ["a:free"]
+    assert cache["probes"]["a:free"]["status"] == "ok"
     assert "secret" not in (tmp_path / "temp-pool-lists.json").read_text(encoding="utf-8")
     assert wr.temp_pool_read(entries[0], now + timedelta(minutes=30), opener=_refuse).free == 1.0  # cached
     key.unlink()
@@ -2038,11 +2049,17 @@ def test_temporary_pool_malformed_and_zen_entries(monkeypatch: pytest.MonkeyPatc
 
     def opener(url: str, headers: dict[str, str], timeout: float) -> object:
         seen.append(url)
-        assert headers == {}
-        return {"data": [{"id": "some-model-free"}, {"id": "some-model"}]}
+        if url.endswith("/models"):
+            assert headers == {}
+            return {"data": [{"id": "some-model-free"}, {"id": "some-model"}]}
+        assert "Authorization" not in headers
+        return {"choices": [{"message": {"content": "OK"}}]}
 
     pools = {f"temp-{e['name']}": wr.temp_pool_read(e, now, opener=opener) for e in entries}
-    assert pools["temp-zen"].free == 1.0 and seen == [wr.ZEN_MODELS_URL]
+    assert pools["temp-zen"].free == 1.0 and seen == [
+        wr.ZEN_MODELS_URL,
+        "https://opencode.ai/zen/v1/chat/completions",
+    ]
     _, skipped = wr.rank(1, pools, models=wr.temp_models([]), now=now)
     assert {s["worker"]: s["skipped"] for s in skipped} == {
         "temp-invalid#0": "invalid", "temp-invalid#2": "invalid", "temp-invalid#3": "invalid",
