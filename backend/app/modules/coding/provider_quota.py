@@ -70,12 +70,12 @@ def host_which(command: str) -> str | None:
     return shutil.which(command, path=os.pathsep.join(entries))
 
 
-def _run(env_key: str, command: str, args: list[str]) -> tuple[str | None, str | None]:
+def _run(env_key: str, command: str, args: list[str], *, env: dict[str, str] | None = None) -> tuple[str | None, str | None]:
     """The CLI's stdout, or None and a short failure code (``not_found``, ``timeout``); stderr is never kept."""
     binary = os.environ.get(env_key) or host_which(command) or command
     try:
         proc = subprocess.run([binary, *args], capture_output=True, text=True, timeout=READ_TIMEOUT_S, check=False,
-                              cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL)
+                              cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL, env=env)
     except subprocess.TimeoutExpired:
         return None, "timeout"
     except OSError:
@@ -150,49 +150,7 @@ def _resolve_claude_credentials_path() -> tuple[Path | None, bool]:
     return None, False
 
 
-def read_claude_limits(*, refresh: bool = False, opener: Any = None) -> tuple[dict[str, Any] | None, str | None]:
-    target, is_configured = _resolve_claude_credentials_path()
-    if not is_configured:
-        relay_data, error = read_relay_limits(refresh=refresh)
-        agents = relay_data.get("agents") if isinstance(relay_data, dict) else None
-        entry = next((a for a in agents if isinstance(a, dict) and a.get("agent_key") == "claude"), None) if isinstance(agents, list) else None
-        if entry is not None:
-            return entry, None
-        err = f"relay_{error}" if error in READ_ERRORS else (error or "credentials_missing")
-        return None, err
-
-    if target is None or not target.is_file():
-        return {"status": "unavailable", "reason": "credentials_missing", "windows": []}, "credentials_missing"
-
-    try:
-        raw_text = target.read_text(encoding="utf-8")
-        cred_data = json.loads(raw_text)
-    except (OSError, json.JSONDecodeError):
-        return {"status": "unavailable", "reason": "credentials_missing", "windows": []}, "credentials_missing"
-
-    if not isinstance(cred_data, dict):
-        return {"status": "unavailable", "reason": "credentials_missing", "windows": []}, "credentials_missing"
-
-    oauth = cred_data.get("claudeAiOauth")
-    if not isinstance(oauth, dict):
-        return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
-
-    token = oauth.get("accessToken")
-    if not isinstance(token, str) or not token.strip():
-        return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
-    token = token.strip()
-
-    expires_at = oauth.get("expiresAt")
-    if isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool):
-        exp_s = expires_at / 1000.0 if expires_at > 1e11 else float(expires_at)
-        if exp_s <= time.time():
-            return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
-
-    data, error = _fetch_claude_usage(token, opener=opener)
-    if error is not None or data is None:
-        err = error or "invalid_response"
-        return {"status": "unavailable", "reason": err, "windows": []}, err
-
+def _parse_claude_usage_windows(data: dict[str, Any]) -> list[dict[str, Any]]:
     windows: list[dict[str, Any]] = []
     for key, block in data.items():
         if not isinstance(block, dict):
@@ -217,12 +175,152 @@ def read_claude_limits(*, refresh: bool = False, opener: Any = None) -> tuple[di
             "resets_at": _iso(resets_at),
         })
 
+    order = {"five_hour": 0, "5h": 0, "seven_day": 1, "weekly": 1}
+    windows.sort(key=lambda w: order.get(str(w["id"]), 2))
+    return windows
+
+
+def _attempt_claude_refresh(target: Path, *, opener: Any = None, now: datetime | None = None) -> tuple[dict[str, Any] | None, str | None]:
+    """Attempt a bounded refresh through `agent-relay --json limits --refresh` with CLAUDE_CONFIG_DIR set to target's parent."""
+    config_dir = str(target.parent)
+    sub_env = os.environ.copy()
+    sub_env["CLAUDE_CONFIG_DIR"] = config_dir
+    sub_env["JARVISOS_CLAUDE_CONFIG_DIR"] = config_dir
+    binary = os.environ.get("JARVISOS_AGENT_RELAY_BIN") or host_which("agent-relay") or "agent-relay"
+    try:
+        proc = subprocess.run(
+            [binary, "--json", "limits", "--refresh"],
+            capture_output=True,
+            text=True,
+            timeout=READ_TIMEOUT_S,
+            check=False,
+            cwd=tempfile.gettempdir(),
+            stdin=subprocess.DEVNULL,
+            env=sub_env,
+        )
+        stdout = proc.stdout
+    except (subprocess.TimeoutExpired, OSError):
+        stdout = None
+
+    now_dt = now or datetime.now(UTC)
+    if stdout:
+        doc = _json_document(stdout)
+        if isinstance(doc, dict):
+            agents = doc.get("agents")
+            if isinstance(agents, list):
+                claude_entry = next((a for a in agents if isinstance(a, dict) and a.get("agent_key") == "claude"), None)
+                if claude_entry is not None and claude_entry.get("status") == "ok":
+                    raw_windows = claude_entry.get("windows")
+                    if isinstance(raw_windows, list) and len(raw_windows) > 0:
+                        as_of_raw = claude_entry.get("as_of") or claude_entry.get("timestamp")
+                        as_of_dt = _ts(as_of_raw)
+                        # Enforce freshness: reject stale relay snapshots (older than 1h / 3600s, or missing as_of)
+                        if as_of_dt is not None:
+                            age_s = (now_dt - as_of_dt).total_seconds()
+                            if -86400 <= age_s <= 3600:
+                                sanitized = {
+                                    "status": "ok",
+                                    "as_of": _iso(as_of_dt),
+                                    "windows": [
+                                        {
+                                            k: w[k] for k in ("id", "label", "used_percent", "resets_at", "status", "stale")
+                                            if k in w
+                                        } for w in raw_windows if isinstance(w, dict)
+                                    ],
+                                }
+                                for optional_field in ("source", "reason", "agent_key", "label"):
+                                    if optional_field in claude_entry:
+                                        sanitized[optional_field] = claude_entry[optional_field]
+                                return sanitized, None
+
+    # Re-read target and retry _fetch_claude_usage once if token was refreshed on disk
+    try:
+        raw_text = target.read_text(encoding="utf-8")
+        cred_data = json.loads(raw_text)
+        if isinstance(cred_data, dict):
+            oauth = cred_data.get("claudeAiOauth")
+            if isinstance(oauth, dict):
+                new_token = oauth.get("accessToken")
+                if isinstance(new_token, str) and new_token.strip():
+                    new_token = new_token.strip()
+                    expires_at = oauth.get("expiresAt")
+                    exp_s = None
+                    if isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool):
+                        exp_s = expires_at / 1000.0 if expires_at > 1e11 else float(expires_at)
+                    if exp_s is None or exp_s > time.time():
+                        data, error = _fetch_claude_usage(new_token, opener=opener)
+                        if error is None and isinstance(data, dict):
+                            windows = _parse_claude_usage_windows(data)
+                            if windows:
+                                return {"status": "ok", "as_of": _iso(now_dt), "windows": windows}, None
+    except Exception:
+        pass
+
+    return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
+
+
+def read_claude_limits(*, refresh: bool = False, opener: Any = None, now: datetime | None = None) -> tuple[dict[str, Any] | None, str | None]:
+    target, is_configured = _resolve_claude_credentials_path()
+    if not is_configured:
+        relay_data, error = read_relay_limits(refresh=refresh)
+        agents = relay_data.get("agents") if isinstance(relay_data, dict) else None
+        entry = next((a for a in agents if isinstance(a, dict) and a.get("agent_key") == "claude"), None) if isinstance(agents, list) else None
+        if entry is not None:
+            sanitized = {k: v for k, v in entry.items() if k in ("status", "windows", "as_of", "source", "reason", "agent_key", "label")}
+            return sanitized, None
+        err = f"relay_{error}" if error in READ_ERRORS else (error or "credentials_missing")
+        return None, err
+
+    if target is None or not target.is_file():
+        return {"status": "unavailable", "reason": "credentials_missing", "windows": []}, "credentials_missing"
+
+    try:
+        raw_text = target.read_text(encoding="utf-8")
+        cred_data = json.loads(raw_text)
+    except (OSError, json.JSONDecodeError):
+        return {"status": "unavailable", "reason": "credentials_missing", "windows": []}, "credentials_missing"
+
+    if not isinstance(cred_data, dict):
+        return {"status": "unavailable", "reason": "credentials_missing", "windows": []}, "credentials_missing"
+
+    oauth = cred_data.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
+
+    token = oauth.get("accessToken")
+    refresh_token = oauth.get("refreshToken")
+    has_refresh = isinstance(refresh_token, str) and bool(refresh_token.strip())
+
+    token_str = token.strip() if isinstance(token, str) else ""
+    is_expired = not bool(token_str)
+
+    expires_at = oauth.get("expiresAt")
+    if isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool):
+        exp_s = expires_at / 1000.0 if expires_at > 1e11 else float(expires_at)
+        if exp_s <= time.time():
+            is_expired = True
+
+    if is_expired:
+        if has_refresh:
+            return _attempt_claude_refresh(target, opener=opener, now=now)
+        return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
+
+    data, error = _fetch_claude_usage(token_str, opener=opener)
+    if error == "session_expired":
+        if has_refresh:
+            return _attempt_claude_refresh(target, opener=opener, now=now)
+        return {"status": "unavailable", "reason": "session_expired", "windows": []}, "session_expired"
+
+    if error is not None or data is None:
+        err = error or "invalid_response"
+        return {"status": "unavailable", "reason": err, "windows": []}, err
+
+    windows = _parse_claude_usage_windows(data)
     if not windows:
         return {"status": "unavailable", "reason": "invalid_response", "windows": []}, "invalid_response"
 
-    order = {"five_hour": 0, "5h": 0, "seven_day": 1, "weekly": 1}
-    windows.sort(key=lambda w: order.get(str(w["id"]), 2))
-    return {"status": "ok", "as_of": _iso(datetime.now(UTC)), "windows": windows}, None
+    now_dt = now or datetime.now(UTC)
+    return {"status": "ok", "as_of": _iso(now_dt), "windows": windows}, None
 
 
 def read_relay_limits(*, refresh: bool = False) -> tuple[dict[str, Any] | None, str | None]:
@@ -275,26 +373,23 @@ def read_agy_quota() -> tuple[dict[str, Any] | None, str | None]:
     return data, None if data is not None else error or "no_json"
 
 
-def read_codex_limits() -> tuple[dict[str, Any] | None, str | None]:
-    """Ask the CLI for current account limits; never create a thread, run a turn or handle credentials."""
+def _query_codex_app_server(codex_home: str | None) -> tuple[dict[str, Any] | None, str | None]:
+    """Execute codex app-server for a specific CODEX_HOME, distinguishing failure reasons without leaking secrets or paths."""
     binary = os.environ.get("JARVISOS_CODEX_BIN") or host_which("codex") or "codex"
     env = os.environ.copy()
-    codex_home = os.environ.get("JARVISOS_CODEX_HOME") or os.environ.get("CODEX_HOME")
-    if not codex_home:
-        sandbox_codex = Path.home() / ".local" / "share" / "jarvisos-sandbox" / "state" / "codex"
-        if sandbox_codex.is_dir():
-            codex_home = str(sandbox_codex)
     if codex_home:
         env["CODEX_HOME"] = codex_home
     try:
         proc = subprocess.Popen([binary, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                                stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
                                 cwd=tempfile.gettempdir(), env=env)
     except OSError:
         return None, "not_found"
-    messages: queue.Queue[dict[str, Any] | None] = queue.Queue()
 
-    def collect() -> None:
+    messages: queue.Queue[dict[str, Any] | None] = queue.Queue()
+    stderr_lines: list[str] = []
+
+    def collect_stdout() -> None:
         assert proc.stdout is not None
         try:
             for line in proc.stdout:
@@ -304,9 +399,45 @@ def read_codex_limits() -> tuple[dict[str, Any] | None, str | None]:
         finally:
             messages.put(None)
 
-    reader = threading.Thread(target=collect, daemon=True)
+    def collect_stderr() -> None:
+        assert proc.stderr is not None
+        try:
+            for line in proc.stderr:
+                stderr_lines.append(line)
+        except Exception:
+            pass
+
+    reader = threading.Thread(target=collect_stdout, daemon=True)
     reader.start()
+    stderr_reader = threading.Thread(target=collect_stderr, daemon=True)
+    stderr_reader.start()
+
     deadline = time.monotonic() + READ_TIMEOUT_S
+    detected_error: list[str] = []
+
+    def _check_stderr_auth() -> bool:
+        text = "".join(stderr_lines).lower()
+        return any(w in text for w in ("auth", "login", "unauthorized", "unauthenticated", "token", "credential"))
+
+    def _stop_proc_and_drain() -> None:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=1)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=1)
+                except Exception:
+                    pass
+        stderr_reader.join(timeout=1)
+        reader.join(timeout=1)
+
+    def _decide_error(default: str = "no_json") -> str:
+        _stop_proc_and_drain()
+        if "auth_required" in detected_error or _check_stderr_auth():
+            return "auth_required"
+        return detected_error[0] if detected_error else default
 
     def send(message: dict[str, Any]) -> None:
         assert proc.stdin is not None
@@ -319,7 +450,15 @@ def read_codex_limits() -> tuple[dict[str, Any] | None, str | None]:
             if remaining <= 0:
                 raise queue.Empty
             message = messages.get(timeout=remaining)
-            if message is None or (message.get("id") == request_id and "error" in message):
+            if message is None:
+                return None
+            if message.get("id") == request_id and "error" in message:
+                err_val = message.get("error")
+                err_str = str(err_val).lower()
+                if any(w in err_str for w in ("auth", "login", "unauthorized", "unauthenticated", "token", "credential")):
+                    detected_error.append("auth_required")
+                else:
+                    detected_error.append("no_json")
                 return None
             if message.get("id") == request_id:
                 result = message.get("result")
@@ -328,18 +467,18 @@ def read_codex_limits() -> tuple[dict[str, Any] | None, str | None]:
     try:
         send({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "jarvisos_usage", "version": "0.1.0"}}})
         if response(1) is None:
-            return None, "no_json"
+            return None, _decide_error("no_json")
         send({"method": "initialized", "params": {}})
         send({"id": 2, "method": "account/rateLimits/read", "params": {}})
         result = response(2)
         if result is None:
-            return None, "no_json"
+            return None, _decide_error("no_json")
         buckets = result.get("rateLimitsByLimitId")
         limits = buckets.get("codex") if isinstance(buckets, dict) else None
         if not isinstance(limits, dict):
             limits = result.get("rateLimits")
         if not isinstance(limits, dict):
-            return None, "no_json"
+            return None, _decide_error("no_json")
         windows = []
         for key in ("primary", "secondary"):
             window = limits.get(key)
@@ -352,24 +491,145 @@ def read_codex_limits() -> tuple[dict[str, Any] | None, str | None]:
                 resets_at = None
             windows.append({"id": key, "window_minutes": window.get("windowDurationMins"),
                             "used_percent": window.get("usedPercent"), "resets_at": resets_at})
+        if not windows:
+            return None, _decide_error("no_json")
         return {"status": "ok", "as_of": _iso(datetime.now(UTC)), "windows": windows}, None
     except queue.Empty:
-        return None, "timeout"
+        return None, _decide_error("timeout")
     except (OSError, ValueError):
-        return None, "no_json"
+        return None, _decide_error("no_json")
     finally:
         if proc.poll() is None:
-            proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait()
+                except Exception:
+                    pass
         reader.join(timeout=1)
-        if proc.stdin is not None:
-            proc.stdin.close()
-        if proc.stdout is not None:
-            proc.stdout.close()
+        stderr_reader.join(timeout=1)
+        for s in (proc.stdin, proc.stdout, proc.stderr):
+            if s is not None:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+
+
+def _find_snapshot_paths() -> list[Path]:
+    paths: list[Path] = []
+    env_file = os.environ.get("JARVISOS_WORKER_QUOTA_FILE")
+    if env_file:
+        paths.append(Path(env_file).expanduser())
+    paths.append(Path.cwd() / ".agent-relay" / "worker-quota.json")
+    repo_root = Path(__file__).resolve().parents[4]
+    paths.append(repo_root / ".agent-relay" / "worker-quota.json")
+    marker = repo_root / ".git"
+    if marker.is_file():
+        try:
+            text = marker.read_text(encoding="utf-8").strip()
+            if text.startswith("gitdir:"):
+                gitdir = (repo_root / text[len("gitdir:"):].strip()).resolve()
+                if gitdir.parent.name == "worktrees" and gitdir.parent.parent.name == ".git":
+                    paths.append(gitdir.parent.parent.parent / ".agent-relay" / "worker-quota.json")
+        except OSError:
+            pass
+    ctrl = _resolve_control_root()
+    if ctrl:
+        paths.append(ctrl / ".agent-relay" / "worker-quota.json")
+        paths.append(ctrl.parent / ".agent-relay" / "worker-quota.json")
+        paths.append(ctrl / "worker-quota.json")
+        paths.append(ctrl.parent / "worker-quota.json")
+    paths.append(Path.home() / "jarvis-control" / "work" / ".agent-relay" / "worker-quota.json")
+    paths.append(Path.home() / "jarvis-control" / "work" / "worker-quota.json")
+    paths.append(Path.home() / ".agent-relay" / "worker-quota.json")
+    return paths
+
+
+def _load_codex_snapshot() -> tuple[dict[str, Any] | None, str | None]:
+    """Read a fresh supervisor worker-quota.json Codex reading (if present and valid), preserving exact as_of."""
+    now = datetime.now(UTC)
+    override = os.environ.get("JARVISOS_WORKER_QUOTA_FILE")
+    candidate_paths = [Path(override).expanduser()] if override else _find_snapshot_paths()
+    for p in candidate_paths:
+        if not p.is_file():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict) or data.get("schema") != "worker-quota.v1":
+            continue
+        pools = data.get("pools")
+        if not isinstance(pools, dict):
+            continue
+        entry = pools.get("codex")
+        if not isinstance(entry, dict):
+            continue
+        as_of_str = entry.get("as_of") or data.get("as_of")
+        as_of_dt = _ts(as_of_str)
+        if as_of_dt is None:
+            continue
+        age_s = (now - as_of_dt).total_seconds()
+        if not (-60 <= age_s <= 1800):
+            continue
+        raw_windows = entry.get("windows")
+        if not isinstance(raw_windows, dict) or not raw_windows:
+            continue
+        windows: list[dict[str, Any]] = []
+        for key, val in raw_windows.items():
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                v_flt = float(val)
+                used_pct = round((1.0 - v_flt) * 100.0, 1) if 0 <= v_flt <= 1 else round(v_flt, 1)
+                window_mins = 300 if key in ("5h", "primary") else 10080 if key in ("weekly", "secondary") else None
+                windows.append({
+                    "id": str(key),
+                    "window_minutes": window_mins,
+                    "used_percent": used_pct,
+                    "resets_at": None,
+                })
+        if windows:
+            return {"status": "ok", "as_of": as_of_str, "windows": windows}, None
+    return None, None
+
+
+def read_codex_limits() -> tuple[dict[str, Any] | None, str | None]:
+    """Ask the CLI for current account limits; never create a thread, run a turn or handle credentials."""
+    codex_home = os.environ.get("JARVISOS_CODEX_HOME") or os.environ.get("CODEX_HOME")
+    if not codex_home:
+        sandbox_codex = Path.home() / ".local" / "share" / "jarvisos-sandbox" / "state" / "codex"
+        if sandbox_codex.is_dir():
+            codex_home = str(sandbox_codex)
+
+    result, error = _query_codex_app_server(codex_home)
+    if result is not None:
+        return result, None
+
+    # Retry once with default user ~/.codex if distinct and present
+    user_codex = Path.home() / ".codex"
+    is_distinct = True
+    if codex_home:
+        try:
+            is_distinct = Path(codex_home).resolve() != user_codex.resolve()
+        except Exception:
+            is_distinct = True
+
+    if user_codex.is_dir() and is_distinct:
+        retry_res, retry_err = _query_codex_app_server(str(user_codex))
+        if retry_res is not None:
+            return retry_res, None
+        if retry_err:
+            error = retry_err
+
+    # Fall back to reading a fresh supervisor worker-quota.json Codex reading
+    snapshot_res, _ = _load_codex_snapshot()
+    if snapshot_res is not None:
+        return snapshot_res, None
+
+    return None, error or "no_json"
 
 
 def _resolve_control_root() -> Path | None:
@@ -404,7 +664,37 @@ def _resolve_temp_pools_path(control_dir: Path | None = None) -> Path | None:
     return None
 
 
-def _load_bridge_states(pools_path: Path | None) -> dict[str, str]:
+def _resolve_reference_score(data: dict[str, Any]) -> float | None:
+    if not isinstance(data, dict):
+        return None
+    val = data.get("reference_score")
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return float(val)
+    ref_name = data.get("reference")
+    scores = data.get("scores")
+    if isinstance(ref_name, str) and isinstance(scores, dict):
+        v = scores.get(ref_name)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v)
+    return None
+
+
+def _resolve_coding_reference_score(data: dict[str, Any]) -> float | None:
+    if not isinstance(data, dict):
+        return None
+    val = data.get("reference_coding_index") or data.get("coding_reference_score")
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return float(val)
+    coding_ref = data.get("coding_reference") or data.get("reference")
+    coding_scores = data.get("coding_scores")
+    if isinstance(coding_ref, str) and isinstance(coding_scores, dict):
+        v = coding_scores.get(coding_ref)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v)
+    return None
+
+
+def _load_lists_doc(pools_path: Path | None) -> dict[str, Any]:
     if pools_path is None:
         return {}
     lists_file = pools_path.parent / "temp-pool-lists.json"
@@ -412,23 +702,196 @@ def _load_bridge_states(pools_path: Path | None) -> dict[str, str]:
         return {}
     try:
         data = json.loads(lists_file.read_text(encoding="utf-8"))
-        bridge = data.get("bridge")
-        if not isinstance(bridge, dict):
-            return {}
-        result: dict[str, str] = {}
-        for k, v in bridge.items():
-            if isinstance(k, str) and isinstance(v, dict):
-                st = v.get("state")
-                if isinstance(st, str):
-                    result[k] = st
-        return result
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def _load_bridge_states(pools_path: Path | None) -> dict[str, str]:
+    data = _load_lists_doc(pools_path)
+    bridge = data.get("bridge")
+    if not isinstance(bridge, dict):
+        return {}
+    result: dict[str, str] = {}
+    for k, v in bridge.items():
+        if isinstance(k, str) and isinstance(v, dict):
+            st = v.get("state")
+            if isinstance(st, str):
+                result[k] = st
+    return result
+
+
+def _verify_free_pool_liveness_and_quality(
+    raw: dict[str, Any],
+    pools_doc: dict[str, Any],
+    lists_doc: dict[str, Any],
+    now: datetime,
+) -> bool:
+    # 1. Dual curated indexes: index_score and coding_index must both meet reference
+    ref_score = _resolve_reference_score(pools_doc)
+    ref_coding = _resolve_coding_reference_score(pools_doc)
+    if ref_score is None or ref_coding is None:
+        return False
+
+    score = raw.get("index_score") if raw.get("index_score") is not None else raw.get("intelligence_index")
+    if score is None:
+        score = raw.get("score")
+    coding = raw.get("coding_index") if raw.get("coding_index") is not None else raw.get("coding_score")
+    if score is None or coding is None:
+        return False
+    if isinstance(score, bool) or isinstance(coding, bool):
+        return False
+    if not isinstance(score, (int, float)) or not isinstance(coding, (int, float)):
+        return False
+    if score < ref_score or coding < ref_coding:
+        return False
+
+    # 2. Expiry check: future expires_at is never proof, but expired is immediately disqualified
+    exp = _ts(raw.get("expires_at"))
+    if exp is not None and exp <= now:
+        return False
+
+    # 3. Source free-list check: model ID must be present in a fresh source list (read_at < 3600s)
+    model_id = str(raw.get("model_id") or raw.get("model") or "")
+    if not model_id:
+        return False
+    pool_name = str(raw.get("name") or raw.get("id") or "")
+
+    sources = lists_doc.get("sources")
+    if not isinstance(sources, dict) or not sources:
+        return False
+
+    candidate_keys: list[str] = []
+    fl = raw.get("free_list")
+    bu = raw.get("base_url")
+    if fl not in ("openai_models", "openrouter_public", "opencode_zen"):
+        return False
+    if fl == "openai_models":
+        if not bu:
+            return False
+        candidate_keys.extend([str(bu), str(bu).rstrip("/")])
+    else:
+        candidate_keys.append(str(fl))
+
+    matching_source: dict[str, Any] | None = None
+    for k in candidate_keys:
+        if k in sources and isinstance(sources[k], dict):
+            matching_source = sources[k]
+            break
+
+    if matching_source is None:
+        return False
+
+    source_ids = matching_source.get("ids")
+    if not isinstance(source_ids, list) or model_id not in source_ids:
+        return False
+
+    src_read_at = _ts(matching_source.get("read_at"))
+    if src_read_at is None:
+        return False
+    if not (-60 <= (now - src_read_at).total_seconds() <= 3600):
+        return False
+
+    def _is_zero(val: Any) -> bool:
+        if isinstance(val, bool) or val is None:
+            return False
+        try:
+            return float(val) == 0.0
+        except (ValueError, TypeError):
+            return False
+
+    # 4. Zero price check: must require sources[<source>]["pricing"][<id>] with both prices zero.
+    # Absent pricing for the id -> exclude (fail closed).
+    source_pricing = None
+    for pricing_dict in (matching_source.get("pricing"), matching_source.get("prices"), lists_doc.get("pricing"), lists_doc.get("prices")):
+        if isinstance(pricing_dict, dict) and model_id in pricing_dict:
+            source_pricing = pricing_dict[model_id]
+            break
+
+    if source_pricing is None or not isinstance(source_pricing, dict):
+        return False
+    p = source_pricing.get("prompt") if "prompt" in source_pricing else source_pricing.get("prompt_price")
+    c = source_pricing.get("completion") if "completion" in source_pricing else source_pricing.get("completion_price")
+    if not _is_zero(p) or not _is_zero(c):
+        return False
+
+    # Also check local pool pricing claim if present
+    pool_pricing = raw.get("pricing")
+    if pool_pricing is not None:
+        if not isinstance(pool_pricing, dict):
+            return False
+        p = pool_pricing.get("prompt") if "prompt" in pool_pricing else pool_pricing.get("prompt_price")
+        c = pool_pricing.get("completion") if "completion" in pool_pricing else pool_pricing.get("completion_price")
+        if not _is_zero(p) or not _is_zero(c):
+            return False
+
+    # 5. Bounded recent free-only response proof exists and is fresh: only the producer's probes record is accepted
+    candidates: list[dict[str, Any]] = []
+    probes_map = lists_doc.get("probes")
+    if isinstance(probes_map, dict):
+        for k in (model_id, pool_name, f"temp-{pool_name}"):
+            val = probes_map.get(k)
+            if isinstance(val, dict):
+                candidates.append(val)
+
+    if not candidates:
+        return False
+
+    # Fail closed immediately if ANY candidate proof reports 404 or 402 with fresh or missing timestamp
+    for proof in candidates:
+        p_status = str(proof.get("status") or "").lower()
+        p_code = proof.get("code")
+        ts_raw = proof.get("at")
+        proof_dt = _ts(ts_raw)
+        is_fresh = proof_dt is not None and (-60 <= (now - proof_dt).total_seconds() <= 3600)
+        if (p_code in (404, "404") or p_status in ("404", "not_found")) and (proof_dt is None or is_fresh):
+            return False
+        if (p_code in (402, "402") or p_status in ("402", "payment_required", "payment_response")) and (proof_dt is None or is_fresh):
+            return False
+
+    # Find the most recent fresh OK proof
+    newest_ok_dt: datetime | None = None
+    has_fresh_ok = False
+    for proof in candidates:
+        p_status = str(proof.get("status") or "").lower()
+        p_code = proof.get("code")
+        if p_code in (404, 402, 500, 502, 503, 504) or p_status in (
+            "404", "not_found", "402", "payment_required", "payment_response", "error", "timeout", "failed", "unusable"
+        ):
+            continue
+        # Reject active, throttled, exhausted as live-response proof
+        if p_status in ("active", "throttled", "exhausted"):
+            continue
+        is_ok = p_code in (200, "200") and proof.get("answered") is True and p_status in ("ok", "success", "succeeded")
+        if not is_ok:
+            continue
+        ts_raw = proof.get("at")
+        proof_dt = _ts(ts_raw)
+        if proof_dt is not None and (-60 <= (now - proof_dt).total_seconds() <= 3600):
+            has_fresh_ok = True
+            if newest_ok_dt is None or proof_dt > newest_ok_dt:
+                newest_ok_dt = proof_dt
+
+    if not has_fresh_ok:
+        return False
+
+    # Check if any error/unusable proof beats the newest OK proof
+    for proof in candidates:
+        p_status = str(proof.get("status") or "").lower()
+        p_code = proof.get("code")
+        if p_code in (500, 502, 503, 504) or p_status in ("error", "timeout", "failed", "unusable"):
+            ts_raw = proof.get("at")
+            proof_dt = _ts(ts_raw)
+            if proof_dt is None or newest_ok_dt is None or proof_dt >= newest_ok_dt:
+                return False
+
+    return True
 
 
 def normalize_free_model(
     raw: Any,
     reference_score: float | None = None,
+    reference_coding_index: float | None = None,
     bridge_states: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
@@ -462,8 +925,18 @@ def normalize_free_model(
     if isinstance(score, (int, float)) and not isinstance(score, bool):
         intelligence_index = int(round(float(score)))
 
+    coding_val = raw.get("coding_index") if raw.get("coding_index") is not None else raw.get("coding_score")
+    coding_index: int | None = None
+    if isinstance(coding_val, (int, float)) and not isinstance(coding_val, bool):
+        coding_index = int(round(float(coding_val)))
+
     bridge = bridge_states or {}
-    bridge_st = bridge.get(pool_id) or bridge.get(str(raw_id))
+    bridge_st = (
+        bridge.get(pool_id)
+        or bridge.get(str(raw_id))
+        or bridge.get(f"temp-{pool_id}")
+        or bridge.get(f"temp-{raw_id}")
+    )
     raw_status = str(raw.get("status") or "").lower()
 
     rem = raw.get("remaining_percent")
@@ -501,8 +974,9 @@ def normalize_free_model(
     is_unqualified = (
         raw.get("unqualified") is True
         or raw_status == "unqualified"
-        or raw.get("admission") in ("below_index", "unindexed", "no_reference")
+        or raw.get("admission") in ("below_index", "below_coding_index", "unindexed", "no_reference")
         or (reference_score is not None and intelligence_index is not None and intelligence_index < reference_score)
+        or (reference_coding_index is not None and coding_index is not None and coding_index < reference_coding_index)
     )
 
     if is_exhausted:
@@ -516,7 +990,7 @@ def normalize_free_model(
     else:
         status = "active"
 
-    return {
+    res = {
         "id": pool_id,
         "label": label,
         "source": source,
@@ -527,9 +1001,13 @@ def normalize_free_model(
         "remaining_percent": remaining_percent,
         "exhausted": bool(is_exhausted or status == "exhausted"),
     }
+    if coding_index is not None:
+        res["coding_index"] = coding_index
+    return res
 
 
-def read_free_models(control_dir: Path | None = None) -> list[dict[str, Any]]:
+def read_free_models(control_dir: Path | None = None, now: datetime | None = None) -> list[dict[str, Any]]:
+    moment = now or datetime.now(UTC)
     path = _resolve_temp_pools_path(control_dir)
     if path is None or not path.is_file():
         return []
@@ -542,19 +1020,20 @@ def read_free_models(control_dir: Path | None = None) -> list[dict[str, Any]]:
     if not isinstance(pools, list):
         return []
 
-    ref_score = None
-    if isinstance(data, dict):
-        ref_name = data.get("reference")
-        scores = data.get("scores")
-        if isinstance(ref_name, str) and isinstance(scores, dict):
-            val = scores.get(ref_name)
-            if isinstance(val, (int, float)) and not isinstance(val, bool):
-                ref_score = float(val)
+    ref_score = _resolve_reference_score(data)
+    ref_coding = _resolve_coding_reference_score(data)
+    if ref_score is None or ref_coding is None:
+        return []
 
+    lists_doc = _load_lists_doc(path)
     bridge_states = _load_bridge_states(path)
     results: list[dict[str, Any]] = []
     for raw in pools:
-        norm = normalize_free_model(raw, reference_score=ref_score, bridge_states=bridge_states)
+        if not isinstance(raw, dict):
+            continue
+        if not _verify_free_pool_liveness_and_quality(raw, data, lists_doc, moment):
+            continue
+        norm = normalize_free_model(raw, reference_score=ref_score, reference_coding_index=ref_coding, bridge_states=bridge_states)
         if norm is not None:
             results.append(norm)
     return results
@@ -818,7 +1297,7 @@ def copilot_entry(reading: dict[str, Any], now: datetime) -> dict[str, Any]:
             "resets_at": _iso(reset_at)}]}
 
 
-READ_ERRORS = ("not_found", "timeout", "no_json")
+READ_ERRORS = ("not_found", "timeout", "no_json", "auth_required")
 CLAUDE_ERRORS = {"session_expired", "credentials_missing", "rate_limited", "provider_unreachable", "invalid_response"}
 UNREADABLE = {"relay": "relay_limits_unreadable", "claude": "credentials_missing", "agy": "agy_quota_unreadable", "codex": "codex_limits_unreadable", "copilot": "copilot_quota_unreadable"}
 
@@ -874,7 +1353,7 @@ def normalize(readings: dict[str, Any], now: datetime, *, read_at: datetime | No
 
     raw_free = readings.get("free_models")
     if raw_free is None:
-        free_models = read_free_models()
+        free_models = read_free_models(now=now)
     elif isinstance(raw_free, list):
         free_models = [m for item in raw_free if (m := normalize_free_model(item)) is not None]
     else:
