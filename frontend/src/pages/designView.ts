@@ -5,13 +5,13 @@ import { DESIGN_NODES, type DesignNode } from "../components/design/DesignCompon
 // Dynamic sits next to Plant: both work on the version's Process draft, the stages after them on one component.
 export const STAGES = ["Plant", "Dynamic", "CAD", "Motion/Mechanics", "CFD", "Optics", "Reduced model"] as const;
 export type Stage = (typeof STAGES)[number];
-/** `draftId` is Dynamic's chosen Process draft (`&draft=<id>`); absent means the version's Plant draft. */
-export type DesignView = Readonly<{ stage: Stage; componentId: string | null; node: DesignNode; draftId?: string | null }>;
+/** `draftId` is Dynamic's chosen Process draft (`&draft=<id>`); absent means the version's Plant draft. `axial` opens Axial O2 drawer. */
+export type DesignView = Readonly<{ stage: Stage; componentId: string | null; node: DesignNode; draftId?: string | null; axial?: boolean }>;
 
 const STAGE_SLUG: Record<Stage, string> = { Plant: "plant", Dynamic: "dynamic", CAD: "cad", "Motion/Mechanics": "mechanics", CFD: "cfd", Optics: "optics", "Reduced model": "reduced-model" };
 /** The node each stage opens on; a link with a component but no node opens there too. */
 export const STAGE_NODE: Record<Stage, DesignNode> = { Plant: "Parameters", Dynamic: "Parameters", CAD: "Geometry", "Motion/Mechanics": "Physics", CFD: "Results", Optics: "Physics", "Reduced model": "Reduced model" };
-const VIEW_PARAMS = ["stage", "component", "node", "draft"] as const;
+const VIEW_PARAMS = ["stage", "component", "node", "draft", "axial"] as const;
 const nodeSlug = (node: DesignNode) => node.toLowerCase().replace(/ /g, "-");
 /** Retired node slugs that old links still carry: Studies merged into Results. */
 const NODE_ALIASES: Readonly<Record<string, DesignNode>> = { studies: "Results" };
@@ -25,7 +25,8 @@ export function readDesignView(search: string): DesignView {
   const slug = params.get("node") ?? "";
   const node = componentId ? DESIGN_NODES.find((item) => nodeSlug(item) === slug) ?? NODE_ALIASES[slug] : undefined;
   const draftId = stage === "Dynamic" ? idParam(params.get("draft")) : null;
-  return { stage, componentId, node: node ?? STAGE_NODE[stage], ...(draftId ? { draftId } : {}) };
+  const axial = params.get("axial") === "true" || params.get("axial") === "1";
+  return { stage, componentId, node: node ?? STAGE_NODE[stage], ...(draftId ? { draftId } : {}), ...(axial ? { axial: true } : {}) };
 }
 
 /** Plant without a component is the bare /design/project; other query parameters are kept as they are. */
@@ -35,6 +36,7 @@ export function designViewHref(view: DesignView, search: string): string {
   if (view.stage !== "Plant") params.set("stage", STAGE_SLUG[view.stage]);
   if (view.componentId) { params.set("component", view.componentId); params.set("node", nodeSlug(view.node)); }
   if (view.stage === "Dynamic" && view.draftId) params.set("draft", view.draftId);
+  if (view.stage === "Dynamic" && view.axial) params.set("axial", "true");
   const query = params.toString();
   return `/design/project${query ? `?${query}` : ""}`;
 }

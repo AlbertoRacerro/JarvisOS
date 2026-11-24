@@ -36,7 +36,7 @@ export const DESIGN_TARGETS = {
   "design.stage.plant": { role: "button", name: "Plant", surface: "design" },
   "design.stage.dynamic": { role: "button", name: "Dynamic", surface: "design" },
   "design.stage.cad": { role: "button", name: "CAD", surface: "design" },
-  "design.stage.mechanics": { role: "button", name: "Motion/Mechanics (placeholder)", surface: "design" },
+  "design.stage.mechanics": { role: "button", name: "Motion/Mechanics", surface: "design" },
   "design.stage.cfd": { role: "button", name: "CFD", surface: "design" },
   "design.stage.optics": { role: "button", name: "Optics", surface: "design" },
   "design.stage.reduced-model": { role: "button", name: "Reduced model", surface: "design" },
@@ -49,6 +49,8 @@ export const DESIGN_TARGETS = {
   "design.tree.node.results": { role: "treeitem", name: "^Results", surface: "design", when: "component selected" },
   "design.tree.node.reduced-model": { role: "treeitem", name: "^Reduced model", surface: "design", when: "component selected" },
   "design.panel.plant": { role: "region", name: "Plant", surface: "design", when: "Plant stage without a selected component" },
+  "design.panel.mechanics": { role: "region", name: "Motion and Mechanics", surface: "design", when: "Motion/Mechanics stage" },
+  "design.panel.axial-o2": { role: "group", name: "Axial O2 (tube)", surface: "design", when: "Dynamic stage" },
   "design.panel.viewport": { role: "region", name: "Component viewport", surface: "design", when: "component stages" },
   "design.panel.inspector": { role: "complementary", name: "Inspector", surface: "design", when: "component stages" },
   "design.panel.feature-inspector": { role: "region", name: "Feature inspector", surface: "design", when: "Geometry node" },
@@ -126,7 +128,7 @@ export const DESIGN_STAGE_POSTCONDITIONS: Readonly<Record<DesignStageName, reado
     { target: "design.panel.viewport", holds: "the attached validated geometry renders in the 3D viewport" }
   ],
   "Motion/Mechanics": [
-    { target: "design.stage.mechanics", holds: "the stage is labelled a placeholder and claims no capability" }
+    { target: "design.panel.mechanics", holds: "the panel evaluates wave motion and mooring tension with check sheet" }
   ],
   CFD: [
     { target: "design.field.run", holds: "every stored run is listed with its state; the latest finished run is checked by default" },
