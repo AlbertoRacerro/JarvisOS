@@ -50,6 +50,7 @@ relay_argon = sys.modules.get("relay_argon") or importlib.util.module_from_spec(
 if "relay_argon" not in sys.modules:
     sys.modules["relay_argon"] = relay_argon
     _ARGON_SPEC.loader.exec_module(relay_argon)
+account_models = relay_argon.account_models
 
 RESERVE = 0.05
 # Per-pool reserve. The Claude pool is also what the coordinator spends: if it is skipped the coordinator would do
@@ -2157,13 +2158,21 @@ def rank(required: int, pools: dict[str, Pool], models: tuple[Model, ...] | None
     return result_list, skipped
 
 
-def bare_command(model: Model) -> str:
+def bare_command(model: Model, exact: str | None = None) -> str:
     if model.kind == "codex":
-        return f'codex exec --model {model.model} --cd "$WORKTREE" - < "$TASK_FILE"'
+        if exact:
+            binary = os.environ.get("JARVISOS_CODEX_BIN") or shutil.which("codex")
+            if not binary:
+                raise account_models.Refused("catalog_unavailable")
+            preflight = ("python3 scripts/account_model_resolution.py "
+                         f"worker_{model.key} {shlex.quote(exact)} {shlex.quote(binary)}")
+            return (f'{preflight} && {shlex.quote(binary)} exec --model {shlex.quote(exact)} '
+                    '--cd "$WORKTREE" - < "$TASK_FILE"')
+        return f'codex exec --model {shlex.quote(exact or model.model)} --cd "$WORKTREE" - < "$TASK_FILE"'
     if model.kind == "claude":
         # Headless, edits only: acceptEdits plus no permission prompts (anything that would prompt is denied).
         # Never bypassPermissions or --dangerously-skip-permissions for a worker.
-        return (f'cd "$WORKTREE" && claude -p --model {model.model} --permission-mode acceptEdits '
+        return (f'cd "$WORKTREE" && claude -p --model {shlex.quote(exact or model.model)} --permission-mode acceptEdits '
                 '--permission-prompts none --output-format json < "$TASK_FILE"')
     if model.kind == "copilot":
         return (f'python3 scripts/copilot_worker.py run --task-file "$TASK_FILE" '
@@ -2172,19 +2181,33 @@ def bare_command(model: Model) -> str:
         pool_name = model.pool[len("temp-"):] if model.pool.startswith("temp-") else model.pool
         return (f'python3 scripts/opencode_worker.py run --pool {pool_name} '
                 f'--task-file "$TASK_FILE" --worktree "$WORKTREE"')
-    return f'python3 scripts/agy_worker.py run --task-file "$TASK_FILE" --worktree "$WORKTREE" --model {model.key}'
+    command = f'python3 scripts/agy_worker.py run --task-file "$TASK_FILE" --worktree "$WORKTREE" --model {model.key}'
+    return command + (f' --resolved-model {shlex.quote(exact)}' if exact else '')
 
 
-def launch_command(model: Model) -> str:
+def launch_command(model: Model, exact: str | None = None) -> str:
     # --input digests the task file, so a new task for the same worker and worktree is not refused as a duplicate.
     return ('python3 scripts/relay_jobs.py start --label "$LABEL" --authority "$AUTHORITY" --spec "$SPEC" '
             '--wall-hours "${WALL_HOURS:-1}" --cwd "$WORKTREE" --input "$TASK_FILE" -- bash -c '
-            + shlex.quote(bare_command(model)))
+            + shlex.quote(bare_command(model, exact) if exact else bare_command(model)))
+
+
+def resolve_worker_catalog(model: Model) -> str:
+    if model.kind not in ("agy", "codex", "claude"):
+        # Existing non-versioned Copilot and temporary OpenCode routes retain their own preflights.
+        return model.model
+    binary = (os.environ.get("JARVISOS_AGY_BIN") if model.kind == "agy" else
+              os.environ.get("JARVISOS_CODEX_BIN") if model.kind == "codex" else None)
+    binary = binary or shutil.which("agy" if model.kind == "agy" else model.kind)
+    if not binary:
+        raise account_models.Refused("catalog_unavailable")
+    return account_models.resolve(f"worker_{model.key}", binary, dict(os.environ))
 
 
 def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | None = None,
            task: str | None = None, kind: str | None = None, outcomes: list[dict[str, Any]] | None = None,
-           now: datetime | None = None) -> dict[str, Any]:
+           now: datetime | None = None,
+           model_resolver: Callable[[Model], str] | None = None) -> dict[str, Any]:
     required = tier(difficulty, risk)
     models = all_models(outcomes)
     eligible, skipped = rank(required, pools, models=models, review_of=review_of, now=now,
@@ -2192,17 +2215,33 @@ def decide(difficulty: str, risk: str, pools: dict[str, Pool], review_of: str | 
     decision: dict[str, Any] = {"difficulty": difficulty, "risk": risk, "required_tier": required,
                                 "kind": kind, "review": REVIEW[risk], "reserves": RESERVES}
     by_key = {m.key: m for m in models}
+    use_catalog = model_resolver is not None or account_models.enabled(dict(os.environ))
+    if use_catalog:
+        resolver = model_resolver or resolve_worker_catalog
+        verified = []
+        for candidate in eligible:
+            try:
+                model_obj = by_key[candidate["worker"]]
+                exact = resolver(model_obj)
+                cmd = launch_command(model_obj, exact)
+            except account_models.Refused as exc:
+                skipped.append({**candidate, "skipped": exc.reason})
+                continue
+            verified.append({**candidate, "model": exact, "_command": cmd})
+        eligible = verified
     if not eligible:
         reason = "wait_for_escalation_pool" if any(s.get("skipped") == "escalated_from_family" for s in skipped) else "no_worker"
         return {**decision, "status": "no_worker", "reason": reason, "skipped": skipped}
     chosen = eligible[0]
     low = chosen["pool"] == "claude" and chosen["free"] < CLAUDE_LOW_FREE
+    command = chosen.get("_command") or launch_command(by_key[chosen["worker"]])
+    alternatives = [{k: v for k, v in item.items() if k != "_command"} for item in eligible[1:]]
     return {**decision, "status": "ok", "worker": chosen["worker"], "model": chosen["model"], "pool": chosen["pool"],
-            "source": chosen["source"], "command": launch_command(by_key[chosen["worker"]]),
+            "source": chosen["source"], "command": command,
             "claude_pool_low": low, **({"note": CLAUDE_LOW_NOTE} if low else {}),
             "measured_cost": chosen.get("measured_cost"), "record_count": chosen.get("record_count", 0),
             **({"pacing": chosen["pacing"]} if chosen.get("pacing") else {}),
-            "alternatives": eligible[1:], "skipped": skipped}
+            "alternatives": alternatives, "skipped": skipped}
 
 
 def summary_line(pools: dict[str, Pool], outcomes: list[dict[str, Any]] | None = None) -> str:

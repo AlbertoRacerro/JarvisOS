@@ -29,6 +29,9 @@ import json, os, sys
 from pathlib import Path
 cfg = json.loads(Path({cfg!r}).read_text())
 args = sys.argv[1:]
+if args == ["models"]:
+    print(cfg.get("models_out", json.dumps({{"models": [{{"id": "gemini-3.8-flash-low"}}]}})))
+    sys.exit(cfg.get("models_exit", 0))
 if args[:2] == ["-p", "/quota"]:
     calls = cfg.get("quota_calls", 0) + 1
     cfg["quota_calls"] = calls
