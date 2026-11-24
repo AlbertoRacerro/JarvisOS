@@ -7,6 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from app.core.database import open_sqlite_connection
+from app.modules.agents.hermes.ip_boundary import (
+    CLOUD_IP_MODE_NO_CLOUD,
+    CLOUD_IP_MODE_SANITIZED,
+    is_local_route,
+    log_cloud_boundary_event,
+    resolve_cloud_ip_mode,
+    sanitize_record,
+)
 from app.modules.ai.agent_contracts import CapabilityGrantRef, StructuredToolCall
 
 _ALLOWED_VIEWS = frozenset({
@@ -941,6 +949,43 @@ def dispatch_knowledge_read_tool(
 
     scrubbed = _scrub_value(result, home_str)
     items_key = None if view == "table_counts" else ("ai_jobs" if view == "ai_jobs_recent" else view)
+
+    is_local = is_local_route(grant=grant)
+    if not is_local and isinstance(scrubbed, dict):
+        mode = resolve_cloud_ip_mode(workspace_id=target_workspace, grant=grant)
+        if items_key and isinstance(scrubbed.get(items_key), list):
+            kept_items = []
+            withheld_count = 0
+            for item in scrubbed[items_key]:
+                allowed, out_item, _ = sanitize_record(item, mode)
+                if allowed:
+                    kept_items.append(out_item)
+                else:
+                    withheld_count += 1
+            scrubbed[items_key] = kept_items
+            scrubbed["count"] = len(kept_items)
+            scrubbed["withheld_count"] = withheld_count
+            scrubbed["egress_mode"] = mode
+            if mode == CLOUD_IP_MODE_SANITIZED:
+                scrubbed["sanitized"] = True
+            if withheld_count > 0:
+                reason_code = "egress_pack_blocked" if mode == CLOUD_IP_MODE_NO_CLOUD else (
+                    "egress_sanitization_required" if mode == CLOUD_IP_MODE_SANITIZED else "egress_s4_blocked"
+                )
+                log_cloud_boundary_event(
+                    tool_name="jarvis_knowledge_read",
+                    op=view,
+                    egress_mode=mode,
+                    withheld_count=withheld_count,
+                    reason_code=reason_code,
+                    workspace_id=target_workspace,
+                )
+        else:
+            scrubbed["withheld_count"] = 0
+            scrubbed["egress_mode"] = mode
+            if mode == CLOUD_IP_MODE_SANITIZED:
+                scrubbed["sanitized"] = True
+
     if isinstance(scrubbed, dict):
         scrubbed = _enforce_payload_bounds(scrubbed, items_key)
     return scrubbed, default_error

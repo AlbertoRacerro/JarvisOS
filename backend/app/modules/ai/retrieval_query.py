@@ -34,6 +34,9 @@ def query_context(
     master_ref: str = "refs/remotes/origin/master",
     allowed_refs: frozenset[tuple[str, str, str]] | None = None,
     store: SQLiteIndexStore | None = None,
+    grant: Any = None,
+    is_local: bool | None = None,
+    cloud_ip_mode: str | None = None,
 ) -> dict[str, Any]:
     """Return current, owner-validated evidence; index contents remain candidates only."""
     if not query.strip() or len(query) > MAX_QUERY_CHARS:
@@ -75,6 +78,54 @@ def query_context(
             "validation": "current",
             "excerpt": excerpt,
         })
+
+    if is_local is None:
+        try:
+            from app.modules.agents.hermes.ip_boundary import is_local_route
+            is_local = is_local_route(grant=grant)
+        except Exception:
+            is_local = True
+
+    withheld_count = 0
+    active_mode = None
+    withheld_digests = set()
+    if not is_local:
+        from app.modules.agents.hermes.ip_boundary import (
+            CLOUD_IP_MODE_NO_CLOUD,
+            CLOUD_IP_MODE_SANITIZED,
+            filter_or_sanitize_text,
+            log_cloud_boundary_event,
+            resolve_cloud_ip_mode,
+        )
+        active_mode = cloud_ip_mode or resolve_cloud_ip_mode(workspace_id=workspace_id, grant=grant)
+        kept_evidence = []
+        for ev in evidence:
+            ev_excerpt = ev.get("excerpt") or ""
+            allowed, out_excerpt, _ = filter_or_sanitize_text(ev_excerpt, active_mode)
+            if allowed:
+                if active_mode == CLOUD_IP_MODE_SANITIZED:
+                    ev["excerpt"] = out_excerpt
+                    ev["sanitized"] = True
+                kept_evidence.append(ev)
+            else:
+                withheld_count += 1
+                if ev.get("content_digest"):
+                    withheld_digests.add(ev["content_digest"])
+
+        evidence = kept_evidence
+        if withheld_count > 0:
+            reason_code = "egress_pack_blocked" if active_mode == CLOUD_IP_MODE_NO_CLOUD else (
+                "egress_sanitization_required" if active_mode == CLOUD_IP_MODE_SANITIZED else "egress_s4_blocked"
+            )
+            log_cloud_boundary_event(
+                tool_name="jarvis_retrieval_query",
+                op="query",
+                egress_mode=active_mode,
+                withheld_count=withheld_count,
+                reason_code=reason_code,
+                workspace_id=workspace_id,
+            )
+
     result: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "query": query,
@@ -86,6 +137,17 @@ def query_context(
         "evidence": evidence,
         "truncated": truncated,
     }
+    if not is_local:
+        result["withheld_count"] = withheld_count
+        result["egress_mode"] = active_mode
+        if active_mode == CLOUD_IP_MODE_SANITIZED:
+            result["sanitized"] = True
+        if withheld_digests and isinstance(result.get("bundle"), dict):
+            b_items = result["bundle"].get("items", [])
+            result["bundle"]["items"] = [
+                item for item in b_items
+                if item.get("content_digest") not in withheld_digests
+            ]
     while evidence and len(json.dumps(result, ensure_ascii=False)) > MAX_RETRIEVAL_RESULT_CHARS:
         result["truncated"] = True
         last = evidence[-1]
