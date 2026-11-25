@@ -1117,7 +1117,7 @@ def build_manifest(runtime: RelayRuntime, config: dict[str, Any], agent: str, wo
     if not git_config.is_file():
         # Only workspaces Jarvis created (and recorded a trusted config for) may be handed to agents.
         raise RelayGatewayError("relay_workspace_git_config_untrusted")
-    manifest = {
+    manifest: dict[str, Any] = {
         "version": sandbox.MANIFEST_VERSION,
         "workspace": os.path.realpath(workspace),
         "context_dir": str(context_dir),
