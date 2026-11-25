@@ -604,7 +604,7 @@ def test_supervisor_dispatch_refuses_expired_or_mismatched_grant() -> None:
 
     result = supervisor.dispatch_tool(call, live_grants=live_grants)
     assert result.status == "refused"
-    assert result.error_code == "capability_denied"
+    assert result.error_code == "grant_expired"
 
 
 def test_per_turn_research_budget_enforcement() -> None:

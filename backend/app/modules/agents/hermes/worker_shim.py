@@ -206,16 +206,22 @@ DEAD_TURN_NUDGE = (
     "or conclude with your final answer."
 )
 TURN_CAP_REACHED_MESSAGE = "Turn cap reached."
+ANSWER_FORMAT_TEXT = (
+    "a final message without tool calls: first line `Answer:` with one to three sentences, "
+    "then sections `Numbers:`, `Sources:` and `Caveats:`"
+)
 COMPACT_METHODOLOGY = (
     "Never compute numbers in your head: every number and check comes from jarvis_python; print the results. "
-    "Read before citing; never invent a DOI, URL or number. Final message, no tool call:\n"
-    "Answer: 1-3 sentences\nNumbers:\nSources:\nCaveats:"
+    "Read before citing; never invent a DOI, URL or number. "
+    "Use every given input; if you leave one out, say why. "
+    "If your own check shows an inconsistency, fix it before answering. "
+    f"Finish with {ANSWER_FORMAT_TEXT}."
 )
 RESEARCH_BUDGET_NOTICE = (
     "Research budget used up ({budget} searches/reads). Do not search again: answer now with what you have, "
     "and say clearly what is unconfirmed."
 )
-STEP_CAP_MESSAGE = "Stop using tools now and give your final answer in the format."
+STEP_CAP_MESSAGE = f"Stop using tools now and give your final answer: {ANSWER_FORMAT_TEXT}."
 REPEATED_CALL_NOTICE = (
     "You already made this exact call. Its result was: {stored} Do not repeat it: change the input or answer."
 )
@@ -458,6 +464,12 @@ def compact_tool_payload(payload: Any, max_chars: int = 2000, *, max_bytes: int 
 
         num_keys = max(1, len(payload))
         initial_str_budget = max(30, (bound - _json_utf8_len(keys_skeleton)) // num_keys)
+        # Spec 374: values that already fit the even share leave their unused room to the longer ones.
+        long_keys = [k for k, v in payload.items() if _json_utf8_len(v) > initial_str_budget]
+        if long_keys:
+            fixed = sum(_json_utf8_len(v) for k, v in payload.items() if k not in long_keys)
+            initial_str_budget = max(initial_str_budget,
+                                     (bound - _json_utf8_len(keys_skeleton) - fixed) // len(long_keys))
 
         def _compact_val(val: Any, str_budget: int) -> Any:
             if isinstance(val, str):

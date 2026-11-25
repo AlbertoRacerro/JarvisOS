@@ -172,6 +172,25 @@ def size_breakdown(messages: list[dict[str, Any]], tools: list[dict[str, Any]], 
     return sizes
 
 
+PATENT_CLAIM_KEEP = 300
+_PATENT_KEEP_KEYS = ("publication_number", "title", "applicants", "priority_date", "filing_date", "publication_date")
+
+
+def _trim_patent_result(content: str) -> str | None:
+    """Spec 374 item 5: an older `jarvis_patent_read` result keeps its bibliographic fields, claim 1's first 300
+    characters and the register sentence; None when the content is not such a result."""
+    try:
+        data = json.loads(content)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or "claim_1" not in data or "legal_status_note" not in data:
+        return None
+    kept = {key: str(data[key])[:120] for key in _PATENT_KEEP_KEYS if key in data}
+    kept["claim_1"] = str(data["claim_1"])[:PATENT_CLAIM_KEEP]
+    kept["legal_status_note"] = str(data["legal_status_note"])[:200]
+    return json.dumps(kept, ensure_ascii=False, separators=(",", ":")) + TRIMMED_MARKER
+
+
 def trim_old_tool_results(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Spec 372 item 5: cut every tool result but the last 4 (and any in the latest step) to 700 chars + marker."""
     tool_indexes = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
@@ -181,7 +200,8 @@ def trim_old_tool_results(messages: list[dict[str, Any]]) -> list[dict[str, Any]
     for i in tool_indexes:
         content = messages[i].get("content")
         if i not in whole and isinstance(content, str) and len(content) > TOOL_RESULT_LIMIT:
-            result[i] = {**messages[i], "content": content[:TOOL_RESULT_LIMIT] + TRIMMED_MARKER}
+            patent = _trim_patent_result(content)
+            result[i] = {**messages[i], "content": patent or content[:TOOL_RESULT_LIMIT] + TRIMMED_MARKER}
     return result
 
 

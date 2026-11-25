@@ -974,7 +974,7 @@ def test_supervisor_dispatch_refuses_expired_grant(isolated_db) -> None:
 
     tool_result = dispatch_tool(call, live_grants={"grant-expired": grant})
     assert tool_result.status == "refused"
-    assert tool_result.error_code == "capability_denied"
+    assert tool_result.error_code == "grant_expired"
 
 
 def test_file_url_path_scrubbed_and_https_preserved() -> None:

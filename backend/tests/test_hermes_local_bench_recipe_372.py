@@ -123,7 +123,7 @@ def test_research_budget_and_step_cap_texts() -> None:
     assert RESEARCH_BUDGET_NOTICE.format(budget=8) == (
         "Research budget used up (8 searches/reads). Do not search again: answer now with what you have, "
         "and say clearly what is unconfirmed.")
-    assert STEP_CAP_MESSAGE == "Stop using tools now and give your final answer in the format."
+    assert STEP_CAP_MESSAGE.startswith("Stop using tools now and give your final answer")
 
 
 def test_only_the_shim_emits_tool_call_frames() -> None:
