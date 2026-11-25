@@ -14,7 +14,6 @@ from app.modules.agents.hermes.broker_mcp import (
 )
 from app.modules.agents.hermes.supervisor import _assemble_turn_prompt
 from app.modules.agents.hermes.verification import verify_answer
-from app.modules.agents.hermes.worker_shim import compact_turn_messages, inject_saved_plan
 from app.modules.ai import thread_service
 
 
@@ -40,19 +39,6 @@ def test_verification_checks_and_clean_answer() -> None:
     assert verify_answer("The output is 100 kg", [{"value": 1000, "unit": "kg"}])["warning_count"] == 1
     assert verify_answer("Gauge pressure is -1 bar")["status"] == "passed"
     assert verify_answer("Absolute pressure is -1 bar")["status"] == "warnings"
-
-
-def test_compaction_preserves_anchors_and_saved_plan() -> None:
-    messages = [{"role": "system", "content": "rules"}, {"role": "user", "content": "request"}]
-    messages += [{"role": "assistant", "content": "old" * 2000}, {"role": "tool", "content": "old result" * 500}]
-    messages += [{"role": "assistant", "content": "recent"}, {"role": "tool", "content": "latest result"}]
-    result = compact_turn_messages(messages, max_chars=1000)
-    assert result[0] == messages[0]
-    assert messages[1] in result and messages[-2:] == result[-2:]
-    assert "compacted" in str(result)
-    assert len(json.dumps(result, ensure_ascii=False)) <= 1000
-    saved = inject_saved_plan(result, {"steps": [{"id": "a", "title": "check", "status": "done"}], "findings": []})
-    assert "[Active turn plan]" in str(saved)
 
 
 def test_verification_event_projects_to_interaction() -> None:

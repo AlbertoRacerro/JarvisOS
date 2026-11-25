@@ -28,7 +28,6 @@ from app.modules.agents.hermes.supervisor import (
 from app.modules.agents.hermes.worker_shim import (
     _PLAN_HEADER,
     Worker,
-    compact_turn_messages,
     shrink_tool_history,
 )
 from app.modules.ai.agent_contracts import AgentSessionRef
@@ -106,24 +105,12 @@ def _frame(messages: list[dict[str, Any]]) -> dict[str, Any]:
     return {"id": "r", "session_ref": SESSION.model_dump(mode="json"), "messages": messages}
 
 
-def test_cloud_prompt_equals_the_pre_change_pipeline() -> None:
+def test_infer_envelope_shrinks_only_non_local_routes() -> None:
     messages = _transcript(6, 1500)
-    expected = json.dumps(compact_turn_messages(shrink_tool_history(messages), max_chars=45_500), ensure_ascii=False)
-    prompt = infer_envelope(_frame(compact_turn_messages(shrink_tool_history(messages), max_chars=45_500)),
-                            route_class="external:cheap").prompt
-    assert prompt == expected
-    # infer_envelope itself still shrinks a cloud transcript but never a local one.
     assert infer_envelope(_frame(messages), route_class="external:cheap").prompt == json.dumps(
         shrink_tool_history(messages), ensure_ascii=False)
     local = infer_envelope(_frame(messages), route_class="local:llamacpp").prompt
     assert local == json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
-
-
-def test_cloud_guard_keeps_anchors_and_states_the_omitted_count() -> None:
-    messages = _transcript(300, 2000)
-    guarded = compact_turn_messages(shrink_tool_history(messages), max_chars=45_500)
-    assert guarded[0] == messages[0] and messages[1] in guarded and guarded[-2:] == messages[-2:]
-    assert any("Earlier turn messages compacted:" in str(m.get("content")) for m in guarded if m["role"] == "system")
 
 
 def _db() -> sqlite3.Connection:
