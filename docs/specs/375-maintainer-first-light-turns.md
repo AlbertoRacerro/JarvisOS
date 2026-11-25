@@ -1,6 +1,6 @@
 # 375 — MAINTAINER-FIRST-LIGHT-TURNS-1: Benchmarks yield the local model to the maintainer; navigation turns run light
 
-Status: in_review
+Status: merged
 Depends on: 368, 372
 
 ## Goal

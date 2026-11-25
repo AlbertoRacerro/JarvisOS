@@ -1,6 +1,6 @@
 # 376 — VAULT-OVERLAY-1: Optional private vault overlay for protected dimensions and local-only items
 
-Status: ready
+Status: in_review
 Depends on: none
 
 ## Goal
