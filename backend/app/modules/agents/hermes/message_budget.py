@@ -1,8 +1,9 @@
-"""Deterministic message budget for local Hermes relay steps (specs 369, 370).
+"""Deterministic message budget for local Hermes relay steps (specs 372, 369, 370).
 
-Pure functions over the OpenAI-shaped message list: older assistant steps become short digests, the saved plan
-is not repeated, earlier tool results stay whole while the step fits and are shortened oldest first when it does
-not, and only then are the oldest complete steps dropped.
+Pure functions over the OpenAI-shaped message list. Spec 372: the system message, the first user message and the
+saved plan stay whole, the last 4 tool results stay whole and every older one is cut to 700 characters. Only when
+a step still exceeds the budget does the fallback of specs 369 and 370 run: older assistant steps become short
+digests, earlier tool results are shortened oldest first, and only then are the oldest complete steps dropped.
 """
 from __future__ import annotations
 
@@ -15,6 +16,9 @@ from app.modules.agents.hermes.worker_shim import _PLAN_HEADER, shrink_tool_hist
 LOCAL_STEP_TOKEN_BUDGET = 6000  # target of actual input tokens: estimated envelope + measured overhead
 DEFAULT_STEP_OVERHEAD = 2500  # tokens the runtime adds outside the envelope, until one is measured
 MAX_STEP_OVERHEAD = 4000
+KEEP_WHOLE_TOOL_RESULTS = 4
+TOOL_RESULT_LIMIT = 700
+TRIMMED_MARKER = " …[trimmed]"
 STEP_CONTENT_LIMIT = 300
 STEP_ARGUMENTS_LIMIT = 200
 CONTENT_MARKER = " [older step shortened]"
@@ -168,11 +172,29 @@ def size_breakdown(messages: list[dict[str, Any]], tools: list[dict[str, Any]], 
     return sizes
 
 
-def compact_local_messages(
+def trim_old_tool_results(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Spec 372 item 5: cut every tool result but the last 4 (and any in the latest step) to 700 chars + marker."""
+    tool_indexes = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    latest = max((i for i, m in enumerate(messages) if m.get("role") == "assistant"), default=-1)
+    whole = {*tool_indexes[-KEEP_WHOLE_TOOL_RESULTS:], *(i for i in tool_indexes if i > latest)}
+    result = list(messages)
+    for i in tool_indexes:
+        content = messages[i].get("content")
+        if i not in whole and isinstance(content, str) and len(content) > TOOL_RESULT_LIMIT:
+            result[i] = {**messages[i], "content": content[:TOOL_RESULT_LIMIT] + TRIMMED_MARKER}
+    return result
+
+
+def _trimmed_count(messages: list[dict[str, Any]]) -> int:
+    """Tool results in what is sent that carry the 700-char cut (the fallback may shorten or drop some)."""
+    return sum(1 for m in messages if m.get("role") == "tool" and str(m.get("content", "")).endswith(TRIMMED_MARKER))
+
+
+def fit_to_budget(
     messages: Any, tools: list[dict[str, Any]], protocol: str, overhead: int = DEFAULT_STEP_OVERHEAD,
     budget: int = LOCAL_STEP_TOKEN_BUDGET,
 ) -> tuple[Any, dict[str, Any] | None]:
-    """Items 1-4: returns the messages to send and the `hermes.step_size` payload (None when not a message list).
+    """The spec 369/370 reductions, now the fallback: digests, 180-char shortening oldest first, whole-step drop.
 
     `tools` are the local tool summaries and `protocol` the suffix the envelope appends when tools are admitted.
     `overhead` is the measured (or default) token count the runtime adds outside the envelope; the budget is a
@@ -215,3 +237,26 @@ def compact_local_messages(
     }
     return working, payload
 
+
+def compact_local_messages(
+    messages: Any, tools: list[dict[str, Any]], protocol: str, overhead: int = DEFAULT_STEP_OVERHEAD,
+    budget: int = LOCAL_STEP_TOKEN_BUDGET,
+) -> tuple[Any, dict[str, Any] | None]:
+    """Spec 372 item 5: returns the messages to send and the `hermes.step_size` payload (None when not a list).
+
+    Older tool results are trimmed first; the 369/370 fallback runs only when that step still exceeds the budget.
+    """
+    if not isinstance(messages, list) or not messages or not all(isinstance(m, dict) for m in messages):
+        return messages, None
+    trimmed = trim_old_tool_results(messages)
+    estimated = estimate_tokens(_prompt_chars(trimmed, tools, protocol))
+    if estimated + overhead <= budget:
+        payload: dict[str, Any] = {
+            **size_breakdown(trimmed, tools, protocol),
+            "estimated_tokens": estimated, "compacted_steps": 0, "overhead": overhead, "over_budget": False,
+            "shrunk_tool_results": 0,
+        }
+        return trimmed, {**payload, "trimmed_tool_results": _trimmed_count(trimmed)}
+    working, fallback = fit_to_budget(trimmed, tools, protocol, overhead, budget)
+    assert fallback is not None
+    return working, {**fallback, "trimmed_tool_results": _trimmed_count(working)}

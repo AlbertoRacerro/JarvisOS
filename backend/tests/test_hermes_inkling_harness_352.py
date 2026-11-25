@@ -299,10 +299,10 @@ def test_identical_tool_call_blocking_within_turn(monkeypatch: pytest.MonkeyPatc
     assert len(sent_frames) == 1
     assert sent_frames[0]["tool_result"]["status"] == "succeeded"
 
+    # Spec 372 item 4: the shim owns the repeated-call rule, so the supervisor runs whatever reaches it.
     supervisor_inst._handle_tool(frame2)
     assert len(sent_frames) == 2
-    res2 = sent_frames[1]["tool_result"]
-    assert "Tool call blocked: identical call was already executed" in str(res2["result"])
+    assert sent_frames[1]["tool_result"]["result"] == sent_frames[0]["tool_result"]["result"]
 
 
 def test_research_budget_cap_enforcement(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -344,8 +344,8 @@ def test_research_budget_cap_enforcement(monkeypatch: pytest.MonkeyPatch) -> Non
     }
     supervisor_inst._handle_tool(frame_exceed)
     res_exceed = sent_frames[-1]["tool_result"]
-    assert "Research budget reached for this turn" in str(res_exceed["result"])
-    assert "synthesize your final answer" in str(res_exceed["result"]).lower()
+    assert "Research budget used up (3 searches/reads). Do not search again" in str(res_exceed["result"])
+    assert "answer now with what you have" in str(res_exceed["result"]).lower()
 
 
 def test_is_research_tool_classification() -> None:
