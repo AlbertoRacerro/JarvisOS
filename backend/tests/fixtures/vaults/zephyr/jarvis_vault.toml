@@ -1,0 +1,13 @@
+# Fake vault overlay for the test suite (spec 376): invented values only.
+[[protected_dimensions]]
+value = 75.0
+unit = "mm"
+tolerance_rel = 0.02
+
+[[local_only]]
+id = "L1"
+text = "The orchard layout keeps the quince rows north of the pond."
+
+[[protected_propositions]]
+id = "P1"
+text = "Pruning in late winter doubles the yield of the zephyr orchard."
