@@ -1,6 +1,6 @@
 # 372 — HERMES-LOCAL-BENCH-RECIPE-1: Run local Hermes turns with the bench loop's prompt, continuation and history rules
 
-Status: ready
+Status: in_review
 Depends on: 370, 371
 
 ## Goal

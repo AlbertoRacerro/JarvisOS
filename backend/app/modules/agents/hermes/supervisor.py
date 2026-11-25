@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -367,7 +368,8 @@ CONTINUATION_REQUEST = (
     "otherwise give the final answer in the required format."
 )
 MAX_CONTINUATIONS = 2  # per turn, on local routes (spec 372 item 3)
-_CONTINUATION_REPLY_CHARS = 6000
+_CONTINUATION_REPLY_CHARS = 2000  # echo of the unfinished reply, kept short for the step budget
+_ANSWER_LINE = re.compile(r"(?im)^[\s*#>_-]*answer[\s*_]*:")
 _ANNOUNCE_STARTS = ("let me", "i'll", "i will", "now i", "next, i", "i am going to", "i'm going to")
 
 
@@ -413,7 +415,7 @@ def missing_final_answer(text: str | None) -> str | None:
         value = value.get("answer", "")
     if not isinstance(value, str):
         return None
-    return None if "answer:" in value.lower() else value
+    return None if _ANSWER_LINE.search(value) else value
 
 
 def compact_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

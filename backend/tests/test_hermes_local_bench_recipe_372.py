@@ -166,3 +166,11 @@ def test_over_budget_transcript_falls_back_within_budget() -> None:
     assert {m["tool_call_id"] for m in sent if m["role"] == "tool"} <= {
         c["id"] for m in sent if m["role"] == "assistant" for c in m.get("tool_calls", [])}
     assert LOCAL_STEP_TOKEN_BUDGET == 6000
+
+
+def test_answer_must_start_a_line() -> None:
+    from app.modules.agents.hermes.supervisor import missing_final_answer
+
+    assert missing_final_answer('{"answer":"I will answer: later, let me check"}') is not None
+    assert missing_final_answer('{"answer":"Done.\\n**Answer:** 4 kg"}') is None
+    assert missing_final_answer('{"answer":"Answer: 4 kg"}') is None
