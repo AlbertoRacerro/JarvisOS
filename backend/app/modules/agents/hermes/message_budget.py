@@ -11,7 +11,9 @@ from typing import Any
 
 from app.modules.agents.hermes.worker_shim import _PLAN_HEADER, shrink_tool_history
 
-LOCAL_STEP_TOKEN_BUDGET = 6000
+LOCAL_STEP_TOKEN_BUDGET = 6000  # target of actual input tokens: estimated envelope + measured overhead
+DEFAULT_STEP_OVERHEAD = 2500  # tokens the runtime adds outside the envelope, until one is measured
+MAX_STEP_OVERHEAD = 4000
 STEP_CONTENT_LIMIT = 300
 STEP_ARGUMENTS_LIMIT = 200
 CONTENT_MARKER = " [older step shortened]"
@@ -22,6 +24,11 @@ _PLAN_TOOL = "jarvis_turn_plan"
 
 def estimate_tokens(chars: int) -> int:
     return math.ceil(chars / 3.5)
+
+
+def measured_overhead(actual_input_tokens: int, estimated_tokens: int) -> int:
+    """Tokens the runtime added beyond the estimated envelope (chat template, schema, wrapping), clamped."""
+    return min(MAX_STEP_OVERHEAD, max(0, actual_input_tokens - estimated_tokens))
 
 
 def _call_name(call: Any) -> str:
@@ -143,11 +150,14 @@ def size_breakdown(messages: list[dict[str, Any]], tools: list[dict[str, Any]], 
 
 
 def compact_local_messages(
-    messages: Any, tools: list[dict[str, Any]], protocol: str, budget: int = LOCAL_STEP_TOKEN_BUDGET,
+    messages: Any, tools: list[dict[str, Any]], protocol: str, overhead: int = DEFAULT_STEP_OVERHEAD,
+    budget: int = LOCAL_STEP_TOKEN_BUDGET,
 ) -> tuple[Any, dict[str, Any] | None]:
     """Items 1-4: returns the messages to send and the `hermes.step_size` payload (None when not a message list).
 
     `tools` are the local tool summaries and `protocol` the suffix the envelope appends when tools are admitted.
+    `overhead` is the measured (or default) token count the runtime adds outside the envelope; the budget is a
+    target of actual input tokens, so steps are compacted while estimated + overhead exceeds it.
     """
     if not isinstance(messages, list) or not messages or not all(isinstance(m, dict) for m in messages):
         return messages, None
@@ -164,13 +174,15 @@ def compact_local_messages(
         return [*kept[: first_user + 1], _compaction_line(count), *kept[first_user + 1:]]
 
     compacted = 0
-    while compacted < len(steps) and estimate_tokens(_prompt_chars(without_oldest(compacted), tools, protocol)) > budget:
+    while compacted < len(steps) and (
+            estimate_tokens(_prompt_chars(without_oldest(compacted), tools, protocol)) + overhead > budget):
         compacted += 1
     working = without_oldest(compacted)
     estimated = estimate_tokens(_prompt_chars(working, tools, protocol))
     payload: dict[str, Any] = {
         **size_breakdown(working, tools, protocol),
-        "estimated_tokens": estimated, "compacted_steps": compacted, "over_budget": estimated > budget,
+        "estimated_tokens": estimated, "compacted_steps": compacted, "overhead": overhead,
+        "over_budget": estimated + overhead > budget,
     }
     return working, payload
 

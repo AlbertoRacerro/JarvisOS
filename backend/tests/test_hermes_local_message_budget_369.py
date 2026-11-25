@@ -14,11 +14,14 @@ import pytest
 import app.modules.agents.hermes.supervisor as supervisor_module
 from app.modules.agents.hermes.message_budget import (
     ARGUMENTS_MARKER,
+    DEFAULT_STEP_OVERHEAD,
     LOCAL_STEP_TOKEN_BUDGET,
+    MAX_STEP_OVERHEAD,
     PLAN_RESULT_MARKER,
     compact_local_messages,
     digest_older_steps,
     estimate_tokens,
+    measured_overhead,
 )
 from app.modules.agents.hermes.supervisor import (
     RELAY_TOOL_PROTOCOL,
@@ -31,6 +34,7 @@ from app.modules.agents.hermes.supervisor import (
 )
 from app.modules.agents.hermes.worker_shim import inject_saved_plan
 from app.modules.ai.agent_contracts import AgentSessionRef
+from app.modules.ai.contracts import AIUsage, AIUsageSource
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -113,8 +117,8 @@ def test_twelve_step_transcript_stays_under_budget_and_cloud_is_unchanged(steps:
     original = json.dumps(messages)
     compacted, payload = compact_local_messages(messages, SUMMARIES, RELAY_TOOL_PROTOCOL)
     assert json.dumps(messages) == original
-    assert _tokens(compacted) <= LOCAL_STEP_TOKEN_BUDGET
-    assert payload is not None and payload["over_budget"] is False
+    assert payload is not None and payload["over_budget"] is False and payload["overhead"] == DEFAULT_STEP_OVERHEAD
+    assert _tokens(compacted) + DEFAULT_STEP_OVERHEAD <= LOCAL_STEP_TOKEN_BUDGET
     assert payload["estimated_tokens"] == _tokens(compacted)
     # Anchors: system with plan, first user message and the whole latest step.
     assert compacted[:2] == messages[:2]
@@ -153,9 +157,26 @@ def test_unfittable_transcript_is_sent_as_over_budget() -> None:
     messages = _transcript(3)
     messages[-1]["content"] = "r" * 40_000
     compacted, payload = compact_local_messages(messages, SUMMARIES, RELAY_TOOL_PROTOCOL)
-    assert payload is not None and payload["over_budget"] is True and payload["estimated_tokens"] > 6000
+    assert payload is not None and payload["over_budget"] is True and payload["estimated_tokens"] + payload["overhead"] > 6000
     assert compacted[0] == messages[0] and compacted[1] == messages[1] and compacted[-2:] == messages[-2:]
     assert not any(m["role"] == "tool" for m in compacted[2:-2])
+
+
+def test_overhead_tightens_the_budget_and_over_budget_counts_it() -> None:
+    messages = _transcript(12)
+    _, loose = compact_local_messages(messages, SUMMARIES, RELAY_TOOL_PROTOCOL, 0)
+    _, tight = compact_local_messages(messages, SUMMARIES, RELAY_TOOL_PROTOCOL, 3500)
+    assert loose is not None and tight is not None
+    assert tight["compacted_steps"] > loose["compacted_steps"] and tight["overhead"] == 3500
+    assert tight["estimated_tokens"] + 3500 <= LOCAL_STEP_TOKEN_BUDGET
+    _, huge = compact_local_messages(messages, SUMMARIES, RELAY_TOOL_PROTOCOL, 5990)
+    assert huge is not None and huge["over_budget"] is True
+
+
+def test_measured_overhead_is_clamped() -> None:
+    assert measured_overhead(4070, 1640) == 2430
+    assert measured_overhead(1000, 1640) == 0
+    assert measured_overhead(50_000, 1000) == MAX_STEP_OVERHEAD
 
 
 def test_non_message_lists_pass_through() -> None:
@@ -167,7 +188,7 @@ def test_size_breakdown_counts_categories_without_text() -> None:
     _, payload = compact_local_messages(_transcript(2), SUMMARIES, RELAY_TOOL_PROTOCOL)
     assert payload is not None
     assert set(payload) == {"system", "plan", "user", "assistant", "tool_args", "tool_results", "tools",
-                            "protocol", "estimated_tokens", "compacted_steps", "over_budget"}
+                            "protocol", "estimated_tokens", "compacted_steps", "overhead", "over_budget"}
     assert all(isinstance(v, bool if k == "over_budget" else int) for k, v in payload.items())
     assert payload["protocol"] == len(RELAY_TOOL_PROTOCOL) and payload["plan"] > 1000
     assert payload["system"] > 0 and payload["user"] > 1500
@@ -217,15 +238,45 @@ def test_relay_compacts_local_route_and_writes_counts_only_event(monkeypatch: py
     prompts: list[str] = []
     sent, connection = _relay(monkeypatch, _transcript(40), prompts)
     assert sent[-1]["status"] == "success", sent[-1]
-    assert estimate_tokens(len(prompts[0])) <= LOCAL_STEP_TOKEN_BUDGET
+    assert estimate_tokens(len(prompts[0])) + DEFAULT_STEP_OVERHEAD <= LOCAL_STEP_TOKEN_BUDGET
     rows = connection.execute("SELECT event_type, payload FROM events WHERE event_type = 'hermes.step_size'").fetchall()
     assert len(rows) == 1
     payload = json.loads(rows[0]["payload"])
     assert set(payload) == {"system", "plan", "user", "assistant", "tool_args", "tool_results", "tools", "protocol",
-                            "estimated_tokens", "compacted_steps", "over_budget", "step"}
+                            "estimated_tokens", "compacted_steps", "overhead", "over_budget", "step"}
     assert payload["step"] == 1 and payload["compacted_steps"] > 0 and payload["over_budget"] is False
     assert all(isinstance(v, (int, bool)) for v in payload.values())
     assert "What is the result" not in rows[0]["payload"]
+
+
+def _relay_with_usage(monkeypatch: pytest.MonkeyPatch, usage_source: AIUsageSource) -> tuple[
+        HermesSupervisor, dict[str, Any]]:
+    connection = _db()
+    monkeypatch.setattr(supervisor_module, "open_sqlite_connection", lambda: _Keep(connection))
+    usage = AIUsage(provider_id="local", model_id="m", input_tokens=4070, output_tokens=20, usage_source=usage_source)
+
+    def runner(**_kwargs: Any) -> Any:
+        return SimpleNamespace(status="success", flow_id=None, response=SimpleNamespace(
+            text=json.dumps({"answer": "done"}), finish_reason="stop", usage=usage))
+
+    supervisor = HermesSupervisor("unused", runner=runner)
+    supervisor.session = SESSION
+    supervisor.active_turn_plan = PLAN
+    monkeypatch.setattr(supervisor, "_send", lambda _frame: None)
+    supervisor._handle_relay({"type": "relay_request", "id": "r", "session_ref": SESSION.model_dump(mode="json"),
+                              "messages": _transcript(2), "tools": TOOLS, "allowed_tools": TOOL_NAMES})
+    return supervisor, json.loads(connection.execute("SELECT payload FROM events").fetchone()["payload"])
+
+
+def test_supervisor_updates_overhead_from_actual_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    supervisor, payload = _relay_with_usage(monkeypatch, AIUsageSource.actual)
+    assert payload["overhead"] == DEFAULT_STEP_OVERHEAD
+    assert supervisor.step_overhead == 4070 - payload["estimated_tokens"] != DEFAULT_STEP_OVERHEAD
+
+
+def test_supervisor_keeps_default_overhead_for_estimated_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    supervisor, _payload = _relay_with_usage(monkeypatch, AIUsageSource.estimated)
+    assert supervisor.step_overhead == DEFAULT_STEP_OVERHEAD
 
 
 def test_relay_over_budget_is_sent_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:

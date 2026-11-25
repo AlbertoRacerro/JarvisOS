@@ -16,7 +16,11 @@ from uuid import uuid4
 
 from app.core.database import open_sqlite_connection
 from app.core.paths import build_paths
-from app.modules.agents.hermes.message_budget import compact_local_messages
+from app.modules.agents.hermes.message_budget import (
+    DEFAULT_STEP_OVERHEAD,
+    compact_local_messages,
+    measured_overhead,
+)
 from app.modules.agents.hermes.worker_shim import (
     _PLAN_HEADER,
     COMPACT_METHODOLOGY,
@@ -40,6 +44,7 @@ from app.modules.ai.agent_contracts import (
     run_ai_task_kwargs,
 )
 from app.modules.ai.context_builder import canonical_digest
+from app.modules.ai.contracts import AIUsageSource
 from app.modules.ai.execution import AiTaskOutcome, run_ai_task
 from app.modules.ai.jarvis_context import PRODUCTION_CAPABILITY_REGISTRY, build_jarvis_context_preview
 from app.modules.ai.jarvis_context_models import JarvisCapabilityDescriptor, JarvisContextRequest
@@ -930,6 +935,7 @@ class HermesSupervisor:
         self.turn_tool_outputs: list[dict[str, Any]] = []
         self.active_turn_plan: dict[str, Any] = {"steps": [], "findings": []}
         self.turn_step_count: int = 0
+        self.step_overhead: int = DEFAULT_STEP_OVERHEAD
         self.turn_cap: int = DEFAULT_TURN_CAP
         self.step_deadline_seconds: int = 240
         self.compact_system_prompt: str = f"{PRESENTATION_INSTRUCTIONS}\n\n{COMPACT_METHODOLOGY}"
@@ -1074,13 +1080,17 @@ class HermesSupervisor:
                 tools = frame["tools"]
                 frame["messages"], step_size = compact_local_messages(
                     frame.get("messages", []), [_local_tool_prompt(tool) for tool in tools],
-                    RELAY_TOOL_PROTOCOL if tools else "")
+                    RELAY_TOOL_PROTOCOL if tools else "", self.step_overhead)
             envelope = infer_envelope(frame, deadline_seconds=self.step_deadline_seconds,
                                       route_class=selected_route)
             if envelope.agent_session != self.session:
                 result = {"status": "refused"}
             else:
                 def record_flow(outcome: AiTaskOutcome) -> None:
+                    usage = getattr(outcome.response, "usage", None)
+                    if (step_size is not None and usage is not None and usage.usage_source == AIUsageSource.actual
+                            and usage.input_tokens > 0):
+                        self.step_overhead = measured_overhead(usage.input_tokens, step_size["estimated_tokens"])
                     if outcome.flow_id and envelope.agent_session is not None:
                         self.turn_flow_ids.setdefault(envelope.agent_session.hermes_session_id, []).append(outcome.flow_id)
                         if envelope.task_kind == "general":
