@@ -451,7 +451,8 @@ def infer_envelope(frame: dict[str, Any], *, deadline_seconds: int = 120,
     messages = frame["messages"]
     if not isinstance(messages, list) or not messages:
         raise ValueError("messages must be a nonempty array")
-    messages = shrink_tool_history(messages)
+    if not (route_class and route_class.startswith("local:")):
+        messages = shrink_tool_history(messages)
     for message in messages:
         if not isinstance(message, dict) or message.get("role") not in {"system", "developer", "user", "assistant", "tool"}:
             raise ValueError("invalid message role")

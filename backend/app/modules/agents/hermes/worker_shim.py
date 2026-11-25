@@ -345,34 +345,6 @@ def shrink_tool_history(
     return shrunk_messages
 
 
-def compact_turn_messages(messages: list[dict[str, Any]], max_chars: int = 48_000) -> list[dict[str, Any]]:
-    """Keep turn anchors and a deterministic count of omitted middle messages."""
-    if not isinstance(messages, list) or max_chars < 1:
-        return messages
-    def size(value: Any) -> int:
-        return len(json.dumps(value, ensure_ascii=False, default=str))
-    if size(messages) <= max_chars:
-        return messages
-    first_user = next((i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user"), None)
-    latest_tool = next((i for i in range(len(messages) - 1, -1, -1)
-                        if isinstance(messages[i], dict) and messages[i].get("role") == "tool"), None)
-    latest = (next((i for i in range(latest_tool - 1, -1, -1)
-                    if isinstance(messages[i], dict) and messages[i].get("role") == "assistant"), latest_tool)
-              if latest_tool is not None else len(messages) - 1)
-    keep = {i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "system"}
-    if first_user is not None:
-        keep.add(first_user)
-    keep.update(range(latest, len(messages)))
-    omitted = len(messages) - len(keep)
-    if omitted < 1:
-        return messages
-    digest = {"role": "system", "content": f"Earlier turn messages compacted: {omitted} messages. Consult the saved turn plan for retained findings."}
-    result = [m for i, m in enumerate(messages) if i in keep]
-    insert_at = next((i for i, m in enumerate(result) if m.get("role") != "system"), len(result))
-    result.insert(insert_at, digest)
-    return result if size(result) <= max_chars else messages
-
-
 def _truncate_str_bytes(s: str, max_bytes: int, suffix: str = "... [output truncated]") -> str:
     raw = s.encode("utf-8")
     suffix_bytes = suffix.encode("utf-8")
@@ -814,8 +786,6 @@ class Worker:
                         raise ValueError("no active session")
                     messages = body.get("messages")
                     if isinstance(messages, list):
-                        messages = shrink_tool_history(messages)
-                        messages = compact_turn_messages(messages, max_chars=45_500)
                         if worker.active_turn_plan and (
                             worker.active_turn_plan.get("steps") or worker.active_turn_plan.get("findings")
                         ):

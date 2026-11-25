@@ -1,7 +1,8 @@
-"""Deterministic message budget for local Hermes relay steps (spec 369).
+"""Deterministic message budget for local Hermes relay steps (specs 369, 370).
 
 Pure functions over the OpenAI-shaped message list: older assistant steps become short digests, the saved plan
-is not repeated, and the oldest complete steps are dropped while the estimated envelope prompt exceeds the budget.
+is not repeated, earlier tool results stay whole while the step fits and are shortened oldest first when it does
+not, and only then are the oldest complete steps dropped.
 """
 from __future__ import annotations
 
@@ -92,11 +93,10 @@ def digest_older_steps(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _prompt_chars(messages: list[dict[str, Any]], tools: list[dict[str, Any]], protocol: str) -> int:
-    # Mirrors infer_envelope's local serialisation, including its shrink_tool_history pass.
-    shrunk = shrink_tool_history(messages)
+    # Mirrors infer_envelope's local serialisation.
     if not tools:
-        return len(json.dumps(shrunk, ensure_ascii=False, separators=(",", ":")))
-    return len(json.dumps({"messages": shrunk, "tools": tools}, ensure_ascii=False,
+        return len(json.dumps(messages, ensure_ascii=False, separators=(",", ":")))
+    return len(json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False,
                           separators=(",", ":"))) + len(protocol)
 
 
@@ -116,6 +116,25 @@ def _steps(messages: list[dict[str, Any]], start: int, stop: int) -> list[tuple[
     return steps
 
 
+def _shorten_tool_results(messages: list[dict[str, Any]], count: int, stop: int) -> tuple[list[dict[str, Any]], set[int]]:
+    """Item 3: shorten the first `count` tool results before index `stop` that are long enough to change.
+
+    Returns the messages and the ids of the replaced ones. Each result is cut by `shrink_tool_history` with
+    `keep_recent=0`, so the form and marker are the existing 180-char one.
+    """
+    result = list(messages)
+    changed: set[int] = set()
+    for i, message in enumerate(messages[:stop]):
+        if len(changed) >= count:
+            break
+        if message.get("role") == "tool":
+            shortened = shrink_tool_history([message], keep_recent=0)[0]
+            if shortened is not message:
+                result[i] = shortened
+                changed.add(id(shortened))
+    return result, changed
+
+
 def _compaction_line(count: int) -> dict[str, str]:
     return {"role": "system",
             "content": f"[{count} earlier steps were compacted to fit the local budget; see the saved plan above]"}
@@ -128,7 +147,7 @@ def _length(value: Any) -> int:
 def size_breakdown(messages: list[dict[str, Any]], tools: list[dict[str, Any]], protocol: str) -> dict[str, int]:
     """Char counts by category of what infer_envelope will send; counts only, never text."""
     sizes = dict.fromkeys(("system", "plan", "user", "assistant", "tool_args", "tool_results"), 0)
-    for message in shrink_tool_history(messages):
+    for message in messages:
         role, content = message.get("role"), message.get("content")
         if role in ("system", "developer"):
             text = content if isinstance(content, str) else ""
@@ -173,9 +192,18 @@ def compact_local_messages(
         kept = [m for i, m in enumerate(working) if i not in dropped]
         return [*kept[: first_user + 1], _compaction_line(count), *kept[first_user + 1:]]
 
+    def over(candidate: list[dict[str, Any]]) -> bool:
+        return estimate_tokens(_prompt_chars(candidate, tools, protocol)) + overhead > budget
+
+    shortenable = sum(1 for m in working[: latest or 0] if m.get("role") == "tool")
+    shrunk_ids: set[int] = set()
+    for shortened in range(shortenable + 1):
+        candidate, shrunk_ids = _shorten_tool_results(working, shortened, latest or 0)
+        if not over(candidate):
+            break
+    working = candidate
     compacted = 0
-    while compacted < len(steps) and (
-            estimate_tokens(_prompt_chars(without_oldest(compacted), tools, protocol)) + overhead > budget):
+    while compacted < len(steps) and over(without_oldest(compacted)):
         compacted += 1
     working = without_oldest(compacted)
     estimated = estimate_tokens(_prompt_chars(working, tools, protocol))
@@ -183,6 +211,7 @@ def compact_local_messages(
         **size_breakdown(working, tools, protocol),
         "estimated_tokens": estimated, "compacted_steps": compacted, "overhead": overhead,
         "over_budget": estimated + overhead > budget,
+        "shrunk_tool_results": sum(1 for m in working if id(m) in shrunk_ids),
     }
     return working, payload
 
