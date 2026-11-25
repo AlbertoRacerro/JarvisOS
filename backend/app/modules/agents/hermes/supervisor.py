@@ -1068,6 +1068,7 @@ class HermesSupervisor:
                 frame["messages"] = inject_saved_plan(frame.get("messages", []), self.active_turn_plan)
 
             tools = _admitted_tools(frame)
+            step_size: dict[str, Any] | None = None
             if selected_route.startswith("local:"):
                 frame["tools"] = compact_tool_schemas(tools)
                 tools = frame["tools"]
