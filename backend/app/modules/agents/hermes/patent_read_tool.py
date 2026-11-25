@@ -536,6 +536,7 @@ def execute_patent_read(
                     dated_events = parsed_events
                     official_status_error = parse_err
 
+    legal_note = _legal_status_note(official_status, official_status_error)
     return {
         "status": "succeeded",
         "publication_number": canonical_number,
@@ -544,16 +545,32 @@ def execute_patent_read(
         "priority_date": parsed_google["priority_date"],
         "filing_date": parsed_google["filing_date"],
         "publication_date": parsed_google["publication_date"],
+        "claim_1": parsed_google["claim_1"],
+        "legal_status_note": legal_note,
         "google_legal_status": parsed_google["google_legal_status"],
         "google_legal_status_disclaimer": GOOGLE_STATUS_DISCLAIMER,
-        "claim_1": parsed_google["claim_1"],
-        "source_url": google_url,
-        "observed_at": observed_at,
         "official_status": official_status,
         "official_status_error": official_status_error,
+        "source_url": google_url,
+        "observed_at": observed_at,
         "register_url": register_url,
         "dated_events": dated_events,
     }
+
+
+def _legal_status_note(official_status: str | None, error: str | None) -> str:
+    """One sentence saying whether the official register was read, placed next to the advisory Google status."""
+    if official_status is None:
+        return "official legal status not checked: the EPO Register applies to EP publications only; the Google status is advisory"
+    if official_status == "unverified":
+        if error == "http_403_challenge":
+            reason = "the EPO Register refused automated access (HTTP 403)"
+        elif error == "no_register_link_found":
+            reason = "no EPO Register link was found"
+        else:
+            reason = f"the EPO Register could not be read ({error or 'unknown'})"
+        return f"official legal status not verified: {reason}; the Google status is advisory"
+    return f"official legal status read from the EPO Register: {official_status}"
 
 
 def dispatch_patent_read_tool(

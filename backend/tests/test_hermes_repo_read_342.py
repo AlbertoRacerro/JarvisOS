@@ -593,7 +593,7 @@ def test_dispatch_tool_enforces_repo_read_grant(tmp_path: Path, monkeypatch: pyt
     call_expired = _make_call({"op": "read", "path": "file.txt"}, grant_id="grant-expired")
     res_expired = dispatch_tool(call_expired, live_grants={"grant-expired": expired_grant})
     assert res_expired.status == "refused"
-    assert res_expired.error_code == "capability_denied"
+    assert res_expired.error_code == "grant_expired"
 
     # 5. Cloud route with pack scope refused via dispatch_tool
     cloud_grant = _make_grant(grant_id="grant-cloud", route_class="cloud:openai")

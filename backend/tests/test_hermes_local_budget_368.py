@@ -53,7 +53,7 @@ def test_first_step_uses_real_broker_schemas_size_guard(surface: str) -> None:
                                       {"role": "user", "content": "What is the result?\n\n" + "x" * 2500}],
                          "tools": compact}, separators=(",", ":")) + RELAY_TOOL_PROTOCOL
     # This is a size regression guard, not a model token count.
-    assert len(prompt) < 14000
+    assert len(prompt) < 14400
     session = {"jarvis_thread_id": "thread-1", "hermes_session_id": "session-1", "profile_id": "isaac",
                "workspace_id": "default", "generation": 1, "upstream_revision": "test"}
     frame = {"id": "relay-1", "session_ref": session, "messages": [{"role": "user", "content": "Hi"}],

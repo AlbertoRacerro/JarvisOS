@@ -326,7 +326,7 @@ def test_hermes_retrieval_grant_without_refs_allows_workspace_navigation() -> No
     assert grant.scope.workspace_id == "workspace-a"
     assert grant.scope.jarvis_thread_id == "thread-a"
     assert grant.scope.object_refs == ()
-    assert 0 < (grant.expires_at - grant.issued_at).total_seconds() <= 600
+    assert 0 < (grant.expires_at - grant.issued_at).total_seconds() <= 3660
     decision_grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.decide")
     assert decision_grant.scope == type(grant.scope)(workspace_id="workspace-a", jarvis_thread_id="thread-a")
     dev_read_grant = next(item for item in worker.live_grants.values() if item.capability_id == "jarvis.dev_read")

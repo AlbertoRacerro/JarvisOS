@@ -88,6 +88,20 @@ def _log_run(call: StructuredToolCall, workspace_id: str, record: Any) -> None:
         return
 
 
+def argument_problem(arguments: dict[str, Any]) -> str:
+    """Spec 374 item 2: which argument of a refused `jarvis_python` call is wrong; never echoes a value."""
+    code = arguments.get("code")
+    if "code" not in arguments:
+        return "invalid arguments: `code` is missing"
+    if not isinstance(code, str):
+        return "invalid arguments: `code` must be a string"
+    if len(code) > MAX_CODE_CHARS:
+        return f"invalid arguments: `code` is over the {MAX_CODE_CHARS}-character limit"
+    if set(arguments) != {"code"}:
+        return "invalid arguments: only `code` is accepted"
+    return "invalid arguments: `code` is too large to run"
+
+
 def dispatch_calc_run_tool(call: StructuredToolCall, workspace_id: str,
                            error: str) -> tuple[dict[str, Any] | None, str]:
     """Run the script; refusals return (None, code) and run nothing. Never raises."""

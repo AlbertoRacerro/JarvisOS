@@ -661,11 +661,23 @@ def _ensure_hermes_thread_session(worker: HermesSupervisor, *, thread_id: str, w
     worker.last_error = None
 
 
+def _grant_lifetime(worker: HermesSupervisor) -> Any:
+    """Spec 374 item 1: a grant lives as long as the worker's own turn may run, plus a 60 s margin."""
+    from datetime import timedelta
+
+    from app.modules.agents.hermes.supervisor import turn_deadline
+    from app.modules.agents.hermes.worker_shim import DEFAULT_TURN_CAP
+
+    step_seconds = int(getattr(worker, "step_deadline_seconds", 120))
+    turn_cap = int(getattr(worker, "turn_cap", DEFAULT_TURN_CAP))
+    return timedelta(seconds=turn_deadline(step_seconds, turn_cap) + 60)
+
+
 def _install_hermes_retrieval_grant(
     worker: HermesSupervisor, payload: AIThreadSubmit, workspace_id: str, thread_id: str,
     *, compact: bool = False,
 ) -> str | None:
-    from datetime import UTC, datetime, timedelta
+    from datetime import UTC, datetime
 
     from app.modules.ai.agent_contracts import CapabilityGrantRef, CapabilityScope
     from app.modules.ai.jarvis_context_models import SourceRef
@@ -693,6 +705,7 @@ def _install_hermes_retrieval_grant(
     allowed_owners = sorted(WORKSPACE_SCOPED_OWNERS) if workspace_scoped else sorted(
         {ref.authority_owner for ref in source_refs})
     now = datetime.now(UTC)
+    lifetime = _grant_lifetime(worker)
 
     from app.modules.agents.hermes.ip_boundary import is_local_route
 
@@ -725,21 +738,21 @@ def _install_hermes_retrieval_grant(
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id,
                               object_refs=tuple(source_refs)),
         constraints=dict(read_constraints),
-        issued_at=now, expires_at=now + timedelta(minutes=10),
+        issued_at=now, expires_at=now + lifetime,
     )
     worker.live_grants[grant_id] = grant
     decision_grant_id = str(uuid4())
     decision_grant = CapabilityGrantRef(
         grant_id=decision_grant_id, capability_id="jarvis.decide", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
-        issued_at=now, expires_at=now + timedelta(minutes=10),
+        issued_at=now, expires_at=now + lifetime,
     )
     worker.live_grants[decision_grant_id] = decision_grant
     dev_read_grant_id = str(uuid4())
     dev_read_grant = CapabilityGrantRef(
         grant_id=dev_read_grant_id, capability_id="jarvis.dev_read", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
-        issued_at=now, expires_at=now + timedelta(minutes=10),
+        issued_at=now, expires_at=now + lifetime,
     )
     worker.live_grants[dev_read_grant_id] = dev_read_grant
     dev_read_ops = "specs, spec_text, recent_work, plan, supervisor, directives, quotas, runtime_health"
@@ -748,7 +761,7 @@ def _install_hermes_retrieval_grant(
         grant_id=repo_read_grant_id, capability_id="jarvis.repo_read", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
         constraints=dict(read_constraints),
-        issued_at=now, expires_at=now + timedelta(minutes=10),
+        issued_at=now, expires_at=now + lifetime,
     )
     worker.live_grants[repo_read_grant_id] = repo_read_grant
     repo_read_ops = "list, search, read"
@@ -758,7 +771,7 @@ def _install_hermes_retrieval_grant(
         grant_id=knowledge_read_grant_id, capability_id="jarvis.knowledge_read", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
         constraints=dict(read_constraints),
-        issued_at=now, expires_at=now + timedelta(minutes=10),
+        issued_at=now, expires_at=now + lifetime,
     )
     worker.live_grants[knowledge_read_grant_id] = knowledge_read_grant
     knowledge_read_views = "workspaces, memory_records, literature_sources, literature_entries, project_revisions, calc_runs, ai_jobs_recent, table_counts"
@@ -767,7 +780,7 @@ def _install_hermes_retrieval_grant(
         grant_id=paper_search_grant_id, capability_id="jarvis.paper_search", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
         constraints=dict(read_constraints),
-        issued_at=now, expires_at=now + timedelta(minutes=10),
+        issued_at=now, expires_at=now + lifetime,
     )
     worker.live_grants[paper_search_grant_id] = paper_search_grant
     patent_read_grant_id = str(uuid4())
@@ -775,21 +788,21 @@ def _install_hermes_retrieval_grant(
         grant_id=patent_read_grant_id, capability_id="jarvis.patent_read", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
         constraints=dict(read_constraints),
-        issued_at=now, expires_at=now + timedelta(minutes=10),
+        issued_at=now, expires_at=now + lifetime,
     )
     paper_pdf_grant_id = str(uuid4())
     paper_pdf_grant = CapabilityGrantRef(
         grant_id=paper_pdf_grant_id, capability_id="jarvis.paper_pdf_read", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
         constraints=dict(read_constraints),
-        issued_at=now, expires_at=now + timedelta(minutes=10),
+        issued_at=now, expires_at=now + lifetime,
     )
     browser_page_grant_id = str(uuid4())
     browser_page_grant = CapabilityGrantRef(
         grant_id=browser_page_grant_id, capability_id="jarvis.browser_page_read", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
         constraints=dict(read_constraints),
-        issued_at=now, expires_at=now + timedelta(minutes=10),
+        issued_at=now, expires_at=now + lifetime,
     )
     worker.live_grants[patent_read_grant_id] = patent_read_grant
     worker.live_grants[browser_page_grant_id] = browser_page_grant
@@ -827,16 +840,17 @@ def _install_hermes_retrieval_grant(
 def _install_surface_grants(worker: HermesSupervisor, workspace_id: str, thread_id: str,
                             surface_ref: Any, brief: Any, *, compact: bool = False) -> str:
     """Issue the calculation grant plus the tools matching this interaction's owner-derived surface."""
-    from datetime import UTC, datetime, timedelta
+    from datetime import UTC, datetime
 
     from app.modules.ai.agent_contracts import CapabilityGrantRef, CapabilityScope
     now = datetime.now(UTC)
+    lifetime = _grant_lifetime(worker)
     # Spec 371: every Hermes interaction holds one calculation grant, whatever the surface.
     calc_grant_id = str(uuid4())
     worker.live_grants[calc_grant_id] = CapabilityGrantRef(
         grant_id=calc_grant_id, capability_id="jarvis.calc_run", issuer="jarvis_policy",
         scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
-        issued_at=now, expires_at=now + timedelta(minutes=10),
+        issued_at=now, expires_at=now + lifetime,
     )
     calc_line = f"mcp__jarvis__jarvis_python grant_id={calc_grant_id}."
     if brief.surface not in {"process", "bluecad", "studio"}:
@@ -854,7 +868,7 @@ def _install_surface_grants(worker: HermesSupervisor, workspace_id: str, thread_
             grant_id=grant_id, capability_id=capability, issuer="jarvis_policy",
             scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
             constraints=constraints,
-            issued_at=now, expires_at=now + timedelta(minutes=10),
+            issued_at=now, expires_at=now + lifetime,
         )
     read_name = f"mcp__jarvis__jarvis_{prefix}_read"
     act_name = f"mcp__jarvis__jarvis_{prefix}_act"

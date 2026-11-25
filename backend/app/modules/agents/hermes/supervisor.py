@@ -24,6 +24,7 @@ from app.modules.agents.hermes.message_budget import (
 )
 from app.modules.agents.hermes.worker_shim import (
     _PLAN_HEADER,
+    ANSWER_FORMAT_TEXT,
     COMPACT_METHODOLOGY,
     DEFAULT_LOCAL_OUTPUT_CAP,
     PRESENTATION_INSTRUCTIONS,
@@ -365,7 +366,7 @@ def is_dead_turn(text: str | None) -> bool:
 
 CONTINUATION_REQUEST = (
     "Continue. If you need a tool, call it now in this message; "
-    "otherwise give the final answer in the required format."
+    f"otherwise give the final answer: {ANSWER_FORMAT_TEXT}."
 )
 MAX_CONTINUATIONS = 2  # per turn, on local routes (spec 372 item 3)
 _CONTINUATION_REPLY_CHARS = 2000  # echo of the unfinished reply, kept short for the step budget
@@ -398,6 +399,29 @@ def is_local_route(route_class: str | None) -> bool:
     return bool(route_class) and str(route_class).startswith("local:")
 
 
+_TEMPLATE_BLOCK = re.compile(
+    r"\A\s*Answer:[ \t]*1-3 sentences[ \t]*\s*Numbers:[ \t]*\s*Sources:[ \t]*\s*Caveats:[ \t]*(?=\s*\Z|\n|Answer\s*:)")
+
+
+def strip_empty_template(text: str) -> str:
+    """Spec 374 item 4: drop a leading block made only of the four empty format labels; anything else is unchanged."""
+    match = _TEMPLATE_BLOCK.match(text)
+    return text[match.end():].lstrip() if match else text
+
+
+def strip_template_from_reply(text: str) -> str:
+    """Apply `strip_empty_template` to a reply that is plain text or a JSON `{"answer": ...}` object."""
+    try:
+        value: Any = json.loads(text)
+    except (ValueError, TypeError):
+        return strip_empty_template(text)
+    if isinstance(value, dict) and isinstance(value.get("answer"), str) and not value.get("tool_calls"):
+        stripped = strip_empty_template(value["answer"])
+        if stripped != value["answer"]:
+            return json.dumps({**value, "answer": stripped}, ensure_ascii=False)
+    return text
+
+
 def missing_final_answer(text: str | None) -> str | None:
     """Spec 372 item 3: the step's text when it has neither a tool call nor an `Answer:`; otherwise None."""
     if is_dead_turn(text) or not isinstance(text, str):
@@ -415,7 +439,7 @@ def missing_final_answer(text: str | None) -> str | None:
         value = value.get("answer", "")
     if not isinstance(value, str):
         return None
-    return None if _ANSWER_LINE.search(value) else value
+    return None if _ANSWER_LINE.search(strip_empty_template(value)) else value
 
 
 def compact_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -644,7 +668,10 @@ def run_governed_inference(
 
     if outcome.status != "success" or outcome.response is None or outcome.response.text is None:
         return {"status": "refused"}
-    result: dict[str, Any] = {"status": "success", "text": outcome.response.text}
+    final_text = outcome.response.text
+    if local and isinstance(final_text, str):
+        final_text = strip_template_from_reply(final_text)
+    result: dict[str, Any] = {"status": "success", "text": final_text}
     finish_reason = getattr(outcome.response, "finish_reason", None)
     if finish_reason is not None:
         result["finish_reason"] = finish_reason
@@ -676,6 +703,9 @@ def dispatch_tool(
         # Tell the agent which grant it confused so it can retry; the grant still authorizes nothing else.
         error = "use_process_act_grant_id" if call.capability_id == "jarvis.process_act" \
             else "use_process_read_grant_id"
+    if (grant is not None and grant.capability_id == call.capability_id and error == "capability_denied"
+            and grant.revoked_at is None and now >= grant.expires_at):
+        error = "grant_expired"
     result: dict[str, Any] | None = None
     if call.capability_id == "jarvis.turn_plan":
         from app.modules.agents.hermes.turn_plan_tool import dispatch_turn_plan_tool
@@ -833,6 +863,19 @@ def dispatch_tool(
         result=result, error_code=None if result is not None else error,
         completed_at=now,
     )
+
+
+def refusal_message(call: StructuredToolCall, error_code: str) -> str | None:
+    """Spec 374 item 2: a short, secret-free reason the model can act on; never ids, paths or argument values."""
+    if error_code == "grant_expired":
+        return "grant expired: answer with what you have"
+    if error_code == "capability_denied":
+        return "unknown grant_id or grant of another capability: use the grant_id given in the system message"
+    if error_code == "invalid_arguments" and call.capability_id == "jarvis.calc_run":
+        from app.modules.agents.hermes.calc_run_tool import argument_problem
+
+        return argument_problem(call.arguments)
+    return None
 
 
 def tool_response_schema(tools: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1213,6 +1256,7 @@ class HermesSupervisor:
         tool_name = "unknown"
         capability_id = "jarvis.context_preview"
         call_id = str(frame.get("id", "unknown"))
+        refusal_note: str | None = None
         try:
             ref = AgentSessionRef.model_validate(frame["session_ref"])
             raw_arguments = frame["arguments"]
@@ -1263,6 +1307,8 @@ class HermesSupervisor:
                                    patent_read_opener=self.patent_read_opener,
                                    browser_page_runner=self.browser_page_runner,
                                    active_plan=self.active_turn_plan)
+            if result.error_code is not None:
+                refusal_note = refusal_message(call, result.error_code)
             if result.status == "succeeded" and isinstance(result.result, dict) and len(self.turn_tool_outputs) < 50:
                 self.turn_tool_outputs.append(result.result)
             if (
@@ -1297,6 +1343,7 @@ class HermesSupervisor:
                 call_id=call_id, capability_id=capability_id,
                 status="refused", error_code="capability_denied", completed_at=now,
             )
+            refusal_note = "the call could not be processed: check the tool arguments and grant_id"
         try:
             with open_sqlite_connection() as connection:
                 log_event(connection, event_type="hermes.tool_result", actor="jarvis",
@@ -1329,8 +1376,10 @@ class HermesSupervisor:
         except sqlite3.Error:
             self.last_error = "tool_evidence_unavailable"
         try:
-            self._send({"type": "tool_result", "id": frame.get("id"),
-                        "tool_result": result.model_dump(mode="json")})
+            tool_result = result.model_dump(mode="json")
+            if refusal_note:
+                tool_result["message"] = refusal_note
+            self._send({"type": "tool_result", "id": frame.get("id"), "tool_result": tool_result})
         except RuntimeError:
             self.last_error = "worker_lost_during_tool"
 
@@ -1454,6 +1503,11 @@ class HermesSupervisor:
         self.step_deadline_seconds = step_deadline_from_rows(rows, output_cap)
         if turn_timeout == 600:
             turn_timeout = turn_deadline(self.step_deadline_seconds, self.turn_cap)
+        # Spec 374 item 1: grants issued before the step deadline was measured live as long as this turn may run.
+        grant_end = datetime.now(UTC) + timedelta(seconds=min(turn_timeout, 3600) + 60)
+        for grant_id, grant in list(self.live_grants.items()):
+            if grant.revoked_at is None and grant.expires_at < grant_end:
+                self.live_grants[grant_id] = grant.model_copy(update={"expires_at": grant_end})
         self.last_flow.pop(self.session.hermes_session_id, None)
         self.turn_flow_ids[self.session.hermes_session_id] = []
         self.active_interaction_id = interaction_id

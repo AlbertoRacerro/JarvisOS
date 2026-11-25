@@ -26,6 +26,7 @@ from app.modules.agents.hermes.supervisor import (
     UPSTREAM_REVISION,
     HermesSupervisor,
     dispatch_tool,
+    turn_deadline,
 )
 from app.modules.agents.hermes.worker_shim import ADMITTED_TOOLS, COMPACT_METHODOLOGY, pinned_config
 from app.modules.ai.agent_contracts import (
@@ -332,7 +333,7 @@ def test_every_surface_holds_one_calc_grant(workspace_id: str, surface: str, com
     grant = grants[0]
     assert f"mcp__jarvis__jarvis_python grant_id={grant.grant_id}" in text
     assert grant.scope.workspace_id == workspace_id and grant.scope.jarvis_thread_id == "thread-1"
-    assert grant.expires_at - grant.issued_at == timedelta(minutes=10)
+    assert grant.expires_at - grant.issued_at == timedelta(seconds=turn_deadline(120, 10) + 60)
     if surface == "none":
         assert len(worker.live_grants) == 1
     else:
