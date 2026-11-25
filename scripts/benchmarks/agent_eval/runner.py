@@ -8,6 +8,7 @@ checks, and compares candidate runs with baselines to fail on regressions.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import math
@@ -31,6 +32,8 @@ TERMINAL_FLOW_STATES = frozenset(
     {"complete", "completed", "failed", "failed_terminal", "cancelled_terminal", "timed_out"}
 )
 COMPLETED_FLOW_STATES = frozenset({"complete", "completed"})
+ARTIFACT_CHECK_KINDS = frozenset({"tool_called", "studio_draft"})
+SPLITS = ("dev", "heldout", "all")
 
 # Type for injectable Claude runner: (prompt, model) -> (answer, flow_state, terminal_reason)
 ClaudeRunner = Callable[[str, str], tuple[str, str, str | None]]
@@ -102,6 +105,87 @@ def count_thread_tool_calls(data_root: Path | str, thread_id: str) -> int:
         return count
     finally:
         conn.close()
+
+
+def _open_proof_db(data_root: Path | str) -> sqlite3.Connection | None:
+    root = Path(data_root)
+    db_file = root if root.is_file() else root / "jarvisos.db"
+    if not db_file.exists():
+        return None
+    return sqlite3.connect(f"file:{urllib.parse.quote(db_file.resolve().as_posix())}?mode=ro", uri=True)
+
+
+def _bare_tool_name(name: Any) -> str:
+    return str(name).removeprefix("mcp__jarvis__")
+
+
+def count_named_tool_calls(data_root: Path | str, thread_id: str, tool: str) -> int:
+    """Count a thread's `tool.call` events whose matching `hermes.tool_started` row names `tool`."""
+    conn = _open_proof_db(data_root)
+    if conn is None:
+        return 0
+    try:
+        rows = conn.execute(
+            "SELECT event_type, target_id, payload FROM events "
+            "WHERE event_type IN ('hermes.agent_event', 'hermes.tool_started')").fetchall()
+    finally:
+        conn.close()
+    call_ids: set[str] = set()
+    started: dict[str, str] = {}
+    for event_type, target_id, payload_raw in rows:
+        try:
+            payload = json.loads(payload_raw) if payload_raw else None
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if event_type == "hermes.tool_started":
+            started[str(target_id)] = _bare_tool_name(payload.get("tool_name", ""))
+            continue
+        session_ref = payload.get("session_ref")
+        if (payload.get("kind") == "tool.call" and isinstance(session_ref, dict)
+                and session_ref.get("jarvis_thread_id") == thread_id and payload.get("correlation_id")):
+            call_ids.add(str(payload["correlation_id"]))
+    wanted = _bare_tool_name(tool)
+    return sum(1 for call_id in call_ids if started.get(call_id) == wanted)
+
+
+def studio_draft_matches(data_root: Path | str, workspace_id: str, started_at: float, ended_at: float,
+                         terms: list[str]) -> bool:
+    """True when a studio_drafts row of the workspace changed in the window and its source holds every term."""
+    conn = _open_proof_db(data_root)
+    if conn is None:
+        return False
+    try:
+        rows = conn.execute(
+            "SELECT source FROM studio_drafts WHERE workspace_id = ? AND "
+            "(julianday(created_at) BETWEEN julianday(?, 'unixepoch') AND julianday(?, 'unixepoch') "
+            "OR julianday(updated_at) BETWEEN julianday(?, 'unixepoch') AND julianday(?, 'unixepoch'))",
+            (workspace_id, started_at, ended_at, started_at, ended_at)).fetchall()
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        conn.close()
+    return any(all(str(term).lower() in str(source or "").lower() for term in terms) for (source,) in rows)
+
+
+def check_outcome(answer: str, check: dict[str, Any], context: dict[str, Any] | None = None) -> tuple[bool, str | None]:
+    """Evaluate one check; the second value is the reason an artifact check failed."""
+    kind = check.get("kind")
+    if kind not in ARTIFACT_CHECK_KINDS:
+        return check_passes(answer, check), None
+    if not context or not context.get("data_root") or not context.get("thread_id"):
+        return False, f"{kind}: requires --data-root and a backend thread"
+    if kind == "tool_called":
+        tool = str(check.get("tool", ""))
+        minimum = int(check.get("min", 1))
+        seen = count_named_tool_calls(context["data_root"], context["thread_id"], tool)
+        return (True, None) if seen >= minimum else (False, f"tool_called: {tool} seen {seen}, need {minimum}")
+    terms = [str(term) for term in check.get("terms", [])]
+    if studio_draft_matches(context["data_root"], context["workspace_id"], context["started_at"],
+                            context["ended_at"], terms):
+        return True, None
+    return False, "studio_draft: no matching draft created or updated during the repetition"
 
 
 def read_job_metrics(data_root: Path | str, started_at: float, ended_at: float) -> dict[str, float | int | None]:
@@ -224,8 +308,9 @@ def check_passes(answer: str, check: dict[str, Any]) -> bool:
     return False
 
 
-def score_task(answer: str | None, flow_state: str, task: dict[str, Any]) -> tuple[float, int, int]:
-    """Score a task execution.
+def score_task_detailed(answer: str | None, flow_state: str, task: dict[str, Any],
+                        context: dict[str, Any] | None = None) -> tuple[float, int, int, list[str]]:
+    """Score a task execution; the last value lists why artifact checks failed.
 
     Points = share of checks passed * max_points, plus a hard zero when
     flow_state is not completed or the answer is empty.
@@ -233,15 +318,22 @@ def score_task(answer: str | None, flow_state: str, task: dict[str, Any]) -> tup
     checks = task.get("checks", [])
     max_points = float(task.get("max_points", 2.0))
     if not checks:
-        return (0.0, 0, 0)
+        return (0.0, 0, 0, [])
 
     # Hard zero if flow_state is not completed or answer is empty
     if flow_state not in COMPLETED_FLOW_STATES or not answer or not answer.strip():
-        return (0.0, 0, len(checks))
+        return (0.0, 0, len(checks), [])
 
-    passed = sum(1 for check in checks if check_passes(answer, check))
+    outcomes = [check_outcome(answer, check, context) for check in checks]
+    passed = sum(1 for ok, _ in outcomes if ok)
     points = (passed / len(checks)) * max_points
-    return (points, passed, len(checks))
+    return (points, passed, len(checks), [reason for ok, reason in outcomes if not ok and reason])
+
+
+def score_task(answer: str | None, flow_state: str, task: dict[str, Any],
+               context: dict[str, Any] | None = None) -> tuple[float, int, int]:
+    """Score a task execution as (points, checks passed, checks total)."""
+    return score_task_detailed(answer, flow_state, task, context)[:3]
 
 
 def execute_claude_cli(prompt: str, model: str, *, timeout: float) -> tuple[str, str, str | None]:
@@ -311,6 +403,82 @@ def wait_for_model_idle(
         sleep(poll_seconds)
 
 
+def _std_error(values: list[float]) -> float:
+    """Sample standard deviation over sqrt(n); 0 for fewer than two values."""
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / (len(values) - 1)) / math.sqrt(len(values))
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def rep_passed(rep: dict[str, Any]) -> bool:
+    """A repetition passes when every check passed; earlier results are judged by full points."""
+    if isinstance(rep.get("passed"), bool):
+        return rep["passed"]
+    return (rep.get("flow_state") in COMPLETED_FLOW_STATES and float(rep.get("max_points") or 0) > 0
+            and float(rep.get("points", 0)) >= float(rep["max_points"]) - 1e-9)
+
+
+def task_pass_stats(reps: list[dict[str, Any]]) -> dict[str, Any]:
+    passes = sum(1 for rep in reps if rep_passed(rep))
+    return {"passes": passes, "n": len(reps), "pass_at_1": round(passes / len(reps), 4),
+            "pass_at_k": 1.0 if passes == len(reps) else 0.0}
+
+
+def run_summary(task_results: dict[str, Any]) -> dict[str, Any]:
+    """Mean points, pass^1 and pass^k over tasks, each with its standard error over tasks."""
+    points = [float(t["mean_score"]) for t in task_results.values()]
+    stats = [task_pass_stats(t["repetitions"]) for t in task_results.values()]
+    pass1 = [s["pass_at_1"] for s in stats]
+    passk = [s["pass_at_k"] for s in stats]
+    return {"tasks": len(points), "k": max((s["n"] for s in stats), default=0),
+            "mean_points": round(_mean(points), 4), "mean_points_se": round(_std_error(points), 4),
+            "mean_pass_at_1": round(_mean(pass1), 4), "pass_at_1_se": round(_std_error(pass1), 4),
+            "mean_pass_at_k": round(_mean(passk), 4), "pass_at_k_se": round(_std_error(passk), 4)}
+
+
+def _task_entry(task_id: str, rep_results: list[dict[str, Any]]) -> dict[str, Any]:
+    points_list = [r["points"] for r in rep_results]
+    calls_list = [r["tool_calls"] for r in rep_results]
+    walls_list = [r["wall_time_s"] for r in rep_results]
+    return {
+        "task_id": task_id,
+        "mean_score": round(sum(points_list) / len(points_list), 4),
+        "min_score": round(min(points_list), 4),
+        **task_pass_stats(rep_results),
+        "mean_tool_calls": round(sum(calls_list) / len(calls_list), 2),
+        "total_tool_calls": sum(calls_list),
+        "mean_wall_time_s": round(sum(walls_list) / len(walls_list), 3),
+        "total_wall_time_s": round(sum(walls_list), 3),
+        "mean_first_actual_input_tokens": _mean_present(rep_results, "first_actual_input_tokens"),
+        "mean_max_actual_input_tokens": _mean_present(rep_results, "max_actual_input_tokens"),
+        "mean_input_tokens": _mean_present(rep_results, "input_tokens"),
+        "mean_output_tokens": _mean_present(rep_results, "output_tokens"),
+        "mean_decode_tps": _mean_present(rep_results, "decode_tps"),
+        "repetitions": rep_results,
+    }
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def format_summary(result: dict[str, Any]) -> str:
+    s = result["summary"]
+    return (f"set={result['set_id']} split={result['split']} tasks={s['tasks']} k={s['k']} "
+            f"points={s['mean_points']:.3f}±{s['mean_points_se']:.3f} "
+            f"pass^1={s['mean_pass_at_1']:.3f}±{s['pass_at_1_se']:.3f} "
+            f"pass^k={s['mean_pass_at_k']:.3f}±{s['pass_at_k_se']:.3f} "
+            f"reps={result['completed_repetitions']} tool_calls={result['total_tool_calls']} "
+            f"wall={result['total_wall_time_s']:.1f}s" + ("" if result["complete"] else " INCOMPLETE"))
+
+
 def run_eval(
     *,
     tasks_path: Path | str,
@@ -326,6 +494,9 @@ def run_eval(
     role_id: str | None = None,
     yield_to_model: str | None = None,
     yield_quiet_seconds: float = 120.0,
+    split: str = "dev",
+    allow_heldout: bool = False,
+    resume: bool = False,
     slots_opener: Callable[..., Any] = urllib.request.urlopen,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
@@ -335,9 +506,24 @@ def run_eval(
     if not tasks_file.is_file():
         raise FileNotFoundError(f"Tasks file not found: {tasks_file}")
 
-    task_data = json.loads(tasks_file.read_text(encoding="utf-8"))
+    tasks_bytes = tasks_file.read_bytes()
+    tasks_sha256 = hashlib.sha256(tasks_bytes).hexdigest()
+    task_data = json.loads(tasks_bytes.decode("utf-8"))
     cloud_ok = task_data.get("cloud_ok") is True
-    tasks = task_data.get("tasks", [])
+    all_tasks = task_data.get("tasks", [])
+    if split not in SPLITS:
+        raise ValueError(f"split must be one of {', '.join(SPLITS)}")
+    if split != "dev" and not allow_heldout:
+        raise ValueError(f"--split {split} reads held-out tasks and requires --allow-heldout")
+    for task in all_tasks:
+        if task.get("split", "dev") not in ("dev", "heldout"):
+            raise ValueError(f"Task {task.get('id')}: split must be 'dev' or 'heldout'")
+        tags = task.get("tags", [])
+        if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+            raise ValueError(f"Task {task.get('id')}: tags must be a list of strings")
+    tasks = [task for task in all_tasks if split == "all" or task.get("split", "dev") == split]
+    if not tasks:
+        raise ValueError(f"No tasks in split '{split}'")
     set_id = task_data.get("set_id", tasks_file.stem)
 
     if reps < 1 or timeout <= 0:
@@ -361,19 +547,64 @@ def run_eval(
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
+    task_ids = [task["id"] for task in tasks]
+    results_file = out_path / "results.json"
+    label_file = out_path / f"{label}.json"
+    prior: dict[str, Any] = {}
+    if results_file.is_file():
+        prior = json.loads(results_file.read_text(encoding="utf-8"))
+        if resume:
+            expected = {"label": label, "tasks_sha256": tasks_sha256, "split": split, "reps": reps}
+            for key, value in expected.items():
+                if prior.get(key) != value:
+                    raise ValueError(f"Cannot resume: {key} differs ({prior.get(key)!r} vs {value!r})")
+        elif prior.get("complete") is False:
+            raise ValueError(f"{results_file} holds an unfinished run; use --resume or another --out")
+    elif resume:
+        raise ValueError(f"Cannot resume: no {results_file}")
+
     task_results: dict[str, Any] = {}
-    total_tool_calls_overall = 0
-    total_wall_time_overall = 0.0
-    yield_pauses = 0
-    yield_paused_s = 0.0
+    yield_pauses = int(prior.get("yield_pauses", 0)) if resume else 0
+    yield_paused_s = float(prior.get("yield_paused_s", 0.0)) if resume else 0.0
     yield_logged = False
+    started_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    def write_results(complete: bool) -> dict[str, Any]:
+        entries = list(task_results.values())
+        data = {
+            "label": label,
+            "set_id": set_id,
+            "split": split,
+            "reps": reps,
+            "task_ids": task_ids,
+            "tasks_sha256": tasks_sha256,
+            "complete": complete,
+            "completed_repetitions": sum(len(t["repetitions"]) for t in entries),
+            "timestamp": started_iso,
+            "total_mean_score": round(sum(t["mean_score"] for t in entries), 4),
+            "total_tool_calls": sum(t["total_tool_calls"] for t in entries),
+            "total_wall_time_s": round(sum(t["total_wall_time_s"] for t in entries), 3),
+            "yield_pauses": yield_pauses,
+            "yield_paused_s": round(yield_paused_s, 3),
+            "summary": run_summary(task_results),
+            "tasks": task_results,
+        }
+        encoded = json.dumps(data, indent=2)
+        _write_atomic(results_file, encoded)
+        _write_atomic(label_file, encoded)
+        return data
 
     for task in tasks:
         task_id = task["id"]
         prompt = task["prompt"]
         rep_results: list[dict[str, Any]] = []
+        if resume:
+            kept = prior.get("tasks", {}).get(task_id, {}).get("repetitions", [])
+            rep_results = [r for r in kept if isinstance(r, dict) and r.get("rep", 0) < reps]
+            if rep_results:
+                task_results[task_id] = _task_entry(task_id, rep_results)
 
-        for rep in range(reps):
+        for rep in range(len(rep_results), reps):
             yield_wait_s = 0.0
             if yield_to_model:
                 waited = wait_for_model_idle(
@@ -466,9 +697,11 @@ def run_eval(
                 if data_root and thread_id:
                     tool_calls = count_thread_tool_calls(data_root, thread_id)
 
-            points, passed, total_chk = score_task(answer, flow_state, task)
-            total_tool_calls_overall += tool_calls
-            total_wall_time_overall += elapsed_wall
+            ended_at = time.time()
+            artifact_context = ({"data_root": data_root, "thread_id": thread_id, "workspace_id": workspace_id,
+                                 "started_at": started_at, "ended_at": ended_at}
+                                if data_root and thread_id and not reference else None)
+            points, passed, total_chk, notes = score_task_detailed(answer, flow_state, task, artifact_context)
 
             rep_results.append({
                 "rep": rep,
@@ -485,50 +718,19 @@ def run_eval(
                 "max_points": float(task.get("max_points", 2.0)),
                 "checks_passed": passed,
                 "checks_total": total_chk,
-                **(read_job_metrics(data_root, started_at, time.time()) if data_root and not reference else
+                "passed": total_chk > 0 and passed == total_chk,
+                "check_notes": notes,
+                **(read_job_metrics(data_root, started_at, ended_at) if data_root and not reference else
                    {"first_actual_input_tokens": None, "max_actual_input_tokens": None, "input_tokens": None,
                     "output_tokens": None, "decode_tps": None, "steps_over_6000_input_tokens": None}),
             })
 
-        points_list = [r["points"] for r in rep_results]
-        calls_list = [r["tool_calls"] for r in rep_results]
-        walls_list = [r["wall_time_s"] for r in rep_results]
+            task_results[task_id] = _task_entry(task_id, rep_results)
+            write_results(False)
 
-        task_results[task_id] = {
-            "task_id": task_id,
-            "mean_score": round(sum(points_list) / len(points_list), 4),
-            "min_score": round(min(points_list), 4),
-            "mean_tool_calls": round(sum(calls_list) / len(calls_list), 2),
-            "total_tool_calls": sum(calls_list),
-            "mean_wall_time_s": round(sum(walls_list) / len(walls_list), 3),
-            "total_wall_time_s": round(sum(walls_list), 3),
-            "mean_first_actual_input_tokens": _mean_present(rep_results, "first_actual_input_tokens"),
-            "mean_max_actual_input_tokens": _mean_present(rep_results, "max_actual_input_tokens"),
-            "mean_input_tokens": _mean_present(rep_results, "input_tokens"),
-            "mean_output_tokens": _mean_present(rep_results, "output_tokens"),
-            "mean_decode_tps": _mean_present(rep_results, "decode_tps"),
-            "repetitions": rep_results,
-        }
+        task_results[task_id] = _task_entry(task_id, rep_results)
 
-    total_mean_score = sum(t["mean_score"] for t in task_results.values())
-    result_data = {
-        "label": label,
-        "set_id": set_id,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "total_mean_score": round(total_mean_score, 4),
-        "total_tool_calls": total_tool_calls_overall,
-        "total_wall_time_s": round(total_wall_time_overall, 3),
-        "yield_pauses": yield_pauses,
-        "yield_paused_s": round(yield_paused_s, 3),
-        "tasks": task_results,
-    }
-
-    results_file = out_path / "results.json"
-    label_file = out_path / f"{label}.json"
-    encoded = json.dumps(result_data, indent=2)
-    results_file.write_text(encoded, encoding="utf-8")
-    label_file.write_text(encoded, encoding="utf-8")
-    return result_data
+    return write_results(True)
 
 
 def load_run_results(path_input: str | Path) -> dict[str, Any]:
@@ -546,7 +748,27 @@ def load_run_results(path_input: str | Path) -> dict[str, Any]:
     raise FileNotFoundError(f"Cannot load eval results from {path}")
 
 
-def compare_runs(baseline_data: dict[str, Any], candidate_data: dict[str, Any]) -> tuple[int, str]:
+def paired_stats(baseline_tasks: dict[str, Any], candidate_tasks: dict[str, Any], ids: list[str]) -> dict[str, Any]:
+    """Per-task paired differences (candidate - baseline) of mean points and pass^1 over `ids`."""
+    out: dict[str, Any] = {"tasks": len(ids)}
+    for name, value in (("points", lambda t: float(t["mean_score"])),
+                        ("pass_at_1", lambda t: task_pass_stats(t["repetitions"])["pass_at_1"])):
+        diffs = [value(candidate_tasks[i]) - value(baseline_tasks[i]) for i in ids]
+        out[name] = {"mean_diff": round(_mean(diffs), 4), "se": round(_std_error(diffs), 4),
+                     "better": sum(d > 1e-9 for d in diffs), "worse": sum(d < -1e-9 for d in diffs),
+                     "equal": sum(abs(d) <= 1e-9 for d in diffs)}
+    return out
+
+
+def compare_runs(baseline_data: dict[str, Any], candidate_data: dict[str, Any],
+                 *, allow_task_drift: bool = False) -> tuple[int, str]:
+    """Compare candidate evaluation run against baseline; see `compare_report`."""
+    code, report, _ = compare_report(baseline_data, candidate_data, allow_task_drift=allow_task_drift)
+    return code, report
+
+
+def compare_report(baseline_data: dict[str, Any], candidate_data: dict[str, Any],
+                   *, allow_task_drift: bool = False) -> tuple[int, str, dict[str, Any]]:
     """Compare candidate evaluation run against baseline.
 
     Exits 1 when:
@@ -558,11 +780,30 @@ def compare_runs(baseline_data: dict[str, Any], candidate_data: dict[str, Any]) 
     candidate_tasks = candidate_data.get("tasks", {})
     if not isinstance(baseline_tasks, dict) or not isinstance(candidate_tasks, dict) or not baseline_tasks:
         raise ValueError("Both runs must contain a nonempty tasks mapping")
+    for name, run in (("baseline", baseline_data), ("candidate", candidate_data)):
+        if run.get("complete", True) is not True:
+            raise ValueError(f"The {name} run is incomplete; finish it with run --resume")
+    notes: list[str] = []
+    drift = []
     if baseline_data.get("set_id") != candidate_data.get("set_id"):
-        raise ValueError("Runs have different task set ids")
+        drift.append("task set ids differ")
+    b_sha, c_sha = baseline_data.get("tasks_sha256"), candidate_data.get("tasks_sha256")
+    if b_sha and c_sha and b_sha != c_sha:
+        drift.append("task-file SHA-256 differs")
     if set(baseline_tasks) != set(candidate_tasks):
-        raise ValueError("Runs have different task ids")
-    for task_id in baseline_tasks:
+        drift.append("task ids differ")
+    if drift and not allow_task_drift:
+        raise ValueError("Runs are not comparable: " + ", ".join(drift) + " (--allow-task-drift overrides)")
+    if drift:
+        notes.append("TASK DRIFT ALLOWED: " + ", ".join(drift) + "; comparing the common tasks only")
+    common_ids = sorted(set(baseline_tasks) & set(candidate_tasks))
+    if not common_ids:
+        raise ValueError("Runs share no task ids")
+    for name, run in (("baseline", baseline_data), ("candidate", candidate_data)):
+        missing = [f for f in ("split", "tasks_sha256", "complete") if f not in run]
+        if missing:
+            notes.append(f"The {name} run predates {', '.join(missing)}: treated as split dev, complete, SHA unverified")
+    for task_id in common_ids:
         baseline_reps = baseline_tasks[task_id].get("repetitions")
         candidate_reps = candidate_tasks[task_id].get("repetitions")
         if (not isinstance(baseline_reps, list) or not baseline_reps
@@ -584,8 +825,8 @@ def compare_runs(baseline_data: dict[str, Any], candidate_data: dict[str, Any]) 
         if not math.isclose(value, task_sum, abs_tol=0.001):
             raise ValueError("Run total_mean_score does not match task means")
 
-    b_total_mean = float(baseline_data.get("total_mean_score", 0.0))
-    c_total_mean = float(candidate_data.get("total_mean_score", 0.0))
+    b_total_mean = sum(float(baseline_tasks[i]["mean_score"]) for i in common_ids)
+    c_total_mean = sum(float(candidate_tasks[i]["mean_score"]) for i in common_ids)
 
     regressions: list[str] = []
 
@@ -596,7 +837,8 @@ def compare_runs(baseline_data: dict[str, Any], candidate_data: dict[str, Any]) 
         )
 
     # Condition 2: any task mean drops >= 1.0 point
-    for task_id, b_info in baseline_tasks.items():
+    for task_id in common_ids:
+        b_info = baseline_tasks[task_id]
         b_mean = float(b_info.get("mean_score", 0.0))
         c_info = candidate_tasks.get(task_id)
         c_mean = float(c_info.get("mean_score", 0.0)) if c_info else 0.0
@@ -608,8 +850,8 @@ def compare_runs(baseline_data: dict[str, Any], candidate_data: dict[str, Any]) 
     # Condition 3: candidate uncompleted repetition where baseline had none
     def count_uncompleted(data: dict[str, Any]) -> int:
         count = 0
-        for task in data.get("tasks", {}).values():
-            for rep in task.get("repetitions", []):
+        for task_id in common_ids:
+            for rep in data["tasks"][task_id].get("repetitions", []):
                 state = rep.get("flow_state")
                 ans = rep.get("answer")
                 if state not in COMPLETED_FLOW_STATES or not (ans or "").strip():
@@ -628,8 +870,7 @@ def compare_runs(baseline_data: dict[str, Any], candidate_data: dict[str, Any]) 
     lines.append(f"{'Task ID':<30} | {'Base Mean':<10} {'Min':<6} {'Calls':<6} {'Wall(s)':<8} | {'Cand Mean':<10} {'Min':<6} {'Calls':<6} {'Wall(s)':<8} | {'Delta':<7}")
     lines.append("-" * 105)
 
-    all_task_ids = sorted(set(baseline_tasks) | set(candidate_tasks))
-    for tid in all_task_ids:
+    for tid in common_ids:
         b = baseline_tasks.get(tid, {})
         c = candidate_tasks.get(tid, {})
         b_m = b.get("mean_score", 0.0)
@@ -653,15 +894,25 @@ def compare_runs(baseline_data: dict[str, Any], candidate_data: dict[str, Any]) 
         f"{'TOTAL':<30} | {b_total_mean:<10.2f} {'':<6} {baseline_data.get('total_tool_calls', 0):<6} {baseline_data.get('total_wall_time_s', 0):<8.2f} | {c_total_mean:<10.2f} {'':<6} {candidate_data.get('total_tool_calls', 0):<6} {candidate_data.get('total_wall_time_s', 0):<8.2f} | {total_delta:+6.2f}"
     )
 
+    paired = paired_stats(baseline_tasks, candidate_tasks, common_ids)
+    lines.append(f"\nPaired over {paired['tasks']} tasks (candidate - baseline, mean difference ± paired SE):")
+    for key, label in (("points", "points"), ("pass_at_1", "pass^1")):
+        p = paired[key]
+        lines.append(f"  {label:<7} {p['mean_diff']:+.4f} ± {p['se']:.4f}   "
+                     f"better {p['better']}  worse {p['worse']}  equal {p['equal']}")
+    lines.extend(notes)
+
+    code = 1 if regressions else 0
     if regressions:
         lines.append("\nREGRESSION FAILURES DETECTED:")
         for reg in regressions:
             lines.append(f"  [X] {reg}")
         lines.append("\nResult: FAIL (exit 1)")
-        return (1, "\n".join(lines))
-
-    lines.append("\nResult: PASS (within regression bounds, exit 0)")
-    return (0, "\n".join(lines))
+    else:
+        lines.append("\nResult: PASS (within regression bounds, exit 0)")
+    return (code, "\n".join(lines),
+            {"exit_code": code, "regressions": regressions, "notes": notes, "paired": paired,
+             "baseline_total_mean": round(b_total_mean, 4), "candidate_total_mean": round(c_total_mean, 4)})
 
 
 def _mean_present(rows: list[dict[str, Any]], key: str) -> float | None:
@@ -705,10 +956,19 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--yield-quiet-seconds", type=_non_negative_seconds, default=120.0,
                             help="Continuous idle window required before a repetition (default 120)")
 
+    run_parser.add_argument("--split", choices=SPLITS, default="dev",
+                            help="Task split to run (default dev); heldout and all need --allow-heldout")
+    run_parser.add_argument("--allow-heldout", action="store_true", help="Permit reading held-out tasks")
+    run_parser.add_argument("--resume", action="store_true",
+                            help="Continue an unfinished run in --out (same label, task file, split and reps)")
+
     # compare subcommand
     cmp_parser = subparsers.add_parser("compare", help="Compare candidate run against baseline")
     cmp_parser.add_argument("--baseline", required=True, help="Baseline run directory or results JSON")
     cmp_parser.add_argument("--candidate", required=True, help="Candidate run directory or results JSON")
+    cmp_parser.add_argument("--allow-task-drift", action="store_true",
+                            help="Compare common tasks although set id, task file or task ids differ")
+    cmp_parser.add_argument("--json", help="Also write the comparison numbers to this JSON file")
 
     return parser
 
@@ -728,7 +988,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {vault_guard.REFUSED_MESSAGE}", file=sys.stderr)
             return 1
         try:
-            run_eval(
+            result = run_eval(
                 tasks_path=args.tasks,
                 label=args.label,
                 reps=args.reps,
@@ -742,7 +1002,11 @@ def main(argv: list[str] | None = None) -> int:
                 role_id=args.role_id,
                 yield_to_model=args.yield_to_model,
                 yield_quiet_seconds=args.yield_quiet_seconds,
+                split=args.split,
+                allow_heldout=args.allow_heldout,
+                resume=args.resume,
             )
+            print(format_summary(result))
             print(f"Eval run completed successfully. Results written to {args.out}")
             return 0
         except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, urllib.error.URLError) as exc:
@@ -753,8 +1017,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             baseline_data = load_run_results(args.baseline)
             candidate_data = load_run_results(args.candidate)
-            code, report = compare_runs(baseline_data, candidate_data)
+            code, report, numbers = compare_report(
+                baseline_data, candidate_data, allow_task_drift=args.allow_task_drift)
             print(report)
+            if args.json:
+                Path(args.json).write_text(json.dumps(numbers, indent=2), encoding="utf-8")
             return code
         except (OSError, ValueError, KeyError, TypeError) as exc:
             print(f"Error comparing runs: {exc}", file=sys.stderr)

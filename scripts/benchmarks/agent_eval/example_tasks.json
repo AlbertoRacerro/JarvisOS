@@ -129,6 +129,26 @@
           }
         }
       ]
+    },
+    {
+      "id": "heldout_reynolds_number",
+      "split": "heldout",
+      "tags": ["calculation", "tool"],
+      "prompt": "Use the calculation tool to compute the Reynolds number Re = rho * v * D / mu for water with rho = 1000 kg/m^3, v = 2 m/s, D = 0.1 m and dynamic viscosity mu = 0.001 Pa*s. State the result.",
+      "reference": 200000.0,
+      "max_points": 2.0,
+      "checks": [
+        {
+          "kind": "number",
+          "value": 200000.0,
+          "rel_tol": 0.01
+        },
+        {
+          "kind": "tool_called",
+          "tool": "bench_run",
+          "min": 1
+        }
+      ]
     }
   ]
 }
