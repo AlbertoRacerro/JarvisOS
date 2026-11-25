@@ -476,6 +476,12 @@ def _local_tool_prompt(tool: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+LIGHT_ROLE_LINE = (
+    "You are Bubu, the assistant of JarvisOS. Answer in the user's language, briefly. "
+    "Use the page description when it is given; never invent screens, numbers or sources."
+)
+
+
 def compact_system_message(messages: Any, system_prompt: str) -> Any:
     """Replace the upstream Hermes system message on local routes, keeping a saved-plan tail."""
     if not isinstance(messages, list) or not messages or not isinstance(messages[0], dict) \
@@ -583,6 +589,7 @@ def run_governed_inference(
     reasoning_phase: str | None = None,
     on_guard: Callable[[str, bool | None], None] | None = None,
     max_continuations: int = 0,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     if envelope.agent_session is None:
         return {"status": "refused"}
@@ -610,6 +617,8 @@ def run_governed_inference(
         runner_kwargs = run_ai_task_kwargs(current, structured_output_schema=structured_output_schema,
                                            temperature=temperature)
         runner_kwargs["metadata"] = {"reasoning_phase": reasoning_phase} if reasoning_phase else {}
+        if reasoning_effort == "low":
+            runner_kwargs["metadata"]["reasoning_effort"] = "low"
         outcome = runner(**runner_kwargs)
         if on_outcome is not None:
             on_outcome(outcome)
@@ -1045,6 +1054,7 @@ class HermesSupervisor:
         self.turn_tool_outputs: list[dict[str, Any]] = []
         self.active_turn_plan: dict[str, Any] = {"steps": [], "findings": []}
         self.turn_step_count: int = 0
+        self.turn_light: bool = False
         self.step_overhead: int = DEFAULT_STEP_OVERHEAD
         self.turn_cap: int = DEFAULT_TURN_CAP
         self.step_deadline_seconds: int = 240
@@ -1239,6 +1249,7 @@ class HermesSupervisor:
                     reasoning_phase=reasoning_phase,
                     on_guard=record_guard,
                     max_continuations=max(0, MAX_CONTINUATIONS - self.turn_continuations),
+                    reasoning_effort="low" if self.turn_light else None,
                 )
                 if is_capped:
                     result["admitted_tools"] = []
@@ -1471,6 +1482,7 @@ class HermesSupervisor:
              context_blocks: list[dict[str, str]] | None = None,
              allowed_tools: list[str] | None = None,
              sheldon_mode: bool = False,
+             light: bool = False,
              turn_timeout: float = 600) -> dict[str, Any]:
         if self.session is None:
             raise RuntimeError("no bound Hermes session")
@@ -1516,13 +1528,18 @@ class HermesSupervisor:
         self.turn_tool_outputs.clear()
         self.active_turn_plan = {"steps": [], "findings": []}
         self.turn_step_count = 0
+        # Spec 375: a light turn on a local route offers no tools and asks for low reasoning effort.
+        self.turn_light = bool(light and is_local_route(selected_route))
+        if self.turn_light:
+            allowed_tools = []
         with self.evidence_lock:
             self.turn_evidence_ledger = []
         prompt = _assemble_turn_prompt(prompt, context_blocks or [], include_rules=False)
         from app.modules.agents.hermes.roles import get_role_instructions
 
         role_instructions = get_role_instructions(self.session.profile_id, sheldon_mode=sheldon_mode)
-        self.compact_system_prompt = f"{role_instructions}\n\n{COMPACT_METHODOLOGY}"
+        self.compact_system_prompt = (LIGHT_ROLE_LINE if self.turn_light
+                                      else f"{role_instructions}\n\n{COMPACT_METHODOLOGY}")
         request_id = str(uuid4())
         try:
             self._send({"type": "turn", "id": request_id, "prompt": prompt,
@@ -1555,6 +1572,7 @@ class HermesSupervisor:
         finally:
             self.active_interaction_id = None
             self.active_role_route = None
+            self.turn_light = False
             with self.evidence_lock:
                 self.turn_evidence_ledger = []
 

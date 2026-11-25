@@ -275,6 +275,37 @@ def _http_request(
         return json.loads(resp.read().decode("utf-8"))
 
 
+def wait_for_model_idle(
+    slots_url: str, *, quiet_seconds: float, opener: Callable[..., Any] = urllib.request.urlopen,
+    clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
+    poll_seconds: float = 2.0,
+) -> tuple[float, bool] | None:
+    """Block until no model slot has been processing for `quiet_seconds`.
+
+    Returns (seconds waited, whether a busy slot was seen), or None when `/slots` is unreachable or
+    malformed (do not wait).
+    """
+    start = clock()
+    quiet_since: float | None = None
+    saw_busy = False
+    while True:
+        try:
+            with opener(slots_url.rstrip("/") + "/slots", timeout=5) as resp:
+                slots = json.loads(resp.read().decode("utf-8"))
+            busy = any(bool(slot.get("is_processing")) for slot in slots)
+        except (OSError, ValueError, AttributeError, TypeError):
+            return None
+        now = clock()
+        if busy:
+            saw_busy = True
+            quiet_since = None
+        else:
+            quiet_since = now if quiet_since is None else quiet_since
+            if now - quiet_since >= quiet_seconds:
+                return now - start, saw_busy
+        sleep(poll_seconds)
+
+
 def run_eval(
     *,
     tasks_path: Path | str,
@@ -288,6 +319,11 @@ def run_eval(
     workspace_id: str = "default",
     route_class: str | None = "hermes:agent",
     role_id: str | None = None,
+    yield_to_model: str | None = None,
+    yield_quiet_seconds: float = 120.0,
+    slots_opener: Callable[..., Any] = urllib.request.urlopen,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     """Run evaluation for task set across repetitions."""
     tasks_file = Path(tasks_path)
@@ -312,6 +348,8 @@ def run_eval(
         if not base_url:
             raise ValueError("--base-url is required when not using --reference")
         validate_base_url(base_url)
+    if yield_to_model:
+        validate_base_url(yield_to_model)
 
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -319,6 +357,9 @@ def run_eval(
     task_results: dict[str, Any] = {}
     total_tool_calls_overall = 0
     total_wall_time_overall = 0.0
+    yield_pauses = 0
+    yield_paused_s = 0.0
+    yield_logged = False
 
     for task in tasks:
         task_id = task["id"]
@@ -326,6 +367,20 @@ def run_eval(
         rep_results: list[dict[str, Any]] = []
 
         for rep in range(reps):
+            yield_wait_s = 0.0
+            if yield_to_model:
+                waited = wait_for_model_idle(
+                    yield_to_model, quiet_seconds=yield_quiet_seconds, opener=slots_opener, clock=clock, sleep=sleep,
+                )
+                if waited is None:
+                    if not yield_logged:
+                        print(f"yield: {yield_to_model}/slots unreachable or malformed; not waiting", file=sys.stderr)
+                        yield_logged = True
+                else:
+                    yield_wait_s, saw_busy = waited
+                    if saw_busy:
+                        yield_pauses += 1
+                        yield_paused_s += yield_wait_s
             started_at = time.time()
             start_wall = time.monotonic()
             deadline = start_wall + timeout
@@ -417,6 +472,7 @@ def run_eval(
                 "model_id": model_id,
                 "role_id": resp_role_id,
                 "wall_time_s": round(elapsed_wall, 3),
+                "yield_wait_s": round(yield_wait_s, 3),
                 "tool_calls": tool_calls,
                 "points": round(points, 4),
                 "max_points": float(task.get("max_points", 2.0)),
@@ -455,6 +511,8 @@ def run_eval(
         "total_mean_score": round(total_mean_score, 4),
         "total_tool_calls": total_tool_calls_overall,
         "total_wall_time_s": round(total_wall_time_overall, 3),
+        "yield_pauses": yield_pauses,
+        "yield_paused_s": round(yield_paused_s, 3),
         "tasks": task_results,
     }
 
@@ -628,6 +686,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--workspace-id", default="default", help="Workspace id (default 'default')")
     run_parser.add_argument("--route-class", default="hermes:agent", help="Route class (default 'hermes:agent')")
     run_parser.add_argument("--role-id", help="Hermes role id (e.g. 'isaac')")
+    run_parser.add_argument("--yield-to-model", help="Loopback model server base URL; wait for its /slots to be idle "
+                            "before every repetition so the maintainer's own turns go first")
+    run_parser.add_argument("--yield-quiet-seconds", type=float, default=120.0,
+                            help="Continuous idle window required before a repetition (default 120)")
 
     # compare subcommand
     cmp_parser = subparsers.add_parser("compare", help="Compare candidate run against baseline")
@@ -660,6 +722,8 @@ def main(argv: list[str] | None = None) -> int:
                 workspace_id=args.workspace_id,
                 route_class=args.route_class,
                 role_id=args.role_id,
+                yield_to_model=args.yield_to_model,
+                yield_quiet_seconds=args.yield_quiet_seconds,
             )
             print(f"Eval run completed successfully. Results written to {args.out}")
             return 0
