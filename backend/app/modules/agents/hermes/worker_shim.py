@@ -171,6 +171,7 @@ ADMITTED_TOOLS = frozenset({"mcp__jarvis__jarvis_context_preview",
                             "mcp__jarvis__jarvis_bluecad_read", "mcp__jarvis__jarvis_bluecad_act",
                             "mcp__jarvis__jarvis_studio_read", "mcp__jarvis__jarvis_studio_act",
                             "mcp__jarvis__jarvis_bench_read", "mcp__jarvis__jarvis_bench_run",
+                            "mcp__jarvis__jarvis_python",
                             "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
                             "paper_search", "jarvis_paper_search",
                             "mcp__jarvis__patent_read", "mcp__jarvis__jarvis_patent_read",
@@ -205,10 +206,9 @@ DEAD_TURN_NUDGE = (
 )
 TURN_CAP_REACHED_MESSAGE = "Turn cap reached."
 COMPACT_METHODOLOGY = (
-    "Ground numbers in tool outputs or label estimates and confidence. Calculate physics with deterministic tools; "
-    "state uncertain input ranges. Read sources before citing; never invent a DOI. For multi-step work, use "
-    "jarvis_turn_plan and save findings with source refs. If an exact source is unavailable, give a labelled "
-    "engineering estimate and state what remains unconfirmed."
+    "Never compute numbers in your head. Use jarvis_python for every calculation, unit conversion and fit; "
+    "print the results. Cite sources; never invent a DOI. Label estimates and uncertainty. "
+    "Use jarvis_turn_plan for multi-step work."
 )
 
 
@@ -594,7 +594,7 @@ def pinned_config(base_url: str, token: str, python: str | None = None) -> dict[
                                   "jarvis_process_read", "jarvis_process_act",
                                   "jarvis_bluecad_read", "jarvis_bluecad_act",
                                   "jarvis_studio_read", "jarvis_studio_act",
-                                  "jarvis_bench_read", "jarvis_bench_run",
+                                  "jarvis_bench_read", "jarvis_bench_run", "jarvis_python",
                                   "jarvis_paper_search", "jarvis_patent_read", "jarvis_browser_page_read", "jarvis_paper_pdf_read",
                                   "jarvis_turn_plan"]},
         }},

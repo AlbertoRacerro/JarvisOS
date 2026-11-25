@@ -1,6 +1,6 @@
 # 371 — HERMES-CALC-RUN-1: Let the chat compute with short Python in the offline calculation sandbox
 
-Status: ready
+Status: in_review
 Depends on: 368, 370
 
 ## Goal

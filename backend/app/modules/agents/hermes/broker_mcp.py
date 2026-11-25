@@ -327,6 +327,19 @@ _BENCH_RUN_TOOL = {
         "additionalProperties": False,
     },
 }
+_PYTHON_TOOL = {
+    "name": "jarvis_python",
+    "description": "Run Python 3 code (numpy, scipy, pint available) and return what it prints. Use it for every calculation, unit conversion and data fit. Always print() the results.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "grant_id": {"type": "string", "maxLength": 128},
+            "code": {"type": "string", "maxLength": 16384},
+        },
+        "required": ["grant_id", "code"],
+        "additionalProperties": False,
+    },
+}
 _JARVIS_PAPER_SEARCH_TOOL = {
     "name": "jarvis_paper_search",
     "description": "Use to discover public scientific papers by metadata. Prefer paper_pdf_read to inspect an identified open-access paper and bench_run for calculations.",
@@ -435,7 +448,7 @@ _TURN_PLAN_TOOL = {
 _TOOLS = [_TOOL, _RETRIEVAL_TOOL, _DECISION_TOOL, _DEV_READ_TOOL, _REPO_READ_TOOL, _KNOWLEDGE_READ_TOOL,
           _PROCESS_READ_TOOL, _PROCESS_ACT_TOOL,
           _BLUECAD_READ_TOOL, _BLUECAD_ACT_TOOL, _STUDIO_READ_TOOL, _STUDIO_ACT_TOOL,
-          _BENCH_READ_TOOL, _BENCH_RUN_TOOL,
+          _BENCH_READ_TOOL, _BENCH_RUN_TOOL, _PYTHON_TOOL,
           _JARVIS_PAPER_SEARCH_TOOL, _JARVIS_PATENT_READ_TOOL, _JARVIS_BROWSER_PAGE_TOOL, _JARVIS_PAPER_PDF_READ_TOOL,
           _TURN_PLAN_TOOL]
 _NAMED = {tool["name"] for tool in _TOOLS if tool is not _TOOL} | {"paper_search", "patent_read", "browser_page_read", "paper_pdf_read", "turn_plan"}

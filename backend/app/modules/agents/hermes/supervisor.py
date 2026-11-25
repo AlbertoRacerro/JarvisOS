@@ -67,6 +67,7 @@ HERMES_TOOL_ALLOWLIST = frozenset({"mcp__jarvis__jarvis_context_preview",
                                   "mcp__jarvis__jarvis_bluecad_read", "mcp__jarvis__jarvis_bluecad_act",
                                   "mcp__jarvis__jarvis_studio_read", "mcp__jarvis__jarvis_studio_act",
                                   "mcp__jarvis__jarvis_bench_read", "mcp__jarvis__jarvis_bench_run",
+                                  "mcp__jarvis__jarvis_python",
                                   "mcp__jarvis__paper_search", "mcp__jarvis__jarvis_paper_search",
                                   "paper_search", "jarvis_paper_search",
                                   "mcp__jarvis__patent_read", "mcp__jarvis__jarvis_patent_read",
@@ -125,6 +126,12 @@ _HERMES_BENCH_RUN_CAPABILITY = JarvisCapabilityDescriptor(
     capability_id="jarvis.bench_run", route_id="ai-threads", action_class="EXECUTE",
     label="Run an engineering bench evaluator",
 )
+# Spec 371: model-written Python in the offline calculation sandbox. Own grant outside the common registry,
+# admitted by identity only, like bench_run.
+_HERMES_CALC_RUN_CAPABILITY = JarvisCapabilityDescriptor(
+    capability_id="jarvis.calc_run", route_id="ai-threads", action_class="EXECUTE",
+    label="Run Python in the offline calculation sandbox",
+)
 _HERMES_DEV_READ_CAPABILITY = JarvisCapabilityDescriptor(
     capability_id="jarvis.dev_read", route_id="ai-threads", action_class="READ",
     label="Read JarvisOS development, supervisor, quota and runtime state",
@@ -182,6 +189,7 @@ _TOOL_CAPABILITIES = {
     "jarvis_studio_act": "jarvis.studio_act",
     "jarvis_bench_read": "jarvis.bench_read",
     "jarvis_bench_run": "jarvis.bench_run",
+    "jarvis_python": "jarvis.calc_run",
 }
 for _descriptor in (_HERMES_PROCESS_READ_CAPABILITY, _HERMES_PROCESS_ACT_CAPABILITY,
                     _HERMES_BLUECAD_READ_CAPABILITY,
@@ -299,9 +307,8 @@ def worker_environment(home: Path, backend_root: Path) -> dict[str, str]:
 # model must be told the exact text shape the worker shim promotes to a tool call;
 # without it Qwen-class models end the turn after reasoning with no visible output.
 RELAY_TOOL_PROTOCOL = (
-    "\n\nYou are answering the conversation above as the assistant. To call one of the listed "
-    'tools, reply with ONLY {"tool_calls": [{"name": "<tool name>", "arguments": {...}}]}. '
-    'Otherwise reply with ONLY {"answer": "your final answer"}. The name must exactly match an admitted tool.'
+    '\n\nReply only with JSON: {"tool_calls":[{"name":"<admitted tool>","arguments":{...}}]} '
+    'or {"answer":"<final answer>"}.'
 )
 
 RESEARCH_TOOLS = frozenset({
@@ -647,8 +654,11 @@ def dispatch_tool(
             descriptor = next((item for item in descriptors if item.capability_id == call.capability_id), None)
             if call.capability_id == _HERMES_BENCH_RUN_CAPABILITY.capability_id:
                 descriptor = _HERMES_BENCH_RUN_CAPABILITY
+            if call.capability_id == _HERMES_CALC_RUN_CAPABILITY.capability_id:
+                descriptor = _HERMES_CALC_RUN_CAPABILITY
             if descriptor is not None and (descriptor.action_class in {"READ", "CONTEXT", "PROPOSE"}
-                                           or descriptor is _HERMES_BENCH_RUN_CAPABILITY):
+                                           or descriptor is _HERMES_BENCH_RUN_CAPABILITY
+                                           or descriptor is _HERMES_CALC_RUN_CAPABILITY):
                 if call.capability_id == "jarvis.context_preview":
                     try:
                         request = JarvisContextRequest.model_validate(call.arguments)
@@ -725,6 +735,10 @@ def dispatch_tool(
                     from app.modules.engineering.bench import dispatch_bench_tool
 
                     result, error = dispatch_bench_tool(call, scope.workspace_id, error)
+                elif call.capability_id == "jarvis.calc_run":
+                    from app.modules.agents.hermes.calc_run_tool import dispatch_calc_run_tool
+
+                    result, error = dispatch_calc_run_tool(call, scope.workspace_id, error)
                 elif call.capability_id == "jarvis.dev_read":
                     from app.modules.agents.hermes.dev_read_tool import dispatch_dev_read_tool
 
@@ -1265,6 +1279,7 @@ class HermesSupervisor:
                                                  if result.capability_id == "jarvis.browser_page_read"
                                                  else _safe_tool_arguments({"doi": arguments.get("doi"), "pages": arguments.get("pages")})
                                                  if result.capability_id == "jarvis.paper_pdf_read"
+                                                 else {} if result.capability_id == "jarvis.calc_run"
                                                  else _safe_tool_arguments(arguments)),
                                    "result_digest": canonical_digest(result.model_dump(mode="json")),
                                    "evidence_refs": _tool_evidence_refs(result.model_dump(mode="json")),
