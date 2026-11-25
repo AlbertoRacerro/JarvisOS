@@ -79,7 +79,7 @@ Out of scope (binding non-goals):
 - `scripts/benchmarks/agent_eval/runner.py`
 - `scripts/benchmarks/agent_eval/example_tasks.json` (one `heldout` task and one `tool_called` check as examples)
 - `scripts/benchmarks/agent_eval/module.toml`
-- `backend/tests/test_agent_eval_*.py` (new test file for this spec)
+- `backend/tests/test_agent_eval_373.py` (new; `test_agent_eval_354.py` keeps passing)
 
 ## Design constraints
 
