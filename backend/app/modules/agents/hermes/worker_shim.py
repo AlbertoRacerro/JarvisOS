@@ -200,16 +200,36 @@ RESEARCH_TOOLS = frozenset({
 })
 DEFAULT_RESEARCH_BUDGET = 8
 DEFAULT_TURN_CAP = 10
+DEFAULT_LOCAL_OUTPUT_CAP = 8192
 DEAD_TURN_NUDGE = (
     "No tool call or final answer was received. Please provide your next tool call "
     "or conclude with your final answer."
 )
 TURN_CAP_REACHED_MESSAGE = "Turn cap reached."
 COMPACT_METHODOLOGY = (
-    "Never compute numbers in your head. Use jarvis_python for every calculation, unit conversion and fit; "
-    "print the results. Cite sources; never invent a DOI. Label estimates and uncertainty. "
-    "Use jarvis_turn_plan for multi-step work."
+    "Never compute numbers in your head: every number and check comes from jarvis_python; print the results. "
+    "Read before citing; never invent a DOI, URL or number. Final message, no tool call:\n"
+    "Answer: 1-3 sentences\nNumbers:\nSources:\nCaveats:"
 )
+RESEARCH_BUDGET_NOTICE = (
+    "Research budget used up ({budget} searches/reads). Do not search again: answer now with what you have, "
+    "and say clearly what is unconfirmed."
+)
+STEP_CAP_MESSAGE = "Stop using tools now and give your final answer in the format."
+REPEATED_CALL_NOTICE = (
+    "You already made this exact call. Its result was: {stored} Do not repeat it: change the input or answer."
+)
+REPEATED_CALL_RESULT_CHARS = 600
+
+
+def repeated_call_notice(stored: str) -> str:
+    return REPEATED_CALL_NOTICE.format(stored=stored[:REPEATED_CALL_RESULT_CHARS])
+
+
+def stored_result_text(tool_res: Any) -> str:
+    """The text a repeated identical call is answered with: the compacted result the first call returned."""
+    value = tool_res.get("result") if isinstance(tool_res, dict) and tool_res.get("result") is not None else tool_res
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def extract_capped_text(text: str) -> str:
@@ -635,10 +655,12 @@ class Worker:
         self.turn_step_count: int = 0
         self.turn_cap: int = DEFAULT_TURN_CAP
         self.step_deadline_seconds: int = 240
-        self.general_output_cap: int = 2048
+        self.general_output_cap: int = DEFAULT_LOCAL_OUTPUT_CAP
         self.turn_research_count: int = 0
         self.research_budget: int = DEFAULT_RESEARCH_BUDGET
-        self.seen_tool_calls: set[str] = set()
+        # Per turn, call key -> {"done": Event, "text": stored result}; the one owner of the repeated-call rule.
+        self.tool_results: dict[str, dict[str, Any]] = {}
+        self.tool_results_lock = threading.Lock()
         self.history: list[dict[str, Any]] = []
         self.session: dict[str, Any] | None = None
         self.sequence = 0
@@ -667,12 +689,37 @@ class Worker:
             self.protocol_output.write(json.dumps(frame, separators=(",", ":")) + "\n")
             self.protocol_output.flush()
 
+    def claim_tool_call(self, call_key: str, tool_name: str, is_read_plan: bool) -> tuple[str, dict[str, Any] | None]:
+        """The one repeated-call and research-budget rule: returns ("repeat", stored claim), ("budget", None) or
+        ("run", claim to fill once the call returns; None for the exempt read_plan)."""
+        if is_read_plan:
+            return "run", None
+        with self.tool_results_lock:
+            stored = self.tool_results.get(call_key)
+            if stored is not None:
+                return "repeat", stored
+            if is_research_tool(tool_name):
+                if self.turn_research_count >= self.research_budget:
+                    return "budget", None
+                self.turn_research_count += 1
+            claim: dict[str, Any] = {"done": threading.Event(), "text": ""}
+            self.tool_results[call_key] = claim
+            return "run", claim
+
     def _handler(self) -> type[BaseHTTPRequestHandler]:
         worker = self
 
         class Relay(BaseHTTPRequestHandler):
             def log_message(self, *_args: Any) -> None:
                 pass
+
+            def _send_json(self, payload: Any) -> None:
+                encoded = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
 
             def do_POST(self) -> None:  # noqa: N802
                 if self.headers.get("Authorization") != f"Bearer {worker.token}":
@@ -707,78 +754,51 @@ class Worker:
                         )
                         canonical_args = json.dumps(body, sort_keys=True, separators=(",", ":"))
                         call_key = f"{tool_name}:{canonical_args}"
-                        if call_key in worker.seen_tool_calls and not is_read_plan:
-                            dup_result = {
-                                "status": "succeeded",
-                                "result": {
-                                    "notice": (
-                                        "Tool call blocked: identical call was already executed in this turn. "
-                                        "The result was already provided above."
-                                    )
-                                },
-                            }
-                            encoded = json.dumps(dup_result).encode()
-                            self.send_response(200)
-                            self.send_header("Content-Type", "application/json")
-                            self.send_header("Content-Length", str(len(encoded)))
-                            self.end_headers()
-                            self.wfile.write(encoded)
+                        action, claim = worker.claim_tool_call(call_key, tool_name, is_read_plan)
+                        if action == "repeat" and claim is not None:
+                            claim["done"].wait(worker.step_deadline_seconds)
+                            self._send_json({"status": "succeeded",
+                                             "result": {"notice": repeated_call_notice(claim["text"])}})
                             return
-                        if not is_read_plan:
-                            worker.seen_tool_calls.add(call_key)
+                        if action == "budget":
+                            self._send_json({"status": "succeeded", "result": {
+                                "notice": RESEARCH_BUDGET_NOTICE.format(budget=worker.research_budget)}})
+                            return
 
-                        if is_research_tool(tool_name):
-                            if worker.turn_research_count >= worker.research_budget:
-                                budget_result = {
-                                    "status": "succeeded",
-                                    "result": {
-                                        "notice": (
-                                            f"Research budget reached for this turn (maximum {worker.research_budget} "
-                                            "search/read calls). Please synthesize your final answer from gathered evidence."
-                                        )
-                                    },
-                                }
-                                encoded = json.dumps(budget_result).encode()
-                                self.send_response(200)
-                                self.send_header("Content-Type", "application/json")
-                                self.send_header("Content-Length", str(len(encoded)))
-                                self.end_headers()
-                                self.wfile.write(encoded)
-                                return
-                            worker.turn_research_count += 1
-
-                        request_id = uuid.uuid4().hex
-                        tool_answer: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
-                        with worker.pending_lock:
-                            worker.pending[request_id] = tool_answer
-                        worker.event("tool.call", request_id)
-                        worker.send({"type": "tool_call", "id": request_id,
-                                     "session_ref": worker.session, "arguments": body})
+                        stored = "The call returned no result."
                         try:
-                            result = tool_answer.get(timeout=worker.step_deadline_seconds)
-                        finally:
+                            request_id = uuid.uuid4().hex
+                            tool_answer: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
                             with worker.pending_lock:
-                                worker.pending.pop(request_id, None)
-                        tool_res = result["tool_result"]
-                        if isinstance(tool_res, dict) and tool_res.get("result") is not None:
-                            raw_res_data = tool_res.get("result")
-                            if (
-                                tool_name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan"}
-                                and tool_res.get("status") == "succeeded"
-                                and isinstance(raw_res_data, dict)
-                                and ("steps" in raw_res_data or "findings" in raw_res_data)
-                            ):
-                                worker.active_turn_plan = {
-                                    "steps": list(raw_res_data.get("steps", [])),
-                                    "findings": list(raw_res_data.get("findings", [])),
-                                }
-                            tool_res = {**tool_res, "result": compact_tool_payload(raw_res_data)}
-                        encoded = json.dumps(tool_res).encode()
-                        self.send_response(200)
-                        self.send_header("Content-Type", "application/json")
-                        self.send_header("Content-Length", str(len(encoded)))
-                        self.end_headers()
-                        self.wfile.write(encoded)
+                                worker.pending[request_id] = tool_answer
+                            worker.event("tool.call", request_id)
+                            worker.send({"type": "tool_call", "id": request_id,
+                                         "session_ref": worker.session, "arguments": body})
+                            try:
+                                result = tool_answer.get(timeout=worker.step_deadline_seconds)
+                            finally:
+                                with worker.pending_lock:
+                                    worker.pending.pop(request_id, None)
+                            tool_res = result["tool_result"]
+                            if isinstance(tool_res, dict) and tool_res.get("result") is not None:
+                                raw_res_data = tool_res.get("result")
+                                if (
+                                    tool_name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan"}
+                                    and tool_res.get("status") == "succeeded"
+                                    and isinstance(raw_res_data, dict)
+                                    and ("steps" in raw_res_data or "findings" in raw_res_data)
+                                ):
+                                    worker.active_turn_plan = {
+                                        "steps": list(raw_res_data.get("steps", [])),
+                                        "findings": list(raw_res_data.get("findings", [])),
+                                    }
+                                tool_res = {**tool_res, "result": compact_tool_payload(raw_res_data)}
+                            stored = stored_result_text(tool_res)
+                        finally:
+                            if claim is not None:
+                                claim["text"] = stored
+                                claim["done"].set()
+                        self._send_json(tool_res)
                         return
                     if not isinstance(body, dict) or "base_url" in body or "provider" in body:
                         raise ValueError("unsupported or bypassing request")
@@ -931,10 +951,10 @@ class Worker:
             self.active_turn_plan = None
             self.turn_cap = getattr(self, "turn_cap", DEFAULT_TURN_CAP)
             self.research_budget = getattr(self, "research_budget", DEFAULT_RESEARCH_BUDGET)
-            if not hasattr(self, "seen_tool_calls"):
-                self.seen_tool_calls = set()
-            else:
-                self.seen_tool_calls.clear()
+            if not hasattr(self, "tool_results_lock"):
+                self.tool_results_lock = threading.Lock()
+            with self.tool_results_lock:
+                self.tool_results = {}
             self.active_turn_tools = allowed_tools
             if self.agent is None:
                 self.agent = self._build_agent()
@@ -1015,7 +1035,7 @@ class Worker:
                 raise ValueError("invalid per-turn tools")
             sheldon_mode = bool(frame.get("sheldon_mode", False))
             self.step_deadline_seconds = max(120, min(900, int(frame.get("step_deadline_seconds", 240))))
-            self.general_output_cap = max(1, min(8192, int(frame.get("general_output_cap", 2048))))
+            self.general_output_cap = max(1, min(8192, int(frame.get("general_output_cap", DEFAULT_LOCAL_OUTPUT_CAP))))
             threading.Thread(target=self.run_turn,
                              args=(frame["id"], frame["prompt"], allowed_tools, sheldon_mode),
                              daemon=True).start()

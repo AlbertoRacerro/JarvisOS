@@ -24,7 +24,10 @@ from app.modules.agents.hermes.message_budget import (
 from app.modules.agents.hermes.worker_shim import (
     _PLAN_HEADER,
     COMPACT_METHODOLOGY,
+    DEFAULT_LOCAL_OUTPUT_CAP,
     PRESENTATION_INSTRUCTIONS,
+    RESEARCH_BUDGET_NOTICE,
+    STEP_CAP_MESSAGE,
     inject_saved_plan,
     repair_proposal,
     shrink_tool_history,
@@ -359,6 +362,12 @@ def is_dead_turn(text: str | None) -> bool:
     return False
 
 
+CONTINUATION_REQUEST = (
+    "Continue. If you need a tool, call it now in this message; "
+    "otherwise give the final answer in the required format."
+)
+MAX_CONTINUATIONS = 2  # per turn, on local routes (spec 372 item 3)
+_CONTINUATION_REPLY_CHARS = 6000
 _ANNOUNCE_STARTS = ("let me", "i'll", "i will", "now i", "next, i", "i am going to", "i'm going to")
 
 
@@ -381,6 +390,30 @@ def turn_guard_kind(text: str | None, *, tools_offered: bool, capped: bool = Fal
     if len(answer) < 400 and not any(char.isdigit() for char in answer) and answer.startswith(_ANNOUNCE_STARTS):
         return "announcement"
     return None
+
+
+def is_local_route(route_class: str | None) -> bool:
+    return bool(route_class) and str(route_class).startswith("local:")
+
+
+def missing_final_answer(text: str | None) -> str | None:
+    """Spec 372 item 3: the step's text when it has neither a tool call nor an `Answer:`; otherwise None."""
+    if is_dead_turn(text) or not isinstance(text, str):
+        return None
+    try:
+        value: Any = json.loads(text)
+    except (ValueError, TypeError):
+        value = text
+        proposal = repair_proposal(text)
+        if isinstance(proposal, dict) and proposal.get("tool_calls"):
+            return None
+    if isinstance(value, dict):
+        if value.get("tool_calls"):
+            return None
+        value = value.get("answer", "")
+    if not isinstance(value, str):
+        return None
+    return None if "answer:" in value.lower() else value
 
 
 def compact_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -523,6 +556,7 @@ def run_governed_inference(
     max_nudges: int = 1,
     reasoning_phase: str | None = None,
     on_guard: Callable[[str, bool | None], None] | None = None,
+    max_continuations: int = 0,
 ) -> dict[str, Any]:
     if envelope.agent_session is None:
         return {"status": "refused"}
@@ -541,6 +575,8 @@ def run_governed_inference(
     else:
         temperature = 0.3 if envelope.task_kind == "general" else None
     offered = structured_output_schema is not None
+    local = is_local_route(envelope.route_class)
+    continuations_left = max_continuations if local else 0
     current = envelope
     nudges = 0
     length_retries = 0
@@ -571,15 +607,29 @@ def run_governed_inference(
                 continue
             if not usable:
                 break
-        kind = turn_guard_kind(response_text, tools_offered=offered,
-                               capped=reasoning_phase == "final" or finish == "length")
+        capped = reasoning_phase == "final" or finish == "length"
+        if local:
+            # Spec 372 item 3: no announcement detector; a step without a tool call or `Answer:` is asked to continue.
+            kind = "empty" if is_dead_turn(response_text) else None
+            unfinished = missing_final_answer(response_text) if kind is None and offered and not capped else None
+            if unfinished is not None and continuations_left > 0:
+                continuations_left -= 1
+                if on_guard:
+                    on_guard("continue", None)
+                previous = unfinished[:_CONTINUATION_REPLY_CHARS]
+                current = envelope.model_copy(update={
+                    "prompt": f"{envelope.prompt}\n\nYour previous reply had no tool call and no `Answer:`:\n"
+                              f"{previous}\n\n{CONTINUATION_REQUEST}"})
+                continue
+        else:
+            kind = turn_guard_kind(response_text, tools_offered=offered, capped=capped)
         if kind and nudges < max_nudges:
             nudges += 1
             if on_guard:
                 on_guard("nudge", None)
             current = current.model_copy(update={"prompt": f"{envelope.prompt}\n\n{DEAD_TURN_NUDGE}"})
             continue
-        if kind == "announcement" and nudges:
+        if not local and kind == "announcement" and nudges:
             if on_guard:
                 on_guard("forced_final", None)
             structured_output_schema = None
@@ -946,7 +996,7 @@ class HermesSupervisor:
         self.active_interaction_id: str | None = None
         self.turn_research_count: int = 0
         self.research_budget: int = DEFAULT_RESEARCH_BUDGET
-        self.turn_tool_hashes: set[str] = set()
+        self.turn_continuations: int = 0
         self.turn_tool_outputs: list[dict[str, Any]] = []
         self.active_turn_plan: dict[str, Any] = {"steps": [], "findings": []}
         self.turn_step_count: int = 0
@@ -1082,6 +1132,8 @@ class HermesSupervisor:
             if is_capped:
                 frame["tools"] = []
                 frame["allowed_tools"] = []
+                if isinstance(frame.get("messages"), list):
+                    frame["messages"] = [*frame["messages"], {"role": "user", "content": STEP_CAP_MESSAGE}]
 
             if selected_route.startswith("local:"):
                 frame["messages"] = compact_system_message(frame.get("messages", []), self.compact_system_prompt)
@@ -1127,6 +1179,8 @@ class HermesSupervisor:
                     payload: dict[str, object] = {"kind": kind, "step": self.turn_step_count}
                     if kind == "length":
                         payload["parsed"] = bool(usable)
+                    if kind == "continue":
+                        self.turn_continuations += 1
                     record_event("hermes.turn_guard", payload)
 
                 if step_size is not None:
@@ -1139,6 +1193,7 @@ class HermesSupervisor:
                     on_outcome=record_flow,
                     reasoning_phase=reasoning_phase,
                     on_guard=record_guard,
+                    max_continuations=max(0, MAX_CONTINUATIONS - self.turn_continuations),
                 )
                 if is_capped:
                     result["admitted_tools"] = []
@@ -1165,33 +1220,15 @@ class HermesSupervisor:
             tool_name = arguments.pop("tool_name", "")
             capability_id = _TOOL_CAPABILITIES.get(tool_name, "jarvis.context_preview")
 
-            # Identical repeated-call blocking
-            canonical_args = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
-            call_key = f"{tool_name}:{canonical_args}"
-            is_read_plan = (
-                tool_name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan"}
-                and arguments.get("op") == "read_plan"
-            )
-            if call_key in self.turn_tool_hashes and not is_read_plan:
-                result = StructuredToolResult(
-                    call_id=call_id, capability_id=capability_id,
-                    status="succeeded",
-                    result={"notice": "Tool call blocked: identical call was already executed in this turn. The result was already provided above."},
-                    completed_at=now,
-                )
-                self._send({"type": "tool_result", "id": call_id,
-                            "tool_result": result.model_dump(mode="json")})
-                return
-            if not is_read_plan:
-                self.turn_tool_hashes.add(call_key)
-
+            # Identical repeated calls never reach here: the shim's /v1/jarvis/tool handler is the only
+            # sender of tool_call frames and owns the repeated-call rule (spec 372 item 4).
             # Research budget cap
             if is_research_tool(tool_name):
                 if self.turn_research_count >= self.research_budget:
                     result = StructuredToolResult(
                         call_id=call_id, capability_id=capability_id,
                         status="succeeded",
-                        result={"notice": f"Research budget reached for this turn (maximum {self.research_budget} search/read calls). Please synthesize your final answer from gathered evidence."},
+                        result={"notice": RESEARCH_BUDGET_NOTICE.format(budget=self.research_budget)},
                         completed_at=now,
                     )
                     self._send({"type": "tool_result", "id": call_id,
@@ -1394,7 +1431,10 @@ class HermesSupervisor:
             self.active_role_route = self.route_for_role(self.session.profile_id)
         from app.modules.local_ai.runtime.model_registry import get_active_model_entry
         active_entry = get_active_model_entry()
-        output_cap = getattr(active_entry, "max_output_tokens", None) or 2048
+        selected_route = (self.active_role_route if self.route_for_role is not None
+                          else self.route_for_task("general"))
+        output_cap = getattr(active_entry, "max_output_tokens", None) or (
+            DEFAULT_LOCAL_OUTPUT_CAP if is_local_route(selected_route) else 2048)
         try:
             with open_sqlite_connection() as connection:
                 rows = connection.execute(
@@ -1416,7 +1456,7 @@ class HermesSupervisor:
         self.turn_flow_ids[self.session.hermes_session_id] = []
         self.active_interaction_id = interaction_id
         self.turn_research_count = 0
-        self.turn_tool_hashes.clear()
+        self.turn_continuations = 0
         self.turn_tool_outputs.clear()
         self.active_turn_plan = {"steps": [], "findings": []}
         self.turn_step_count = 0
