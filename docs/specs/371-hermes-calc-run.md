@@ -62,7 +62,7 @@ surface the chat has no tool that computes: `bench_run` runs fixed evaluators an
    selections are unchanged except that the list stays at most seven names (the last-ranked one gives way).
 6. **Prompt line.** `COMPACT_METHODOLOGY` says: never compute numbers in your head; use `jarvis_python` for every
    calculation, unit conversion and fit, and print the results. The base prompt plus tool schemas stays under the
-   spec 368 first-step size bound. The rest of the bench prompt belongs to the follow-up spec for items 2–8.
+   spec 368 first-step size bound. The rest of the bench prompt is spec 372.
 7. **Dependency.** `pint` is imported by the tool's users but is not a declared requirement (it is present in the
    host venv by hand). Add `pint==0.25.3` to `backend/requirements.txt`.
 
@@ -77,7 +77,7 @@ Out of scope (binding non-goals):
 - Adding the tool to cloud routes' prompts beyond the shared allowlist; promotion of any result into project state.
 - `bluecad.solid_code` in `AGENT_RUNNABLE_EVALUATORS`.
 - The system prompt, output cap, continuation, repeated-call, trimming and end-of-turn rules of directive
-  `L20261125074257-c57d` items 2–8 (a follow-up spec).
+  `L20261125074257-c57d` items 2–8 (spec 372).
 
 ## Constraints
 
