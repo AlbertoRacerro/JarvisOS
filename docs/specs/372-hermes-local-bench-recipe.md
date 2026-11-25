@@ -22,18 +22,18 @@ behaviour, rule for rule, written for JarvisOS; the reference loop is private an
 ## Code facts checked at `513abe87`
 
 - `backend/app/modules/agents/hermes/worker_shim.py`: `COMPACT_METHODOLOGY` (five sentences) is the local
-  methodology; `supervisor.py::HermesSupervisor.__init__` builds `compact_system_prompt` from
+  methodology; `backend/app/modules/agents/hermes/supervisor.py::HermesSupervisor.__init__` builds `compact_system_prompt` from
   `PRESENTATION_INSTRUCTIONS` and it.
-- `supervisor.py::turn_guard_kind` detects an empty step or an announcement (`_ANNOUNCE_STARTS`, under 400 chars, no
+- `backend/app/modules/agents/hermes/supervisor.py::turn_guard_kind` detects an empty step or an announcement (`_ANNOUNCE_STARTS`, under 400 chars, no
   digit); the inference loop in `supervisor.py` (the `while True` around `runner(**runner_kwargs)`) nudges with
   `DEAD_TURN_NUDGE` up to `max_nudges`, then forces a final step (`reasoning_phase = "final"`, no tools).
 - Output cap: `HermesSupervisor.turn` takes `active_entry.max_output_tokens or 2048`; the shim forwards
   `general_output_cap` (default 2048, clamped to 8192); one `length` retry doubles the cap up to 8192.
 - Identical-call guard exists twice: `worker_shim.py` (`/v1/jarvis/tool`, `seen_tool_calls`) and
-  `supervisor.py::HermesSupervisor._handle_tool` (`turn_tool_hashes`); both answer "Tool call blocked: identical call was already
+  `backend/app/modules/agents/hermes/supervisor.py::HermesSupervisor._handle_tool` (`turn_tool_hashes`); both answer "Tool call blocked: identical call was already
   executed in this turn" without the result. Research budget (8) is also enforced in both places.
 - Step cap: the shim sets `tools = []` and `reasoning_phase = "final"` at `turn_cap` (10).
-- `message_budget.py::compact_local_messages` digests older assistant steps (spec 369), shortens earlier tool results
+- `backend/app/modules/agents/hermes/message_budget.py::compact_local_messages` digests older assistant steps (spec 369), shortens earlier tool results
   to 180 chars oldest first only over budget (spec 370), then drops whole steps.
 - `local_ai/runtime/model_registry.py` entries carry `reasoning_effort_analysis` and `reasoning_effort_final`; the
   sampling fields come from the entry.
