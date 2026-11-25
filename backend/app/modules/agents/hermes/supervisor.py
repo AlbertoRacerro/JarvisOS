@@ -616,9 +616,10 @@ def run_governed_inference(
     while True:
         runner_kwargs = run_ai_task_kwargs(current, structured_output_schema=structured_output_schema,
                                            temperature=temperature)
-        runner_kwargs["metadata"] = {"reasoning_phase": reasoning_phase} if reasoning_phase else {}
+        metadata: dict[str, str] = {"reasoning_phase": reasoning_phase} if reasoning_phase else {}
         if reasoning_effort == "low":
-            runner_kwargs["metadata"]["reasoning_effort"] = "low"
+            metadata["reasoning_effort"] = "low"
+        runner_kwargs["metadata"] = metadata
         outcome = runner(**runner_kwargs)
         if on_outcome is not None:
             on_outcome(outcome)
