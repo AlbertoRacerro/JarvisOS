@@ -1,11 +1,11 @@
 # 369 — HERMES-LOCAL-MESSAGE-BUDGET-1: Keep every local Hermes step under a message budget
 
-Status: ready
+Status: in_review
 Depends on: 362, 366, 368
 
 ## Goal
 
-On a `local:` route every model step of a Hermes turn sends at most about 6,000 estimated input tokens, from the
+On a `local:` route every model step of a Hermes turn sends at most about 6,000 actual input tokens, from the
 first step to the turn cap, instead of growing from about 4k to over 10k. The saved plan, the question, the latest
 assistant step and its tool results stay whole; older steps are reduced to short digests. Each relay step records a
 size breakdown by message category, so the gate shows where input goes.
@@ -37,6 +37,9 @@ holds, because the extra KV cache sits in host RAM.
   `local:` routes it replaces the system message (`compact_system_message`), re-injects the plan and compacts tool
   schemas, then calls `infer_envelope`, which applies `shrink_tool_history` again and serialises messages plus the
   tool summaries (`_local_tool_prompt`) and `RELAY_TOOL_PROTOCOL` into the envelope prompt.
+- Measured on the chat gate with the local model: step 1 estimated 1,640 tokens (`hermes.step_size`) against about
+  4,070 actual input tokens, a gap of about 2,400 tokens outside the envelope messages; an estimated budget of 6,000
+  therefore reaches about 8,400 actual tokens.
 - `ai_jobs.input_tokens` holds the actual prompt tokens reported by the local runtime (PR #312);
   `scripts/benchmarks/agent_eval/runner.py` reports `first_actual_input_tokens` and `max_actual_input_tokens` per
   repetition.
@@ -52,16 +55,21 @@ In scope, `local:` routes only, applied in `HermesSupervisor._handle_relay` befo
    Tool-call ids stay paired with their `tool` messages, so the upstream transcript shape stays valid.
 2. **Plan not repeated.** Older `jarvis_turn_plan` tool results and call arguments are cut to their digest even
    when short, because the saved plan in the system message already carries them. The latest step is unchanged.
-3. **Message budget.** After 1–2, if the estimated size of the envelope prompt (messages, tool summaries and
-   `RELAY_TOOL_PROTOCOL`, `ceil(chars/3.5)`) exceeds `LOCAL_STEP_TOKEN_BUDGET = 6000`, the oldest complete steps
-   (an assistant message with its tool messages) after the first user message are removed one at a time, oldest
-   first, and replaced by one system line stating how many steps were compacted and pointing to the saved plan.
-   The system message, the saved plan, the first user message and the latest step are never removed. If the
-   budget still cannot be met, the request is sent as it is and the overflow is recorded (item 4); it is never
-   refused for size.
+3. **Message budget.** `LOCAL_STEP_TOKEN_BUDGET = 6000` is a target of actual input tokens. The runtime adds tokens
+   the envelope does not contain (chat template, structured-output schema, wrapping), so the supervisor keeps a
+   measured overhead per worker: after each local step whose outcome reports usage with source `actual` and an input
+   token count, `overhead = max(0, actual_input_tokens - estimated_tokens)` of that step's envelope, the latest value
+   kept and clamped to 0–4,000. Before any measurement the overhead is 2,500. After 1–2, while the estimated size of
+   the envelope prompt (messages, tool summaries and `RELAY_TOOL_PROTOCOL`, `ceil(chars/3.5)`) plus the overhead
+   exceeds the budget, the oldest complete steps (an assistant message with its tool messages) after the first user
+   message are removed one at a time, oldest first, and replaced by one system line stating how many steps were
+   compacted and pointing to the saved plan. The system message, the saved plan, the first user message and the
+   latest step are never removed. If the budget still cannot be met, the request is sent as it is and the overflow
+   is recorded (item 4); it is never refused for size.
 4. **Size breakdown.** Each local relay step writes one `hermes.step_size` event, through the same event writer as
    `hermes.turn_guard`, with integer char counts only: `system`, `plan`, `user`, `assistant`, `tool_args`, `tool_results`, `tools`,
-   `protocol`, `estimated_tokens`, `compacted_steps`, `over_budget` (bool), and the step number. No text.
+   `protocol`, `estimated_tokens`, `compacted_steps`, `overhead`, `over_budget` (bool; estimated plus overhead above the
+   budget), and the step number. No text.
 5. **Gate report.** `agent_eval` results add per repetition the number of steps over 6,000 actual input tokens.
 
 Out of scope (binding non-goals):
@@ -89,12 +97,12 @@ Out of scope (binding non-goals):
 ## Acceptance criteria
 
 1. A synthetic 12-step local transcript with realistic sizes (2 kB tool results, 1.5 kB `jarvis_turn_plan` arguments,
-   400-char assistant text, a 2.4 kB saved plan) gives an estimated envelope prompt ≤ 6,000 tokens at every step,
-   while the same transcript on a cloud route is unchanged byte for byte.
+   400-char assistant text, a 2.4 kB saved plan) gives an estimated envelope prompt plus the default overhead of
+   2,500 tokens ≤ 6,000 at every step, while the same transcript on a cloud route is unchanged byte for byte.
 2. In that transcript the first user message, the system message with the saved plan, and the latest assistant step
    with all its tool messages are identical to the input; every remaining `tool_call_id` has its matching call.
-3. A transcript already under budget is changed only by items 1–2; a transcript that cannot fit is sent with
-   `over_budget: true` in its `hermes.step_size` event and is not refused.
+3. A transcript already under budget is changed only by items 1–2; a transcript that cannot fit (estimated plus
+   overhead above 6,000) is sent with `over_budget: true` in its `hermes.step_size` event and is not refused.
 4. `hermes.step_size` payloads contain only the listed integer and boolean fields.
 5. Lint, mypy ratchet and the focused Hermes and agent-eval tests pass offline.
 

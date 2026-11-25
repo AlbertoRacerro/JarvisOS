@@ -107,7 +107,7 @@ def read_job_metrics(data_root: Path | str, started_at: float, ended_at: float) 
     root = Path(data_root)
     db_file = root if root.is_file() else root / "jarvisos.db"
     empty: dict[str, float | int | None] = {"first_actual_input_tokens": None, "max_actual_input_tokens": None, "input_tokens": None,
-                                           "output_tokens": None, "decode_tps": None}
+                                           "output_tokens": None, "decode_tps": None, "steps_over_6000_input_tokens": None}
     if not db_file.exists():
         return empty
     uri = f"file:{urllib.parse.quote(db_file.resolve().as_posix())}?mode=ro"
@@ -127,6 +127,8 @@ def read_job_metrics(data_root: Path | str, started_at: float, ended_at: float) 
         max_actual_input_tokens = (max(int(row[1]) for row in rows)
                                    if rows and all(row[0] == "actual" and row[1] is not None for row in rows)
                                    else None)
+        steps_over_6000 = (sum(int(row[1]) > 6000 for row in rows)
+                           if all(row[0] == "actual" and row[1] is not None for row in rows) else None)
         input_tokens = sum(int(row[1] or 0) for row in rows)
         output_tokens = sum(int(row[2] or 0) for row in rows)
         latency_s = sum(float(row[3] or 0) for row in rows) / 1000
@@ -143,7 +145,8 @@ def read_job_metrics(data_root: Path | str, started_at: float, ended_at: float) 
         return {"first_actual_input_tokens": first_actual_input_tokens,
                 "max_actual_input_tokens": max_actual_input_tokens,
                 "input_tokens": input_tokens, "output_tokens": output_tokens,
-                "decode_tps": round(decode_tps, 2) if decode_tps is not None else None}
+                "decode_tps": round(decode_tps, 2) if decode_tps is not None else None,
+                "steps_over_6000_input_tokens": steps_over_6000}
     finally:
         conn.close()
 
@@ -421,7 +424,7 @@ def run_eval(
                 "checks_total": total_chk,
                 **(read_job_metrics(data_root, started_at, time.time()) if data_root and not reference else
                    {"first_actual_input_tokens": None, "max_actual_input_tokens": None, "input_tokens": None,
-                    "output_tokens": None, "decode_tps": None}),
+                    "output_tokens": None, "decode_tps": None, "steps_over_6000_input_tokens": None}),
             })
 
         points_list = [r["points"] for r in rep_results]

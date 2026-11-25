@@ -257,7 +257,7 @@ def test_eval_metrics_read_proof_jobs_only(tmp_path: Path) -> None:
     end = datetime.datetime(2026, 1, 2, tzinfo=datetime.UTC).timestamp()
     metrics = read_job_metrics(tmp_path, start, end)
     assert metrics == {"first_actual_input_tokens": 1000, "max_actual_input_tokens": 3000, "input_tokens": 6000,
-                       "output_tokens": 600, "decode_tps": 10.0}
+                       "output_tokens": 600, "decode_tps": 10.0, "steps_over_6000_input_tokens": 0}
     with sqlite3.connect(db_file) as db:
         db.execute("UPDATE ai_jobs SET normalized_usage_source = 'estimated' WHERE output_tokens = 100")
     assert read_job_metrics(tmp_path, start, end)["first_actual_input_tokens"] is None
