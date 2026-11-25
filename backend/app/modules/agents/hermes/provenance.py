@@ -164,6 +164,7 @@ def extract_tool_numeric_evidence(
 
     norm_name = normalize_tool_name(tool_name)
     admitted = {
+        "jarvis_python",
         "jarvis_bench_run",
         "bench_run",
         "jarvis_bench_read",

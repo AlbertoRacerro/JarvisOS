@@ -498,8 +498,9 @@ def _submit_hermes_interaction(
             )
             grant_text = _install_hermes_retrieval_grant(worker, payload, workspace_id, thread_id,
                                                          compact=True) or ""
-            grant_text += _install_surface_grants(worker, workspace_id, thread_id,
-                                                  payload.surface_context, surface_brief, compact=True)
+            surface_text = _install_surface_grants(worker, workspace_id, thread_id,
+                                                   payload.surface_context, surface_brief, compact=True)
+            grant_text = "\n".join(part for part in (grant_text, surface_text) if part)
             # Spec 344 review: jarvis:agent-grant first, then jarvis:system-envelope, then the rest
             # so HermesSupervisor.turn's 16-block slicing and 12,000 char prompt cap never drop grant IDs.
             agent_blocks: list[dict[str, Any]] = []
@@ -825,14 +826,21 @@ def _install_hermes_retrieval_grant(
 
 def _install_surface_grants(worker: HermesSupervisor, workspace_id: str, thread_id: str,
                             surface_ref: Any, brief: Any, *, compact: bool = False) -> str:
-    """Issue only the two tools matching this interaction's owner-derived surface."""
-    from datetime import timedelta
+    """Issue the calculation grant plus the tools matching this interaction's owner-derived surface."""
+    from datetime import UTC, datetime, timedelta
 
     from app.modules.ai.agent_contracts import CapabilityGrantRef, CapabilityScope
-    if brief.surface not in {"process", "bluecad", "studio"}:
-        return ""
-    from datetime import UTC, datetime
     now = datetime.now(UTC)
+    # Spec 371: every Hermes interaction holds one calculation grant, whatever the surface.
+    calc_grant_id = str(uuid4())
+    worker.live_grants[calc_grant_id] = CapabilityGrantRef(
+        grant_id=calc_grant_id, capability_id="jarvis.calc_run", issuer="jarvis_policy",
+        scope=CapabilityScope(workspace_id=workspace_id, jarvis_thread_id=thread_id),
+        issued_at=now, expires_at=now + timedelta(minutes=10),
+    )
+    calc_line = f"mcp__jarvis__jarvis_python grant_id={calc_grant_id}."
+    if brief.surface not in {"process", "bluecad", "studio"}:
+        return calc_line
     prefix = brief.surface
     capability_ids = [f"jarvis.{prefix}_read", f"jarvis.{prefix}_act"]
     if brief.surface == "bluecad":
@@ -878,8 +886,8 @@ def _install_surface_grants(worker: HermesSupervisor, workspace_id: str, thread_
              "Treat the tool result as authoritative. For state proposed, say the change is prepared for approval and has NOT been applied; do not say it was changed or updated. "
              "Say a change was made only when state is applied and applied is true. Refused or stale means nothing was changed; state the returned reason."])
     if compact:
-        return "\n".join([*lines[:3], *(lines[3:6] if brief.surface == "bluecad" else []), lines[-1]])
-    return "\n".join(lines)[:7000]
+        return "\n".join([calc_line, *lines[:3], *(lines[3:6] if brief.surface == "bluecad" else []), lines[-1]])
+    return "\n".join([calc_line, *lines])[:7000]
 
 
 def _surface_grant_constraints(surface_ref: Any, brief: Any) -> dict[str, str | int | float | bool]:
@@ -971,12 +979,14 @@ def _first_brief_bluecad_part(text: str) -> str | None:
 def _turn_tools(surface: str, question: str = "") -> list[str]:
     """Choose at most seven model-visible tools by fixed surface and word rules."""
     prefix = "mcp__jarvis__jarvis_"
-    names = ["turn_plan", "retrieval_query", "knowledge_read"]
+    names = ["python", "turn_plan", "retrieval_query"]
     words = set(re.findall(r"[a-z]+", question.lower()))
     if surface in {"process", "bluecad", "studio"}:
         names.extend([f"{surface}_read", f"{surface}_act"])
     if surface == "bluecad":
         names.extend(["bench_read", "bench_run"])
+    # Spec 371: knowledge_read gives way on the CAD surface so python never displaces the bench tools.
+    names.append("knowledge_read")
     groups = (
         ({"patent", "patents", "prior", "claims", "invention"}, ["patent_read"]),
         ({"code", "repo", "repository", "source", "file", "files", "python", "bug"},
@@ -989,7 +999,7 @@ def _turn_tools(surface: str, question: str = "") -> list[str]:
         if words & keywords:
             matched = True
             names.extend(group[:max(0, 7 - len(names))])
-    if not matched and len(names) == 3:
+    if not matched and len(names) == 4:
         names.extend(["paper_search", "paper_pdf_read", "browser_page_read"])
     return [prefix + name for name in names[:7]]
 
@@ -1508,6 +1518,7 @@ _TOOL_ACTIVITY = {
     "jarvis_decide": "Deciding route…",
     "jarvis_bench_read": "Reading evaluation…",
     "jarvis_bench_run": "Running evaluation…",
+    "jarvis_python": "Running calculation…",
     "jarvis_turn_plan": "Updating turn plan…",
     "turn_plan": "Updating turn plan…",
     "jarvis_paper_search": "Searching scientific papers…",
