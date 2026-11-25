@@ -25,6 +25,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from scripts import vault_guard
+
 TERMINAL_FLOW_STATES = frozenset(
     {"complete", "completed", "failed", "failed_terminal", "cancelled_terminal", "timed_out"}
 )
@@ -720,6 +722,10 @@ def main(argv: list[str] | None = None) -> int:
                 and args.timeout < 660):
             print("Error: Hermes --timeout must be at least 660 seconds (longer than the worker turn deadline)",
                   file=sys.stderr)
+            return 1
+        vault = vault_guard.vault_root()
+        if any(vault_guard.touches_vault(p, vault) for p in (args.data_root, args.out) if p):
+            print(f"Error: {vault_guard.REFUSED_MESSAGE}", file=sys.stderr)
             return 1
         try:
             run_eval(

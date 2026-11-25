@@ -20,6 +20,10 @@ if (!process.argv[2]) throw new Error("usage: freecad_bridge_walk.mjs <evidence-
 const evidence = resolve(process.argv[2]);
 await mkdir(evidence, { recursive: true });
 const dataRoot = resolve(process.argv[3] ?? await mkdtemp(join(tmpdir(), "jarvisos-326-data-")));
+// Spec 377: a source data root inside or containing the private vault is refused before it is read.
+if (process.argv[3] && spawnSync("python3", [resolve(root, "scripts/vault_guard.py"), "check", resolve(process.argv[3])], { stdio: "inherit" }).status !== 0) {
+  throw new Error("source data root refused by the vault guard");
+}
 const controlDir = join(dataRoot, "control");
 await mkdir(join(controlDir, "continuity", "jobs"), { recursive: true });
 await mkdir(join(dataRoot, "relay-repo", ".agent-relay", "devctx"), { recursive: true });

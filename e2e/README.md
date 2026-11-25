@@ -41,6 +41,8 @@ optional pack, not by this repository.
 | `process_dynamic_physics_walk.mjs` | Spec 325 Dynamic physics UI: thermal, carbonate/pH and optics/fouling controls save and persist on a photobioreactor draft (fresh temporary data root) | `node e2e/process_dynamic_physics_walk.mjs <evidence-dir> [<data-root-copy>]` |
 | `case_walk.mjs` | Spec 328 CASE-WALK-1: one readiness case from seven red cells to seven green through visible controls only (workspace, source with paper file, located datum, accept, parameter, card run, verdict, decision, retrieval check). After the backend starts the script only GETs the board; it never writes through the API. A step with no visible control fails the walk and `summary.json` names the step and control. Evidence: `board.jsonl`, one screenshot per step, `summary.json` | `node e2e/case_walk.mjs <evidence-dir> [--pack <pack-dir>] [--case <case-id>] [--data-root-copy <dir>]` |
 
+**Private vault (spec 377).** Walks and agent-eval runs use fresh roots or copies of non-vault roots only. When `JARVISOS_VAULT_PATH` is set, every walk that reads a source data root first runs `scripts/vault_guard.py check` and stops if the root is inside or contains the vault.
+
 **`case_walk.mjs` walk input.** Defaults: the fake pack (`backend/tests/fixtures/packs/zephyr`), case `generic-literature-1`,
 a fresh empty temporary data root; `--data-root-copy` runs on a temporary copy and never touches the original. The case
 comes from `<pack>/readiness_cases.toml`; what it does not say comes from `<pack>/case_walks/<case-id>.toml`

@@ -32,6 +32,10 @@ const copyArg = flag("--data-root-copy");
 if (!args[0]) throw new Error(`usage: ${USAGE}`);
 
 const root = resolve(new URL("../", import.meta.url).pathname);
+// Spec 377: a source data root inside or containing the private vault is refused before it is read.
+if (copyArg && spawnSync("python3", [resolve(root, "scripts/vault_guard.py"), "check", resolve(copyArg)], { stdio: "inherit" }).status !== 0) {
+  throw new Error("source data root refused by the vault guard");
+}
 const backend = join(root, "backend");
 const python = process.env.JARVISOS_PROOF_PYTHON ?? join(backend, ".venv/bin/python");
 const port = Number(process.env.JARVISOS_PROOF_PORT ?? 8328);

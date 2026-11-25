@@ -19,6 +19,10 @@ const port = Number(process.env.JARVISOS_PROOF_PORT ?? 8225);
 const base = `http://127.0.0.1:${port}`;
 const evidence = resolve(process.argv[2] ?? "");
 const sourceRoot = resolve(process.argv[3] ?? "");
+// Spec 377: a source data root inside or containing the private vault is refused before it is read.
+if (process.argv[3] && spawnSync("python3", [resolve(root, "scripts/vault_guard.py"), "check", resolve(process.argv[3])], { stdio: "inherit" }).status !== 0) {
+  throw new Error("source data root refused by the vault guard");
+}
 if (!process.argv[2] || !process.argv[3]) throw new Error("usage: owner_predicate_real_app.mjs <evidence-dir> <source-data-root>");
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 await mkdir(evidence, { recursive: true });
