@@ -184,6 +184,8 @@ def test_strip_removes_only_the_empty_template_block() -> None:
     for normal in ("Answer: 4 m.\nNumbers: 4\nSources: none\nCaveats: none", "Answer: 1-3 sentences\nNumbers: 5",
                    "Numbers:\nSources:", ""):
         assert strip_empty_template(normal) == normal
+    with_content = TEMPLATE + " none reported"
+    assert strip_empty_template(with_content) == with_content
 
 
 def test_strip_applies_to_plain_and_json_replies() -> None:
@@ -206,6 +208,35 @@ def test_local_final_answer_is_stripped_before_it_is_returned() -> None:
 
     source = inspect.getsource(supervisor_module)
     assert "final_text = strip_template_from_reply(final_text)" in source
+
+
+def test_turn_extends_grants_to_the_measured_turn_deadline(monkeypatch: pytest.MonkeyPatch,
+                                                            workspace_id: str) -> None:
+    supervisor = supervisor_module.HermesSupervisor("unused")
+    supervisor.session = AgentSessionRef(jarvis_thread_id="thread-374", hermes_session_id="hermes-374",
+                                         profile_id="default", workspace_id=workspace_id, generation=1,
+                                         upstream_revision=UPSTREAM_REVISION)
+    _install_surface_grants(supervisor, workspace_id, "thread-374", None, _brief("none", workspace_id))
+    monkeypatch.setattr("app.modules.agents.hermes.roles.get_role_instructions", lambda *_a, **_k: "role")
+    monkeypatch.setattr(supervisor_module, "step_deadline_from_rows", lambda *_a: 900)
+
+    class Alive:
+        def poll(self) -> None:
+            return None
+
+    supervisor.process = Alive()  # type: ignore[assignment]
+    monkeypatch.setattr(supervisor, "_send", lambda _frame: None)
+
+    def answer(_id: str, **_kwargs: Any) -> dict[str, Any]:
+        supervisor.last_flow[supervisor.session.hermes_session_id] = "flow-1"  # type: ignore[union-attr]
+        return {"type": "turn_result", "status": "success", "completed": True, "final_response": "Answer: ok"}
+
+    monkeypatch.setattr(supervisor, "_await", answer)
+    before = datetime.now(UTC)
+    assert supervisor.turn("question")["status"] == "success"
+    (grant,) = supervisor.live_grants.values()
+    assert grant.expires_at >= before + timedelta(seconds=3600 + 60)
+    assert grant.expires_at <= datetime.now(UTC) + timedelta(seconds=3600 + 60)
 
 
 # Criterion 6

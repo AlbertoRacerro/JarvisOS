@@ -400,7 +400,7 @@ def is_local_route(route_class: str | None) -> bool:
 
 
 _TEMPLATE_BLOCK = re.compile(
-    r"\A\s*Answer:[ \t]*1-3 sentences[ \t]*\s*Numbers:[ \t]*\s*Sources:[ \t]*\s*Caveats:[ \t]*")
+    r"\A\s*Answer:[ \t]*1-3 sentences[ \t]*\s*Numbers:[ \t]*\s*Sources:[ \t]*\s*Caveats:[ \t]*(?=\s*\Z|\n|Answer\s*:)")
 
 
 def strip_empty_template(text: str) -> str:
@@ -1503,6 +1503,11 @@ class HermesSupervisor:
         self.step_deadline_seconds = step_deadline_from_rows(rows, output_cap)
         if turn_timeout == 600:
             turn_timeout = turn_deadline(self.step_deadline_seconds, self.turn_cap)
+        # Spec 374 item 1: grants issued before the step deadline was measured live as long as this turn may run.
+        grant_end = datetime.now(UTC) + timedelta(seconds=min(turn_timeout, 3600) + 60)
+        for grant_id, grant in list(self.live_grants.items()):
+            if grant.revoked_at is None and grant.expires_at < grant_end:
+                self.live_grants[grant_id] = grant.model_copy(update={"expires_at": grant_end})
         self.last_flow.pop(self.session.hermes_session_id, None)
         self.turn_flow_ids[self.session.hermes_session_id] = []
         self.active_interaction_id = interaction_id
