@@ -106,7 +106,7 @@ def read_job_metrics(data_root: Path | str, started_at: float, ended_at: float) 
     """Read token use from the isolated proof database for one serial repetition."""
     root = Path(data_root)
     db_file = root if root.is_file() else root / "jarvisos.db"
-    empty: dict[str, float | int | None] = {"prompt_tokens_estimate": None, "input_tokens": None,
+    empty: dict[str, float | int | None] = {"first_actual_input_tokens": None, "max_actual_input_tokens": None, "input_tokens": None,
                                            "output_tokens": None, "decode_tps": None}
     if not db_file.exists():
         return empty
@@ -115,15 +115,18 @@ def read_job_metrics(data_root: Path | str, started_at: float, ended_at: float) 
     try:
         try:
             rows = conn.execute(
-                "SELECT route_reason_json, input_tokens, output_tokens, latency_ms FROM ai_jobs "
+                "SELECT normalized_usage_source, input_tokens, output_tokens, latency_ms FROM ai_jobs "
                 "WHERE julianday(created_at) BETWEEN julianday(?, 'unixepoch') AND julianday(?, 'unixepoch') "
-                "AND selected_route_class LIKE 'local:%' AND status = 'success'",
+                "AND selected_route_class LIKE 'local:%' AND status = 'success' ORDER BY created_at, rowid",
                 (started_at, ended_at),
             ).fetchall()
         except sqlite3.OperationalError:
             return empty
-        estimates = [value for raw, *_ in rows
-                     if isinstance((value := json.loads(raw or "{}").get("prompt_tokens_estimate")), (int, float))]
+        first_actual_input_tokens = (int(rows[0][1]) if rows and rows[0][0] == "actual"
+                                     and rows[0][1] is not None else None)
+        max_actual_input_tokens = (max(int(row[1]) for row in rows)
+                                   if rows and all(row[0] == "actual" and row[1] is not None for row in rows)
+                                   else None)
         input_tokens = sum(int(row[1] or 0) for row in rows)
         output_tokens = sum(int(row[2] or 0) for row in rows)
         latency_s = sum(float(row[3] or 0) for row in rows) / 1000
@@ -137,7 +140,8 @@ def read_job_metrics(data_root: Path | str, started_at: float, ended_at: float) 
                 seconds_per_token = sum((x - mean_x) * (y - mean_y) for x, y in samples) / spread
                 if seconds_per_token > 0:
                     decode_tps = 1 / seconds_per_token
-        return {"prompt_tokens_estimate": round(sum(estimates) / len(estimates), 2) if estimates else None,
+        return {"first_actual_input_tokens": first_actual_input_tokens,
+                "max_actual_input_tokens": max_actual_input_tokens,
                 "input_tokens": input_tokens, "output_tokens": output_tokens,
                 "decode_tps": round(decode_tps, 2) if decode_tps is not None else None}
     finally:
@@ -416,7 +420,7 @@ def run_eval(
                 "checks_passed": passed,
                 "checks_total": total_chk,
                 **(read_job_metrics(data_root, started_at, time.time()) if data_root and not reference else
-                   {"prompt_tokens_estimate": None, "input_tokens": None,
+                   {"first_actual_input_tokens": None, "max_actual_input_tokens": None, "input_tokens": None,
                     "output_tokens": None, "decode_tps": None}),
             })
 
@@ -432,7 +436,8 @@ def run_eval(
             "total_tool_calls": sum(calls_list),
             "mean_wall_time_s": round(sum(walls_list) / len(walls_list), 3),
             "total_wall_time_s": round(sum(walls_list), 3),
-            "mean_prompt_tokens_estimate": _mean_present(rep_results, "prompt_tokens_estimate"),
+            "mean_first_actual_input_tokens": _mean_present(rep_results, "first_actual_input_tokens"),
+            "mean_max_actual_input_tokens": _mean_present(rep_results, "max_actual_input_tokens"),
             "mean_input_tokens": _mean_present(rep_results, "input_tokens"),
             "mean_output_tokens": _mean_present(rep_results, "output_tokens"),
             "mean_decode_tps": _mean_present(rep_results, "decode_tps"),

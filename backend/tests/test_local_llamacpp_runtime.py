@@ -62,6 +62,22 @@ def test_adapter_is_loopback_only_and_sends_route_budget(monkeypatch: pytest.Mon
         adapter.complete(AIRequest(task_type=AITaskType.synthesis, prompt="hello"))
 
 
+@pytest.mark.parametrize(("usage", "expected"), [
+    ({"prompt_tokens": 12, "completion_tokens": 0}, "actual"),
+    ({"prompt_tokens": 12}, "mixed"),
+    ({"completion_tokens": 0}, "mixed"),
+    ({}, "estimated"),
+])
+def test_adapter_usage_source_counts_present_zero(usage: dict, expected: str) -> None:
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, json={
+        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": usage,
+    }))
+    result = LocalLlamaCppAdapter(client_factory=lambda: httpx.Client(transport=transport)).complete(
+        AIRequest(task_type=AITaskType.synthesis, prompt="hello")
+    )
+    assert result.usage.usage_source == expected
+
+
 @pytest.mark.parametrize(("thinking", "expected"), [("on", True), ("off", False)])
 def test_adapter_sends_per_request_thinking_control(
     thinking: str, expected: bool, monkeypatch: pytest.MonkeyPatch,
