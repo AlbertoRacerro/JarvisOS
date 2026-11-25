@@ -37,7 +37,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.benchmarks.agent_eval.runner import run_eval, set_claude_runner, wait_for_model_idle  # noqa: E402
+from scripts.benchmarks.agent_eval.runner import (  # noqa: E402
+    build_parser,
+    run_eval,
+    set_claude_runner,
+    wait_for_model_idle,
+)
 
 SESSION = AgentSessionRef(jarvis_thread_id="thread-375", hermes_session_id="hermes-375", profile_id="isaac",
                           workspace_id="workspace-375", generation=1, upstream_revision=UPSTREAM_REVISION)
@@ -120,7 +125,8 @@ def test_wait_for_model_idle_restarts_the_window_when_a_slot_turns_busy_again() 
     assert result[0] == 24.0
 
 
-@pytest.mark.parametrize("body", [None, b"not json", b'{"id": 0}'])
+@pytest.mark.parametrize("body", [None, b"not json", b'{"id": 0}', b"[]", b"[{}]", b"[[]]", b"[1]",
+                                  b'[{"id": 0, "is_processing": "no"}]', b'[{"id": 0}, "x"]'])
 def test_wait_for_model_idle_does_not_block_on_unreachable_or_malformed_slots(body: bytes | None) -> None:
     def opener(_url: str, timeout: float = 0) -> Any:
         if body is None:
@@ -129,6 +135,16 @@ def test_wait_for_model_idle_does_not_block_on_unreachable_or_malformed_slots(bo
 
     assert wait_for_model_idle("http://127.0.0.1:8090", quiet_seconds=120, opener=opener,
                                clock=lambda: 0.0, sleep=lambda _s: None) is None
+
+
+@pytest.mark.parametrize("bad", [-1.0, float("nan"), float("inf")])
+def test_yield_quiet_seconds_must_be_finite_and_non_negative(tmp_path: Path, bad: float) -> None:
+    with pytest.raises(ValueError):
+        run_eval(tasks_path=_task_file(tmp_path), label="y", out_dir=tmp_path / "out", reference="haiku",
+                 yield_to_model="http://127.0.0.1:8090", yield_quiet_seconds=bad)
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["run", "--tasks", "t", "--label", "l", "--out", "o",
+                                   "--yield-quiet-seconds", str(bad)])
 
 
 def _task_file(tmp_path: Path) -> Path:
@@ -149,9 +165,12 @@ def test_run_eval_records_yield_wait_and_totals(tmp_path: Path) -> None:
         set_claude_runner(None)
     reps = result["tasks"]["a"]["repetitions"]
     assert reps[0]["yield_wait_s"] >= 30 and reps[1]["yield_wait_s"] >= 30
-    # Only the first repetition saw a busy slot, so only it counts as a pause.
+    # Only the first repetition saw a busy slot, so only it counts as a pause; the mandatory quiet-window
+    # wait of the initially idle second repetition is still waiting time and is reported in the total.
     assert result["yield_pauses"] == 1
-    assert result["yield_paused_s"] == reps[0]["yield_wait_s"]
+    assert result["yield_paused_s"] == round(reps[0]["yield_wait_s"] + reps[1]["yield_wait_s"], 3)
+    # Waiting is not benchmark wall time: the fake clock only moves while waiting, so no wait leaks in.
+    assert all(r["wall_time_s"] < 1 for r in reps) and result["total_wall_time_s"] < 1
     assert json.loads((tmp_path / "out" / "results.json").read_text())["yield_pauses"] == 1
 
 
@@ -181,6 +200,7 @@ def test_run_eval_refuses_a_yield_url_on_port_8000(tmp_path: Path) -> None:
 @pytest.mark.parametrize("question", [
     "mostrami la schermata CFD", "dove trovo il flowsheet?", "apri la libreria", "vai alla pagina Studio",
     "Where is the CFD screen?", "show me the plant", "open the library", "go to Studio", "find the Studio tab",
+    "go to Design", "Go to the Design page", "vai a Design", "apri la schermata Design", "dove trovo Design?",
 ])
 def test_label_navigation_with_ui_context_is_light(question: str) -> None:
     assert turn_weight(question, has_ui_context=True) == "light"
@@ -203,6 +223,10 @@ def test_label_short_greetings_are_light_in_both_languages(question: str) -> Non
     ("Where is the pressure drop calculation? calculate it", True),
     ("ciao, mi spieghi come funziona la rete di scambio termico del flowsheet", True),  # not a short greeting
     ("design a heat exchanger", True),
+    ("go to Design and design a heat exchanger", True),
+    ("vai a Design e progetta uno scambiatore", True),
+    ("show me the design of the heat exchanger", True),
+    ("go to Design", False),  # no page description: not navigation
     ("", True),
 ])
 def test_label_other_turns_stay_work(question: str, has_ui: bool) -> None:
@@ -318,9 +342,13 @@ class _Worker:
     last_error = None
     turn_tool_outputs: list = []
 
-    def __init__(self, replies: list[dict[str, Any]]) -> None:
+    def __init__(self, replies: list[dict[str, Any]], route: str = "local:llamacpp") -> None:
         self.replies = replies
+        self.route = route
         self.turns: list[dict[str, Any]] = []
+
+    def selected_turn_route(self) -> str:
+        return self.route
 
     def _alive(self) -> bool:
         return False
@@ -372,6 +400,25 @@ def test_work_turn_is_unchanged() -> None:
     assert worker.turns[0]["allowed_tools"]
     sources = {b["source"] for b in worker.turns[0]["context_blocks"]}
     assert "jarvis:system-envelope" in sources
+
+
+def test_cloud_role_route_skips_the_light_path_and_keeps_grants_and_context() -> None:
+    workspace_id = _workspace("workspace-375-cloud")
+    worker = _Worker([{"status": "failed"}], route="cloud:scaleway")
+    _submit(worker, workspace_id, "cloud-1", "mostrami la schermata CFD", ui_context=_ui())
+    assert len(worker.turns) == 1 and "light" not in worker.turns[0]
+    assert worker.turns[0]["allowed_tools"]
+    assert "jarvis:system-envelope" in {b["source"] for b in worker.turns[0]["context_blocks"]}
+
+
+def test_supervisor_route_helper_follows_the_role_route() -> None:
+    supervisor = HermesSupervisor("unused", runner=lambda **_k: None, route_for_task=lambda _t: "cloud:task",
+                                  route_for_role=lambda role: f"local:{role}")
+    assert supervisor.selected_turn_route() is None  # no bound session
+    supervisor.session = SESSION
+    assert supervisor.selected_turn_route() == "local:isaac"
+    supervisor.route_for_role = None
+    assert supervisor.selected_turn_route() == "cloud:task"
 
 
 # --- criterion 4: fallback -------------------------------------------------------------------------

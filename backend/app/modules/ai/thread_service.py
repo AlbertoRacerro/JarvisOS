@@ -487,7 +487,8 @@ def _submit_hermes_interaction(
             _ensure_hermes_thread_session(worker, thread_id=thread_id, workspace_id=workspace_id, role_id=payload.role_id)
             blocks = list(context_blocks or [])
             result: dict[str, Any] = {}
-            if turn_weight(prompt, has_ui_context=payload.ui_context is not None) == "light":
+            if (turn_weight(prompt, has_ui_context=payload.ui_context is not None) == "light"
+                    and _is_local_turn(worker)):
                 # Spec 375: one tool-less low-effort step with the page description; no grants are installed.
                 result = worker.turn(
                     prompt, interaction_id=interaction_id, sheldon_mode=payload.sheldon_mode, light=True,
@@ -634,6 +635,16 @@ def _run_work_turn(
                        sheldon_mode=payload.sheldon_mode)
 
 
+def _is_local_turn(worker: Any) -> bool:
+    """Spec 375: the light path is local only; a cloud role route takes the normal work path."""
+    from app.modules.agents.hermes.supervisor import is_local_route
+
+    try:
+        return is_local_route(worker.selected_turn_route())
+    except Exception:
+        return False
+
+
 def _has_final_answer(result: dict[str, Any]) -> bool:
     final = result.get("final_response")
     return (result.get("status") == "success" and result.get("completed") is True
@@ -649,6 +660,11 @@ _CALCULATION_WORDS = frozenset({
     "verifica", "verificare", "verify", "check", "progetta", "dimensiona", "dimensionare", "design", "size",
     "sizing", "simula", "simulate", "stima", "estimate", "somma", "media", "percentuale",
 })
+_NAVIGATION_FILLER = frozenset({
+    "to", "the", "a", "me", "my", "screen", "page", "section", "tab", "view", "is", "i", "can", "do", "please",
+    "alla", "al", "la", "il", "lo", "di", "in", "su", "pagina", "schermata", "sezione", "scheda", "vista", "trovo",
+    "per", "favore", "dov", "e", "è",
+})
 _GREETING_WORDS = frozenset({
     "ciao", "salve", "buongiorno", "buonasera", "buonanotte", "grazie", "hello", "hi", "hey", "thanks", "thank",
     "you", "good", "morning", "evening", "afternoon", "mille", "molte", "tante", "a", "tutti", "bubu", "inkling", "there",
@@ -661,7 +677,14 @@ def turn_weight(question: str, *, has_ui_context: bool) -> str:
     if re.search(r"\d", text):
         return "work"
     words = re.findall(r"[a-zà-ÿ]+", text)
-    if not words or _CALCULATION_WORDS & set(words):
+    if not words:
+        return "work"
+    calculation = _CALCULATION_WORDS & set(words)
+    # "go to Design" names the Design screen; "design a heat exchanger" is a request for work.
+    if calculation == {"design"} and has_ui_context and _NAVIGATION_WORDS & set(words) and not (
+            set(words) - _NAVIGATION_WORDS - _NAVIGATION_FILLER - {"design"}):
+        calculation = set()
+    if calculation:
         return "work"
     if has_ui_context and _NAVIGATION_WORDS & set(words):
         return "light"

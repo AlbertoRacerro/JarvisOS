@@ -292,7 +292,10 @@ def wait_for_model_idle(
         try:
             with opener(slots_url.rstrip("/") + "/slots", timeout=5) as resp:
                 slots = json.loads(resp.read().decode("utf-8"))
-            busy = any(bool(slot.get("is_processing")) for slot in slots)
+            if not isinstance(slots, list) or not slots or not all(
+                    isinstance(slot, dict) and isinstance(slot.get("is_processing"), bool) for slot in slots):
+                return None
+            busy = any(slot["is_processing"] for slot in slots)
         except (OSError, ValueError, AttributeError, TypeError):
             return None
         now = clock()
@@ -350,6 +353,8 @@ def run_eval(
         validate_base_url(base_url)
     if yield_to_model:
         validate_base_url(yield_to_model)
+        if not math.isfinite(yield_quiet_seconds) or yield_quiet_seconds < 0:
+            raise ValueError("yield_quiet_seconds must be a finite number >= 0")
 
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -378,9 +383,9 @@ def run_eval(
                         yield_logged = True
                 else:
                     yield_wait_s, saw_busy = waited
+                    yield_paused_s += yield_wait_s
                     if saw_busy:
                         yield_pauses += 1
-                        yield_paused_s += yield_wait_s
             started_at = time.time()
             start_wall = time.monotonic()
             deadline = start_wall + timeout
@@ -662,6 +667,13 @@ def _mean_present(rows: list[dict[str, Any]], key: str) -> float | None:
     return round(sum(values) / len(values), 2) if values else None
 
 
+def _non_negative_seconds(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError("must be a finite number >= 0")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent_eval",
@@ -688,7 +700,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--role-id", help="Hermes role id (e.g. 'isaac')")
     run_parser.add_argument("--yield-to-model", help="Loopback model server base URL; wait for its /slots to be idle "
                             "before every repetition so the maintainer's own turns go first")
-    run_parser.add_argument("--yield-quiet-seconds", type=float, default=120.0,
+    run_parser.add_argument("--yield-quiet-seconds", type=_non_negative_seconds, default=120.0,
                             help="Continuous idle window required before a repetition (default 120)")
 
     # compare subcommand

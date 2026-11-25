@@ -1478,6 +1478,14 @@ class HermesSupervisor:
         if self._await(request_id, timeout=30).get("type") != "ack":
             raise RuntimeError("Hermes recovery bind failed")
 
+    def selected_turn_route(self) -> str | None:
+        """The route this session's next turn runs on: the role route, else the general task route."""
+        if self.session is None:
+            return None
+        if self.route_for_role is not None:
+            return self.route_for_role(self.session.profile_id)
+        return self.route_for_task("general")
+
     def turn(self, prompt: str, *, interaction_id: str | None = None,
              context_blocks: list[dict[str, str]] | None = None,
              allowed_tools: list[str] | None = None,
@@ -1490,12 +1498,11 @@ class HermesSupervisor:
             raise ValueError("Hermes turn prompt must be 1..12000 characters")
         if not self._alive():
             self._recover(self.session)
+        selected_route = self.selected_turn_route()
         if self.route_for_role is not None:
-            self.active_role_route = self.route_for_role(self.session.profile_id)
+            self.active_role_route = selected_route
         from app.modules.local_ai.runtime.model_registry import get_active_model_entry
         active_entry = get_active_model_entry()
-        selected_route = (self.active_role_route if self.route_for_role is not None
-                          else self.route_for_task("general"))
         output_cap = getattr(active_entry, "max_output_tokens", None) or (
             DEFAULT_LOCAL_OUTPUT_CAP if is_local_route(selected_route) else 2048)
         try:
