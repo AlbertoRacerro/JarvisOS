@@ -57,6 +57,12 @@ def _tool_contents(messages: list[dict[str, Any]]) -> dict[str, str]:
     return {m["tool_call_id"]: m["content"] for m in messages if m["role"] == "tool"}
 
 
+def _trimmed_contents(messages: list[dict[str, Any]]) -> dict[str, str]:
+    contents = _tool_contents(messages)
+    older = list(contents)[:-4]
+    return {k: (v[:700] + " …[trimmed]" if k in older and len(v) > 700 else v) for k, v in contents.items()}
+
+
 def _pairs_match(messages: list[dict[str, Any]]) -> bool:
     calls = {c["id"] for m in messages if m["role"] == "assistant" for c in m.get("tool_calls", [])}
     return calls == {m["tool_call_id"] for m in messages if m["role"] == "tool"}
@@ -66,7 +72,8 @@ def test_fitting_local_transcript_keeps_earlier_tool_results_whole() -> None:
     messages = _transcript(6, 1500)
     compacted, payload = compact_local_messages(messages, SUMMARIES, RELAY_TOOL_PROTOCOL)
     assert payload is not None and payload["shrunk_tool_results"] == 0 and payload["compacted_steps"] == 0
-    assert _tool_contents(compacted) == _tool_contents(messages)
+    # Spec 372 item 5: the last 4 results stay whole, older ones are cut to 700 chars plus the marker.
+    assert _tool_contents(compacted) == _trimmed_contents(messages)
 
 
 def test_tool_results_are_shortened_oldest_first_before_any_step_is_dropped() -> None:
@@ -157,10 +164,10 @@ def test_relay_local_route_forwards_whole_results_and_counts_only_event(monkeypa
     prompts, sent, connection = _relay(monkeypatch, messages, "local:llamacpp")
     assert sent[-1]["status"] == "success"
     sent_messages = json.loads(prompts[0].split(RELAY_TOOL_PROTOCOL)[0])["messages"]
-    assert _tool_contents(sent_messages) == _tool_contents(messages)
+    assert _tool_contents(sent_messages) == _trimmed_contents(messages)
     payload = json.loads(connection.execute(
         "SELECT payload FROM events WHERE event_type = 'hermes.step_size'").fetchone()["payload"])
-    assert payload["shrunk_tool_results"] == 0
+    assert payload["shrunk_tool_results"] == 0 and payload["trimmed_tool_results"] == 2
     assert all(isinstance(v, (int, bool)) for v in payload.values())
     assert estimate_tokens(len(prompts[0])) + DEFAULT_STEP_OVERHEAD <= LOCAL_STEP_TOKEN_BUDGET
 

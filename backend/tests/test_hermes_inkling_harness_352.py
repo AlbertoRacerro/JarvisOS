@@ -345,7 +345,7 @@ def test_research_budget_cap_enforcement(monkeypatch: pytest.MonkeyPatch) -> Non
     supervisor_inst._handle_tool(frame_exceed)
     res_exceed = sent_frames[-1]["tool_result"]
     assert "Research budget used up (3 searches/reads). Do not search again" in str(res_exceed["result"])
-    assert "synthesize your final answer" in str(res_exceed["result"]).lower()
+    assert "answer now with what you have" in str(res_exceed["result"]).lower()
 
 
 def test_is_research_tool_classification() -> None:

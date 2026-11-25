@@ -150,7 +150,8 @@ def test_under_budget_transcript_changes_only_by_digests() -> None:
     messages = _transcript(2)
     compacted, payload = compact_local_messages(messages, SUMMARIES, RELAY_TOOL_PROTOCOL)
     assert payload is not None and payload["compacted_steps"] == 0 and payload["over_budget"] is False
-    assert compacted == digest_older_steps(messages) and len(compacted) == len(messages)
+    # Spec 372 item 5: on local routes the digests are only a fallback, so a fitting transcript is unchanged.
+    assert compacted == messages
 
 
 def test_unfittable_transcript_is_sent_as_over_budget() -> None:
@@ -189,7 +190,7 @@ def test_size_breakdown_counts_categories_without_text() -> None:
     assert payload is not None
     assert set(payload) == {"system", "plan", "user", "assistant", "tool_args", "tool_results", "tools",
                             "protocol", "estimated_tokens", "compacted_steps", "overhead", "over_budget",
-                            "shrunk_tool_results"}
+                            "shrunk_tool_results", "trimmed_tool_results"}
     assert all(isinstance(v, bool if k == "over_budget" else int) for k, v in payload.items())
     assert payload["protocol"] == len(RELAY_TOOL_PROTOCOL) and payload["plan"] > 1000
     assert payload["system"] > 0 and payload["user"] > 1500
@@ -245,7 +246,7 @@ def test_relay_compacts_local_route_and_writes_counts_only_event(monkeypatch: py
     payload = json.loads(rows[0]["payload"])
     assert set(payload) == {"system", "plan", "user", "assistant", "tool_args", "tool_results", "tools", "protocol",
                             "estimated_tokens", "compacted_steps", "overhead", "over_budget", "step",
-                            "shrunk_tool_results"}
+                            "shrunk_tool_results", "trimmed_tool_results"}
     assert payload["step"] == 1 and payload["compacted_steps"] > 0 and payload["over_budget"] is False
     assert all(isinstance(v, (int, bool)) for v in payload.values())
     assert "What is the result" not in rows[0]["payload"]
