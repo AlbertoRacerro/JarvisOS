@@ -1,6 +1,6 @@
 # 369 — HERMES-LOCAL-MESSAGE-BUDGET-1: Keep every local Hermes step under a message budget
 
-Status: ready
+Status: in_review
 Depends on: 362, 366, 368
 
 ## Goal

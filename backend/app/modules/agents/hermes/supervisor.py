@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from app.core.database import open_sqlite_connection
 from app.core.paths import build_paths
+from app.modules.agents.hermes.message_budget import compact_local_messages
 from app.modules.agents.hermes.worker_shim import (
     _PLAN_HEADER,
     COMPACT_METHODOLOGY,
@@ -1070,6 +1071,9 @@ class HermesSupervisor:
             if selected_route.startswith("local:"):
                 frame["tools"] = compact_tool_schemas(tools)
                 tools = frame["tools"]
+                frame["messages"], step_size = compact_local_messages(
+                    frame.get("messages", []), [_local_tool_prompt(tool) for tool in tools],
+                    RELAY_TOOL_PROTOCOL if tools else "")
             envelope = infer_envelope(frame, deadline_seconds=self.step_deadline_seconds,
                                       route_class=selected_route)
             if envelope.agent_session != self.session:
@@ -1081,13 +1085,10 @@ class HermesSupervisor:
                         if envelope.task_kind == "general":
                             self.last_flow[envelope.agent_session.hermes_session_id] = outcome.flow_id
 
-                def record_guard(kind: str, usable: bool | None) -> None:
-                    payload: dict[str, object] = {"kind": kind, "step": self.turn_step_count}
-                    if kind == "length":
-                        payload["parsed"] = bool(usable)
+                def record_event(event_type: str, payload: dict[str, object]) -> None:
                     try:
                         with open_sqlite_connection() as connection:
-                            log_event(connection, event_type="hermes.turn_guard", actor="jarvis",
+                            log_event(connection, event_type=event_type, actor="jarvis",
                                       target_type="ai_thread_interaction", target_id=self.active_interaction_id,
                                       workspace_id=self.session.workspace_id if self.session else None,
                                       payload=payload)
@@ -1095,6 +1096,15 @@ class HermesSupervisor:
                     except sqlite3.OperationalError as exc:
                         if "no such table: events" not in str(exc):
                             raise
+
+                def record_guard(kind: str, usable: bool | None) -> None:
+                    payload: dict[str, object] = {"kind": kind, "step": self.turn_step_count}
+                    if kind == "length":
+                        payload["parsed"] = bool(usable)
+                    record_event("hermes.turn_guard", payload)
+
+                if step_size is not None:
+                    record_event("hermes.step_size", {**step_size, "step": self.turn_step_count})
 
                 result = run_governed_inference(
                     envelope, runner=self.runner,
