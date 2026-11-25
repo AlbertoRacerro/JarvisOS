@@ -25,6 +25,7 @@ from app.modules.agents.hermes.worker_shim import (
     _PLAN_HEADER,
     COMPACT_METHODOLOGY,
     PRESENTATION_INSTRUCTIONS,
+    compact_turn_messages,
     inject_saved_plan,
     repair_proposal,
     shrink_tool_history,
@@ -451,7 +452,8 @@ def infer_envelope(frame: dict[str, Any], *, deadline_seconds: int = 120,
     messages = frame["messages"]
     if not isinstance(messages, list) or not messages:
         raise ValueError("messages must be a nonempty array")
-    messages = shrink_tool_history(messages)
+    if not (route_class and route_class.startswith("local:")):
+        messages = shrink_tool_history(messages)
     for message in messages:
         if not isinstance(message, dict) or message.get("role") not in {"system", "developer", "user", "assistant", "tool"}:
             raise ValueError("invalid message role")
@@ -1070,6 +1072,9 @@ class HermesSupervisor:
 
             if selected_route.startswith("local:"):
                 frame["messages"] = compact_system_message(frame.get("messages", []), self.compact_system_prompt)
+            else:
+                frame["messages"] = compact_turn_messages(shrink_tool_history(frame.get("messages", [])),
+                                                          max_chars=45_500)
             if self.active_turn_plan and (self.active_turn_plan.get("steps") or self.active_turn_plan.get("findings")):
                 frame["messages"] = inject_saved_plan(frame.get("messages", []), self.active_turn_plan)
 

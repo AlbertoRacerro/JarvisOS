@@ -1,6 +1,6 @@
 # 370 — HERMES-LOCAL-TOOL-HISTORY-BUDGET-1: Keep earlier tool results whole while a local step fits its budget
 
-Status: ready
+Status: in_review
 Depends on: 369
 
 ## Goal

@@ -814,8 +814,6 @@ class Worker:
                         raise ValueError("no active session")
                     messages = body.get("messages")
                     if isinstance(messages, list):
-                        messages = shrink_tool_history(messages)
-                        messages = compact_turn_messages(messages, max_chars=45_500)
                         if worker.active_turn_plan and (
                             worker.active_turn_plan.get("steps") or worker.active_turn_plan.get("findings")
                         ):
