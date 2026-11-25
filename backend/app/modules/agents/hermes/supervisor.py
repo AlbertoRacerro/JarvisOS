@@ -307,9 +307,8 @@ def worker_environment(home: Path, backend_root: Path) -> dict[str, str]:
 # model must be told the exact text shape the worker shim promotes to a tool call;
 # without it Qwen-class models end the turn after reasoning with no visible output.
 RELAY_TOOL_PROTOCOL = (
-    "\n\nYou are answering the conversation above as the assistant. To call one of the listed "
-    'tools, reply with ONLY {"tool_calls": [{"name": "<tool name>", "arguments": {...}}]}. '
-    'Otherwise reply with ONLY {"answer": "your final answer"}. The name must exactly match an admitted tool.'
+    '\n\nReply only with JSON: {"tool_calls":[{"name":"<admitted tool>","arguments":{...}}]} '
+    'or {"answer":"<final answer>"}.'
 )
 
 RESEARCH_TOOLS = frozenset({
