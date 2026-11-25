@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .common import DataRootError, _resolved_path
+from .move import move_data_root, verify_move
 from .restore import restore_snapshot
 from .snapshot import create_snapshot, verify_snapshot
 
@@ -31,6 +32,13 @@ def _build_parser() -> argparse.ArgumentParser:
     restore.add_argument("snapshot_dir", type=Path)
     restore.add_argument("--target-root", type=Path, required=True)
     restore.add_argument("--allow-nonempty-target", action="store_true")
+    move = subparsers.add_parser("move", help="copy the whole data root to a new place; the source is never touched")
+    move.add_argument("--source-root", type=Path, required=True)
+    move.add_argument("--target-root", type=Path, required=True)
+    move.add_argument("--database-filename")
+    verify_moved = subparsers.add_parser("verify-move", help="compare a moved root with its source (read-only)")
+    verify_moved.add_argument("--source-root", type=Path, required=True)
+    verify_moved.add_argument("--target-root", type=Path, required=True)
     return parser
 
 
@@ -51,6 +59,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "snapshot_dir": str(_resolved_path(args.snapshot_dir)),
                 "manifest": verify_snapshot(args.snapshot_dir),
             }
+        elif args.operation == "move":
+            output = move_data_root(source_root=args.source_root, target_root=args.target_root,
+                                    database_filename=args.database_filename)
+        elif args.operation == "verify-move":
+            output = verify_move(source_root=args.source_root, target_root=args.target_root)
+            print(json.dumps(output, sort_keys=True, indent=2, ensure_ascii=False))
+            return 0 if output["ok"] else 1
         else:
             output = {
                 "target_root": str(

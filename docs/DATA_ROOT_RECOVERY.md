@@ -127,3 +127,45 @@ an unresolved old-root occurrence aborts restore.
   file changes, and concurrent SQLite data-version changes fail closed.
 - Preserve any unexpected partial directory and command output long enough to
   diagnose the cause, but do not treat it as a valid backup.
+
+## Move the data root
+
+`move` copies the **whole** data root (every top-level entry, `logs/` included) to a new place, for example into the
+private vault (spec 378). Snapshot and restore copy only the database, `workspaces/` and `artifacts/`; do not use them
+for a move. The source is never modified, renamed or deleted.
+
+1. Stop the app and every unit that writes the data root (backend, search guard, workers). Nothing may write the
+   source while it is copied; a change during the copy aborts the move.
+2. Run, from the repository root:
+
+   ```bash
+   python3 scripts/jarvisos_data_root.py move --source-root <old-root> --target-root <new-root>
+   ```
+
+   The target must be absent or empty and must not contain the source or lie inside it. The command copies the
+   database with SQLite's backup API and every other file byte for byte, keeps relative symlinks that stay inside the
+   root (model caches use them), rebases the paths the database stores, and verifies sizes, SHA-256 hashes and SQLite
+   integrity. It refuses absolute symlinks, symlinks that leave the root and special files, and it aborts when a
+   configuration file (`.json`, `.toml`, `.env`, `.ini`, `.yaml`, `.yml`) outside `logs/`, `artifacts/` and
+   `workspaces/` still names the old root: edit that file in the source and run again. Mentions in logs, artifacts,
+   workspace files and other databases are history; they are listed as `old_root_mentions` and not changed. On
+   success it publishes the target in one rename and writes `MOVED_FROM.json` there. On failure no target is
+   published; a `.partial-move-*` directory next to it is kept for diagnosis. Delete it by hand once understood.
+3. Point every environment file that names the data root at the new root: `~/.config/jarvisos/operator.env`, the
+   search guard's env file, and any other that `grep -rl JARVISOS_DATA_ROOT ~/.config` finds. When the new root is in
+   the private vault, also set `JARVISOS_VAULT_PATH` to the vault directory.
+4. Start the app. Check `/health` and the system status, then open a recent workspace and a recent result.
+5. Run the read-only comparison:
+
+   ```bash
+   python3 scripts/jarvisos_data_root.py verify-move --source-root <old-root> --target-root <new-root>
+   ```
+
+   It fails only when a source file is missing from the target. Files the app changed or added since the move are
+   listed as `changed` and `added`.
+6. Keep the old root until the maintainer confirms in writing that the new one works. Removing it is the maintainer's
+   own step, never an agent's.
+
+**Rollback.** Stop the app, put the old values back in every environment file changed in step 3, and start the app
+on the old root. Keep the new root for diagnosis. Anything written only to the new root after the move is not in the
+old one; `verify-move` lists it as `changed` or `added`.
