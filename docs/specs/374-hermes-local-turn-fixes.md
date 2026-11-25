@@ -1,6 +1,6 @@
 # 374 — HERMES-LOCAL-TURN-FIXES-1: Keep tool grants alive for the whole turn, stop the format echo, and keep patent fields visible
 
-Status: ready
+Status: in_review
 Depends on: 371, 372
 
 ## Goal
