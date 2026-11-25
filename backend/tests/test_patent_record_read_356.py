@@ -624,8 +624,8 @@ def test_patent_read_research_budget_enforcement(monkeypatch: pytest.MonkeyPatch
     }
     supervisor_inst._handle_tool(frame_exceed)
     res_exceed = sent_frames[-1]["tool_result"]
-    assert "Research budget reached for this turn" in str(res_exceed["result"])
-    assert "synthesize your final answer" in str(res_exceed["result"]).lower()
+    assert "Research budget used up (2 searches/reads). Do not search again" in str(res_exceed["result"])
+    assert "answer now with what you have" in str(res_exceed["result"]).lower()
 
 
 def test_is_research_tool_includes_patent_read() -> None:
