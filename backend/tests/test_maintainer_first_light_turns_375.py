@@ -421,6 +421,20 @@ def test_supervisor_route_helper_follows_the_role_route() -> None:
     assert supervisor.selected_turn_route() == "cloud:task"
 
 
+def test_light_turn_discards_grants_left_by_a_prior_work_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    worker = HermesSupervisor("unused", route_for_task=lambda _task: "local:llamacpp")
+    worker.session = SESSION
+    worker.live_grants["prior-turn"] = object()  # type: ignore[assignment]
+    monkeypatch.setattr(worker, "_alive", lambda: True)
+    monkeypatch.setattr(worker, "_send", lambda _frame: None)
+    monkeypatch.setattr(worker, "_await", lambda _id, **_kwargs: {"status": "failed", "completed": False})
+    monkeypatch.setattr(supervisor_module, "open_sqlite_connection", lambda: _Keep(_db()))
+    monkeypatch.setattr(model_registry, "get_active_model_entry", lambda: None)
+
+    worker.turn("ciao", light=True, allowed_tools=[])
+    assert worker.live_grants == {}
+
+
 # --- criterion 4: fallback -------------------------------------------------------------------------
 
 

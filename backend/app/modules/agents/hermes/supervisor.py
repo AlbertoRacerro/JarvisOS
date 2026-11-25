@@ -1522,6 +1522,11 @@ class HermesSupervisor:
         self.step_deadline_seconds = step_deadline_from_rows(rows, output_cap)
         if turn_timeout == 600:
             turn_timeout = turn_deadline(self.step_deadline_seconds, self.turn_cap)
+        self.turn_light = bool(light and is_local_route(selected_route))
+        if self.turn_light:
+            # A light turn has no grants. Discard grants left by the preceding work turn
+            # before the lifetime extension below can make them usable again.
+            self.live_grants.clear()
         # Spec 374 item 1: grants issued before the step deadline was measured live as long as this turn may run.
         grant_end = datetime.now(UTC) + timedelta(seconds=min(turn_timeout, 3600) + 60)
         for grant_id, grant in list(self.live_grants.items()):
@@ -1536,7 +1541,6 @@ class HermesSupervisor:
         self.active_turn_plan = {"steps": [], "findings": []}
         self.turn_step_count = 0
         # Spec 375: a light turn on a local route offers no tools and asks for low reasoning effort.
-        self.turn_light = bool(light and is_local_route(selected_route))
         if self.turn_light:
             allowed_tools = []
         with self.evidence_lock:
