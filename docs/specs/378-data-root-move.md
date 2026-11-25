@@ -42,8 +42,11 @@ entry.
      stays inside `S` is recreated as the same relative link (model caches use them); an absolute symlink, one that
      leaves `S`, or a special file aborts and names its relative path;
    - rebases the database with `_rebase_database`, then runs `_assert_old_root_absent` and the restore verification;
-   - also scans every other `.sqlite3` file and every UTF-8 text or JSON file under the copy for the old root. Any
-     mention aborts the move and lists the relative file paths, never the content. No text file is rewritten;
+   - also scans the copy for the old root. A mention in a configuration file (`.json`, `.toml`, `.env`, `.ini`,
+     `.yaml`, `.yml`) outside `logs/`, `artifacts/` and `workspaces/` aborts the move: such a file would point the app
+     back at the old root. Mentions anywhere else (logs, artifacts, workspace files, other `.sqlite3` files) are
+     history and are reported as `old_root_mentions` (relative paths only) without aborting. Output never contains
+     file content, and no file other than the main database is rewritten;
    - verifies the copy: the same relative file set as the source (database excepted), the same size and SHA-256 per
      file, SQLite integrity on every database;
    - publishes `T` by atomic rename only after every check passes, and writes `T/MOVED_FROM.json` with the source path,
