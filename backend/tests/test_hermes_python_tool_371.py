@@ -142,6 +142,33 @@ def test_output_is_capped_and_carries_no_host_path(monkeypatch: pytest.MonkeyPat
     assert venv not in text and "/home/example" not in text and "/usr/lib" not in text and "Boom" in text
 
 
+@pytest.mark.parametrize(("printed", "expected"), [
+    ("velocity = 2 /s", "velocity = 2 /s"),
+    ("pressure 3 kg /m^3", "pressure 3 kg /m^3"),
+    ("speed 2.5 m/s^2; density 1.2 kg/m^3", "speed 2.5 m/s^2; density 1.2 kg/m^3"),
+    ("rate 4 /m/s; concentration 2 /mol/L", "rate 4 /m/s; concentration 2 /mol/L"),
+    ('File "/tmp/private/result.py", line 1', 'File "<path>", line 1'),
+    ("read /home/example/report.txt and /usr/lib/example.py", "read <path> and <path>"),
+    ("scratch /tmp; file:///tmp/private/result.py", "scratch <path>; <path>"),
+    ("scratch /custom and /secret/data", "scratch <path> and <path>"),
+    ("file:///tmp/private", "<path>"),
+    ("file://localhost/tmp/private/result.py", "<path>"),
+    (r"C:\temp\private\result.py", "<path>"),
+])
+def test_scrub_preserves_units_and_removes_host_paths(printed: str, expected: str) -> None:
+    assert calc_run_tool._scrub(printed) == expected
+
+
+def test_scrub_applies_to_stdout_and_stderr_before_output_cap() -> None:
+    record = _record("error", stdout="velocity = 2 /s\n" + "7" * 5000 + " /tmp/private/result.py",
+                     stderr="pressure 3 kg /m^3\nfile:///tmp/private/error.txt")
+    text = calc_run_tool._result_text(record)
+    assert len(text) == calc_run_tool.MAX_TEXT_CHARS
+    assert text.startswith("velocity = 2 /s\n")
+    assert text.endswith("[stderr]\npressure 3 kg /m^3\n<path>")
+    assert "/tmp/private" not in text and "file://" not in text
+
+
 def test_output_cap_preserves_error_and_limit(monkeypatch: pytest.MonkeyPatch, workspace_id: str) -> None:
     _install(monkeypatch, _record("error", stdout="x" * 9000, stderr="final error"))
     text = _call(workspace_id, {"code": "print(1)"})[0].result["text"]

@@ -20,18 +20,31 @@ MAX_STDERR_CHARS = 1_500
 CALC_RUN_EVENT = "hermes.calc_run"
 _MAIN_SUFFIX = "\n\ndef main(inputs):\n    return None\n"
 _NOTHING_PRINTED = "(nothing printed: use print())"
+_FILE_URL = re.compile(r"(?i)file://[^\s,;\"'<>(){}\[\]]+")
 _ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9:/])/[A-Za-z0-9._~+-]+(?:/[A-Za-z0-9._~+-]+)*")
+_WINDOWS_PATH = re.compile(r"[A-Za-z]:\\[^\s,;\"'<>(){}\[\]]+")
+_UNIT_COMPONENTS = frozenset({"A", "J", "K", "L", "N", "Pa", "V", "W", "bar", "cm", "g", "h", "kg", "km",
+                              "kPa", "m", "mg", "min", "mL", "mm", "mol", "s"})
+
+
+def _redact_absolute_path(match: re.Match[str]) -> str:
+    path = match.group()
+    if all(component in _UNIT_COMPONENTS for component in path.strip("/").split("/")):
+        return path
+    return "<path>"
 
 
 def _scrub(text: str) -> str:
     """Remove host paths from sandbox output before the model sees it."""
     from app.modules.studio_runtime import runtime
 
+    text = _FILE_URL.sub("<path>", text)
     prefixes = {str(Path(sys.prefix).resolve()), sys.prefix, str(Path(runtime.__file__).resolve().parent)}
     for prefix in sorted(prefixes, key=len, reverse=True):
         if prefix and prefix != "/":
             text = text.replace(prefix, "<venv>")
-    return _ABSOLUTE_PATH.sub("<path>", text)
+    text = _ABSOLUTE_PATH.sub(_redact_absolute_path, text)
+    return _WINDOWS_PATH.sub("<path>", text)
 
 
 def _limit_text(limit: str | None, value: int | None) -> str:
