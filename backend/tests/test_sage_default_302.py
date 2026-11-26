@@ -940,3 +940,60 @@ def test_registry_written_before_host_start_keeps_working(tmp_path: Path, monkey
         _setup_registry(tmp_path, monkeypatch, rows_bad)
         with pytest.raises(HTTPException):
             read_registry()
+
+
+def test_strata_to_strata_switch_stops_the_previous_unit_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two Strata models cannot share the card: the running one is stopped before the next one is started.
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    monkeypatch.setenv("JARVISOS_HOSTOPS_SPOOL", str(spool))
+    entries = [
+        {"id": "ink", "label": "Ink", "runtime": "strata", "qualification": "default", "unit": "ink.service", "port": 8091, "served_model": "ink-model"},
+        {"id": "sage", "label": "Sage", "runtime": "strata", "qualification": "qualified", "unit": "sage.service", "port": 8090, "served_model": "sage-model"},
+    ]
+    _setup_registry(tmp_path, monkeypatch, entries)
+    answering = {8091}
+
+    def fake_sleep(_: float) -> None:
+        answering.discard(8091)
+        _write_receipt(spool, "stop", "ok")
+
+    ctrl = StrataRuntimeController(probe_fn=lambda host, port, served: port in answering, sleep_fn=fake_sleep)
+    monkeypatch.setattr(host_start, "get_strata_controller", lambda: ctrl)
+
+    class FakeOwner:
+        active_model_id = "ink"
+        _lock = None
+
+        def status(self) -> dict[str, Any]:
+            return {"runtime_reachable": False, "spawned_by_jarvis": False}
+
+        def stop(self) -> None:
+            pass
+
+    owner = FakeOwner()
+    monkeypatch.setattr(model_registry, "get_llama_cpp_runtime_owner", lambda: owner)
+
+    activate_model("sage", persist_choice=False)
+    requests = sorted(
+        (json.loads(p.read_text()) for p in (spool / "requests").glob("*.json")), key=lambda r: r["requested_at"]
+    )
+    actions = [(r["args"]["unit"], r["args"]["action"]) for r in requests]
+    assert ("ink.service", "stop") in actions and ("sage.service", "start") in actions
+    assert owner.active_model_id == "sage"
+
+    # A stop the host refuses leaves the previous model active and starts nothing.
+    for path in (spool / "requests").glob("*.json"):
+        path.unlink()
+    for path in (spool / "receipts").glob("*.json"):
+        path.unlink()
+    answering.add(8090)
+
+    def refuse_sleep(_: float) -> None:
+        _write_receipt(spool, "stop", "refused")
+
+    ctrl._sleep_fn = refuse_sleep
+    with pytest.raises(HTTPException):
+        activate_model("ink", persist_choice=False)
+    assert owner.active_model_id == "sage"
+    assert all(json.loads(p.read_text())["args"]["action"] == "stop" for p in (spool / "requests").glob("*.json"))
