@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal, cast
 
 from app.modules.ai.contracts import AIResponse, AIUsageSource
 from app.modules.ai.execution_types import ProviderBinding
@@ -58,11 +59,6 @@ def local_response_evidence(
     fallback_index: int,
 ) -> AttemptEvidence:
     if selected_route_class == "consult:zone_a" or binding.route_class == "consult:zone_a":
-        usage_source = (
-            response.usage.usage_source.value
-            if response.usage and hasattr(response.usage, "usage_source") and response.usage.usage_source
-            else "actual"
-        )
         return AttemptEvidence(
             execution_class="external_provider",
             adapter_invoked=True,
@@ -175,13 +171,18 @@ def local_exception_evidence(
     return evidence, AttemptUsageOverride(input_tokens=estimate_tokens(prompt), output_tokens=0)
 
 
-def normalize_finish_reason(value: str | None, *, failed: bool) -> str:
+FinishReasonLiteral = Literal["stop", "length", "content_filter", "tool_call", "error", "unknown"]
+
+
+def normalize_finish_reason(value: str | None, *, failed: bool) -> FinishReasonLiteral:
     if failed:
         return "error"
     if value is None:
         return "unknown"
     normalized = value.strip().lower().replace("-", "_")
-    return normalized if normalized in _FINISH_REASONS else "unknown"
+    if normalized in _FINISH_REASONS:
+        return cast(FinishReasonLiteral, normalized)
+    return "unknown"
 
 
 def normalize_outcome_reason(value: str) -> str:

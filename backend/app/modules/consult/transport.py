@@ -236,6 +236,7 @@ class RelayConsultAdapter:
             else:
                 mcp_config = {"mcpServers": {}}
             mcp_config_path.write_text(json.dumps(mcp_config, indent=2), encoding="utf-8")
+            os.chmod(mcp_config_path, 0o600)
 
             manifest = build_consult_manifest(
                 gateway_config,
@@ -252,6 +253,7 @@ class RelayConsultAdapter:
             manifests_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             manifest_path = manifests_dir / sandbox.manifest_name(str(workspace))
             manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            os.chmod(manifest_path, 0o600)
 
             # Run via sandbox.py shim
             cmd = [
