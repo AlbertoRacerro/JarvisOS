@@ -30,7 +30,7 @@ from app.core.vault import VAULT_PATH_ENV
 CONSULT_CONFIG = "consult.toml"
 ConsultMode = Literal["off", "ask", "auto"]
 _MODES = ("off", "ask", "auto")
-_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -47,6 +47,7 @@ class ConsultConfig:
     mode: ConsultMode = "off"
     brief_sha256: str | None = None
     trusted_accounts: tuple[TrustedAccount, ...] = ()
+    sage_model_id: str | None = None
     # Why the mode is off when the file asked for more, as a short code; None when the file was read as written.
     reason: str | None = None
 
@@ -79,17 +80,22 @@ def read_consult_config(vault_dir: Path | None) -> ConsultConfig:
         return ConsultConfig(reason="config_absent")
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return ConsultConfig(reason="config_unreadable")
-    if set(data) - {"consult_mode", "brief_sha256", "trusted_accounts"}:
+    if set(data) - {"consult_mode", "brief_sha256", "trusted_accounts", "sage_model_id"}:
         return ConsultConfig(reason="config_unknown_key")
     digest = data.get("brief_sha256")
     digest = digest.lower() if isinstance(digest, str) and _SHA256.match(digest.lower()) else None
+    sage_model = data.get("sage_model_id")
+    if sage_model is not None:
+        if not isinstance(sage_model, str) or not sage_model.strip() or not _ID.match(sage_model.strip()):
+            return ConsultConfig(reason="config_unreadable")
+        sage_model = sage_model.strip()
     raw_accounts = data.get("trusted_accounts", [])
     accounts = tuple(account for account in map(_account, raw_accounts if isinstance(raw_accounts, list) else [])
                      if account is not None)
     mode = data.get("consult_mode")
     if mode not in _MODES:
-        return ConsultConfig(brief_sha256=digest, trusted_accounts=accounts, reason="mode_unknown")
-    return ConsultConfig(mode=mode, brief_sha256=digest, trusted_accounts=accounts)
+        return ConsultConfig(brief_sha256=digest, trusted_accounts=accounts, sage_model_id=sage_model, reason="mode_unknown")
+    return ConsultConfig(mode=mode, brief_sha256=digest, trusted_accounts=accounts, sage_model_id=sage_model)
 
 
 def load_consult_config() -> ConsultConfig:

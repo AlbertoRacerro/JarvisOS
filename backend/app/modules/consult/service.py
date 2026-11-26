@@ -100,22 +100,35 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _steps_json_entries(gate_steps: tuple[Any, ...]) -> list[dict[str, Any]]:
+    steps = []
+    for s in gate_steps:
+        entry: dict[str, Any] = {"step": s.step, "result": s.result, "reason": s.reason}
+        if getattr(s, "hits", ()):
+            entry["hits"] = list(s.hits)
+        if getattr(s, "ai_job_id", None):
+            entry["ai_job_id"] = s.ai_job_id
+        steps.append(entry)
+    return steps
+
+
 def _record(connection: sqlite3.Connection, request: ConsultRequest, *, state: str, code: str | None, mode: str,
             packet: str | None, packet_sha: str, brief: Brief | None, steps: list[dict], rewrite_count: int,
-            account: TrustedAccount | None, approval: str | None = None, audit: bool = False) -> str:
+            account: TrustedAccount | None, approval: str | None = None, audit: bool = False,
+            ai_job_id: str | None = None) -> str:
     consult_id = f"consult-{uuid.uuid4().hex[:16]}"
     now = utc_now()
     connection.execute(
         """
         INSERT INTO consult_attempts (id, workspace_id, thread_id, turn_id, kind, local_only, packet_text,
             packet_sha256, brief_sha256, modules_json, gate_steps_json, result_code, rewrite_count, mode, account_id,
-            model_id, approval, audit, state, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            model_id, approval, audit, state, ai_job_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (consult_id, request.workspace_id, request.thread_id, request.turn_id, request.kind, int(request.local_only),
          packet, packet_sha, brief.sha256 if brief else None, json.dumps(list(request.modules)), json.dumps(steps),
          code, rewrite_count, mode, account.id if account else None, account.model if account else None, approval,
-         int(audit), state, now, now),
+         int(audit), state, ai_job_id, now, now),
     )
     return consult_id
 
@@ -156,11 +169,11 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
     mode = config.mode
 
     def refuse(code: str, *, steps: list[dict] | None = None, packet: str | None = None, brief: Brief | None = None,
-               account: TrustedAccount | None = None, status: str = "refused") -> ConsultOutcome:
+               account: TrustedAccount | None = None, status: str = "refused", ai_job_id: str | None = None) -> ConsultOutcome:
         raw = packet if packet is not None else f"{request.question}\n\n{request.context}"
         consult_id = _record(connection, request, state="refused", code=code, mode=mode, packet=packet,
                              packet_sha=_sha(raw), brief=brief, steps=steps or [], rewrite_count=streak,
-                             account=account)
+                             account=account, ai_job_id=ai_job_id)
         return ConsultOutcome(status=status, code=code, consult_id=consult_id)
 
     if ended >= MAX_CONSULTS_PER_TURN:
@@ -184,37 +197,42 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
     if transport is None:
         return refuse("transport_unavailable", brief=brief, account=account)
 
+    if _vault_dir() is None and config_loader is load_consult_config:
+        return refuse("vault_absent", brief=brief, account=account)
     try:
         sources = _gate_sources(connection, request.tool_outputs)
     except Exception:  # noqa: BLE001 - an unreadable source (vault, pack, table) refuses, never passes
         return refuse("gate_error", brief=brief, account=account)
     gate = run_gate(request.question, request.context, sources)
-    steps = [{"step": s.step, "result": s.result, "reason": s.reason} for s in gate.steps]
+    steps = _steps_json_entries(gate.steps)
     if gate.literature_numbers or gate.constant_numbers:
         steps.append({"step": "logged_matches", "result": "pass",
                       "reason": json.dumps({"literature": gate.literature_numbers, "constants": gate.constant_numbers})})
+    judge_job_id = next((s.get("ai_job_id") for s in steps if s.get("ai_job_id")), None)
     if gate.status == "refused":
         # An S4 or identity hit stores the hash and the reason only, never the text.
-        return refuse(gate.code or "refused", steps=steps, brief=brief, account=account)
+        return refuse(gate.code or "refused", steps=steps, brief=brief, account=account, ai_job_id=judge_job_id)
     packet = build_packet(brief, request.kind, request.modules, request.question, request.context)
     if gate.status == "rewrite_required":
         if streak >= MAX_REWRITES:
             return refuse("sage_unavailable", steps=steps, packet=packet, brief=brief, account=account,
-                          status="sage_unavailable")
+                          status="sage_unavailable", ai_job_id=judge_job_id)
         consult_id = _record(connection, request, state="rewrite_required", code=gate.code, mode=mode, packet=packet,
-                             packet_sha=_sha(packet), brief=brief, steps=steps, rewrite_count=streak, account=account)
+                             packet_sha=_sha(packet), brief=brief, steps=steps, rewrite_count=streak, account=account,
+                             ai_job_id=judge_job_id)
         return ConsultOutcome(status="rewrite_required", code=gate.code, consult_id=consult_id,
                               reason=gate.steps[-1].reason, offending=gate.offending)
     packet_sha = _sha(packet)
     if mode == "ask":
         consult_id = _record(connection, request, state="awaiting_approval", code=None, mode=mode, packet=packet,
-                             packet_sha=packet_sha, brief=brief, steps=steps, rewrite_count=streak, account=account)
+                             packet_sha=packet_sha, brief=brief, steps=steps, rewrite_count=streak, account=account,
+                             ai_job_id=judge_job_id)
         return ConsultOutcome(status="pending", consult_id=consult_id,
                               reason=f"End your answer with {{{{consult:{consult_id}}}}}; the maintainer approves it.")
     audit = int(packet_sha[:8], 16) % AUDIT_ONE_IN == 0
     consult_id = _record(connection, request, state="approved", code=None, mode=mode, packet=packet,
                          packet_sha=packet_sha, brief=brief, steps=steps, rewrite_count=streak, account=account,
-                         approval="policy_auto", audit=audit)
+                         approval="policy_auto", audit=audit, ai_job_id=judge_job_id)
     connection.commit()
     return _send(connection, consult_id, packet, account, transport)
 
@@ -322,12 +340,15 @@ def edit_consult(connection: sqlite3.Connection, consult_id: str, question: str,
         return ConsultOutcome(status="refused", code=exc.code, consult_id=consult_id)
     if any(module not in brief.modules for module in request.modules):
         return ConsultOutcome(status="refused", code="module_unknown", consult_id=consult_id)
+    if _vault_dir() is None and config_loader is load_consult_config:
+        return ConsultOutcome(status="refused", code="vault_absent", consult_id=consult_id)
     try:
         sources = _gate_sources(connection, ())
     except Exception:  # noqa: BLE001 - an unreadable source refuses, never passes
         return ConsultOutcome(status="refused", code="gate_error", consult_id=consult_id)
     gate = run_gate(question, context, sources)
-    steps = [{"step": s.step, "result": s.result, "reason": s.reason} for s in gate.steps]
+    steps = _steps_json_entries(gate.steps)
+    judge_job_id = next((s.get("ai_job_id") for s in steps if s.get("ai_job_id")), None)
     if gate.status != "pass":
         # The maintainer's edit failed the gate: keep the original pending, record the edit attempt without its text
         # when it was an S4/identity refusal.
@@ -335,14 +356,14 @@ def edit_consult(connection: sqlite3.Connection, consult_id: str, question: str,
         keep = packet if gate.status == "rewrite_required" else None
         new_id = _record(connection, request, state="refused", code=gate.code, mode=mode, packet=keep,
                          packet_sha=_sha(packet), brief=brief, steps=steps, rewrite_count=0, account=account,
-                         approval="operator")
+                         approval="operator", ai_job_id=judge_job_id)
         return ConsultOutcome(status="refused" if gate.status == "refused" else "rewrite_required", code=gate.code,
                               consult_id=new_id, reason=gate.steps[-1].reason, offending=gate.offending)
     packet = build_packet(brief, request.kind, request.modules, question, context)
     _set_state(connection, consult_id, "rejected", approval="operator")
     new_id = _record(connection, request, state="awaiting_approval", code="edited_from:" + consult_id, mode=mode,
                      packet=packet, packet_sha=_sha(packet), brief=brief, steps=steps, rewrite_count=0,
-                     account=account)
+                     account=account, ai_job_id=judge_job_id)
     return ConsultOutcome(status="pending", consult_id=new_id)
 
 

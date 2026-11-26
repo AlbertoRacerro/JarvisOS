@@ -8,6 +8,7 @@ Every step fails closed: an exception is a refusal with code ``gate_error``.
 from __future__ import annotations
 
 import math
+import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -52,6 +53,8 @@ class StepResult:
     step: str
     result: Literal["pass", "rewrite_required", "refused"]
     reason: str | None = None
+    hits: tuple[str, ...] = ()
+    ai_job_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -255,6 +258,17 @@ def run_gate(question: str, context: str, sources: GateSources) -> GateResult:
         steps.append(third)
         if third.result != "pass":
             return GateResult("refused", third.reason, tuple(steps), (), literature, constants)
+        from app.core import vault
+        from app.modules.consult.judge import run_local_judge
+
+        has_vault = (sources.vault_dir is not None and (sources.vault_dir / "jarvis_vault.toml").is_file()) or bool(os.environ.get(vault.VAULT_PATH_ENV))
+        if has_vault:
+            fourth = run_local_judge(question, context, vault_dir=sources.vault_dir)
+            steps.append(StepResult("local_only_judge", fourth.status, fourth.reason, hits=fourth.hits, ai_job_id=fourth.ai_job_id))
+            if fourth.status == "refused":
+                return GateResult("refused", fourth.code or "gate_error", tuple(steps), (), literature, constants)
+            if fourth.status == "rewrite_required":
+                return GateResult("rewrite_required", "local_only", tuple(steps), fourth.hits, literature, constants)
         return GateResult("pass", None, tuple(steps), (), literature, constants)
     except Exception as exc:  # noqa: BLE001 - every unexpected failure refuses
         steps.append(StepResult("gate", "refused", f"gate_error:{type(exc).__name__}"))
