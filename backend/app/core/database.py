@@ -33,6 +33,11 @@ from app.core.cloud_escalation_schema import (
     CLOUD_ESCALATION_MIGRATION_RECORD,
     CLOUD_ESCALATION_SCHEMA_STATEMENTS,
 )
+from app.core.consult_schema import (
+    CONSULT_SCHEMA_INDEX_STATEMENTS,
+    CONSULT_SCHEMA_MIGRATION_RECORD,
+    CONSULT_SCHEMA_STATEMENTS,
+)
 from app.core.conversation_intake_schema import (
     CONVERSATION_INTAKE_MIGRATION_RECORD,
     CONVERSATION_INTAKE_SCHEMA_INDEX_STATEMENTS,
@@ -192,6 +197,8 @@ def initialize_database() -> DatabaseInfo:
             connection.execute(statement)
         for statement in BLUECAD_FREECAD_SCHEMA_STATEMENTS:
             connection.execute(statement)
+        for statement in CONSULT_SCHEMA_STATEMENTS:
+            connection.execute(statement)
         for statement in SENSITIVITY_SCHEMA_STATEMENTS:
             connection.execute(statement)
         for statement in EGRESS_SCHEMA_STATEMENTS:
@@ -252,6 +259,8 @@ def initialize_database() -> DatabaseInfo:
         for statement in BLUECAD_STUDIO_SCHEMA_INDEX_STATEMENTS:
             connection.execute(statement)
         for statement in BLUECAD_FREECAD_SCHEMA_INDEX_STATEMENTS:
+            connection.execute(statement)
+        for statement in CONSULT_SCHEMA_INDEX_STATEMENTS:
             connection.execute(statement)
         for statement in SENSITIVITY_SCHEMA_INDEX_STATEMENTS:
             connection.execute(statement)
@@ -454,6 +463,7 @@ def _record_schema_migrations(connection: sqlite3.Connection) -> None:
         PRINT_HANDOFF_MIGRATION_RECORD,
         CONVERSATION_INTAKE_MIGRATION_RECORD,
         AI_THREAD_TURN_EXTRAS_MIGRATION_RECORD,
+        CONSULT_SCHEMA_MIGRATION_RECORD,
     ]
     for record in records:
         connection.execute(

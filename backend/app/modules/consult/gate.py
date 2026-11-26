@@ -156,7 +156,7 @@ def number_taint(text: str, sources: GateSources) -> tuple[StepResult, tuple[str
         if value is None:
             continue
         unit = re.match(r"\s*([a-zA-Z°µ%][a-zA-Z°µ%/0-9]*)", masked[match.end():match.end() + 16])
-        followed = bool(unit) and unit.group(1).lower().rstrip(".,;:") in KNOWN_SEARCH_GUARD_UNITS
+        followed = unit is not None and unit.group(1).lower().rstrip(".,;:") in KNOWN_SEARCH_GUARD_UNITS
         if not _significant(token, value, followed) or not _matches(abs(value), [abs(r) for r in references]):
             continue
         if _matches(abs(value), PHYSICAL_CONSTANTS):
