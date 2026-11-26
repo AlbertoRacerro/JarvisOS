@@ -64,6 +64,29 @@ export type SearchGuardBlockedSummary = {
   recent_blocked: SearchGuardBlockedEntry[];
 };
 
+export type ConsultAuditItem = {
+  id: string;
+  kind: string;
+  model_id: string | null;
+  state: string;
+  created_at: string;
+  packet_sha256: string;
+};
+
+export type ConsultTrustedAccount = {
+  id: string;
+  training_off_verified_on: string;
+};
+
+export type ConsultStatus = {
+  mode: "off" | "ask" | "auto";
+  reason: string | null;
+  brief_approved: boolean;
+  current_brief_digest: string | null;
+  trusted_accounts: ConsultTrustedAccount[];
+  audit_items: ConsultAuditItem[];
+};
+
 export class SettingsApiError extends Error {
   readonly status: number;
   readonly code: string | null;
@@ -138,6 +161,10 @@ export function loadSystemInfo(): Promise<SystemInfoResponse> {
 
 export function loadSearchGuardBlockedSummary(): Promise<SearchGuardBlockedSummary> {
   return requestJson<SearchGuardBlockedSummary>("/ai/search-guard/blocked");
+}
+
+export function loadConsultStatus(): Promise<ConsultStatus> {
+  return requestJson<ConsultStatus>("/ai/consult/status");
 }
 
 export function saveAISetting(payload: Record<string, number | boolean | Record<string, string>>): Promise<AISettings> {

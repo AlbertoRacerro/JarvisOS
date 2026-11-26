@@ -6,6 +6,7 @@ from app.modules.ai.jarvis_context_models import JarvisContextRequest
 from app.modules.ai.models import ContextPackSelectionRequest
 from app.modules.ai.thread_ui_context import MAX_IMAGES, UiContext, validate_images
 from app.modules.workspace_actions.models import ActionOutcome, SurfaceRef
+from app.modules.consult.render import ConsultBlockRead
 
 PersistenceState = Literal["reserved", "dispatching", "captured", "capture_failed"]
 
@@ -194,6 +195,7 @@ class AIThreadInteractionRead(BaseModel):
     images_unsupported: bool = False
     actions: list[ActionOutcome] = Field(default_factory=list)
     technical_details: str | None = None
+    consult_blocks: list[ConsultBlockRead] = Field(default_factory=list)
     created_at: str
     updated_at: str
 

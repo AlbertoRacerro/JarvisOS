@@ -38,8 +38,10 @@ import {
   type TurnPlan,
   type LiveStep,
   type NumberProvenance,
-  type NumberProvenanceEntry
+  type NumberProvenanceEntry,
+  type ConsultBlock
 } from "../../api/threads";
+import ConsultCard from "./ConsultCard";
 import { publishBubuConversation, publishBubuFailedPrompt, publishBubuRelayEnabled, registerBubuHandlers, type BubuExtras, type BubuTurn } from "../bubu/conversationStore";
 import { useGuidedTourActive } from "../bubu/guidedTourActivity";
 import { SidecarChrome } from "../shell/ContextualSidecar";
@@ -1134,6 +1136,63 @@ export function useJarvisSidecar(
     );
   };
 
+  const renderAssistantContent = (
+    text: string,
+    consultBlocks: ConsultBlock[] | undefined,
+    unsafe: boolean,
+    onAction?: () => void
+  ): ReactNode => {
+    if (unsafe) {
+      return (
+        <>
+          <p role="status">Jarvis could not turn this into a valid change, so nothing was changed. Try rephrasing, or use Escalate for a stronger model.</p>
+          {consultBlocks?.map(block => (
+            <ConsultCard key={block.consult_id} block={block} onAction={onAction} />
+          ))}
+        </>
+      );
+    }
+
+    if (!consultBlocks || consultBlocks.length === 0) {
+      return <JarvisMessageText text={text} />;
+    }
+
+    const blockMap = new Map<string, ConsultBlock>(consultBlocks.map(b => [b.consult_id, b]));
+    const renderedIds = new Set<string>();
+    const nodes: ReactNode[] = [];
+    const regex = /\{\{consult:([a-zA-Z0-9_-]+)\}\}/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = regex.exec(text)) !== null) {
+      const consultId = match[1];
+      const precedingText = text.slice(lastIndex, match.index);
+      if (precedingText) {
+        nodes.push(<JarvisMessageText key={`text-${lastIndex}`} text={precedingText} />);
+      }
+      const block = blockMap.get(consultId);
+      if (block) {
+        renderedIds.add(consultId);
+        nodes.push(<ConsultCard key={consultId} block={block} onAction={onAction} />);
+      } else {
+        nodes.push(<span key={`missing-${consultId}`} className="jarvis-consult-marker">{"{{"}consult:{consultId}{"}}"}</span>);
+      }
+      lastIndex = match.index + match[0].length;
+    }
+
+    const trailingText = text.slice(lastIndex);
+    if (trailingText) {
+      nodes.push(<JarvisMessageText key={`text-${lastIndex}`} text={trailingText} />);
+    }
+
+    const missingBlocks = consultBlocks.filter(b => !renderedIds.has(b.consult_id));
+    for (const block of missingBlocks) {
+      nodes.push(<ConsultCard key={block.consult_id} block={block} onAction={onAction} />);
+    }
+
+    return <>{nodes}</>;
+  };
+
   const renderInteraction = (interaction: ThreadInteraction) => {
     const running = !TERMINAL_FLOW_STATES.has(interaction.flow_state);
     const notice = outcomeNotice(interaction);
@@ -1175,7 +1234,14 @@ export function useJarvisSidecar(
                 )}
               </>
             )
-            : interaction.assistant_text ? unsafeAssistantText ? <p role="status">Jarvis could not turn this into a valid change, so nothing was changed. Try rephrasing, or use Escalate for a stronger model.</p> : <JarvisMessageText text={interaction.assistant_text} /> : null}
+            : (interaction.assistant_text || (interaction.consult_blocks && interaction.consult_blocks.length > 0))
+              ? renderAssistantContent(
+                  interaction.assistant_text ?? "",
+                  interaction.consult_blocks,
+                  unsafeAssistantText,
+                  () => { if (selectedThreadId) loadDetail(selectedThreadId, true); }
+                )
+              : null}
           {interaction.surface_summary ? <p className="jarvis-surface-summary">{interaction.surface_summary}</p> : null}
           <WorkspaceActionCards actions={interaction.actions ?? []} onApply={applyAction} onDismiss={dismissAction} onUndo={undoAction}
             technicalDetails={interaction.technical_details}

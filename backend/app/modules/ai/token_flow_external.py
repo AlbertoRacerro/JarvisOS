@@ -115,7 +115,10 @@ def external_reconciled_evidence(
         usage_source = "estimated"
         accounting_basis = "conservative_estimated_usage"
     elif dispatch_state is AIExternalDispatchState.started:
-        if reconciliation_status == "actual":
+        if binding.route_class == "consult:zone_a" or pricing_version == "subscription":
+            usage_source = "actual" if reconciliation_status == "actual" else "none"
+            accounting_basis = "subscription"
+        elif reconciliation_status == "actual":
             usage_source = "actual"
             accounting_basis = "provider_exact"
         elif reconciliation_status in _STANDARD_INPUT_STATUSES:
@@ -127,7 +130,7 @@ def external_reconciled_evidence(
     else:  # pragma: no cover - enum exhaustiveness
         raise ValueError("unsupported external dispatch state")
 
-    if accounting_basis != "provider_exact" and Decimal(spend) <= 0:
+    if accounting_basis not in ("provider_exact", "subscription") and Decimal(spend) <= 0:
         raise ValueError("conservative external evidence requires positive spend")
     finish_reason = normalize_finish_reason(
         response.finish_reason if response is not None else None,

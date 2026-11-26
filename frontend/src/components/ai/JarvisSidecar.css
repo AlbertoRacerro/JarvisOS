@@ -628,3 +628,134 @@
   font-weight: 500;
   text-transform: uppercase;
 }
+
+
+/* Consult card (Spec 380) */
+.consult-card {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-default, #e5e7eb);
+  background: var(--color-bg-surface-raised, #ffffff);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.consult-card--pending {
+  border-left: 3px solid var(--color-status-warning-text, #d97706);
+}
+.consult-card--answered {
+  border-left: 3px solid var(--color-accent-primary, #2563eb);
+}
+.consult-card--rejected {
+  border-left: 3px solid var(--color-text-muted, #6b7280);
+  opacity: 0.8;
+}
+.consult-card--refused {
+  border-left: 3px solid var(--color-status-danger-text, #dc2626);
+}
+.consult-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+}
+.consult-card__tag {
+  font-size: 11px;
+  font-weight: normal;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--color-bg-surface, #f9fafb);
+  border: 1px solid var(--color-border-default, #e5e7eb);
+}
+.consult-card__meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary, #4b5563);
+}
+.consult-card__packet pre,
+.consult-card__answer pre,
+.consult-card__details pre {
+  margin: 4px 0 0;
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--color-bg-surface, #f9fafb);
+  font-family: monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.consult-card__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.consult-btn {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.consult-btn--approve {
+  background: var(--color-accent-primary, #2563eb);
+  color: white;
+}
+.consult-btn--edit {
+  background: var(--color-bg-surface, #f9fafb);
+  border-color: var(--color-border-default, #e5e7eb);
+  color: var(--color-text-primary, #111827);
+}
+.consult-btn--reject {
+  background: transparent;
+  border-color: var(--color-border-default, #e5e7eb);
+  color: var(--color-text-secondary, #4b5563);
+}
+.consult-btn--save {
+  background: var(--color-accent-primary, #2563eb);
+  color: white;
+}
+.consult-btn--cancel {
+  background: transparent;
+  border-color: var(--color-border-default, #e5e7eb);
+  color: var(--color-text-secondary, #4b5563);
+}
+.consult-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.consult-card__error {
+  color: var(--color-status-danger-text, #dc2626);
+  font-size: 12px;
+  margin: 0;
+}
+.consult-card__edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.consult-card__edit-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary, #4b5563);
+}
+.consult-card__edit-form textarea {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-default, #e5e7eb);
+  background: var(--color-bg-surface, #f9fafb);
+  color: var(--color-text-primary, #111827);
+  resize: vertical;
+}

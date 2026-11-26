@@ -58,6 +58,22 @@ export type LiveStep = {
   status: string;
 };
 
+export type ConsultBlock = {
+  consult_id: string;
+  state: "refused" | "rewrite_required" | "awaiting_approval" | "approved" | "rejected" | "sent" | "failed";
+  kind: string;
+  modules: string[];
+  brief_sha256: string | null;
+  packet_text: string | null;
+  packet_sha256: string;
+  model_id: string | null;
+  created_at: string;
+  answer_text: string | null;
+  answer_sha256: string | null;
+  byte_identical: boolean;
+  answered_at: string | null;
+};
+
 export type ThreadSummary = {
   id: string;
   workspace_id: string;
@@ -105,6 +121,7 @@ export type ThreadInteraction = {
   surface_digest?: string | null;
   actions?: ActionOutcome[];
   technical_details?: string | null;
+  consult_blocks?: ConsultBlock[];
   proposal_ids: string[];
   proposal_count: number;
   proposals_truncated: boolean;

@@ -1,4 +1,4 @@
-"""Spec 380 part a routes: read-only status, the pending packet and maintainer actions (no transport yet)."""
+"""Spec 380 part a & b routes: read-only status, the pending packet and maintainer actions."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from app.core import packs
 from app.core.database import initialize_database, open_sqlite_connection
 from app.core.vault import VAULT_PATH_ENV
 from app.main import create_app
+from app.modules.consult import routes
 from app.modules.consult.service import ConsultRequest, request_consult
 from tests.test_consult_380_flow import BRIEF, DIGEST, FakeTransport
 
@@ -40,12 +41,17 @@ def client(isolated_data_root: None, tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 def test_status_is_read_only_and_minimal(client: TestClient) -> None:
     body = client.get("/ai/consult/status").json()
-    assert body == {"mode": "ask", "reason": None, "brief_approved": True,
-                    "trusted_accounts": [{"id": "sub", "training_off_verified_on": "2026-11-25"}]}
+    assert body["mode"] == "ask"
+    assert body["reason"] is None
+    assert body["brief_approved"] is True
+    assert body["trusted_accounts"] == [{"id": "sub", "training_off_verified_on": "2026-11-25"}]
+    assert body["current_brief_digest"] == DIGEST
+    assert body["audit_items"] == []
     assert client.post("/ai/consult/status").status_code == 405
 
 
-def test_pending_packet_approve_without_transport_and_reject(client: TestClient) -> None:
+def test_pending_packet_approve_without_transport_and_reject(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(routes, "TRANSPORT", None)
     with open_sqlite_connection() as connection:
         pending = request_consult(
             connection, ConsultRequest(kind="ideas", question="How do roots find water?", modules=["M2"]),
@@ -63,3 +69,20 @@ def test_pending_packet_approve_without_transport_and_reject(client: TestClient)
     assert client.post(f"/ai/consult/{edited['consult_id']}/reject").json()["status"] == "rejected"
     assert client.get("/ai/consult/consult-missing").status_code == 404
     assert client.get(f"/ai/consult/{pending.consult_id}/answer").json()["status"] == "not_found"
+
+
+def test_pending_packet_approve_with_fake_transport(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JARVISOS_CONSULT_FAKE_TRANSPORT", "1")
+    with open_sqlite_connection() as connection:
+        pending = request_consult(
+            connection, ConsultRequest(kind="ideas", question="How do roots find water?", modules=["M2"]),
+            transport=FakeTransport())
+        connection.commit()
+    record = client.get(f"/ai/consult/{pending.consult_id}").json()
+    assert record["state"] == "awaiting_approval"
+    approved = client.post(f"/ai/consult/{pending.consult_id}/approve",
+                           json={"packet_sha256": record["packet_sha256"]}).json()
+    assert approved["status"] == "answered"
+    ans = client.get(f"/ai/consult/{pending.consult_id}/answer").json()
+    assert ans["status"] == "answered"
+    assert "simulated" in ans["answer"]

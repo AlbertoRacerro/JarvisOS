@@ -42,6 +42,7 @@ ACCOUNTING_BASES = frozenset(
         "provider_exact",
         "conservative_standard_input",
         "conservative_estimated_usage",
+        "subscription",
         "legacy_unknown",
     }
 )
