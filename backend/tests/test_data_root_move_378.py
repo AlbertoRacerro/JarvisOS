@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import sqlite3
@@ -16,6 +17,7 @@ from data_root_recovery_support import seed_data_root
 def _full_root(root: Path) -> None:
     root.mkdir()
     seed_data_root(root)
+    gc.collect()  # close the seeding WAL connection now, so its checkpoint cannot land inside a test
     (root / "settings").mkdir()
     (root / "settings" / "local_models.json").write_text('{"model": "fake"}', encoding="utf-8")
     (root / "secrets").mkdir()
