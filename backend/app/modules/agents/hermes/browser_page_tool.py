@@ -797,6 +797,26 @@ def execute_browser_page_read(
         cur = dec_plus
         if not added:
             break
+    # 5. Search term validation
+    clean_search_term: str | None = None
+    if search_term is not None:
+        if not isinstance(search_term, str):
+            return {"error": "invalid_arguments", "status": "error"}
+        clean_search_term = search_term.strip()
+        if len(clean_search_term) > MAX_SEARCH_TERM_LENGTH:
+            return {"error": "invalid_arguments", "status": "error"}
+
+    # Zone-C unified egress guard (spec 382)
+    from app.modules.consult.zone_c_guard import evaluate_zone_c_request
+    decision = evaluate_zone_c_request("read_page", clean_search_term or "", target_url=url)
+    if not decision.allowed:
+        return {
+            "error": "egress_blocked_private_content",
+            "status": "error",
+            "reason_code": decision.reason_code,
+            "message": decision.refusal_message,
+        }
+
     for variant in url_variants:
         norm_variant = " ".join(variant.split())
         if _KNOWN_SECRET_RE.search(variant):
@@ -812,27 +832,19 @@ def execute_browser_page_read(
                 if tok and (tok in variant or tok in norm_variant):
                     return {"error": "egress_blocked_private_content", "status": "error"}
 
-    # 5. Search term validation & egress checks (search_term is local only, never sent to network)
-    clean_search_term: str | None = None
-    if search_term is not None:
-        if not isinstance(search_term, str):
-            return {"error": "invalid_arguments", "status": "error"}
-        clean_search_term = search_term.strip()
-        if len(clean_search_term) > MAX_SEARCH_TERM_LENGTH:
-            return {"error": "invalid_arguments", "status": "error"}
-        if clean_search_term:
-            if _KNOWN_SECRET_RE.search(clean_search_term):
-                return {"error": "egress_blocked_private_content", "status": "error"}
-            if sanitize_text(clean_search_term) != clean_search_term:
-                return {"error": "egress_blocked_private_content", "status": "error"}
-            if check_sensitivity_floor(clean_search_term) in {"S2", "S3", "S4"}:
-                return {"error": "egress_blocked_private_content", "status": "error"}
-            if packs.mentions_pack_term(clean_search_term):
-                return {"error": "egress_blocked_private_content", "status": "error"}
-            if blocked_tokens:
-                for tok in blocked_tokens:
-                    if tok and tok in clean_search_term:
-                        return {"error": "egress_blocked_private_content", "status": "error"}
+    if clean_search_term:
+        if _KNOWN_SECRET_RE.search(clean_search_term):
+            return {"error": "egress_blocked_private_content", "status": "error"}
+        if sanitize_text(clean_search_term) != clean_search_term:
+            return {"error": "egress_blocked_private_content", "status": "error"}
+        if check_sensitivity_floor(clean_search_term) in {"S2", "S3", "S4"}:
+            return {"error": "egress_blocked_private_content", "status": "error"}
+        if packs.mentions_pack_term(clean_search_term):
+            return {"error": "egress_blocked_private_content", "status": "error"}
+        if blocked_tokens:
+            for tok in blocked_tokens:
+                if tok and tok in clean_search_term:
+                    return {"error": "egress_blocked_private_content", "status": "error"}
 
     # 6. Locate Chromium binary or runner
     active_runner = _get_runner(runner)

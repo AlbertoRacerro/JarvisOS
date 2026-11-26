@@ -365,9 +365,11 @@ class SearchGuardHandler(http.server.BaseHTTPRequestHandler):
                                    for values in query_params.values() for value in values for char in value))
             if valid_query:
                 # Evaluate every parameter value, not only q: the whole request is forwarded upstream.
-                allowed, reason_code, rule_index = evaluate_query(
-                    " ".join(value for values in query_params.values() for value in values)
-                )
+                from app.modules.consult.zone_c_guard import evaluate_zone_c_request
+
+                query_to_eval = " ".join(value for values in query_params.values() for value in values)
+                decision = evaluate_zone_c_request("web_search", query_to_eval)
+                allowed, reason_code, rule_index = decision.allowed, decision.reason_code, decision.rule_index
             else:
                 allowed, reason_code, rule_index = False, "invalid_query", None
 

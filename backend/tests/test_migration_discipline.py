@@ -54,7 +54,8 @@ LEGACY_CREATE_ONLY_COLUMNS: dict[tuple[str, str], str] = {}
 # Reviewed for spec 314: case_verdicts is a new CREATE IF NOT EXISTS table.
 # Reviewed for spec 327: bluecad_freecad_references is a new CREATE IF NOT EXISTS table.
 # Reviewed for spec 380: consult_attempts and consult_answers are new CREATE IF NOT EXISTS tables.
-BASE_CREATE_ONLY_SHA256 = "884bd7878e18490651deb813c61ae564d2df8b4718fbc2c85fba7ba8061bf355"
+# Reviewed for spec 382: zone_c_query_history is a new CREATE IF NOT EXISTS table.
+BASE_CREATE_ONLY_SHA256 = "111ab6ad296e346b4c5fb85d36c2d1fc1502cdb9d7399dfa58619be9bdfbbaaf"
 
 # KNOWN DRIFT (spec 028, recorded not fixed): columns added by a migration
 # statement but absent from their owner's CREATE TABLE. A fresh database only has

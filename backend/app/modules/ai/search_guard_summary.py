@@ -21,6 +21,10 @@ REASON_MESSAGES_IT: dict[str, str] = {
     "pack_load_error": "Errore di caricamento della configurazione del pacchetto",
     "vault_load_error": "Errore di caricamento della configurazione privata (vault)",
     "guard_error": "Errore interno del filtro di protezione",
+    "zone_c_inference_judge": "Rilevato rischio di inferenza dal giudice locale (Zona C)",
+    "zone_c_mosaic_judge": "Rilevato rischio di inferenza a mosaico dal giudice locale (Zona C)",
+    "mosaic_group_threshold": "Superata la soglia di gruppi concettuali protetti negli ultimi 30 giorni",
+    "zone_c_judge_error": "Errore durante la valutazione del giudice locale (Zona C)",
     "legacy_blocked": "Richiesta bloccata dal filtro (formato precedente)",
 }
 
