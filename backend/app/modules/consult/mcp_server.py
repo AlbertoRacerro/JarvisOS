@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import socket
 import threading
 import urllib.error
@@ -20,146 +19,23 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-from app.core import packs, vault
 from app.modules.agents.hermes.browser_page_tool import execute_browser_page_read
-from app.modules.agents.hermes.ip_boundary import check_sensitivity_floor, sanitize_text
 from app.modules.agents.hermes.paper_search_tool import execute_paper_search
 
 DEFAULT_SEARCH_GUARD_URL = "http://127.0.0.1:8889/search"
 
-_DIM_RE = re.compile(
-    r"(?<![\w.])(\d+(?:\.\d+)?)\s*([a-zA-Z°µ%][a-zA-Z°µ%0-9]*(?:/[a-zA-Z°µ%][a-zA-Z°µ%0-9]*)?)"
-)
 
-_UNIT_ALIASES: dict[str, str] = {
-    "degc": "°c",
-    "celsius": "°c",
-    "c": "°c",
-    "deg_c": "°c",
-    "k": "k",
-    "kelvin": "k",
-    "bar": "bar",
-    "barg": "bar",
-    "pa": "pa",
-    "kpa": "kpa",
-    "mpa": "mpa",
-    "m": "m",
-    "mm": "mm",
-    "cm": "cm",
-    "kg": "kg",
-    "g": "g",
-    "mg": "mg",
-    "s": "s",
-    "sec": "s",
-    "second": "s",
-    "seconds": "s",
-    "min": "min",
-    "minute": "min",
-    "minutes": "min",
-    "h": "h",
-    "hr": "h",
-    "hour": "h",
-    "hours": "h",
-    "w": "w",
-    "kw": "kw",
-    "mw": "mw",
-    "j": "j",
-    "kj": "kj",
-    "mj": "mj",
-    "%": "%",
-    "percent": "%",
-}
-
-
-def _normalize_unit(unit: str) -> str:
-    cleaned = unit.lower().strip()
-    return _UNIT_ALIASES.get(cleaned, cleaned)
-
-
-def _matches_exact_combination(lowered_query: str, combinations: tuple[tuple[str, ...], ...]) -> bool:
-    for combination in combinations:
-        if not combination:
-            continue
-        if all(" ".join(term.lower().split()) in lowered_query for term in combination if term.strip()):
-            return True
-    return False
-
-
-def _matches_min_groups(query: str, groups: tuple[tuple[str, ...], ...] | list[list[str]], min_groups: int) -> bool:
-    if not groups or min_groups <= 0:
-        return False
-    lowered = " ".join(query.lower().split())
-    matched_count = 0
-    for group in groups:
-        if any(" ".join(term.lower().split()) in lowered for term in group if term.strip()):
-            matched_count += 1
-    return matched_count >= min_groups
-
-
-def _matches_protected_dimension(query: str, guard_cfg: packs.SearchGuardConfig) -> bool:
-    if not guard_cfg.protected_dimensions:
-        return False
-    lowered = " ".join(query.lower().split())
-    if guard_cfg.groups:
-        has_context = any(
-            any(" ".join(term.lower().split()) in lowered for term in group if term.strip())
-            for group in guard_cfg.groups
-        )
-        if not has_context:
-            return False
-    for m in _DIM_RE.finditer(query):
-        try:
-            val = float(m.group(1))
-            unit = _normalize_unit(m.group(2))
-        except (ValueError, IndexError):
-            continue
-        for dim in guard_cfg.protected_dimensions:
-            if _normalize_unit(dim.unit) == unit:
-                min_val = dim.value * (1.0 - dim.tolerance_rel) - 1e-9
-                max_val = dim.value * (1.0 + dim.tolerance_rel) + 1e-9
-                if min_val <= val <= max_val:
-                    return True
-    return False
-
-
-def evaluate_search_guard(query: str) -> tuple[bool, str]:
+def evaluate_search_guard(query: str, *, kind: str = "web_search", target_url: str | None = None) -> tuple[bool, str]:
     """Check query against sensitivity floor (S2-S4 blocked) and pack/vault search guard rules.
 
     Returns (allowed, reason_code).
     """
     clean_query = query.strip()
-    if not clean_query:
+    if not clean_query and not target_url:
         return False, "query_empty"
-    floor = check_sensitivity_floor(clean_query)
-    if floor in {"S2", "S3", "S4"}:
-        return False, f"sensitivity_floor_{floor.lower()}"
-    if sanitize_text(clean_query) != clean_query:
-        return False, "sanitized_diff"
-    normalized = " ".join(clean_query.split())
-    if packs.mentions_pack_term(normalized):
-        return False, "pack_term"
-
-    for pack in packs.load_packs():
-        guard_cfg = pack.search_guard
-        if guard_cfg.exact_combinations and _matches_exact_combination(normalized.lower(), guard_cfg.exact_combinations):
-            return False, "exact_combination"
-        if guard_cfg.protected_dimensions and _matches_protected_dimension(normalized, guard_cfg):
-            return False, "protected_dimension"
-        if guard_cfg.groups and _matches_min_groups(normalized, guard_cfg.groups, guard_cfg.min_groups):
-            return False, "guard_groups"
-
-    vault_dimensions = vault.vault_protected_dimensions()
-    if vault_dimensions:
-        merged = packs.search_guard()
-        vault_cfg = packs.SearchGuardConfig(
-            groups=merged.groups,
-            protected_dimensions=vault_dimensions,
-            allow_generic_ranges=merged.allow_generic_ranges,
-        )
-        if _matches_protected_dimension(normalized, vault_cfg):
-            return False, "protected_dimension"
-
-    return True, "ok"
+    from app.modules.consult.zone_c_guard import evaluate_zone_c_request
+    decision = evaluate_zone_c_request(kind, clean_query, target_url=target_url)
+    return decision.allowed, decision.reason_code
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -343,7 +219,7 @@ class ConsultMcpServer:
                     "error": {"code": -32602, "message": "Invalid params: limit must be an integer"},
                 }
             source = str(args.get("source", "all"))
-            allowed, reason = evaluate_search_guard(query)
+            allowed, reason = evaluate_search_guard(query, kind="paper_search")
             if not allowed:
                 res = {"error": f"search_guard_blocked:{reason}", "papers": [], "count": 0}
                 return {
@@ -363,32 +239,14 @@ class ConsultMcpServer:
             url = str(args.get("url") or "")
             search_term = args.get("search_term")
             term_str = str(search_term) if search_term is not None else None
-            url_variants = [url]
-            decoded = url
-            for _ in range(3):
-                next_decoded = urllib.parse.unquote(decoded)
-                if next_decoded == decoded:
-                    break
-                url_variants.append(next_decoded)
-                decoded = next_decoded
-            for candidate in url_variants:
-                allowed, reason = evaluate_search_guard(candidate)
-                if not allowed:
-                    res = {"error": f"search_guard_blocked:{reason}", "status": "error"}
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}], "isError": True},
-                    }
-            if term_str is not None:
-                term_allowed, term_reason = evaluate_search_guard(term_str)
-                if not term_allowed:
-                    res = {"error": f"search_guard_blocked:{term_reason}", "status": "error"}
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}], "isError": True},
-                    }
+            allowed, reason = evaluate_search_guard(term_str or "", kind="read_page", target_url=url)
+            if not allowed:
+                res = {"error": f"search_guard_blocked:{reason}", "status": "error"}
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}], "isError": True},
+                }
             res = execute_browser_page_read(
                 url,
                 search_term=term_str,

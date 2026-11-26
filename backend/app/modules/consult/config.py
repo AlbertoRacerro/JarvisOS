@@ -48,8 +48,26 @@ class ConsultConfig:
     brief_sha256: str | None = None
     trusted_accounts: tuple[TrustedAccount, ...] = ()
     sage_model_id: str | None = None
+    zone_c_benchmark_passed_on: date | None = None
     # Why the mode is off when the file asked for more, as a short code; None when the file was read as written.
     reason: str | None = None
+
+    @property
+    def zone_c_strict(self) -> bool:
+        return self.zone_c_benchmark_passed_on is None
+
+
+def _parse_bench_date(value: object) -> date | None:
+    if isinstance(value, datetime):
+        return None
+    if isinstance(value, str):
+        try:
+            value = date.fromisoformat(value)
+        except ValueError:
+            return None
+    if not (isinstance(value, date) and not isinstance(value, datetime)) or value > date.today():
+        return None
+    return value
 
 
 def _account(entry: object) -> TrustedAccount | None:
@@ -80,7 +98,7 @@ def read_consult_config(vault_dir: Path | None) -> ConsultConfig:
         return ConsultConfig(reason="config_absent")
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return ConsultConfig(reason="config_unreadable")
-    if set(data) - {"consult_mode", "brief_sha256", "trusted_accounts", "sage_model_id"}:
+    if set(data) - {"consult_mode", "brief_sha256", "trusted_accounts", "sage_model_id", "zone_c_benchmark_passed_on"}:
         return ConsultConfig(reason="config_unknown_key")
     digest = data.get("brief_sha256")
     digest = digest.lower() if isinstance(digest, str) and _SHA256.match(digest.lower()) else None
@@ -89,13 +107,28 @@ def read_consult_config(vault_dir: Path | None) -> ConsultConfig:
         if not isinstance(sage_model, str) or not sage_model.strip() or not _ID.match(sage_model.strip()):
             return ConsultConfig(reason="config_unreadable")
         sage_model = sage_model.strip()
+    bench_date: date | None = None
+    if "zone_c_benchmark_passed_on" in data:
+        bench_date = _parse_bench_date(data["zone_c_benchmark_passed_on"])
     raw_accounts = data.get("trusted_accounts", [])
     accounts = tuple(account for account in map(_account, raw_accounts if isinstance(raw_accounts, list) else [])
                      if account is not None)
     mode = data.get("consult_mode")
     if mode not in _MODES:
-        return ConsultConfig(brief_sha256=digest, trusted_accounts=accounts, sage_model_id=sage_model, reason="mode_unknown")
-    return ConsultConfig(mode=mode, brief_sha256=digest, trusted_accounts=accounts, sage_model_id=sage_model)
+        return ConsultConfig(
+            brief_sha256=digest,
+            trusted_accounts=accounts,
+            sage_model_id=sage_model,
+            zone_c_benchmark_passed_on=bench_date,
+            reason="mode_unknown",
+        )
+    return ConsultConfig(
+        mode=mode,
+        brief_sha256=digest,
+        trusted_accounts=accounts,
+        sage_model_id=sage_model,
+        zone_c_benchmark_passed_on=bench_date,
+    )
 
 
 def load_consult_config() -> ConsultConfig:

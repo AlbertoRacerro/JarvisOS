@@ -104,7 +104,7 @@ def status(output):
 
 
 @pytest.mark.usefixtures("fake_pack")
-def test_generic_ranges_pass_search_guard(tmp_path):
+def test_generic_ranges_pass_search_guard(tmp_path, monkeypatch):
     """Generic physics/engineering queries with broad dimension ranges (> 20% width) pass through."""
     queries = [
         "apple 40-60 mm",
@@ -115,7 +115,11 @@ def test_generic_ranges_pass_search_guard(tmp_path):
         "between 40 and 60 mm",
         "physics of 40mm - 60mm piping",
     ]
-    for q in queries:
+    for idx, q in enumerate(queries):
+        monkeypatch.setenv("JARVISOS_DATA_ROOT", str(tmp_path / f"data_root_{idx}"))
+        from app.core.config import get_settings
+
+        get_settings.cache_clear()
         output, body = request("/search?q=" + quote(q) + "&format=json", tmp_path)
         assert status(output) == 200, f"Query {q!r} should pass"
         assert b"sample" in body, f"Query {q!r} should forward to upstream"

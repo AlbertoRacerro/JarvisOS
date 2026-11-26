@@ -10,6 +10,12 @@ CONSULT_SCHEMA_MIGRATION_RECORD = {
     "checksum": None,
 }
 
+ZONE_C_QUERY_HISTORY_MIGRATION_RECORD = {
+    "migration_id": "0039_zone_c_query_history",
+    "name": "Zone-C query history for mosaic and leak prevention",
+    "checksum": None,
+}
+
 CONSULT_SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS consult_attempts (
@@ -50,9 +56,23 @@ CONSULT_SCHEMA_STATEMENTS = (
         FOREIGN KEY (attempt_id) REFERENCES consult_attempts(id)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS zone_c_query_history (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        query_text TEXT NOT NULL,
+        query_sha256 TEXT NOT NULL,
+        matched_groups_json TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK (decision IN ('allowed', 'blocked')),
+        reason_code TEXT NOT NULL,
+        ai_job_id TEXT,
+        created_at TEXT NOT NULL
+    )
+    """,
 )
 
 CONSULT_SCHEMA_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_consult_attempts_turn ON consult_attempts(turn_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_consult_attempts_state ON consult_attempts(state, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_zone_c_query_history_created ON zone_c_query_history(created_at)",
 )

@@ -532,6 +532,18 @@ def execute_paper_search(
     if _UUID_OR_HEX_RE.search(cleaned_query):
         return {"error": "egress_blocked_private_content", "papers": [], "count": 0}
 
+    # Zone-C unified egress guard (spec 382)
+    from app.modules.consult.zone_c_guard import evaluate_zone_c_request
+    decision = evaluate_zone_c_request("paper_search", cleaned_query)
+    if not decision.allowed:
+        return {
+            "error": "egress_blocked_private_content",
+            "reason_code": decision.reason_code,
+            "message": decision.refusal_message,
+            "papers": [],
+            "count": 0,
+        }
+
     # URLs
     if _URL_RE.search(cleaned_query):
         return {"error": "egress_blocked_private_content", "papers": [], "count": 0}
