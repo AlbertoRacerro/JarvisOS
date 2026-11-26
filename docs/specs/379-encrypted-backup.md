@@ -1,6 +1,6 @@
 # 379 — ENCRYPTED-BACKUP-1: Daily encrypted backup with a monthly restore test and a status line
 
-Status: in_review
+Status: merged
 Depends on: none
 
 ## Goal
