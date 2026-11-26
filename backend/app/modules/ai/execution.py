@@ -143,18 +143,7 @@ def _default_bindings() -> dict[str, ProviderBinding]:
     """Load default route bindings from the provider registry config."""
     from app.modules.ai.provider_registry import registry_bindings
 
-    bindings = registry_bindings()
-    if "consult:zone_a" not in bindings:
-        bindings["consult:zone_a"] = ProviderBinding(
-            route_class="consult:zone_a",
-            provider_id="relay_consult",
-            model_id="claude-opus-5-5",
-            requires_network=False,
-            max_output_tokens=24000,
-            execution_class="external_provider",
-            context_window_tokens=32768,
-        )
-    return bindings
+    return registry_bindings()
 
 
 def _default_adapters() -> dict[str, AIProviderAdapter]:
@@ -164,12 +153,6 @@ def _default_adapters() -> dict[str, AIProviderAdapter]:
         LOCAL_LLAMACPP_PROVIDER_ID: LocalLlamaCppAdapter(),
         SCALEWAY_PROVIDER_ID: ScalewayProviderAdapter(),
     }
-    try:
-        from app.modules.consult.transport import RelayConsultAdapter
-
-        adapters["relay_consult"] = RelayConsultAdapter()
-    except (ImportError, Exception):
-        pass
     from app.modules.ai.provider_registry import load_default_provider_registry
 
     registry = load_default_provider_registry()
@@ -388,9 +371,9 @@ def check_egress_level_rule(
     """Egress level rule (spec 380 part b):
 
     - S4 is hard-blocked everywhere.
-    - S2/S3 is admitted ONLY on consult:zone_a AND ONLY when sha256(packet)
-      matches an existing consult_attempts row in state='approved'.
-    - Every other route keeps S0/S1; S2/S3 is refused.
+    - consult:zone_a ALWAYS requires sha256(packet) to match an existing
+      consult_attempts row in state='approved' (regardless of S0/S1/S2/S3).
+    - Every other external route keeps S0/S1; S2/S3 is refused.
     """
     import hashlib
 
@@ -401,9 +384,7 @@ def check_egress_level_rule(
     if floor == "S4":
         return False, "secret_detected"
 
-    if floor in {"S2", "S3"}:
-        if route_class != "consult:zone_a":
-            return False, "egress_level_violation"
+    if route_class == "consult:zone_a":
         packet_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
         query = "SELECT id FROM consult_attempts WHERE packet_sha256 = ? AND state = 'approved'"
         if connection is not None:
@@ -416,6 +397,10 @@ def check_egress_level_rule(
                 row = None
         if row is None:
             return False, "egress_unapproved_attempt"
+        return True, None
+
+    if floor in {"S2", "S3"}:
+        return False, "egress_level_violation"
 
     return True, None
 
@@ -1012,16 +997,41 @@ def run_ai_task(
 
     early_binding, _early_decision = resolve_binding(selected_route_class, bindings)
 
-    is_external_egress = (
-        selected_route_class == "consult:zone_a"
-        or (
-            early_binding is not None
-            and (early_binding.execution_class == "external_provider" or early_binding.requires_network)
+    if early_binding is not None and early_binding.requires_network:
+        return _run_external_network_task(
+            user_prompt=user_prompt,
+            task_kind=task_kind,
+            requested_route_class=requested_route_class,
+            selected_route_class=selected_route_class,
+            context_blocks=context_blocks,
+            max_output_tokens=max_output_tokens,
+            adapters=adapters,
+            bindings=bindings,
+            external_blocked_reason=external_blocked_reason,
+            context_build_error=context_build_error,
+            workspace_id=workspace_id,
+            existing_flow_id=existing_flow_id,
         )
+
+    is_non_network_external = (
+        selected_route_class.startswith("consult:")
+        or (early_binding is not None and early_binding.execution_class == "external_provider")
     )
-    allowed, egress_reason = (
-        check_egress_level_rule(user_prompt, selected_route_class) if is_external_egress else (True, None)
-    )
+    allowed = True
+    egress_reason: str | None = None
+    if is_non_network_external:
+        if selected_route_class.startswith("consult:") and external_blocked_reason is not None:
+            allowed, egress_reason = False, external_blocked_reason
+        elif selected_route_class == "consult:zone_a" and context_blocks:
+            allowed, egress_reason = False, "egress_context_blocks_forbidden"
+        else:
+            allowed, egress_reason = check_egress_level_rule(user_prompt, selected_route_class)
+            if allowed and context_blocks:
+                for block in context_blocks:
+                    block_text = json.dumps(block, sort_keys=True, ensure_ascii=False)
+                    allowed, egress_reason = check_egress_level_rule(block_text, selected_route_class)
+                    if not allowed:
+                        break
     if not allowed:
         bad = RoutingDecision(
             provider_id=early_binding.provider_id if early_binding is not None else None,
@@ -1076,22 +1086,6 @@ def run_ai_task(
                 error_type=egress_reason,
             ),
             flow_id,
-        )
-
-    if early_binding is not None and early_binding.requires_network:
-        return _run_external_network_task(
-            user_prompt=user_prompt,
-            task_kind=task_kind,
-            requested_route_class=requested_route_class,
-            selected_route_class=selected_route_class,
-            context_blocks=context_blocks,
-            max_output_tokens=max_output_tokens,
-            adapters=adapters,
-            bindings=bindings,
-            external_blocked_reason=external_blocked_reason,
-            context_build_error=context_build_error,
-            workspace_id=workspace_id,
-            existing_flow_id=existing_flow_id,
         )
 
     flow_id = _create_local_flow(

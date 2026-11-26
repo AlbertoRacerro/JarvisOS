@@ -186,6 +186,7 @@ def execute_web_search(
     if not _validate_loopback_search_url(search_guard_url):
         return {"error": "search_proxy_invalid_url", "results": [], "count": 0}
 
+    count = max(1, min(int(count), 50))
     params = urllib.parse.urlencode({"q": query, "format": "json"})
     url = f"{search_guard_url}?{params}"
     req = urllib.request.Request(url, headers={"User-Agent": "Jarvis-Consult-MCP/1.0"})
@@ -315,7 +316,14 @@ class ConsultMcpServer:
     def _execute_tool(self, request_id: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if name == "web_search":
             query = str(args.get("query") or "")
-            count = int(args.get("count", 5))
+            try:
+                count = max(1, min(int(args.get("count", 5)), 50))
+            except (TypeError, ValueError):
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "Invalid params: count must be an integer"},
+                }
             res = execute_web_search(query, count=count, opener=self.web_opener)
             is_error = bool(res.get("error"))
             return {
@@ -326,7 +334,14 @@ class ConsultMcpServer:
 
         if name == "paper_search":
             query = str(args.get("query") or "")
-            limit = int(args.get("limit", 5))
+            try:
+                limit = max(1, min(int(args.get("limit", 5)), 50))
+            except (TypeError, ValueError):
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32602, "message": "Invalid params: limit must be an integer"},
+                }
             source = str(args.get("source", "all"))
             allowed, reason = evaluate_search_guard(query)
             if not allowed:
@@ -348,14 +363,23 @@ class ConsultMcpServer:
             url = str(args.get("url") or "")
             search_term = args.get("search_term")
             term_str = str(search_term) if search_term is not None else None
-            allowed, reason = evaluate_search_guard(url)
-            if not allowed:
-                res = {"error": f"search_guard_blocked:{reason}", "status": "error"}
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}], "isError": True},
-                }
+            url_variants = [url]
+            decoded = url
+            for _ in range(3):
+                next_decoded = urllib.parse.unquote(decoded)
+                if next_decoded == decoded:
+                    break
+                url_variants.append(next_decoded)
+                decoded = next_decoded
+            for candidate in url_variants:
+                allowed, reason = evaluate_search_guard(candidate)
+                if not allowed:
+                    res = {"error": f"search_guard_blocked:{reason}", "status": "error"}
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}], "isError": True},
+                    }
             if term_str is not None:
                 term_allowed, term_reason = evaluate_search_guard(term_str)
                 if not term_allowed:
@@ -434,6 +458,15 @@ class ConsultMcpServer:
                                 client_sock.sendall(payload)
                         except (json.JSONDecodeError, UnicodeDecodeError):
                             continue
+                        except Exception as exc:
+                            req_id = msg.get("id") if isinstance(locals().get("msg"), dict) else None
+                            if req_id is not None:
+                                err_resp = {
+                                    "jsonrpc": "2.0",
+                                    "id": req_id,
+                                    "error": {"code": -32603, "message": f"Internal error: {type(exc).__name__}"},
+                                }
+                                client_sock.sendall(json.dumps(err_resp, separators=(",", ":")).encode("utf-8") + b"\n")
                 except OSError:
                     break
 

@@ -184,14 +184,14 @@ def test_egress_level_rule(transport_env: sqlite3.Connection) -> None:
     assert not allowed
     assert reason == "secret_detected"
 
-    # S0/S1 is allowed on any route
-    allowed, reason = check_egress_level_rule(s0_text, "consult:zone_a", connection=transport_env)
-    assert allowed
-    assert reason is None
-
+    # S0/S1 on non-consult route is allowed, but consult:zone_a ALWAYS requires an approved attempt
     allowed, reason = check_egress_level_rule(s0_text, "scaleway:default", connection=transport_env)
     assert allowed
     assert reason is None
+
+    allowed, reason = check_egress_level_rule(s0_text, "consult:zone_a", connection=transport_env)
+    assert not allowed
+    assert reason == "egress_unapproved_attempt"
 
     # S2/S3 on non-consult route is refused
     allowed, reason = check_egress_level_rule(s2_text, "scaleway:default", connection=transport_env)
@@ -203,8 +203,21 @@ def test_egress_level_rule(transport_env: sqlite3.Connection) -> None:
     assert not allowed
     assert reason == "egress_unapproved_attempt"
 
-    # Insert an approved consult attempt with matching digest
+    # Insert approved consult attempts with matching digests (both S0 and S2)
+    s0_sha = hashlib.sha256(s0_text.encode("utf-8")).hexdigest()
     s2_sha = hashlib.sha256(s2_text.encode("utf-8")).hexdigest()
+    transport_env.execute(
+        """
+        INSERT INTO consult_attempts (
+            id, turn_id, kind, modules_json, brief_sha256, packet_text, packet_sha256,
+            account_id, model_id, state, mode, gate_steps_json, audit, created_at, updated_at
+        ) VALUES (
+            'attempt-s0-test', 'turn-1', 'ideas', '[]', 'brief-sha', ?, ?,
+            'sub', 'claude-opus-5-5', 'approved', 'ask', '[]', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
+        )
+        """,
+        (s0_text, s0_sha),
+    )
     transport_env.execute(
         """
         INSERT INTO consult_attempts (
@@ -219,10 +232,90 @@ def test_egress_level_rule(transport_env: sqlite3.Connection) -> None:
     )
     transport_env.commit()
 
-    # S2/S3 on consult:zone_a WITH matching approved attempt is allowed!
+    # S0/S1 and S2/S3 on consult:zone_a WITH matching approved attempts are allowed
+    allowed, reason = check_egress_level_rule(s0_text, "consult:zone_a", connection=transport_env)
+    assert allowed
+    assert reason is None
+
     allowed, reason = check_egress_level_rule(s2_text, "consult:zone_a", connection=transport_env)
     assert allowed
     assert reason is None
+
+
+def test_consult_zone_a_blocks_direct_gateway_and_context_blocks(transport_env: sqlite3.Connection) -> None:
+    """Direct gateway dispatch, unapproved S0/S1, and non-empty context_blocks on consult:zone_a are refused."""
+    from app.modules.ai.execution import run_ai_task
+    from app.modules.ai.execution_types import ProviderBinding
+    from app.modules.ai.gateway import AIGateway
+    from app.modules.ai.models import AITaskRunRequest
+    from app.modules.consult.transport import RelayConsultAdapter
+
+    # 1. Direct AIGateway.run_task on consult:zone_a is blocked before building context
+    resp = AIGateway().run_task(
+        AITaskRunRequest(
+            prompt="Generic question",
+            route_class="consult:zone_a",
+            include_project_context=True,
+        )
+    )
+    assert resp.status == "validation_error"
+    assert resp.blocked_reason == "consult_route_direct_dispatch_forbidden"
+    assert resp.response_text is None
+
+    # 2. run_ai_task on consult:zone_a with context_blocks is blocked even with an approved attempt
+    packet = "Approved S0 packet text"
+    packet_sha = hashlib.sha256(packet.encode("utf-8")).hexdigest()
+    transport_env.execute(
+        """
+        INSERT INTO consult_attempts (
+            id, turn_id, kind, modules_json, brief_sha256, packet_text, packet_sha256,
+            account_id, model_id, state, mode, gate_steps_json, audit, created_at, updated_at
+        ) VALUES (
+            'attempt-ctx-test', 'turn-1', 'ideas', '[]', 'brief-sha', ?, ?,
+            'sub', 'claude-opus-5-5', 'approved', 'ask', '[]', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
+        )
+        """,
+        (packet, packet_sha),
+    )
+    transport_env.commit()
+    called = False
+
+    def _boom(_manifest: dict, _packet: str, _timeout: float) -> str:
+        nonlocal called
+        called = True
+        return "should not run"
+
+    binding = ProviderBinding(
+        route_class="consult:zone_a",
+        provider_id="relay_consult",
+        model_id="fake-consultant",
+        requires_network=False,
+        max_output_tokens=1024,
+        execution_class="external_provider",
+    )
+    outcome = run_ai_task(
+        user_prompt=packet,
+        task_kind="consult",
+        route_class="consult:zone_a",
+        context_blocks=[{"source": "workspace", "content": "secret project data"}],
+        bindings={"consult:zone_a": binding},
+        adapters={"relay_consult": RelayConsultAdapter(runner=_boom)},
+    )
+    assert outcome.status == "validation_error"
+    assert outcome.error_type == "egress_context_blocks_forbidden"
+    assert not called
+
+    # 3. Unapproved S0/S1 on consult:zone_a via run_ai_task is blocked
+    unapproved = run_ai_task(
+        user_prompt="Unapproved benign S0 question",
+        task_kind="consult",
+        route_class="consult:zone_a",
+        bindings={"consult:zone_a": binding},
+        adapters={"relay_consult": RelayConsultAdapter(runner=_boom)},
+    )
+    assert unapproved.status == "validation_error"
+    assert unapproved.error_type == "egress_unapproved_attempt"
+    assert not called
 
 
 class _FakeHTTPResponse:
@@ -528,7 +621,7 @@ def test_run_ai_task_local_route_allows_s2_while_external_blocks(transport_env: 
         route_class="external:test",
         provider_id="scaleway",
         model_id="test-model",
-        requires_network=True,
+        requires_network=False,
         max_output_tokens=1024,
         execution_class="external_provider",
     )
@@ -540,4 +633,43 @@ def test_run_ai_task_local_route_allows_s2_while_external_blocks(transport_env: 
     )
     assert ext_outcome.decision.blocked is True
     assert ext_outcome.decision.blocked_reason == "egress_level_violation"
+
+    # Also verify non-network external_provider blocks S2 in context_blocks
+    ctx_outcome = run_ai_task(
+        user_prompt="Benign prompt",
+        task_kind="chat",
+        route_class="external:test",
+        context_blocks=[{"source": "note", "content": s2_prompt}],
+        bindings={"external:test": ext_binding},
+    )
+    assert ctx_outcome.decision.blocked is True
+    assert ctx_outcome.decision.blocked_reason == "egress_level_violation"
+
+
+def test_mcp_server_malformed_params_and_encoded_url(tmp_path: Path) -> None:
+    """Malformed numeric params return JSON-RPC -32602; percent-encoded S2 URLs are blocked."""
+    server = ConsultMcpServer(
+        str(tmp_path / "mcp.sock"),
+        browser_runner=lambda cmd, timeout: (0, "ok", ""),
+        dns_resolver=lambda host: ["93.184.216.34"],
+    )
+    bad_count = server.handle_request({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": {"name": "web_search", "arguments": {"query": "botany", "count": "not-an-int"}},
+    })
+    assert bad_count is not None
+    assert bad_count["error"]["code"] == -32602
+
+    encoded_url = server.handle_request({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {"name": "read_page", "arguments": {"url": "https://example.com/?q=confidential%20partner%20research"}},
+    })
+    assert encoded_url is not None
+    assert encoded_url["result"]["isError"] is True
+    assert "search_guard_blocked" in encoded_url["result"]["content"][0]["text"]
+
 
