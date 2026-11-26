@@ -69,6 +69,7 @@ class ConsultRequest:
     thread_id: str | None = None
     workspace_id: str | None = None
     tool_outputs: tuple[str, ...] = field(default_factory=tuple)
+    trigger_codes: list[str] = field(default_factory=list)
 
 
 def stored_project_numbers(connection: sqlite3.Connection) -> list[float]:
@@ -193,11 +194,31 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
     config = config_loader()
     mode = config.mode
 
+    fired_trigger_codes: list[str] = list(request.trigger_codes)
+    if not fired_trigger_codes and request.turn_id:
+        try:
+            ev_rows = connection.execute(
+                "SELECT payload_json FROM events WHERE event_type = 'hermes.consult_trigger' AND target_id = ? ORDER BY id",
+                (request.turn_id,),
+            ).fetchall()
+            for r in ev_rows:
+                payload = json.loads(r[0]) if r[0] else {}
+                code = payload.get("trigger_code")
+                if code and code not in fired_trigger_codes:
+                    fired_trigger_codes.append(code)
+        except Exception:
+            pass
+
+    trigger_steps: list[dict[str, Any]] = []
+    if fired_trigger_codes:
+        trigger_steps.append({"step": "triggers", "result": "pass", "trigger_codes": list(fired_trigger_codes)})
+
     def refuse(code: str, *, steps: list[dict] | None = None, packet: str | None = None, brief: Brief | None = None,
                account: TrustedAccount | None = None, status: str = "refused", ai_job_id: str | None = None) -> ConsultOutcome:
         raw = packet if packet is not None else f"{request.question}\n\n{request.context}"
+        combined_steps = [*trigger_steps, *(steps or [])]
         consult_id = _record(connection, request, state="refused", code=code, mode=mode, packet=packet,
-                             packet_sha=_sha(raw), brief=brief, steps=steps or [], rewrite_count=streak,
+                             packet_sha=_sha(raw), brief=brief, steps=combined_steps, rewrite_count=streak,
                              account=account, ai_job_id=ai_job_id)
         return ConsultOutcome(status=status, code=code, consult_id=consult_id)
 
@@ -256,13 +277,13 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
             return refuse("sage_unavailable", status="sage_unavailable")
         return _queue_for_sage(connection, request, config, mode=mode, context=effective_context,
                                 packet=None, packet_sha=_sha(f"{request.question}\n\n{effective_context}"), brief=None,
-                                steps=reply_steps, rewrite_count=streak)
+                                steps=[*trigger_steps, *reply_steps], rewrite_count=streak)
 
     if mode == "off":
         if config.sage_model_id and is_sage_available(config.sage_model_id):
             return _queue_for_sage(connection, request, config, mode=mode, context=effective_context,
                                     packet=None, packet_sha=_sha(f"{request.question}\n\n{effective_context}"), brief=None,
-                                    steps=reply_steps, rewrite_count=streak)
+                                    steps=[*trigger_steps, *reply_steps], rewrite_count=streak)
         return refuse(config.reason or "consult_off")
 
     account = next(iter(config.trusted_accounts), None)
@@ -270,7 +291,7 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
         if config.sage_model_id and is_sage_available(config.sage_model_id):
             return _queue_for_sage(connection, request, config, mode=mode, context=effective_context,
                                     packet=None, packet_sha=_sha(f"{request.question}\n\n{effective_context}"), brief=None,
-                                    steps=reply_steps, rewrite_count=streak)
+                                    steps=[*trigger_steps, *reply_steps], rewrite_count=streak)
         return refuse("no_trusted_account")
     try:
         brief = approved_brief(config.brief_sha256)
@@ -291,7 +312,7 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
     if connection.in_transaction:
         connection.commit()
     gate = run_gate(request.question, effective_context, sources)
-    steps = [*reply_steps, *_steps_json_entries(gate.steps)]
+    steps = [*trigger_steps, *reply_steps, *_steps_json_entries(gate.steps)]
     if gate.literature_numbers or gate.constant_numbers:
         steps.append({"step": "logged_matches", "result": "pass",
                       "reason": json.dumps({"literature": gate.literature_numbers, "constants": gate.constant_numbers})})

@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import type { ConsultBlock } from "../../api/threads";
-import { approveConsult, editConsult, rejectConsult, fetchConsultAnswer } from "../../api/consult";
+import {
+  approveConsult,
+  editConsult,
+  rejectConsult,
+  fetchConsultAnswer,
+  submitConsultFeedback,
+  fetchConsultFeedback,
+} from "../../api/consult";
 
 export type ConsultCardProps = {
   block: ConsultBlock;
@@ -14,6 +21,8 @@ export default function ConsultCard({ block, onAction }: ConsultCardProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [verifiedAnswer, setVerifiedAnswer] = useState<string | null>(block.answer_text);
+  const [verdict, setVerdict] = useState<"accepted" | "rejected" | null>(block.feedback_verdict || null);
+  const [feedbackSaving, setFeedbackSaving] = useState(false);
 
   // If byte_identical is false and answer_text exists, fetch stored answer by id
   useEffect(() => {
@@ -31,6 +40,33 @@ export default function ConsultCard({ block, onAction }: ConsultCardProps) {
       setVerifiedAnswer(block.answer_text);
     }
   }, [block.consult_id, block.state, block.byte_identical, block.answer_text]);
+
+  useEffect(() => {
+    if (block.feedback_verdict) {
+      setVerdict(block.feedback_verdict);
+    } else if (block.state === "sent" && block.consult_id) {
+      fetchConsultFeedback(block.consult_id)
+        .then((res) => {
+          if (res.verdict) {
+            setVerdict(res.verdict);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [block.consult_id, block.state, block.feedback_verdict]);
+
+  const handleFeedback = async (v: "accepted" | "rejected") => {
+    setFeedbackSaving(true);
+    try {
+      setVerdict(v);
+      await submitConsultFeedback(block.consult_id, v);
+      onAction?.();
+    } catch {
+      // Keep optimistic verdict or handle silently
+    } finally {
+      setFeedbackSaving(false);
+    }
+  };
 
   const handleApprove = async () => {
     setSubmitting(true);
@@ -227,6 +263,33 @@ export default function ConsultCard({ block, onAction }: ConsultCardProps) {
           <summary>domanda inviata</summary>
           <pre>{block.packet_text}</pre>
         </details>
+        <div className="consult-card__feedback" data-testid="consult-feedback">
+          <button
+            type="button"
+            className={`consult-btn consult-btn--feedback consult-btn--useful ${verdict === "accepted" ? "consult-btn--active" : ""}`}
+            data-testid="consult-feedback-useful"
+            data-feedback-verdict="accepted"
+            onClick={() => handleFeedback("accepted")}
+            disabled={feedbackSaving}
+          >
+            Utile
+          </button>
+          <button
+            type="button"
+            className={`consult-btn consult-btn--feedback consult-btn--not-useful ${verdict === "rejected" ? "consult-btn--active" : ""}`}
+            data-testid="consult-feedback-not-useful"
+            data-feedback-verdict="rejected"
+            onClick={() => handleFeedback("rejected")}
+            disabled={feedbackSaving}
+          >
+            Non utile
+          </button>
+          {verdict && (
+            <span className="consult-card__feedback-recorded" data-testid="consult-recorded-verdict">
+              {verdict === "accepted" ? "registrato: Utile" : "registrato: Non utile"}
+            </span>
+          )}
+        </div>
       </div>
     );
   }

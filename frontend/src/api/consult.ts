@@ -51,3 +51,32 @@ export async function fetchConsultAnswer(consultId: string, offset: number = 0):
   const response = await fetch(`${API_BASE_URL}/ai/consult/${consultId}/answer?offset=${offset}`);
   return response.json() as Promise<ConsultAnswerRead>;
 }
+
+export type ConsultFeedbackOutcome = {
+  status: string;
+  feedback_id?: string;
+  consult_id: string;
+  verdict?: "accepted" | "rejected" | null;
+  note?: string | null;
+  trigger_codes?: string[];
+  created_at?: string;
+};
+
+export async function submitConsultFeedback(
+  consultId: string,
+  verdict: "accepted" | "rejected",
+  note?: string,
+  workspaceId?: string
+): Promise<ConsultFeedbackOutcome> {
+  const response = await fetch(`${API_BASE_URL}/ai/consult/${consultId}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ verdict, note: note || null, workspace_id: workspaceId || null }),
+  });
+  return response.json() as Promise<ConsultFeedbackOutcome>;
+}
+
+export async function fetchConsultFeedback(consultId: string): Promise<ConsultFeedbackOutcome> {
+  const response = await fetch(`${API_BASE_URL}/ai/consult/${consultId}/feedback`);
+  return response.json() as Promise<ConsultFeedbackOutcome>;
+}

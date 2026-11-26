@@ -34,6 +34,7 @@ from app.core.cloud_escalation_schema import (
     CLOUD_ESCALATION_SCHEMA_STATEMENTS,
 )
 from app.core.consult_schema import (
+    CONSULT_FEEDBACK_MIGRATION_RECORD,
     CONSULT_SCHEMA_INDEX_STATEMENTS,
     CONSULT_SCHEMA_MIGRATION_RECORD,
     CONSULT_SCHEMA_STATEMENTS,
@@ -466,6 +467,7 @@ def _record_schema_migrations(connection: sqlite3.Connection) -> None:
         AI_THREAD_TURN_EXTRAS_MIGRATION_RECORD,
         CONSULT_SCHEMA_MIGRATION_RECORD,
         ZONE_C_QUERY_HISTORY_MIGRATION_RECORD,
+        CONSULT_FEEDBACK_MIGRATION_RECORD,
     ]
     for record in records:
         connection.execute(

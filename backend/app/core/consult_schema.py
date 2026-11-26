@@ -16,6 +16,12 @@ ZONE_C_QUERY_HISTORY_MIGRATION_RECORD = {
     "checksum": None,
 }
 
+CONSULT_FEEDBACK_MIGRATION_RECORD = {
+    "migration_id": "0040_consult_feedback",
+    "name": "Consult maintainer accept and reject feedback ledger",
+    "checksum": None,
+}
+
 CONSULT_SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS consult_attempts (
@@ -69,10 +75,22 @@ CONSULT_SCHEMA_STATEMENTS = (
         created_at TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS consult_feedback (
+        id TEXT PRIMARY KEY,
+        attempt_id TEXT NOT NULL,
+        verdict TEXT NOT NULL CHECK (verdict IN ('accepted', 'rejected')),
+        note TEXT,
+        trigger_codes_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (attempt_id) REFERENCES consult_attempts(id)
+    )
+    """,
 )
 
 CONSULT_SCHEMA_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_consult_attempts_turn ON consult_attempts(turn_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_consult_attempts_state ON consult_attempts(state, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_zone_c_query_history_created ON zone_c_query_history(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_consult_feedback_attempt ON consult_feedback(attempt_id, created_at)",
 )

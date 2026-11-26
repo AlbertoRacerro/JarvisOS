@@ -716,6 +716,7 @@ def dispatch_tool(
     browser_page_runner: Any = None,
     active_plan: dict[str, Any] | None = None,
     turn_tool_outputs: list[dict[str, Any]] | None = None,
+    trigger_codes: list[str] | None = None,
 ) -> StructuredToolResult:
     now = datetime.now(UTC)
     grant = live_grants.get(call.grant_id)
@@ -751,7 +752,12 @@ def dispatch_tool(
         from app.modules.agents.hermes.consult_tool import dispatch_consult_read_tool, dispatch_consult_tool
 
         if call.capability_id == "jarvis.consult":
-            result, error = dispatch_consult_tool(call, turn_id=interaction_id, turn_tool_outputs=turn_tool_outputs)
+            result, error = dispatch_consult_tool(
+                call,
+                turn_id=interaction_id,
+                turn_tool_outputs=turn_tool_outputs,
+                trigger_codes=trigger_codes,
+            )
         else:
             result, error = dispatch_consult_read_tool(call)
         return StructuredToolResult(
@@ -1080,6 +1086,10 @@ class HermesSupervisor:
         self.turn_continuations: int = 0
         self.turn_tool_outputs: list[dict[str, Any]] = []
         self.active_turn_plan: dict[str, Any] = {"steps": [], "findings": []}
+        self.active_turn_prompt: str = ""
+        self.turn_nudged_triggers: set[str] = set()
+        self.turn_fired_triggers: list[str] = []
+        self.turn_solver_failures: dict[str, int] = {}
         self.turn_step_count: int = 0
         self.turn_light: bool = False
         self.step_overhead: int = DEFAULT_STEP_OVERHEAD
@@ -1217,6 +1227,51 @@ class HermesSupervisor:
                 if isinstance(frame.get("messages"), list):
                     frame["messages"] = [*frame["messages"], {"role": "user", "content": STEP_CAP_MESSAGE}]
 
+            def record_event(event_type: str, payload: dict[str, object]) -> None:
+                try:
+                    with open_sqlite_connection() as connection:
+                        log_event(connection, event_type=event_type, actor="jarvis",
+                                  target_type="ai_thread_interaction", target_id=self.active_interaction_id,
+                                  workspace_id=self.session.workspace_id if self.session else None,
+                                  payload=payload)
+                        connection.commit()
+                except (sqlite3.OperationalError, sqlite3.IntegrityError) as exc:
+                    if "no such table: events" not in str(exc) and "foreign key constraint failed" not in str(exc).lower():
+                        raise
+
+            if not self.turn_light and selected_route.startswith("local:"):
+                from app.modules.consult.config import load_consult_config
+                from app.modules.consult.sage import is_sage_available
+                from app.modules.consult.triggers import evaluate_consult_triggers
+
+                c_config = load_consult_config()
+                consults_available = (c_config.mode in {"ask", "auto"}) or (
+                    bool(c_config.sage_model_id and is_sage_available(c_config.sage_model_id))
+                )
+                if consults_available:
+                    eval_res = evaluate_consult_triggers(
+                        prompt=self.active_turn_prompt,
+                        active_plan=self.active_turn_plan,
+                        turn_tool_outputs=self.turn_tool_outputs,
+                        solver_failures=self.turn_solver_failures,
+                    )
+                    for tr in eval_res.fired_triggers:
+                        if tr.code not in self.turn_nudged_triggers:
+                            self.turn_nudged_triggers.add(tr.code)
+                            if tr.code not in self.turn_fired_triggers:
+                                self.turn_fired_triggers.append(tr.code)
+                            record_event("hermes.consult_trigger", {
+                                "trigger_code": tr.code,
+                                "recommended_kind": tr.recommended_kind,
+                                "reason": tr.reason,
+                            })
+                            hint_msg = (
+                                f"[Harness consult hint: Trigger '{tr.code}' fired (recommended kind: '{tr.recommended_kind}'). "
+                                f"You may invoke jarvis_consult if an expert consultation would be helpful for this turn.]"
+                            )
+                            if isinstance(frame.get("messages"), list):
+                                frame["messages"] = [*frame["messages"], {"role": "user", "content": hint_msg}]
+
             if selected_route.startswith("local:"):
                 frame["messages"] = compact_system_message(frame.get("messages", []), self.compact_system_prompt)
             if self.active_turn_plan and (self.active_turn_plan.get("steps") or self.active_turn_plan.get("findings")):
@@ -1245,17 +1300,6 @@ class HermesSupervisor:
                         if envelope.task_kind == "general":
                             self.last_flow[envelope.agent_session.hermes_session_id] = outcome.flow_id
 
-                def record_event(event_type: str, payload: dict[str, object]) -> None:
-                    try:
-                        with open_sqlite_connection() as connection:
-                            log_event(connection, event_type=event_type, actor="jarvis",
-                                      target_type="ai_thread_interaction", target_id=self.active_interaction_id,
-                                      workspace_id=self.session.workspace_id if self.session else None,
-                                      payload=payload)
-                            connection.commit()
-                    except sqlite3.OperationalError as exc:
-                        if "no such table: events" not in str(exc):
-                            raise
 
                 def record_guard(kind: str, usable: bool | None) -> None:
                     payload: dict[str, object] = {"kind": kind, "step": self.turn_step_count}
@@ -1345,9 +1389,26 @@ class HermesSupervisor:
                                    patent_read_opener=self.patent_read_opener,
                                    browser_page_runner=self.browser_page_runner,
                                    active_plan=self.active_turn_plan,
-                                   turn_tool_outputs=self.turn_tool_outputs)
+                                   turn_tool_outputs=self.turn_tool_outputs,
+                                   trigger_codes=self.turn_fired_triggers)
             if result.error_code is not None:
                 refusal_note = refusal_message(call, result.error_code)
+
+            from app.modules.consult.triggers import SOLVER_TOOL_NAMES, normalize_tool_name
+            norm_tool = normalize_tool_name(tool_name)
+            if norm_tool in SOLVER_TOOL_NAMES:
+                is_fail = (
+                    result.status != "succeeded"
+                    or result.error_code is not None
+                    or (isinstance(result.result, dict) and (
+                        result.result.get("status") in {"failed", "error"}
+                        or "error: " in str(result.result.get("text", ""))
+                        or "[stderr]" in str(result.result.get("text", ""))
+                    ))
+                )
+                if is_fail:
+                    self.turn_solver_failures[norm_tool] = self.turn_solver_failures.get(norm_tool, 0) + 1
+
             if result.status == "succeeded" and isinstance(result.result, dict) and len(self.turn_tool_outputs) < 50:
                 self.turn_tool_outputs.append(result.result)
             if (
@@ -1356,13 +1417,16 @@ class HermesSupervisor:
                 and isinstance(result.result, dict)
             ):
                 res_data = result.result
-                if "steps" in res_data or "findings" in res_data:
+                if "steps" in res_data or "findings" in res_data or "task_label" in res_data:
                     raw_steps = res_data.get("steps")
                     raw_findings = res_data.get("findings")
-                    self.active_turn_plan = {
+                    plan_data: dict[str, Any] = {
                         "steps": list(raw_steps) if isinstance(raw_steps, list) else [],
                         "findings": list(raw_findings) if isinstance(raw_findings, list) else [],
                     }
+                    if "task_label" in res_data:
+                        plan_data["task_label"] = res_data["task_label"]
+                    self.active_turn_plan = plan_data
             if result.status == "succeeded" and result.result is not None:
                 from app.modules.agents.hermes.provenance import extract_tool_numeric_evidence
 
@@ -1567,6 +1631,10 @@ class HermesSupervisor:
         self.turn_continuations = 0
         self.turn_tool_outputs.clear()
         self.active_turn_plan = {"steps": [], "findings": []}
+        self.active_turn_prompt = prompt
+        self.turn_nudged_triggers.clear()
+        self.turn_fired_triggers.clear()
+        self.turn_solver_failures.clear()
         self.turn_step_count = 0
         # Spec 375: a light turn on a local route offers no tools and asks for low reasoning effort.
         if self.turn_light:
@@ -1621,6 +1689,10 @@ class HermesSupervisor:
             self.active_interaction_id = None
             self.active_role_route = None
             self.turn_light = False
+            self.active_turn_prompt = ""
+            self.turn_nudged_triggers.clear()
+            self.turn_fired_triggers.clear()
+            self.turn_solver_failures.clear()
             with self.evidence_lock:
                 self.turn_evidence_ledger = []
 

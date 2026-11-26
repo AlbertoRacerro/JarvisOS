@@ -33,6 +33,7 @@ class ConsultBlockRead(BaseModel):
     byte_identical: bool = False
     answered_at: str | None = None
     swap_timing: dict[str, float] | None = None
+    feedback_verdict: str | None = None
 
 
 def parse_consult_markers(text: str) -> list[str]:
@@ -117,6 +118,17 @@ def render_consult_blocks(
             except Exception:
                 swap_timing = None
 
+        feedback_verdict = None
+        try:
+            fb_row = connection.execute(
+                "SELECT verdict FROM consult_feedback WHERE attempt_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (row[0],),
+            ).fetchone()
+            if fb_row:
+                feedback_verdict = fb_row[0]
+        except Exception:
+            feedback_verdict = None
+
         blocks.append(
             ConsultBlockRead(
                 consult_id=row[0],
@@ -133,6 +145,7 @@ def render_consult_blocks(
                 byte_identical=byte_identical,
                 answered_at=str(row[11]) if row[11] else None,
                 swap_timing=swap_timing,
+                feedback_verdict=feedback_verdict,
             )
         )
 
