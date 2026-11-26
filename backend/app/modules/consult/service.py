@@ -184,9 +184,10 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
     if transport is None:
         return refuse("transport_unavailable", brief=brief, account=account)
 
-    sources = GateSources(tool_outputs=request.tool_outputs, stored_numbers=tuple(stored_project_numbers(connection)),
-                          protected_values=tuple(protected_values()), vault_dir=_vault_dir(),
-                          data_root=_data_root(), pack_roots=tuple(pack.root for pack in packs.load_packs()))
+    try:
+        sources = _gate_sources(connection, request.tool_outputs)
+    except Exception:  # noqa: BLE001 - an unreadable source (vault, pack, table) refuses, never passes
+        return refuse("gate_error", brief=brief, account=account)
     gate = run_gate(request.question, request.context, sources)
     steps = [{"step": s.step, "result": s.result, "reason": s.reason} for s in gate.steps]
     if gate.literature_numbers or gate.constant_numbers:
@@ -215,6 +216,12 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
                          packet_sha=packet_sha, brief=brief, steps=steps, rewrite_count=streak, account=account,
                          approval="policy_auto", audit=audit)
     return _send(connection, consult_id, packet, account, transport)
+
+
+def _gate_sources(connection: sqlite3.Connection, tool_outputs: tuple[str, ...]) -> GateSources:
+    return GateSources(tool_outputs=tool_outputs, stored_numbers=tuple(stored_project_numbers(connection)),
+                       protected_values=tuple(protected_values()), vault_dir=_vault_dir(),
+                       data_root=_data_root(), pack_roots=tuple(pack.root for pack in packs.load_packs()))
 
 
 def _data_root() -> Path:
@@ -301,9 +308,10 @@ def edit_consult(connection: sqlite3.Connection, consult_id: str, question: str,
         brief = approved_brief(config.brief_sha256)
     except BriefUnavailable as exc:
         return ConsultOutcome(status="refused", code=exc.code, consult_id=consult_id)
-    sources = GateSources(stored_numbers=tuple(stored_project_numbers(connection)),
-                          protected_values=tuple(protected_values()), vault_dir=_vault_dir(),
-                          data_root=_data_root(), pack_roots=tuple(pack.root for pack in packs.load_packs()))
+    try:
+        sources = _gate_sources(connection, ())
+    except Exception:  # noqa: BLE001 - an unreadable source refuses, never passes
+        return ConsultOutcome(status="refused", code="gate_error", consult_id=consult_id)
     gate = run_gate(question, context, sources)
     steps = [{"step": s.step, "result": s.result, "reason": s.reason} for s in gate.steps]
     if gate.status != "pass":

@@ -224,3 +224,14 @@ def test_s4_refusal_stores_only_hash_and_reason(connection) -> None:
     row = _rows(connection)[0]
     assert row["packet_text"] is None and len(row["packet_sha256"]) == 64 and row["result_code"] == "secret_detected"
     assert "sk-ant" not in json.dumps([dict(r) for r in _rows(connection)])
+
+
+def test_unreadable_vault_refuses_gate_error(connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core.vault import VAULT_PATH_ENV
+
+    broken = tmp_path / "broken-vault"
+    broken.mkdir()
+    monkeypatch.setenv(VAULT_PATH_ENV, str(broken))
+    transport = FakeTransport()
+    outcome = request_consult(connection, _request(), transport=transport, config_loader=_config())
+    assert (outcome.status, outcome.code) == ("refused", "gate_error") and transport.sent == []
