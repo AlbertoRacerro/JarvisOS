@@ -50,6 +50,7 @@ _RELEASE_SCRIPTS = (
     "worker_routing.py",
     "free_model_monitor.py",
     "account_model_resolution.py",
+    "backup.py",
 )
 
 
@@ -4710,6 +4711,50 @@ def test_service_install_failure_unlinks_new_unit(host, monkeypatch, fail_point)
     _, receipt = request(host, "service.install", {"template": "jarvisos-search-guard"})
     assert receipt["outcome"] == "failed"
     assert not (paths.units / unit).exists()
+
+
+def test_service_install_enables_the_timer_of_a_timer_template(host, monkeypatch):
+    """Spec 379: a timer template writes the oneshot service and the timer, and enables and checks the timer."""
+    paths, ex, calls = host
+    monkeypatch.setattr(h.time, "sleep", lambda _seconds: None)
+    for name, calendar in (("jarvisos-backup", "OnCalendar=daily"), ("jarvisos-backup-restore-test", "OnCalendar=monthly")):
+        calls.clear()
+        _, receipt = request(host, "service.install", {"template": name})
+        assert receipt["outcome"] == "ok", receipt
+        assert (paths.units / f"{name}.service").read_bytes() == h.UNIT_TEMPLATES[name].encode()
+        timer = (paths.units / f"{name}.timer").read_text()
+        assert calendar in timer and "Persistent=true" in timer
+        assert "Type=oneshot" in h.UNIT_TEMPLATES[name] and "[Install]" not in h.UNIT_TEMPLATES[name]
+        enables = [argv for argv, _ in calls if "enable" in argv]
+        assert enables == [["systemctl", "--user", "enable", "--now", f"{name}.timer"]]
+        assert not any(f"{name}.service" in argv for argv, _ in calls)
+
+
+def test_service_install_timer_failure_removes_both_new_files(host, monkeypatch):
+    paths, ex, calls = host
+    monkeypatch.setattr(h.time, "sleep", lambda _seconds: None)
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if "enable" in argv:
+            return subprocess.CompletedProcess(argv, 1, "", "enable error")
+        return subprocess.CompletedProcess(argv, 0, "ActiveState=inactive\n", "")
+
+    ex.run = run
+    _, receipt = request(host, "service.install", {"template": "jarvisos-backup"})
+    assert receipt["outcome"] == "failed"
+    assert not (paths.units / "jarvisos-backup.service").exists()
+    assert not (paths.units / "jarvisos-backup.timer").exists()
+
+
+def test_service_install_still_refuses_templates_outside_the_policy(host):
+    paths, _, _ = host
+    policy = json.loads(paths.policy.read_text())
+    policy["ops"]["service.install"]["templates"] = ["jarvisos-search-guard"]
+    paths.policy.write_text(json.dumps(policy))
+    _, receipt = request(host, "service.install", {"template": "jarvisos-backup"})
+    assert receipt["outcome"] == "refused"
+    assert not (paths.units / "jarvisos-backup.timer").exists()
 
 
 def test_publish_release_creates_readonly_scripts_and_symlink(tmp_path):

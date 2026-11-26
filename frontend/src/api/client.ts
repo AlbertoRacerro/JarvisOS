@@ -45,6 +45,12 @@ export type SystemInfoResponse = {
     scaleway_output_tokens_month_to_date: number;
     blocking_reason?: string | null;
   };
+  backup?: {
+    state: "never" | "ok" | "failed" | "stale";
+    last_success_at: string | null;
+    last_restore_test_at: string | null;
+    last_restore_test_ok: boolean | null;
+  };
 };
 
 async function getJson<T>(path: string): Promise<T> {

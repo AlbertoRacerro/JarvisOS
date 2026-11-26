@@ -558,6 +558,28 @@ UNIT_TEMPLATES = {
         "Restart=on-failure\nRestartSec=10\n"
         "NoNewPrivileges=yes\n"
         "[Install]\nWantedBy=default.target\n"),
+    "jarvisos-backup": (
+        "[Unit]\nDescription=JarvisOS encrypted backup with restic (spec 379)\n"
+        "[Service]\nType=oneshot\nWorkingDirectory=%h\n"
+        "ExecStart=/usr/bin/python3 -I %h/.local/share/jarvisos-hostops/current/scripts/backup.py run\n"
+        "Nice=10\nIOSchedulingClass=idle\n"),
+    "jarvisos-backup-restore-test": (
+        "[Unit]\nDescription=JarvisOS monthly backup restore test (spec 379)\n"
+        "[Service]\nType=oneshot\nWorkingDirectory=%h\n"
+        "ExecStart=/usr/bin/python3 -I %h/.local/share/jarvisos-hostops/current/scripts/backup.py restore-test\n"
+        "Nice=10\nIOSchedulingClass=idle\n"),
+}
+
+# Templates whose service is started by a timer: the timer is the unit that is enabled and must be active (spec 379).
+TIMER_TEMPLATES = {
+    "jarvisos-backup": (
+        "[Unit]\nDescription=Daily JarvisOS encrypted backup (spec 379)\n"
+        "[Timer]\nOnCalendar=daily\nPersistent=true\nRandomizedDelaySec=30min\n"
+        "[Install]\nWantedBy=timers.target\n"),
+    "jarvisos-backup-restore-test": (
+        "[Unit]\nDescription=Monthly JarvisOS backup restore test (spec 379)\n"
+        "[Timer]\nOnCalendar=monthly\nPersistent=true\nRandomizedDelaySec=1h\n"
+        "[Install]\nWantedBy=timers.target\n"),
 }
 
 
@@ -567,29 +589,39 @@ def op_service_install(ctx: Context) -> dict[str, Any]:
     name = args.get("template")
     if not isinstance(name, str) or name not in UNIT_TEMPLATES or name not in (conf.get("templates") or []):
         raise Refused(f"template {name!r} is not allowed by the host policy")
-    unit = f"{name}.service"
-    body = UNIT_TEMPLATES[name].encode()
+    # A timer template writes its oneshot service too, but enables and checks only the timer (spec 379).
+    files = {f"{name}.service": UNIT_TEMPLATES[name].encode()}
+    if name in TIMER_TEMPLATES:
+        files[f"{name}.timer"] = TIMER_TEMPLATES[name].encode()
+    unit = f"{name}.timer" if name in TIMER_TEMPLATES else f"{name}.service"
+    body = files[unit]
+    currents: dict[str, bytes | None] = {}
     fd = open_dir(ctx.paths.units, create=True)
     try:
-        try:
-            current = read_regular(fd, unit, 1 << 16)
-        except FileNotFoundError:
-            current = None
+        for file_name in files:
+            try:
+                currents[file_name] = read_regular(fd, file_name, 1 << 16)
+            except FileNotFoundError:
+                currents[file_name] = None
+        current = currents[unit]
         previous_state = _unit_state(ctx, unit) if current is not None else {}
         was_active = previous_state.get("ActiveState") == "active"
-        if current is not None and current != body:
-            sfd = open_dir(ctx.paths.state / "unit-backups", create=True)
-            try:
-                write_at(sfd, f"{unit}.{ctx.request['id'][:8]}", current)
-            finally:
-                os.close(sfd)
-        if current != body:
-            write_at(fd, unit, body)
+        for file_name, file_body in files.items():
+            if currents[file_name] is not None and currents[file_name] != file_body:
+                sfd = open_dir(ctx.paths.state / "unit-backups", create=True)
+                try:
+                    write_at(sfd, f"{file_name}.{ctx.request['id'][:8]}", currents[file_name])
+                finally:
+                    os.close(sfd)
+            if currents[file_name] != file_body:
+                write_at(fd, file_name, file_body)
     finally:
         os.close(fd)
-    changed = current != body
+    changed = any(currents[file_name] != file_body for file_name, file_body in files.items())
     detail: dict[str, Any] = {"unit": unit, "unit_sha256": hashlib.sha256(body).hexdigest(),
                               "changed": changed, "returncodes": [], "state": {}}
+    if len(files) > 1:
+        detail["service_sha256"] = hashlib.sha256(files[f"{name}.service"]).hexdigest()
     try:
         reload = _systemctl(ctx, "daemon-reload")
         detail["returncodes"].append(reload.returncode)
@@ -617,10 +649,11 @@ def op_service_install(ctx: Context) -> dict[str, Any]:
             try:
                 restore_fd = open_dir(ctx.paths.units, create=True)
                 try:
-                    if current is None:
-                        unlink_at(restore_fd, unit)
-                    else:
-                        write_at(restore_fd, unit, current)
+                    for file_name, previous in currents.items():
+                        if previous is None:
+                            unlink_at(restore_fd, file_name)
+                        elif previous != files[file_name]:
+                            write_at(restore_fd, file_name, previous)
                 finally:
                     os.close(restore_fd)
             except Exception:
@@ -3485,7 +3518,8 @@ DEFAULT_POLICY: dict[str, Any] = {
                                       "jarvisos-searxng.service", "jarvisos-search-guard.service"],
                             "actions": OWNER_ACTIONS},
         "service.install": {"templates": ["jarvisos-relay-watch", "jarvisos-mission-owner",
-                                          "jarvisos-searxng", "jarvisos-search-guard"]},
+                                          "jarvisos-searxng", "jarvisos-search-guard",
+                                          "jarvisos-backup", "jarvisos-backup-restore-test"]},
         "wsl.probe": {},
         "wsl.handoff": {"dir": "/mnt/c/Users/user/JarvisOS-print", "open": True, "max_bytes": 200 << 20,
                         "extensions": [".3mf", ".stl", ".step", ".glb", ".png", ".pdf"]},
@@ -3671,6 +3705,7 @@ def _preflight_release(release_dir: Path, paths: Paths) -> None:
         "free_model_monitor.py",
         "account_model_resolution.py",
         "vault_guard.py",
+        "backup.py",
     ):
         if not (release_dir / "scripts" / name).is_file():
             raise Refused(f"release missing {name}")

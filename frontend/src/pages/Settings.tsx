@@ -114,6 +114,24 @@ function capabilitySummary(provider: ProviderSettings["providers"][number]): str
   return `${location} · ${provider.enabled ? "Enabled in configuration · runtime availability not verified" : "Disabled in configuration"}`;
 }
 
+type BackupStatus = NonNullable<SystemInfoResponse["backup"]>;
+
+function backupTime(value: string | null): string {
+  return value ? new Date(value).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" }) : "";
+}
+
+function backupLine(backup: BackupStatus | undefined): string {
+  if (!backup || backup.state === "never") return "mai";
+  if (backup.state === "failed") return "non riuscito";
+  if (backup.state === "stale") return `vecchio (${backupTime(backup.last_success_at)})`;
+  return backupTime(backup.last_success_at);
+}
+
+function restoreTestLine(backup: BackupStatus | undefined): string {
+  if (!backup || !backup.last_restore_test_at) return "mai";
+  return `${backupTime(backup.last_restore_test_at)} · ${backup.last_restore_test_ok ? "riuscito" : "non riuscito"}`;
+}
+
 function Settings() {
   const mounted = useRef(true);
   const generation = useRef(0);
@@ -536,6 +554,8 @@ function Settings() {
             <div><dt>Data root</dt><dd>{system ? (system.data_root_exists ? "Available" : "Missing") : "checking"}</dd></div>
             <div><dt>Database</dt><dd>{system ? (system.database.ready ? "Ready" : "Not ready") : "checking"}</dd></div>
             <div><dt>Provider configured</dt><dd>{system ? (system.ai.provider_configured ? "Yes" : "No") : "checking"}</dd></div>
+            <div data-backup-status><dt>Ultimo backup</dt><dd>{system ? backupLine(system.backup) : "checking"}</dd></div>
+            <div><dt>Ultimo test di ripristino</dt><dd>{system ? restoreTestLine(system.backup) : "checking"}</dd></div>
           </dl>
           <details>
             <summary>Advanced diagnostics</summary>
