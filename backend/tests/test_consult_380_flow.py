@@ -235,3 +235,14 @@ def test_unreadable_vault_refuses_gate_error(connection, tmp_path: Path, monkeyp
     transport = FakeTransport()
     outcome = request_consult(connection, _request(), transport=transport, config_loader=_config())
     assert (outcome.status, outcome.code) == ("refused", "gate_error") and transport.sent == []
+
+
+def test_approve_refuses_when_brief_edited_after_drafting(connection, tmp_path: Path) -> None:
+    transport = FakeTransport()
+    pending = request_consult(connection, _request(), transport=transport, config_loader=_config())
+    assert pending.status == "pending"
+    row = _rows(connection)[0]
+    (tmp_path / "pack" / "brief.md").write_text(BRIEF + "\ntampered\n", encoding="utf-8")
+    refused = approve_consult(connection, pending.consult_id, row["packet_sha256"], transport=transport,
+                              config_loader=_config())
+    assert refused.status == "refused" and refused.code == "brief_not_approved" and transport.sent == []

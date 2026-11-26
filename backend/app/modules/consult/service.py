@@ -262,11 +262,12 @@ def approve_consult(connection: sqlite3.Connection, consult_id: str, packet_sha2
                     config_loader: Callable[[], ConsultConfig] = load_consult_config) -> ConsultOutcome:
     """The maintainer approves the exact packet he saw; a digest mismatch or a replay refuses."""
     row = connection.execute(
-        "SELECT state, packet_text, packet_sha256, account_id FROM consult_attempts WHERE id = ?", (consult_id,)
+        "SELECT state, packet_text, packet_sha256, account_id, brief_sha256 FROM consult_attempts WHERE id = ?",
+        (consult_id,),
     ).fetchone()
     if row is None:
         return ConsultOutcome(status="refused", code="consult_unknown")
-    state, packet, stored_sha, account_id = row[0], row[1], row[2], row[3]
+    state, packet, stored_sha, account_id, stored_brief_sha = row[0], row[1], row[2], row[3], row[4]
     if state != "awaiting_approval":
         return ConsultOutcome(status="refused", code="not_awaiting_approval", consult_id=consult_id)
     if packet is None or packet_sha256 != stored_sha or _sha(packet) != stored_sha:
@@ -275,6 +276,12 @@ def approve_consult(connection: sqlite3.Connection, consult_id: str, packet_sha2
     account = next((a for a in config.trusted_accounts if a.id == account_id), None)
     if config.mode not in ("ask", "auto") or account is None:
         return ConsultOutcome(status="refused", code=config.reason or "consult_off", consult_id=consult_id)
+    try:
+        brief = approved_brief(config.brief_sha256)
+    except BriefUnavailable as exc:
+        return ConsultOutcome(status="refused", code=exc.code, consult_id=consult_id)
+    if stored_brief_sha is not None and brief.sha256 != stored_brief_sha:
+        return ConsultOutcome(status="refused", code="brief_not_approved", consult_id=consult_id)
     if transport is None:
         return ConsultOutcome(status="refused", code="transport_unavailable", consult_id=consult_id)
     _set_state(connection, consult_id, "approved", approval="operator")
@@ -308,6 +315,8 @@ def edit_consult(connection: sqlite3.Connection, consult_id: str, question: str,
         brief = approved_brief(config.brief_sha256)
     except BriefUnavailable as exc:
         return ConsultOutcome(status="refused", code=exc.code, consult_id=consult_id)
+    if any(module not in brief.modules for module in request.modules):
+        return ConsultOutcome(status="refused", code="module_unknown", consult_id=consult_id)
     try:
         sources = _gate_sources(connection, ())
     except Exception:  # noqa: BLE001 - an unreadable source refuses, never passes

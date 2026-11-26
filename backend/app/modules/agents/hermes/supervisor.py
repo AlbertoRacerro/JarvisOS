@@ -82,6 +82,8 @@ HERMES_TOOL_ALLOWLIST = frozenset({"mcp__jarvis__jarvis_context_preview",
                                   "mcp__jarvis__paper_pdf_read", "mcp__jarvis__jarvis_paper_pdf_read",
                                   "paper_pdf_read", "jarvis_paper_pdf_read",
                                   "mcp__jarvis__jarvis_turn_plan", "jarvis_turn_plan", "turn_plan",
+                                  "mcp__jarvis__jarvis_consult", "mcp__jarvis__jarvis_consult_read",
+                                  "jarvis_consult", "jarvis_consult_read",
                                   "memory", "session_search"})
 _BWRAP_PREFIX = ("bwrap", "--dev-bind", "/", "/", "--unshare-net", "--die-with-parent", "--")
 
@@ -186,6 +188,11 @@ _TOOL_CAPABILITIES = {
     "jarvis_turn_plan": "jarvis.turn_plan",
     "turn_plan": "jarvis.turn_plan",
     "mcp__jarvis__jarvis_turn_plan": "jarvis.turn_plan",
+    # Spec 380: session-scoped like turn_plan; sending needs the maintainer's approval or his `auto` mode.
+    "jarvis_consult": "jarvis.consult",
+    "mcp__jarvis__jarvis_consult": "jarvis.consult",
+    "jarvis_consult_read": "jarvis.consult_read",
+    "mcp__jarvis__jarvis_consult_read": "jarvis.consult_read",
     "jarvis_process_read": "jarvis.process_read",
     "jarvis_process_act": "jarvis.process_act",
     "jarvis_bluecad_read": "jarvis.bluecad_read",
@@ -332,6 +339,8 @@ RESEARCH_TOOLS = frozenset({
     "session_search",
 })
 
+_CONSULT_NAMES = frozenset({"jarvis_consult", "mcp__jarvis__jarvis_consult",
+                            "jarvis_consult_read", "mcp__jarvis__jarvis_consult_read"})
 DEFAULT_RESEARCH_BUDGET = 8
 DEFAULT_TURN_CAP = 10
 DEAD_TURN_NUDGE = (
@@ -342,7 +351,7 @@ DEAD_TURN_NUDGE = (
 
 def is_research_tool(tool_name: str) -> bool:
     name = tool_name.strip().lower()
-    if name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan"}:
+    if name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan"} or name in _CONSULT_NAMES:
         return False
     return name in RESEARCH_TOOLS or any(k in name for k in ("read", "search", "retrieval", "query"))
 
@@ -703,6 +712,7 @@ def dispatch_tool(
     patent_read_opener: Any = None,
     browser_page_runner: Any = None,
     active_plan: dict[str, Any] | None = None,
+    turn_tool_outputs: list[dict[str, Any]] | None = None,
 ) -> StructuredToolResult:
     now = datetime.now(UTC)
     grant = live_grants.get(call.grant_id)
@@ -728,6 +738,19 @@ def dispatch_tool(
         result, error = dispatch_turn_plan_tool(
             call, ws_id, error, grant=grant, interaction_id=interaction_id, active_plan=active_plan
         )
+        return StructuredToolResult(
+            call_id=call.call_id, capability_id=call.capability_id,
+            status="succeeded" if result is not None else "refused",
+            result=result, error_code=None if result is not None else error,
+            completed_at=now,
+        )
+    if call.capability_id in {"jarvis.consult", "jarvis.consult_read"}:
+        from app.modules.agents.hermes.consult_tool import dispatch_consult_read_tool, dispatch_consult_tool
+
+        if call.capability_id == "jarvis.consult":
+            result, error = dispatch_consult_tool(call, turn_id=interaction_id, turn_tool_outputs=turn_tool_outputs)
+        else:
+            result, error = dispatch_consult_read_tool(call)
         return StructuredToolResult(
             call_id=call.call_id, capability_id=call.capability_id,
             status="succeeded" if result is not None else "refused",
@@ -1303,7 +1326,7 @@ class HermesSupervisor:
                 connection.commit()
             grant_id = (
                 arguments.pop("grant_id", None) or "session-turn"
-                if capability_id == "jarvis.turn_plan"
+                if capability_id in {"jarvis.turn_plan", "jarvis.consult", "jarvis.consult_read"}
                 else arguments.pop("grant_id")
             )
             call = StructuredToolCall(
@@ -1318,7 +1341,8 @@ class HermesSupervisor:
                                    paper_search_opener=self.paper_search_opener,
                                    patent_read_opener=self.patent_read_opener,
                                    browser_page_runner=self.browser_page_runner,
-                                   active_plan=self.active_turn_plan)
+                                   active_plan=self.active_turn_plan,
+                                   turn_tool_outputs=self.turn_tool_outputs)
             if result.error_code is not None:
                 refusal_note = refusal_message(call, result.error_code)
             if result.status == "succeeded" and isinstance(result.result, dict) and len(self.turn_tool_outputs) < 50:
@@ -1610,7 +1634,9 @@ ENGINEERING_METHODOLOGY_RULES = (
     "label confidence high, medium, or low, and state what remains unconfirmed. Do not refuse solely for missing confirmation.\n"
     "- Read a source before citing it.\n"
     "- Never invent a DOI.\n"
-    "- For multi-step questions, create a plan with jarvis_turn_plan and record intermediate findings with source refs."
+    "- For multi-step questions, create a plan with jarvis_turn_plan and record intermediate findings with source refs.\n"
+    "- Consult the expert for ideas, mechanisms, physical explanations, literature and critique. "
+    "Every number comes from Jarvis tools."
 )
 
 

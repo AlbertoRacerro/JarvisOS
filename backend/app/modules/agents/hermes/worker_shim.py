@@ -181,6 +181,8 @@ ADMITTED_TOOLS = frozenset({"mcp__jarvis__jarvis_context_preview",
                             "mcp__jarvis__paper_pdf_read", "mcp__jarvis__jarvis_paper_pdf_read",
                             "paper_pdf_read", "jarvis_paper_pdf_read",
                             "mcp__jarvis__jarvis_turn_plan", "jarvis_turn_plan", "turn_plan",
+                            "mcp__jarvis__jarvis_consult", "mcp__jarvis__jarvis_consult_read",
+                            "jarvis_consult", "jarvis_consult_read",
                             "memory", "session_search"})
 
 RESEARCH_TOOLS = frozenset({
@@ -269,7 +271,8 @@ def extract_capped_text(text: str) -> str:
 
 def is_research_tool(tool_name: str) -> bool:
     name = tool_name.strip().lower()
-    if name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan"}:
+    if name in {"jarvis_turn_plan", "mcp__jarvis__jarvis_turn_plan", "turn_plan",
+                "jarvis_consult", "mcp__jarvis__jarvis_consult", "jarvis_consult_read", "mcp__jarvis__jarvis_consult_read"}:
         return False
     return name in RESEARCH_TOOLS or any(k in name for k in ("read", "search", "retrieval", "query"))
 
@@ -628,7 +631,7 @@ def pinned_config(base_url: str, token: str, python: str | None = None) -> dict[
                                   "jarvis_studio_read", "jarvis_studio_act",
                                   "jarvis_bench_read", "jarvis_bench_run", "jarvis_python",
                                   "jarvis_paper_search", "jarvis_patent_read", "jarvis_browser_page_read", "jarvis_paper_pdf_read",
-                                  "jarvis_turn_plan"]},
+                                  "jarvis_turn_plan", "jarvis_consult", "jarvis_consult_read"]},
         }},
         "model_catalog": {"enabled": False}, "updates": {"check": False},
         "telemetry": {"enabled": False, "send": False},

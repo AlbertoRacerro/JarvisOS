@@ -95,11 +95,11 @@ def _significant(token: str, value: float, followed_by_unit: bool) -> bool:
     return value != 0
 
 
-def _matches(value: float, references: Iterable[float]) -> bool:
+def _matches(value: float, references: Iterable[float], *, exact_int: bool = False) -> bool:
     for reference in references:
         if reference == 0:
             continue
-        if float(value).is_integer() and float(reference).is_integer() and abs(value) >= 10:
+        if exact_int and float(value).is_integer() and float(reference).is_integer():
             if value == reference:
                 return True
             continue
@@ -157,7 +157,9 @@ def number_taint(text: str, sources: GateSources) -> tuple[StepResult, tuple[str
             continue
         unit = re.match(r"\s*([a-zA-Z°µ%][a-zA-Z°µ%/0-9]*)", masked[match.end():match.end() + 16])
         followed = unit is not None and unit.group(1).lower().rstrip(".,;:") in KNOWN_SEARCH_GUARD_UNITS
-        if not _significant(token, value, followed) or not _matches(abs(value), [abs(r) for r in references]):
+        exact_int = not followed and re.fullmatch(r"[-+]?\d+", token) is not None
+        if not _significant(token, value, followed) or not _matches(abs(value), [abs(r) for r in references],
+                                                                    exact_int=exact_int):
             continue
         if _matches(abs(value), PHYSICAL_CONSTANTS):
             constants.append(token)

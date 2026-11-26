@@ -125,6 +125,7 @@ def test_number_from_a_tool_output_needs_a_rewrite_and_a_wide_range_passes() -> 
 
 def test_stored_and_protected_numbers_are_specific() -> None:
     assert run_gate("A tube of 52 mm?", "", GateSources(protected_values=(52.0,))).status == "rewrite_required"
+    assert run_gate("A drop of 242 Pa?", "", GateSources(stored_numbers=(240.0,))).status == "rewrite_required"
     assert run_gate("Rate 0.731 per day?", "", GateSources(stored_numbers=(0.73,))).status == "rewrite_required"
     assert run_gate("Count 12 units?", "", GateSources(stored_numbers=(13.0,))).status == "pass"  # counts exact
     assert run_gate("Two rounds, 3 options", "", GateSources(tool_outputs=("2 3",))).status == "pass"
