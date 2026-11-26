@@ -21,7 +21,7 @@ CONSULT_READ_TOOL_NAMES = frozenset({"jarvis_consult_read", "mcp__jarvis__jarvis
 CONSULT_DESCRIPTION = ("Consult the expert for ideas, mechanisms, physical explanations, literature and critique. "
                        "Every number comes from Jarvis tools.")
 ANSWER_PREVIEW_CHARS = 6000
-_ARGUMENTS = {"kind", "question", "modules", "context", "local_only"}
+_ARGUMENTS = {"kind", "question", "modules", "context", "local_only", "reply_to"}
 
 # Default is the Relay consult transport (spec 380 part b); tests may inject a fake.
 TRANSPORT: ConsultTransport | None = DEFAULT_CONSULT_TRANSPORT
@@ -59,14 +59,16 @@ def dispatch_consult_tool(call: StructuredToolCall, *, turn_id: str | None,
     modules = arguments.get("modules", [])
     context = arguments.get("context", "")
     local_only = arguments.get("local_only", False)
+    reply_to = arguments.get("reply_to")
     if (not isinstance(kind, str) or not isinstance(question, str) or not isinstance(context, str)
             or not isinstance(modules, list) or not all(isinstance(m, str) for m in modules)
-            or not isinstance(local_only, bool)):
+            or not isinstance(local_only, bool)
+            or (reply_to is not None and not isinstance(reply_to, str))):
         return None, "invalid_arguments"
     module_ids: list[str] = [m for m in modules if isinstance(m, str)]
     request = ConsultRequest(
         kind=kind, question=question, modules=module_ids,
-        context=context, local_only=local_only, turn_id=turn_id,
+        context=context, local_only=local_only, reply_to=reply_to, turn_id=turn_id,
         thread_id=call.session_ref.jarvis_thread_id, workspace_id=call.session_ref.workspace_id,
         tool_outputs=_tool_output_texts(turn_tool_outputs),
     )

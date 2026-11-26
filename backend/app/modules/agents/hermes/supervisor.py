@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -54,6 +55,8 @@ from app.modules.ai.execution import AiTaskOutcome, run_ai_task
 from app.modules.ai.jarvis_context import PRODUCTION_CAPABILITY_REGISTRY, build_jarvis_context_preview
 from app.modules.ai.jarvis_context_models import JarvisCapabilityDescriptor, JarvisContextRequest
 from app.modules.events.service import log_event
+
+logger = logging.getLogger(__name__)
 
 UPSTREAM_REVISION = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
 _MAPPING_EVENT = "hermes.session_bound"
@@ -1604,8 +1607,17 @@ class HermesSupervisor:
                 response["relay_flow_ids"] = list(dict.fromkeys(self.turn_flow_ids.get(self.session.hermes_session_id, [])))
                 with self.evidence_lock:
                     response["evidence_ledger"] = list(self.turn_evidence_ledger)
+                from app.modules.consult.sage import flush_sage_queue
+
+                try:
+                    flush_sage_queue(interaction_id)
+                except Exception as exc:  # noqa: BLE001 - a failed Sage batch never loses the finished turn
+                    logger.warning("Sage batch failed for %s: %s", interaction_id, type(exc).__name__)
             return response
         finally:
+            from app.modules.consult.sage import clear_sage_queue
+
+            clear_sage_queue(interaction_id)
             self.active_interaction_id = None
             self.active_role_route = None
             self.turn_light = False

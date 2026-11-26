@@ -500,7 +500,7 @@ def list_models() -> dict[str, Any]:
     }
 
 
-def activate_model(model_id: str) -> dict[str, Any]:
+def activate_model(model_id: str, persist_choice: bool = True) -> dict[str, Any]:
     entries, present = read_registry()
     if not present:
         raise HTTPException(status_code=404, detail="Local model registry is not configured.")
@@ -530,9 +530,21 @@ def activate_model(model_id: str) -> dict[str, Any]:
                 raise HTTPException(status_code=409, detail="Externally started llama-server cannot be switched here.")
             owner.stop()
             strata_ctrl = get_strata_controller()
+            if current_entry is not None and current_entry.runtime == "strata" and current_entry.id != entry.id:
+                # One hot model on the card: a second Strata model cannot load while the first holds the GPU.
+                stopped = strata_ctrl.stop(
+                    current_entry.id,
+                    current_entry.unit or "",
+                    current_entry.host,
+                    current_entry.port or 8080,
+                    current_entry.served_model or "",
+                )
+                if stopped.state != "stopped":
+                    raise HTTPException(status_code=409, detail="The previous local model has not stopped yet.")
             strata_ctrl.start(entry.id, entry.unit or "", entry.host, entry.port or 8080, entry.served_model or "")
             owner.active_model_id = entry.id
-            save_model_choice(entry.id)
+            if persist_choice:
+                save_model_choice(entry.id)
             return owner.status()
 
         if not Path(entry.model_path).is_file():
@@ -572,7 +584,8 @@ def activate_model(model_id: str) -> dict[str, Any]:
             # Strata is stopped; the owner refuses to spawn llama-server while a Strata entry is active.
             owner.active_model_id = entry.id
         result = owner.switch_model(config_for_entry(entry), entry.id, default.id)
-        save_model_choice(entry.id)
+        if persist_choice:
+            save_model_choice(entry.id)
         return result
 
 

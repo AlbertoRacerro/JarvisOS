@@ -461,6 +461,7 @@ _CONSULT_TOOL = {
             "modules": {"type": "array", "items": {"type": "string", "maxLength": 8}, "maxItems": 2},
             "context": {"type": "string", "maxLength": 12000},
             "local_only": {"type": "boolean"},
+            "reply_to": {"type": "string", "maxLength": 64},
         },
         "required": ["kind", "question"],
         "additionalProperties": False,

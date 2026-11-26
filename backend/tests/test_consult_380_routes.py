@@ -17,6 +17,20 @@ from app.modules.consult.service import ConsultRequest, request_consult
 from tests.test_consult_380_flow import BRIEF, DIGEST, FakeTransport
 
 
+@pytest.fixture(autouse=True)
+def _offline_local_only_judge(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gate step 4 (spec 381) needs a readable vault; give each test an empty one and the offline judge fake."""
+    from app.core import vault as _vault
+
+    empty = tmp_path_factory.mktemp("empty_vault")
+    (empty / "jarvis_vault.toml").write_text("", encoding="utf-8")
+    monkeypatch.setenv(_vault.VAULT_PATH_ENV, str(empty))
+    monkeypatch.setenv("JARVISOS_CONSULT_FAKE_TRANSPORT", "1")
+    _vault._load.cache_clear()
+    from app.core.database import initialize_database as _init_db
+
+    _init_db()
+
 @pytest.fixture()
 def client(isolated_data_root: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     pack = tmp_path / "pack"

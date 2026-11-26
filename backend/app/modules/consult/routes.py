@@ -75,6 +75,7 @@ def read_consult_status() -> dict[str, Any]:
         "current_brief_digest": current_digest,
         "trusted_accounts": [{"id": a.id, "training_off_verified_on": a.training_off_verified_on.isoformat()}
                              for a in config.trusted_accounts],
+        "sage_model_id": config.sage_model_id,
         "audit_items": audit_items,
     }
 

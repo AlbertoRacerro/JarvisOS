@@ -1225,7 +1225,7 @@ export function useJarvisSidecar(
           {running
             ? (
               <>
-                <p className="jarvis-working"><span className="jarvis-working__dots" aria-hidden="true"><i /><i /><i /></span>{interaction.activity ?? "Thinking…"} · {Math.max(0, Math.floor((now - Date.parse(interaction.created_at)) / 1000))}s</p>
+                <p className="jarvis-working"><span className="jarvis-working__dots" aria-hidden="true"><i /><i /><i /></span>{(interaction.activity === "Sage sta ragionando in locale" || interaction.consult_blocks?.some(b => b.state === "approved" && b.model_id === "sage")) ? "Sage sta ragionando in locale" : (interaction.activity ?? "Thinking…")} · {Math.max(0, Math.floor((now - Date.parse(interaction.created_at)) / 1000))}s</p>
                 {hasProgress && (
                   <div className="jarvis-live-progress" data-testid="jarvis-live-progress">
                     {renderTurnPlan(interaction.turn_plan)}

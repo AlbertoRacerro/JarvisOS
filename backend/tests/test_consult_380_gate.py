@@ -74,6 +74,21 @@ training_off_verified_on = 2026-11-25T12:00:00Z
     assert [account.id for account in config.trusted_accounts] == ["sub"]
 
 
+
+@pytest.fixture(autouse=True)
+def _offline_local_only_judge(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gate step 4 (spec 381) needs a readable vault; give each test an empty one and the offline judge fake."""
+    from app.core import vault as _vault
+
+    empty = tmp_path_factory.mktemp("empty_vault")
+    (empty / "jarvis_vault.toml").write_text("", encoding="utf-8")
+    monkeypatch.setenv(_vault.VAULT_PATH_ENV, str(empty))
+    monkeypatch.setenv("JARVISOS_CONSULT_FAKE_TRANSPORT", "1")
+    _vault._load.cache_clear()
+    from app.core.database import initialize_database as _init_db
+
+    _init_db()
+
 @pytest.fixture()
 def brief_pack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     pack = tmp_path / "pack"
