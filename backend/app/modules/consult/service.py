@@ -13,10 +13,10 @@ import json
 import os
 import sqlite3
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.core import packs, vault
 from app.core.paths import build_paths
@@ -64,6 +64,7 @@ class ConsultRequest:
     modules: list[str]
     context: str = ""
     local_only: bool = False
+    reply_to: str | None = None
     turn_id: str | None = None
     thread_id: str | None = None
     workspace_id: str | None = None
@@ -181,12 +182,162 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
     error = _argument_error(request)
     if error:
         return refuse(error)
+
+    # Bounded 2-round exchanges: check reply_to
+    reply_steps: list[dict[str, Any]] = []
+    effective_context = request.context
+    if request.reply_to:
+        target_row = connection.execute(
+            "SELECT id, workspace_id, thread_id, state, gate_steps_json, packet_text FROM consult_attempts WHERE id = ?",
+            (request.reply_to,),
+        ).fetchone()
+        if not target_row or target_row[3] != "sent":
+            return refuse("reply_target_invalid")
+        if request.workspace_id and target_row[1] and target_row[1] != request.workspace_id:
+            return refuse("reply_target_invalid")
+        if request.thread_id and target_row[2] and target_row[2] != request.thread_id:
+            return refuse("reply_target_invalid")
+
+        target_steps = []
+        try:
+            target_steps = json.loads(target_row[4]) if target_row[4] else []
+        except Exception:
+            target_steps = []
+        target_round = 1
+        for s in target_steps:
+            if s.get("step") == "exchange" and (s.get("round", 1) >= 2 or s.get("reply_to")):
+                target_round = 2
+                break
+        if target_round >= 2:
+            return refuse("exchange_limit_reached")
+
+        ans_row = connection.execute(
+            "SELECT answer_text FROM consult_answers WHERE attempt_id = ?",
+            (request.reply_to,),
+        ).fetchone()
+        ans_text = ans_row[0] if ans_row else ""
+        round_1_summary = f"[Round 1 exchange: {request.reply_to}]\n{ans_text[:1000]}"
+        effective_context = f"{round_1_summary}\n\n{request.context}".strip()
+        reply_steps.append({"step": "exchange", "result": "pass", "round": 2, "reply_to": request.reply_to})
+
+    from app.modules.consult.sage import SageQueueItem, enqueue_sage_consult, is_sage_available
+
     if request.local_only:
-        return refuse("sage_unavailable", status="sage_unavailable")
+        if not is_sage_available(config.sage_model_id):
+            return refuse("sage_unavailable", status="sage_unavailable")
+        consult_id = _record(
+            connection,
+            request,
+            state="approved",
+            code=None,
+            mode=mode,
+            packet=None,
+            packet_sha=_sha(f"{request.question}\n\n{effective_context}"),
+            brief=None,
+            steps=reply_steps,
+            rewrite_count=streak,
+            account=None,
+            approval="policy_auto",
+        )
+        connection.execute(
+            "UPDATE consult_attempts SET local_only = 1, account_id = 'sage_local', model_id = ? WHERE id = ?",
+            (config.sage_model_id or "sage", consult_id),
+        )
+        enqueue_sage_consult(
+            SageQueueItem(
+                consult_id=consult_id,
+                turn_id=request.turn_id,
+                workspace_id=request.workspace_id,
+                thread_id=request.thread_id,
+                kind=request.kind,
+                question=request.question,
+                context=effective_context,
+                modules=list(request.modules),
+            )
+        )
+        return ConsultOutcome(
+            status="queued_for_sage",
+            consult_id=consult_id,
+            reason=f"End your answer with {{{{consult:{consult_id}}}}}; Sage will answer at the end of the turn.",
+        )
+
     if mode == "off":
+        if config.sage_model_id and is_sage_available(config.sage_model_id):
+            consult_id = _record(
+                connection,
+                request,
+                state="approved",
+                code=None,
+                mode=mode,
+                packet=None,
+                packet_sha=_sha(f"{request.question}\n\n{effective_context}"),
+                brief=None,
+                steps=reply_steps,
+                rewrite_count=streak,
+                account=None,
+                approval="policy_auto",
+            )
+            connection.execute(
+                "UPDATE consult_attempts SET local_only = 1, account_id = 'sage_local', model_id = ? WHERE id = ?",
+                (config.sage_model_id or "sage", consult_id),
+            )
+            enqueue_sage_consult(
+                SageQueueItem(
+                    consult_id=consult_id,
+                    turn_id=request.turn_id,
+                    workspace_id=request.workspace_id,
+                    thread_id=request.thread_id,
+                    kind=request.kind,
+                    question=request.question,
+                    context=effective_context,
+                    modules=list(request.modules),
+                )
+            )
+            return ConsultOutcome(
+                status="queued_for_sage",
+                consult_id=consult_id,
+                reason=f"End your answer with {{{{consult:{consult_id}}}}}; Sage will answer at the end of the turn.",
+            )
         return refuse(config.reason or "consult_off")
+
     account = next(iter(config.trusted_accounts), None)
     if account is None:
+        if config.sage_model_id and is_sage_available(config.sage_model_id):
+            consult_id = _record(
+                connection,
+                request,
+                state="approved",
+                code=None,
+                mode=mode,
+                packet=None,
+                packet_sha=_sha(f"{request.question}\n\n{effective_context}"),
+                brief=None,
+                steps=reply_steps,
+                rewrite_count=streak,
+                account=None,
+                approval="policy_auto",
+            )
+            connection.execute(
+                "UPDATE consult_attempts SET local_only = 1, account_id = 'sage_local', model_id = ? WHERE id = ?",
+                (config.sage_model_id or "sage", consult_id),
+            )
+            enqueue_sage_consult(
+                SageQueueItem(
+                    consult_id=consult_id,
+                    turn_id=request.turn_id,
+                    workspace_id=request.workspace_id,
+                    thread_id=request.thread_id,
+                    kind=request.kind,
+                    question=request.question,
+                    context=effective_context,
+                    modules=list(request.modules),
+                )
+            )
+            return ConsultOutcome(
+                status="queued_for_sage",
+                consult_id=consult_id,
+                reason=f"End your answer with {{{{consult:{consult_id}}}}}; Sage will answer at the end of the turn.",
+            )
         return refuse("no_trusted_account")
     try:
         brief = approved_brief(config.brief_sha256)
@@ -203,8 +354,8 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
         sources = _gate_sources(connection, request.tool_outputs)
     except Exception:  # noqa: BLE001 - an unreadable source (vault, pack, table) refuses, never passes
         return refuse("gate_error", brief=brief, account=account)
-    gate = run_gate(request.question, request.context, sources)
-    steps = _steps_json_entries(gate.steps)
+    gate = run_gate(request.question, effective_context, sources)
+    steps = [*reply_steps, *_steps_json_entries(gate.steps)]
     if gate.literature_numbers or gate.constant_numbers:
         steps.append({"step": "logged_matches", "result": "pass",
                       "reason": json.dumps({"literature": gate.literature_numbers, "constants": gate.constant_numbers})})
@@ -212,9 +363,46 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
     if gate.status == "refused":
         # An S4 or identity hit stores the hash and the reason only, never the text.
         return refuse(gate.code or "refused", steps=steps, brief=brief, account=account, ai_job_id=judge_job_id)
-    packet = build_packet(brief, request.kind, request.modules, request.question, request.context)
+    packet = build_packet(brief, request.kind, request.modules, request.question, effective_context)
     if gate.status == "rewrite_required":
         if streak >= MAX_REWRITES:
+            if config.sage_model_id and is_sage_available(config.sage_model_id):
+                consult_id = _record(
+                    connection,
+                    request,
+                    state="approved",
+                    code=None,
+                    mode=mode,
+                    packet=packet,
+                    packet_sha=_sha(packet),
+                    brief=brief,
+                    steps=steps,
+                    rewrite_count=streak,
+                    account=None,
+                    approval="policy_auto",
+                    ai_job_id=judge_job_id,
+                )
+                connection.execute(
+                    "UPDATE consult_attempts SET local_only = 1, account_id = 'sage_local', model_id = ? WHERE id = ?",
+                    (config.sage_model_id or "sage", consult_id),
+                )
+                enqueue_sage_consult(
+                    SageQueueItem(
+                        consult_id=consult_id,
+                        turn_id=request.turn_id,
+                        workspace_id=request.workspace_id,
+                        thread_id=request.thread_id,
+                        kind=request.kind,
+                        question=request.question,
+                        context=effective_context,
+                        modules=list(request.modules),
+                    )
+                )
+                return ConsultOutcome(
+                    status="queued_for_sage",
+                    consult_id=consult_id,
+                    reason=f"End your answer with {{{{consult:{consult_id}}}}}; Sage will answer at the end of the turn.",
+                )
             return refuse("sage_unavailable", steps=steps, packet=packet, brief=brief, account=account,
                           status="sage_unavailable", ai_job_id=judge_job_id)
         consult_id = _record(connection, request, state="rewrite_required", code=gate.code, mode=mode, packet=packet,
@@ -234,7 +422,7 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
                          packet_sha=packet_sha, brief=brief, steps=steps, rewrite_count=streak, account=account,
                          approval="policy_auto", audit=audit, ai_job_id=judge_job_id)
     connection.commit()
-    return _send(connection, consult_id, packet, account, transport)
+    return _send(connection, consult_id, packet, config.trusted_accounts, transport, config=config, request=request)
 
 
 def _gate_sources(connection: sqlite3.Connection, tool_outputs: tuple[str, ...]) -> GateSources:
@@ -252,24 +440,116 @@ def _vault_dir() -> Path | None:
     return Path(value) if value else None
 
 
-def _send(connection: sqlite3.Connection, consult_id: str, packet: str, account: TrustedAccount,
-          transport: ConsultTransport) -> ConsultOutcome:
-    try:
+def _send(
+    connection: sqlite3.Connection,
+    consult_id: str,
+    packet: str,
+    account_or_accounts: TrustedAccount | Iterable[TrustedAccount],
+    transport: ConsultTransport,
+    *,
+    config: ConsultConfig | None = None,
+    turn_id: str | None = None,
+    request: ConsultRequest | None = None,
+) -> ConsultOutcome:
+    if isinstance(account_or_accounts, TrustedAccount):
+        account_list = [account_or_accounts]
+    else:
+        account_list = list(account_or_accounts)
+
+    tried_steps: list[dict[str, Any]] = []
+    success_account: TrustedAccount | None = None
+    last_answer: str | None = None
+
+    for account in account_list:
         try:
-            answer = transport.send(packet, account, consult_id=consult_id)
-        except TypeError:
-            answer = transport.send(packet, account)
-    except Exception as exc:  # noqa: BLE001 - a transport failure is recorded, never retried silently
-        _set_state(connection, consult_id, "failed")
-        return ConsultOutcome(status="refused", code=f"transport_failed:{type(exc).__name__}", consult_id=consult_id)
-    answer_id = f"answer-{uuid.uuid4().hex[:16]}"
+            try:
+                answer = transport.send(packet, account, consult_id=consult_id)
+            except TypeError:
+                answer = transport.send(packet, account)
+            success_account = account
+            last_answer = answer
+            break
+        except Exception as exc:  # Transport/quota error
+            tried_steps.append({
+                "step": "transport_attempt",
+                "result": "refused",
+                "account_id": account.id,
+                "reason": f"transport_failed:{type(exc).__name__}",
+            })
+
+    if tried_steps:
+        row = connection.execute("SELECT gate_steps_json FROM consult_attempts WHERE id = ?", (consult_id,)).fetchone()
+        cur_steps = []
+        if row and row[0]:
+            try:
+                cur_steps = json.loads(row[0])
+            except Exception:
+                cur_steps = []
+        cur_steps.extend(tried_steps)
+        connection.execute(
+            "UPDATE consult_attempts SET gate_steps_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(cur_steps), utc_now(), consult_id),
+        )
+
+    if success_account is not None and last_answer is not None:
+        answer_id = f"answer-{uuid.uuid4().hex[:16]}"
+        connection.execute(
+            "INSERT INTO consult_answers (id, attempt_id, answer_text, answer_sha256, model_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (answer_id, consult_id, last_answer, _sha(last_answer), success_account.model, utc_now()),
+        )
+        connection.execute(
+            "UPDATE consult_attempts SET state = 'sent', account_id = ?, model_id = ?, updated_at = ? WHERE id = ?",
+            (success_account.id, success_account.model, utc_now(), consult_id),
+        )
+        connection.commit()
+        return ConsultOutcome(status="answered", consult_id=consult_id, answer=last_answer, answer_id=answer_id)
+
+    # All accounts failed! Fall back to Sage if configured and available
+    cfg = config or load_consult_config()
+    from app.modules.consult.sage import SageQueueItem, enqueue_sage_consult, is_sage_available
+
+    if cfg.sage_model_id and is_sage_available(cfg.sage_model_id):
+        connection.execute(
+            "UPDATE consult_attempts SET local_only = 1, account_id = 'sage_local', model_id = ?, state = 'approved', approval = 'policy_auto', updated_at = ? WHERE id = ?",
+            (cfg.sage_model_id or "sage", utc_now(), consult_id),
+        )
+        att_row = connection.execute(
+            "SELECT kind, packet_text, workspace_id, thread_id, turn_id, modules_json FROM consult_attempts WHERE id = ?",
+            (consult_id,),
+        ).fetchone()
+        q = request.question if request else (att_row[1] if att_row and att_row[1] else "")
+        ctx = request.context if request else ""
+        mods = list(request.modules) if request else (json.loads(att_row[5] or "[]") if att_row else [])
+        ws = request.workspace_id if request else (att_row[2] if att_row else None)
+        th = request.thread_id if request else (att_row[3] if att_row else None)
+        t_id = turn_id or (request.turn_id if request else (att_row[4] if att_row else None))
+
+        enqueue_sage_consult(
+            SageQueueItem(
+                consult_id=consult_id,
+                turn_id=t_id,
+                workspace_id=ws,
+                thread_id=th,
+                kind=att_row[0] if att_row else "general",
+                question=q,
+                context=ctx,
+                modules=mods,
+            )
+        )
+        return ConsultOutcome(
+            status="queued_for_sage",
+            consult_id=consult_id,
+            reason=f"End your answer with {{{{consult:{consult_id}}}}}; Sage will answer at the end of the turn.",
+        )
+
+    # Sage not configured: mark attempt failed with zone_a_unavailable
+    _set_state(connection, consult_id, "failed")
     connection.execute(
-        "INSERT INTO consult_answers (id, attempt_id, answer_text, answer_sha256, model_id, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (answer_id, consult_id, answer, _sha(answer), account.model, utc_now()),
+        "UPDATE consult_attempts SET result_code = 'zone_a_unavailable', updated_at = ? WHERE id = ?",
+        (utc_now(), consult_id),
     )
-    _set_state(connection, consult_id, "sent")
-    return ConsultOutcome(status="answered", consult_id=consult_id, answer=answer, answer_id=answer_id)
+    return ConsultOutcome(status="refused", code="zone_a_unavailable", consult_id=consult_id)
 
 
 def _set_state(connection: sqlite3.Connection, consult_id: str, state: str, approval: str | None = None) -> None:
@@ -308,7 +588,7 @@ def approve_consult(connection: sqlite3.Connection, consult_id: str, packet_sha2
         return ConsultOutcome(status="refused", code="transport_unavailable", consult_id=consult_id)
     _set_state(connection, consult_id, "approved", approval="operator")
     connection.commit()
-    return _send(connection, consult_id, packet, account, transport)
+    return _send(connection, consult_id, packet, config.trusted_accounts, transport, config=config)
 
 
 def edit_consult(connection: sqlite3.Connection, consult_id: str, question: str, context: str = "", *,
