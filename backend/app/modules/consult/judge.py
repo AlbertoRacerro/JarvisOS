@@ -18,6 +18,7 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from app.core import packs, vault
@@ -196,14 +197,14 @@ def run_local_judge(
             bindings=bindings,
             metadata={"judge": "local_only"},
         )
-    except Exception:
-        return JudgeOutcome(status="refused", code="judge_error", reason="judge_error")
+    except Exception as exc:
+        return JudgeOutcome(status="refused", code="judge_error", reason=f"judge_error:{type(exc).__name__}:{exc}")
 
     if outcome.status != "success" or outcome.response is None or outcome.response.text is None:
         return JudgeOutcome(
             status="refused",
             code="judge_error",
-            reason="judge_error",
+            reason=f"judge_error:{outcome.status}:{outcome.error_type}",
             ai_job_id=outcome.ledger_id,
         )
 

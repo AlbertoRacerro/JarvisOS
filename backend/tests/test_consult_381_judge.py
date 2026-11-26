@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from collections.abc import Iterator
 from datetime import date
@@ -14,7 +13,7 @@ import pytest
 from app.core import packs, vault
 from app.core.database import initialize_database, open_sqlite_connection
 from app.modules.consult.config import TrustedAccount
-from app.modules.consult.judge import FAKE_JUDGE_ENV, JudgeOutcome, run_local_judge
+from app.modules.consult.judge import FAKE_JUDGE_ENV, run_local_judge
 from app.modules.consult.service import (
     ConsultRequest,
     edit_consult,
