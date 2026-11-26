@@ -77,6 +77,7 @@ export type ConsultBlock = {
     swap_back_s?: number;
     total_swap_s?: number;
   } | null;
+  feedback_verdict?: "accepted" | "rejected" | null;
 };
 
 export type ThreadSummary = {

@@ -46,7 +46,8 @@ def _untrusted(answer: str, consult_id: str) -> dict[str, Any]:
 
 def dispatch_consult_tool(call: StructuredToolCall, *, turn_id: str | None,
                           turn_tool_outputs: list[dict[str, Any]] | None = None,
-                          transport: ConsultTransport | None = None) -> tuple[dict[str, Any] | None, str]:
+                          transport: ConsultTransport | None = None,
+                          trigger_codes: list[str] | None = None) -> tuple[dict[str, Any] | None, str]:
     if call.session_ref is None or not call.session_ref.workspace_id:
         return None, "capability_denied"
     arguments = dict(call.arguments)
@@ -71,6 +72,7 @@ def dispatch_consult_tool(call: StructuredToolCall, *, turn_id: str | None,
         context=context, local_only=local_only, reply_to=reply_to, turn_id=turn_id,
         thread_id=call.session_ref.jarvis_thread_id, workspace_id=call.session_ref.workspace_id,
         tool_outputs=_tool_output_texts(turn_tool_outputs),
+        trigger_codes=list(trigger_codes or []),
     )
     with open_sqlite_connection() as connection:
         outcome = request_consult(connection, request, transport=transport if transport is not None else TRANSPORT)

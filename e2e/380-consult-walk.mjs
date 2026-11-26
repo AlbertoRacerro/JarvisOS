@@ -306,6 +306,25 @@ with open_sqlite_connection() as conn:
   await shot('03-consult-answered.png');
   summary.checks.push('Consult approved and updated to answered state with fake transport response');
 
+  // 3b. Spec 383: click "Utile" feedback button and verify persistence
+  const usefulBtn = answeredCard.locator('[data-testid="consult-feedback-useful"]');
+  assert(await usefulBtn.isVisible(), 'Utile feedback button not visible');
+  await usefulBtn.click();
+
+  const activeUseful = answeredCard.locator('.consult-btn--useful.consult-btn--active');
+  await activeUseful.waitFor({ timeout: 5000 });
+  const recordedVerdict = answeredCard.getByTestId('consult-recorded-verdict');
+  await recordedVerdict.waitFor({ timeout: 5000 });
+  const recText = await recordedVerdict.innerText();
+  assert(recText.includes('Utile'), `Recorded verdict text missing "Utile": ${recText}`);
+
+  const fbRes = await fetch(base + '/ai/consult/c-walk-380/feedback');
+  const fbData = await fbRes.json();
+  assert(fbData.verdict === 'accepted', `Feedback API persistence failed: ${JSON.stringify(fbData)}`);
+
+  await shot('03b-consult-feedback.png');
+  summary.checks.push('Answered consult recorded and persisted Utile feedback');
+
   // 4. Spec 381: a consult answered locally by Sage shows its model and the measured swap time
   const sageCard = jarvis.locator('[data-consult-card="c-walk-381"][data-consult-state="sent"]');
   await sageCard.waitFor({ timeout: 10000 });

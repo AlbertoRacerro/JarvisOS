@@ -764,3 +764,48 @@
   color: var(--color-text-primary, #111827);
   resize: vertical;
 }
+
+.consult-card__feedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-subtle, #f3f4f6);
+}
+
+.consult-btn--feedback {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--color-border-default, #e5e7eb);
+  background: var(--color-bg-surface, #ffffff);
+  color: var(--color-text-primary, #111827);
+  transition: all 0.15s ease;
+}
+
+.consult-btn--feedback:hover:not(:disabled) {
+  border-color: var(--color-accent-primary, #2563eb);
+}
+
+.consult-btn--useful.consult-btn--active {
+  background: #ecfdf5;
+  border-color: #10b981;
+  color: #047857;
+  font-weight: 600;
+}
+
+.consult-btn--not-useful.consult-btn--active {
+  background: #fef2f2;
+  border-color: #ef4444;
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.consult-card__feedback-recorded {
+  font-size: 11px;
+  color: var(--color-text-secondary, #6b7280);
+  font-style: italic;
+}

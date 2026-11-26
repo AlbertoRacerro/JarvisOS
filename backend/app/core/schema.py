@@ -38,8 +38,10 @@ SCHEMA_DECISION_CASE_VERDICT_MIGRATION_ID = "0036_decision_case_verdict"
 SCHEMA_DECISION_CASE_VERDICT_MIGRATION_NAME = "Decision linked to a case verdict"
 SCHEMA_ZONE_C_QUERY_HISTORY_MIGRATION_ID = "0039_zone_c_query_history"
 SCHEMA_ZONE_C_QUERY_HISTORY_MIGRATION_NAME = "Zone-C query history for mosaic and leak prevention"
-CURRENT_SCHEMA_MIGRATION_ID = "0039_zone_c_query_history"
-CURRENT_SCHEMA_MIGRATION_NAME = "Zone-C query history for mosaic and leak prevention"
+SCHEMA_CONSULT_FEEDBACK_MIGRATION_ID = "0040_consult_feedback"
+SCHEMA_CONSULT_FEEDBACK_MIGRATION_NAME = "Consult maintainer accept and reject feedback ledger"
+CURRENT_SCHEMA_MIGRATION_ID = "0040_consult_feedback"
+CURRENT_SCHEMA_MIGRATION_NAME = "Consult maintainer accept and reject feedback ledger"
 
 SCHEMA_MIGRATION_RECORDS = [
     {

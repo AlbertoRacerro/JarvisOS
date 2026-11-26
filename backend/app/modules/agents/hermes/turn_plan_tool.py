@@ -10,6 +10,7 @@ from app.modules.ai.agent_contracts import CapabilityGrantRef, StructuredToolCal
 from app.modules.events.service import log_event
 
 VALID_STATUSES = frozenset({"pending", "in_progress", "done", "blocked"})
+VALID_TASK_LABELS = frozenset({"creative", "physics", "literature", "engineering", "other"})
 _FORBIDDEN_TERMS = ("token", "secret", "password", "credential", "authorization", "api_key")
 
 
@@ -61,13 +62,22 @@ def dispatch_turn_plan_tool(
     )
 
     if op == "read_plan":
-        return {
+        read_res: dict[str, Any] = {
             "status": "succeeded",
             "steps": list(active_plan["steps"]),
             "findings": list(active_plan["findings"]),
-        }, error
+        }
+        if "task_label" in active_plan:
+            read_res["task_label"] = active_plan.get("task_label")
+        return read_res, error
 
     if op == "set_plan":
+        raw_task_label = arguments.get("task_label")
+        if raw_task_label is not None:
+            if not isinstance(raw_task_label, str) or raw_task_label.strip().lower() not in VALID_TASK_LABELS:
+                return None, "invalid_task_label"
+            active_plan["task_label"] = raw_task_label.strip().lower()
+
         raw_steps = arguments.get("steps")
         if not isinstance(raw_steps, list) or len(raw_steps) > 10:
             return None, "invalid_steps"
@@ -105,12 +115,16 @@ def dispatch_turn_plan_tool(
             interaction_id=target_interaction_id,
             steps=active_plan["steps"],
             findings=active_plan["findings"],
+            task_label=active_plan.get("task_label"),
         )
-        return {
+        set_res: dict[str, Any] = {
             "status": "succeeded",
             "steps": list(active_plan["steps"]),
             "findings": list(active_plan["findings"]),
-        }, error
+        }
+        if "task_label" in active_plan:
+            set_res["task_label"] = active_plan.get("task_label")
+        return set_res, error
 
     if op == "update_step":
         step_id = str(arguments.get("id") or arguments.get("step_id") or "").strip()
@@ -237,9 +251,17 @@ def dispatch_turn_plan_tool(
 
 
 def _persist_plan_event(
-    *, workspace_id: str, interaction_id: str, steps: list[dict[str, Any]], findings: list[dict[str, Any]]
+    *, workspace_id: str, interaction_id: str, steps: list[dict[str, Any]], findings: list[dict[str, Any]],
+    task_label: str | None = None,
 ) -> None:
     try:
+        payload: dict[str, Any] = {
+            "interaction_id": interaction_id,
+            "steps": steps,
+            "findings": findings,
+        }
+        if task_label is not None:
+            payload["task_label"] = task_label
         with open_sqlite_connection() as connection:
             log_event(
                 connection,
@@ -248,11 +270,7 @@ def _persist_plan_event(
                 target_type="ai_thread_interaction",
                 target_id=interaction_id,
                 workspace_id=workspace_id,
-                payload={
-                    "interaction_id": interaction_id,
-                    "steps": steps,
-                    "findings": findings,
-                },
+                payload=payload,
             )
             connection.commit()
     except sqlite3.Error:
