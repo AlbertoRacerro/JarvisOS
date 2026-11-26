@@ -91,6 +91,7 @@ def run_local_judge(
 ) -> JudgeOutcome:
     """Execute gate step 4: vault fail-closed, deterministic pre-check, and local judge."""
     # 1. Vault fail-closed check
+    loaded_vault: vault.Vault | None
     if vault_dir is not None and (vault_dir / "jarvis_vault.toml").is_file():
         try:
             loaded_vault = vault.read_vault(vault_dir)

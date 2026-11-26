@@ -227,7 +227,7 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
             # A round 1 answered by Sage was written from local context: its text never goes to zone A.
             return refuse("reply_target_local_only")
 
-        target_steps = []
+        target_steps: list[Any] = []
         try:
             target_steps = json.loads(target_row[4]) if target_row[4] else []
         except Exception:

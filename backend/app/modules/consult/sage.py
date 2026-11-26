@@ -169,6 +169,7 @@ def flush_sage_queue(
             for item in items_to_process:
                 _mark_failed(conn, item.consult_id, "sage_unavailable")
             return []
+        model_id: str = sage_model_id
         # 1. Emit thread status event
         first_item = items_to_process[0]
         try:
@@ -212,7 +213,7 @@ def flush_sage_queue(
                 parts.append(f"Question:\n{item.question.strip()}")
                 user_prompt = "\n\n".join(parts)
 
-                adapters = None
+                adapters: dict[str, Any] | None = None
                 fake_resp = os.environ.get(FAKE_SAGE_ENV) if _fakes_enabled() else None
                 if fake_resp:
                     from app.modules.ai.contracts import AIResponse, AIUsage
@@ -226,7 +227,7 @@ def flush_sage_queue(
                         def complete(self, request: Any) -> AIResponse:
                             return AIResponse(
                                 provider_id="local_llamacpp",
-                                model_id=sage_model_id,
+                                model_id=model_id,
                                 request_id=getattr(request, "request_id", "req-fake"),
                                 text=self.response_text,
                                 usage=AIUsage(
@@ -234,9 +235,8 @@ def flush_sage_queue(
                                     output_tokens=50,
                                     total_tokens=150,
                                     provider_id="local_llamacpp",
-                                    model_id=sage_model_id,
+                                    model_id=model_id,
                                 ),
-                                latency_ms=100,
                             )
 
                     adapters = {"local_llamacpp": _FakeSageAdapter(fake_resp)}
