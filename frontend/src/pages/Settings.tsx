@@ -547,7 +547,7 @@ function Settings() {
           )}
         </Surface>
 
-        <Surface className="settings-card">
+        <Surface className="settings-card" data-system-facts>
           <h2>System</h2>
           <dl className="settings-facts">
             <div><dt>Environment</dt><dd>{system?.environment ?? "checking"}</dd></div>
