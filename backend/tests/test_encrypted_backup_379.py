@@ -131,7 +131,7 @@ def test_failed_backup_records_only_a_reason_code(fake, monkeypatch: pytest.Monk
 
 
 @pytest.mark.parametrize("case", ["env_password", "env_password_file", "literal_key", "command_in_path",
-                                  "command_in_vault", "command_in_checkout"])
+                                  "command_in_vault", "command_in_checkout", "relative_command_in_path"])
 def test_forbidden_key_sources_refuse_before_any_restic_call(fake, monkeypatch: pytest.MonkeyPatch,
                                                              case: str) -> None:
     text = fake["config"].read_text()
@@ -148,6 +148,10 @@ def test_forbidden_key_sources_refuse_before_any_restic_call(fake, monkeypatch: 
         vault.mkdir()
         monkeypatch.setenv("JARVISOS_VAULT_PATH", str(vault))
         fake["config"].write_text(text.replace('"pass show jarvisos/restic"', f'"cat {vault}/key"'))
+    elif case == "relative_command_in_path":
+        (fake["data"] / "key").write_text("not-a-real-key\n", encoding="utf-8")
+        monkeypatch.chdir(fake["tmp"])
+        fake["config"].write_text(text.replace('"pass show jarvisos/restic"', '"cat data/key"'))
     else:
         checkout = fake["tmp"] / "checkout"
         (checkout / ".git").mkdir(parents=True)

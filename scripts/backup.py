@@ -128,7 +128,8 @@ def check_key_source(config: dict[str, Any], env: dict[str, str] | None = None) 
         guarded.append(Path(os.path.expanduser(vault)).resolve())
     for token in tokens:
         value = token.split("=", 1)[1] if token.startswith("-") and "=" in token else token
-        if not value.startswith(("/", "~", ".")):
+        # A relative token counts as a path when it names something that exists from the working directory.
+        if not value.startswith(("/", "~", ".")) and not ("/" in value and Path(value).exists()):
             continue
         named = Path(os.path.expanduser(value)).resolve()
         if any(_inside(named, root) for root in guarded) or _in_git_checkout(named):
