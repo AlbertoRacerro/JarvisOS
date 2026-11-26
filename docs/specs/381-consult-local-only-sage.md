@@ -1,6 +1,6 @@
 # 381 — CONSULT-LOCAL-ONLY-SAGE-1: `local_only` judge, Sage batch swap, exchanges and fallback
 
-Status: ready
+Status: merged
 Depends on: 380
 
 ## Goal
