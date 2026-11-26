@@ -771,3 +771,35 @@ Decision:
 
 Consequences: quality rests on the gates, which apply unchanged to every model. A later slice records per worker task
 the model, effort, tier, CI first pass, findings, rework and escalation, and recomputes capability from those numbers.
+
+## ADR-063: Specific results stay on the machine: engine, pack and vault
+
+Status: Accepted (2026-11-26, coordinator, recording maintainer directive `L20261125114331-7ab2`; implemented by specs
+376–379).
+
+Context: cloud models (the supervisor, chat sessions, a trusted consultant) help develop the engine and may read
+indicative project material. Account settings and contract terms are welcome but are not a technical guarantee
+against a breach or a compromised account, so the boundary is enforced by where files live and by code.
+
+Decision:
+
+- Three places. The **engine** is this repository. The **pack** holds indicative project material (manifest, cards,
+  bench tasks, examples, literature cases, design notes); it has no remote, only local history and the encrypted
+  backup, and the supervisor may read and commit it locally but never push it. The **vault**, named by
+  `JARVISOS_VAULT_PATH`, holds everything specific: the data root with results, revisions and memory, geometry, meshes,
+  simulation outputs, measurements, protected dimensions, local-only items and protected propositions. Only the
+  operator, the app process and local models read it.
+- The app loads protected dimensions, local-only items and protected propositions from the vault as an optional
+  overlay on the pack (spec 376). A missing vault leaves the pack guards running; a broken one fails closed.
+- No sandbox mount, registered job, evaluation run or walk may touch the vault (spec 377). Proof and evaluation
+  backends use fresh data roots; an evaluation that needs real project data runs locally and only a descriptive
+  summary leaves.
+- The data root moves into the vault by a verified copy that never touches the source (spec 378).
+- A daily encrypted backup, with the key only in the operator's password manager, covers the pack, the vault and the
+  working state; a monthly restore test proves it (spec 379). A cloud copy may exist because it holds ciphertext only.
+- A cloud session that needs a project result asks the operator for an indicative description; it never reads the
+  vault.
+
+Consequences: the private remote can be retired by the operator once the backup and a restore are proven; that step,
+token revocation and archiving are the operator's, never an agent's. Host-side pieces (the supervisor's mount list and
+removing the pack push path from host tooling) are configured on the machine, outside this repository.
