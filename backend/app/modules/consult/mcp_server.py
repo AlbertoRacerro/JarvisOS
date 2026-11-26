@@ -13,7 +13,6 @@ import json
 import os
 import re
 import socket
-import sys
 import threading
 import urllib.error
 import urllib.parse
@@ -163,6 +162,16 @@ def evaluate_search_guard(query: str) -> tuple[bool, str]:
     return True, "ok"
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        raise urllib.error.HTTPError(req.full_url, code, "redirects refused", headers, fp)
+
+
+def _validate_loopback_search_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    return parsed.scheme == "http" and parsed.hostname == "127.0.0.1" and not parsed.username and not parsed.password
+
+
 def execute_web_search(
     query: str,
     *,
@@ -174,6 +183,8 @@ def execute_web_search(
     allowed, reason = evaluate_search_guard(query)
     if not allowed:
         return {"error": f"search_guard_blocked:{reason}", "results": [], "count": 0}
+    if not _validate_loopback_search_url(search_guard_url):
+        return {"error": "search_proxy_invalid_url", "results": [], "count": 0}
 
     params = urllib.parse.urlencode({"q": query, "format": "json"})
     url = f"{search_guard_url}?{params}"
@@ -182,9 +193,10 @@ def execute_web_search(
         if opener is not None:
             resp = opener.open(req, timeout=15)
         else:
-            resp = urllib.request.urlopen(req, timeout=15)
+            local_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirectHandler())
+            resp = local_opener.open(req, timeout=15)
         with resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            data = json.loads(resp.read(262_144).decode("utf-8"))
         results = data.get("results", [])[:count]
         return {"query": query, "results": results, "count": len(results)}
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
@@ -248,11 +260,13 @@ class ConsultMcpServer:
         web_opener: Any = None,
         paper_opener: Any = None,
         browser_runner: Callable[[list[str], float], tuple[int, str, str]] | None = None,
+        dns_resolver: Callable[[str], list[str]] | None = None,
     ) -> None:
         self.socket_path = socket_path
         self.web_opener = web_opener
         self.paper_opener = paper_opener
         self.browser_runner = browser_runner
+        self.dns_resolver = dns_resolver
         self._server_sock: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._running = False
@@ -316,7 +330,7 @@ class ConsultMcpServer:
             source = str(args.get("source", "all"))
             allowed, reason = evaluate_search_guard(query)
             if not allowed:
-                res: dict[str, Any] = {"error": f"search_guard_blocked:{reason}", "papers": [], "count": 0}
+                res = {"error": f"search_guard_blocked:{reason}", "papers": [], "count": 0}
                 return {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -351,7 +365,12 @@ class ConsultMcpServer:
                         "id": request_id,
                         "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}], "isError": True},
                     }
-            res = execute_browser_page_read(url, search_term=term_str, runner=self.browser_runner)
+            res = execute_browser_page_read(
+                url,
+                search_term=term_str,
+                runner=self.browser_runner,
+                dns_resolver=self.dns_resolver,
+            )
             is_error = bool(res.get("error")) or res.get("status") == "error"
             return {
                 "jsonrpc": "2.0",

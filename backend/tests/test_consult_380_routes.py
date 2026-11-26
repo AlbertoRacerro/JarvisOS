@@ -84,5 +84,5 @@ def test_pending_packet_approve_with_fake_transport(client: TestClient, monkeypa
                            json={"packet_sha256": record["packet_sha256"]}).json()
     assert approved["status"] == "answered"
     ans = client.get(f"/ai/consult/{pending.consult_id}/answer").json()
-    assert ans["status"] == "answered"
-    assert "simulated" in ans["answer"]
+    assert ans["status"] == "ok"
+    assert "simulated" in ans["text"]

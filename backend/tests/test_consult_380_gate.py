@@ -63,6 +63,11 @@ id = "future"
 agent = "claude"
 model = "claude-opus-5-5"
 training_off_verified_on = "{future}"
+[[trusted_accounts]]
+id = "with_time"
+agent = "claude"
+model = "claude-opus-5-5"
+training_off_verified_on = 2026-11-25T12:00:00Z
 """)
     config = read_consult_config(vault)
     assert config.mode == "ask" and config.brief_sha256 == "a" * 64

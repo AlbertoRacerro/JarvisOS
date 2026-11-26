@@ -19,6 +19,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -26,7 +27,7 @@ from typing import Any
 
 from app.core.database import open_sqlite_connection
 from app.core.paths import relay_root
-from app.modules.ai.contracts import AIProviderAdapter, AIRequest, AIResponse, AIUsage
+from app.modules.ai.contracts import AIProviderHealth, AIRequest, AIResponse, AIUsage, ModelRegistryEntry
 from app.modules.ai.execution_types import ProviderBinding
 from app.modules.consult.config import TrustedAccount
 from app.modules.consult.mcp_server import ConsultMcpServer
@@ -71,7 +72,10 @@ def build_consult_manifest(
     for relative in spec.get("credentials", []):
         source = Path(os.path.expanduser(f"~/{relative}"))
         if source.is_file():
-            credentials.append({"source": str(source), "target": relative})
+            resolved_source = source.resolve()
+            (home / relative).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            (home / relative).touch(mode=0o600, exist_ok=True)
+            credentials.append({"source": str(resolved_source), "target": relative})
 
     agent_sandbox_args = [
         "--restricted",
@@ -81,11 +85,24 @@ def build_consult_manifest(
         "--effort", "max",
     ]
     if mcp_config_path:
-        agent_sandbox_args.extend(["--mcp-config", str(mcp_config_path)])
+        agent_sandbox_args.extend(["--mcp-config", f"{sandbox.SANDBOX_RUNTIME}/mcp-config.json"])
+
+    raw_cmd = spec.get("command", agent)
+    resolved_bin = shutil.which(raw_cmd) or raw_cmd
+    binary_path = Path(resolved_bin)
+    tool_roots: list[str] = []
+    path_prefix: list[str] = []
+    if binary_path.is_absolute():
+        path_prefix.append(str(binary_path.parent))
+        if not str(binary_path).startswith("/usr/"):
+            root_candidate = binary_path.parents[1] if len(binary_path.parents) > 1 else binary_path.parent
+            tool_roots.append(str(root_candidate))
 
     agent_spec = {
-        "command": spec.get("command", agent),
-        "binary": shutil.which(spec.get("command", agent)) or spec.get("command", agent),
+        "command": raw_cmd,
+        "binary": resolved_bin,
+        "tool_roots": tool_roots,
+        "path_prefix": path_prefix,
         "credentials": credentials,
         "environment": dict(spec.get("environment", {})),
         "sandbox_args": agent_sandbox_args,
@@ -106,7 +123,7 @@ def build_consult_manifest(
         "output_max_chars": MAX_CONSULT_OUTPUT_CHARS,
     }
     if mcp_socket_path:
-        manifest["mcp_socket"] = mcp_socket_path
+        manifest["mcp_socket"] = str(mcp_socket_path)
     if mcp_config_path:
         manifest["mcp_config"] = str(mcp_config_path)
 
@@ -121,8 +138,10 @@ def build_consult_manifest(
 ConsultRunner = Callable[[dict[str, Any], str, float], str]
 
 
-class RelayConsultAdapter(AIProviderAdapter):
+class RelayConsultAdapter:
     """Executes a Relay consult session inside bubblewrap or through an injected runner."""
+
+    provider_id: str = "relay_consult"
 
     def __init__(
         self,
@@ -134,6 +153,15 @@ class RelayConsultAdapter(AIProviderAdapter):
         self.account = account
         self.runner = runner
         self.mcp_server = mcp_server
+
+    def health(self) -> AIProviderHealth:
+        return AIProviderHealth.healthy
+
+    def list_models(self) -> list[ModelRegistryEntry]:
+        return []
+
+    def stream(self, request: AIRequest) -> Any:
+        raise NotImplementedError("Streaming not supported for consult transport")
 
     def complete(self, request: AIRequest) -> AIResponse:
         agent = self.account.agent if self.account else "claude"
@@ -182,61 +210,76 @@ class RelayConsultAdapter(AIProviderAdapter):
         runtime_root = Path(session_dir) / "sandbox-runs"
 
         mcp_socket: str | None = None
+        ephemeral_mcp: ConsultMcpServer | None = None
         if self.mcp_server is not None and self.mcp_server._running:
             mcp_socket = self.mcp_server.socket_path
+        elif self.mcp_server is None:
+            try:
+                ephemeral_mcp = ConsultMcpServer(str(Path(session_dir) / "consult-mcp.sock"))
+                ephemeral_mcp.start()
+                mcp_socket = ephemeral_mcp.socket_path
+            except OSError:
+                ephemeral_mcp = None
+                mcp_socket = None
 
-        mcp_config_path = Path(session_dir) / "mcp-config.json"
-        if mcp_socket and os.path.exists(mcp_socket):
-            mcp_config = {
-                "mcpServers": {
-                    "jarvis-consult": {
-                        "command": "/usr/bin/python3",
-                        "args": ["/run/jarvis/sandbox.py", "mcp-bridge", "/run/jarvis/consult-mcp.sock"],
+        try:
+            mcp_config_path = Path(session_dir) / "mcp-config.json"
+            if mcp_socket and os.path.exists(mcp_socket):
+                mcp_config = {
+                    "mcpServers": {
+                        "jarvis-consult": {
+                            "command": "/usr/bin/python3",
+                            "args": ["/run/jarvis/sandbox.py", "mcp-bridge", "/run/jarvis/consult-mcp.sock"],
+                        }
                     }
                 }
-            }
-        else:
-            mcp_config = {"mcpServers": {}}
-        mcp_config_path.write_text(json.dumps(mcp_config, indent=2), encoding="utf-8")
+            else:
+                mcp_config = {"mcpServers": {}}
+            mcp_config_path.write_text(json.dumps(mcp_config, indent=2), encoding="utf-8")
 
-        manifest = build_consult_manifest(
-            gateway_config,
-            agent,
-            workspace,
-            home,
-            context_dir,
-            runtime_root,
-            mcp_socket_path=mcp_socket,
-            mcp_config_path=mcp_config_path,
-        )
+            manifest = build_consult_manifest(
+                gateway_config,
+                agent,
+                workspace,
+                home,
+                context_dir,
+                runtime_root,
+                mcp_socket_path=mcp_socket,
+                mcp_config_path=mcp_config_path,
+            )
 
-        manifests_dir = Path(session_dir) / "manifests"
-        manifests_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        manifest_path = manifests_dir / sandbox.manifest_name(str(workspace))
-        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            manifests_dir = Path(session_dir) / "manifests"
+            manifests_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            manifest_path = manifests_dir / sandbox.manifest_name(str(workspace))
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-        # Run via sandbox.py shim
-        cmd = [
-            sys.executable,
-            os.path.abspath(sandbox.__file__),
-            "shim",
-            agent,
-            str(manifests_dir),
-            "--",
-            "--print",
-            packet,
-        ]
-        proc = subprocess.run(
-            cmd,
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            timeout=CONSULT_TIMEOUT_SECONDS,
-            check=False,
-        )
-        if proc.returncode != 0:
-            raise RuntimeError(f"consult_process_failed: exit {proc.returncode}: {proc.stderr[:500]}")
-        return proc.stdout.strip()
+            # Run via sandbox.py shim
+            cmd = [
+                sys.executable,
+                os.path.abspath(sandbox.__file__),
+                "shim",
+                agent,
+                str(manifests_dir),
+                "--",
+            ]
+            if model:
+                cmd.extend(["--model", model])
+            cmd.extend(["--print", packet])
+            proc = subprocess.run(
+                cmd,
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=CONSULT_TIMEOUT_SECONDS,
+                check=False,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(f"consult_process_failed: exit {proc.returncode}: {proc.stderr[:500]}")
+            return proc.stdout.strip()
+        finally:
+            if ephemeral_mcp is not None:
+                ephemeral_mcp.stop()
+            shutil.rmtree(session_dir, ignore_errors=True)
 
 
 class RelayConsultTransport(ConsultTransport):
@@ -263,7 +306,7 @@ class RelayConsultTransport(ConsultTransport):
             route_class=CONSULT_ROUTE_CLASS,
             provider_id="relay_consult",
             model_id=account.model,
-            requires_network=True,
+            requires_network=False,
             max_output_tokens=MAX_CONSULT_OUTPUT_CHARS,
             execution_class="external_provider",
             context_window_tokens=32768,

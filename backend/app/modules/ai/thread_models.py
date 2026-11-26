@@ -5,8 +5,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.modules.ai.jarvis_context_models import JarvisContextRequest
 from app.modules.ai.models import ContextPackSelectionRequest
 from app.modules.ai.thread_ui_context import MAX_IMAGES, UiContext, validate_images
-from app.modules.workspace_actions.models import ActionOutcome, SurfaceRef
 from app.modules.consult.render import ConsultBlockRead
+from app.modules.workspace_actions.models import ActionOutcome, SurfaceRef
 
 PersistenceState = Literal["reserved", "dispatching", "captured", "capture_failed"]
 

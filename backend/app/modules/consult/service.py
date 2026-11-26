@@ -43,7 +43,7 @@ _SKIP_SUFFIXES = ("_id", "_at", "sha256", "digest", "_hash")
 
 
 class ConsultTransport(Protocol):
-    def send(self, packet: str, account: TrustedAccount) -> str: ...
+    def send(self, packet: str, account: TrustedAccount, *, consult_id: str | None = None) -> str: ...
 
 
 @dataclass(frozen=True)

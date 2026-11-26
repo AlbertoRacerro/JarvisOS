@@ -58,7 +58,8 @@ def consult_env(isolated_data_root: None, tmp_path: Path, monkeypatch: pytest.Mo
     packs._load.cache_clear()
 
 
-def test_default_transport_none_refuses_transport_unavailable(consult_env: Path) -> None:
+def test_default_transport_none_refuses_transport_unavailable(consult_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(consult_tool, "TRANSPORT", None)
     result = dispatch_tool(
         _call("jarvis.consult", {"kind": "physics", "question": "Why do roots grow down?", "modules": ["M1"]}),
         live_grants={},

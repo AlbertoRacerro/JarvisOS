@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -392,7 +393,7 @@ def check_egress_level_rule(
     - Every other route keeps S0/S1; S2/S3 is refused.
     """
     import hashlib
-    import sqlite3
+
     from app.core.database import open_sqlite_connection
     from app.modules.ai import sensitivity
 
@@ -1011,7 +1012,16 @@ def run_ai_task(
 
     early_binding, _early_decision = resolve_binding(selected_route_class, bindings)
 
-    allowed, egress_reason = check_egress_level_rule(user_prompt, selected_route_class)
+    is_external_egress = (
+        selected_route_class == "consult:zone_a"
+        or (
+            early_binding is not None
+            and (early_binding.execution_class == "external_provider" or early_binding.requires_network)
+        )
+    )
+    allowed, egress_reason = (
+        check_egress_level_rule(user_prompt, selected_route_class) if is_external_egress else (True, None)
+    )
     if not allowed:
         bad = RoutingDecision(
             provider_id=early_binding.provider_id if early_binding is not None else None,
