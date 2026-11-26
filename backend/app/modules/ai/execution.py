@@ -997,7 +997,11 @@ def run_ai_task(
 
     early_binding, _early_decision = resolve_binding(selected_route_class, bindings)
 
-    if early_binding is not None and early_binding.requires_network:
+    if (
+        early_binding is not None
+        and early_binding.requires_network
+        and not selected_route_class.startswith("consult:")
+    ):
         return _run_external_network_task(
             user_prompt=user_prompt,
             task_kind=task_kind,

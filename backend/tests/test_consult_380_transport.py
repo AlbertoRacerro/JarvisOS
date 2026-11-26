@@ -317,6 +317,21 @@ def test_consult_zone_a_blocks_direct_gateway_and_context_blocks(transport_env: 
     assert unapproved.error_type == "egress_unapproved_attempt"
     assert not called
 
+    # 4. A consult binding marked requires_network still goes through the approval check
+    from dataclasses import replace
+
+    network_binding = replace(binding, requires_network=True)
+    via_network = run_ai_task(
+        user_prompt="Unapproved benign S0 question",
+        task_kind="consult",
+        route_class="consult:zone_a",
+        bindings={"consult:zone_a": network_binding},
+        adapters={"relay_consult": RelayConsultAdapter(runner=_boom)},
+    )
+    assert via_network.status == "validation_error"
+    assert via_network.error_type == "egress_unapproved_attempt"
+    assert not called
+
 
 class _FakeHTTPResponse:
     def __init__(self, data: bytes):
