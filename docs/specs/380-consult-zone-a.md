@@ -27,7 +27,7 @@ spec 372 merged and was measured (`L20261125154544-9ec2`), and its follow-ups 37
   operator draft-then-approve flow (exact text and `text_digest`, replay guard, `_submit_run` with `max_turns=1`).
   `_submit_run` mounts the repository or a derivative workspace (`access_mode_for`), materialises context releases and
   ingests `jarvis-actions` blocks; none of that is wanted for a consult. Relay runs write no `ai_jobs` row.
-- `relay_gateway/service.py::create_context_release` accepts only approved S0/S1 derivatives in a workspace.
+- `backend/app/modules/relay_gateway/service.py::create_context_release` accepts only approved S0/S1 derivatives in a workspace.
 - `configs/relay_gateway.json` `repository.note` says "JarvisOS v1 is open source".
 - `backend/app/modules/ai/egress_sanitizer.py::_ALLOWED_SANITIZER_KINDS` is `{"deterministic", "model_local"}`;
   `create_prompt_derivative` validates the final content against S0/S1 cloud levels.
@@ -37,7 +37,7 @@ spec 372 merged and was measured (`L20261125154544-9ec2`), and its follow-ups 37
 - `backend/app/core/vault.py::load_vault` reads `vault.toml` under `JARVISOS_VAULT_PATH` (`protected_dimensions`,
   `local_only`, `protected_propositions`); `vault_protected_dimensions` merges with the pack's.
 - `backend/app/modules/agents/hermes/worker_shim.py` lists the Jarvis MCP tools Hermes may see;
-  `supervisor.py::_TOOL_CAPABILITIES` maps tool names to capability ids and the dispatcher calls one `dispatch_*`
+  `backend/app/modules/agents/hermes/supervisor.py::_TOOL_CAPABILITIES` maps tool names to capability ids and the dispatcher calls one `dispatch_*`
   function per capability with the turn's grant.
 - `backend/app/modules/agents/hermes/calc_run_tool.py::_log_run` stores only metadata of a `jarvis_python` run (no
   output values). Stored specific numbers live in `parameters`, `simulation_result_values`,
