@@ -10,6 +10,7 @@ from .common import (
     rebase_absolute_path,
     sha256_file,
 )
+from .move import move_data_root, verify_move
 from .restore import restore_snapshot
 from .snapshot import create_snapshot, verify_snapshot
 
@@ -21,8 +22,10 @@ __all__ = [
     "_canonical_json_bytes",
     "_string_mentions_source_root",
     "create_snapshot",
+    "move_data_root",
     "rebase_absolute_path",
     "restore_snapshot",
     "sha256_file",
+    "verify_move",
     "verify_snapshot",
 ]

@@ -1,6 +1,6 @@
 # 377 — VAULT-PATH-GUARD-1: Sandboxes, jobs, eval runs and walks refuse the private vault
 
-Status: in_review
+Status: merged
 Depends on: none
 
 ## Goal
