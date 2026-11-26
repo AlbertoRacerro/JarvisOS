@@ -457,3 +457,54 @@ def test_sage_round_one_never_feeds_a_zone_a_round_two(sage_env: sqlite3.Connect
     req = ConsultRequest(kind="ideas", question="Follow-up?", modules=["M1"], reply_to="consult-sage-r1")
     out = request_consult(sage_env, req, transport=transport, config_loader=cfg)
     assert out.status == "refused" and out.code == "reply_target_local_only"
+
+
+def _strata_entry(model_id: str) -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(id=model_id, runtime="strata", host="127.0.0.1", port=18090, served_model=model_id)
+
+
+def test_wait_strata_ready_polls_until_the_model_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from app.modules.consult import sage
+    from app.modules.local_ai.runtime import host_start
+
+    states = iter(["loading", "loading", "ready"])
+    calls: list[str] = []
+
+    class _Controller:
+        def get_state(self, model_id: str, host: str, port: int, served_model: str) -> Any:
+            calls.append(model_id)
+            return SimpleNamespace(state=next(states))
+
+    monkeypatch.setattr(model_registry, "read_registry", lambda: ([_strata_entry("sage-x")], True))
+    monkeypatch.setattr(host_start, "get_strata_controller", lambda: _Controller())
+    monkeypatch.setattr(sage, "STRATA_READY_POLL_S", 0.0)
+
+    assert sage._wait_strata_ready("sage-x") is True
+    assert calls == ["sage-x", "sage-x", "sage-x"]
+
+
+def test_wait_strata_ready_fails_closed_on_failed_or_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from app.modules.consult import sage
+    from app.modules.local_ai.runtime import host_start
+
+    current = {"state": "failed"}
+
+    class _Controller:
+        def get_state(self, model_id: str, host: str, port: int, served_model: str) -> Any:
+            return SimpleNamespace(state=current["state"])
+
+    monkeypatch.setattr(model_registry, "read_registry", lambda: ([_strata_entry("sage-x")], True))
+    monkeypatch.setattr(host_start, "get_strata_controller", lambda: _Controller())
+    monkeypatch.setattr(sage, "STRATA_READY_POLL_S", 0.0)
+
+    assert sage._wait_strata_ready("sage-x") is False
+    current["state"] = "loading"
+    assert sage._wait_strata_ready("sage-x", timeout_s=0.0) is False
+    # Non-Strata models are ready once activation returns.
+    assert sage._wait_strata_ready("unknown-model") is True

@@ -58,6 +58,30 @@ class SageQueueItem:
 
 
 _QUEUE_LOCK = threading.Lock()
+
+# Strata activation only queues a host start request; the swap is over when the model answers.
+STRATA_READY_TIMEOUT_S = 300.0
+STRATA_READY_POLL_S = 2.0
+
+
+def _wait_strata_ready(model_id: str, timeout_s: float = STRATA_READY_TIMEOUT_S) -> bool:
+    """Block until a Strata model answers; non-Strata models are ready when activation returns."""
+    from app.modules.local_ai.runtime.host_start import get_strata_controller
+    from app.modules.local_ai.runtime.model_registry import read_registry
+
+    entries, _ = read_registry()
+    entry = next((e for e in entries if e.id == model_id), None)
+    if entry is None or entry.runtime != "strata":
+        return True
+    controller = get_strata_controller()
+    deadline = time.monotonic() + timeout_s
+    while True:
+        state = controller.get_state(entry.id, entry.host, entry.port or 8080, entry.served_model or "")
+        if state.state == "ready":
+            return True
+        if state.state == "failed" or time.monotonic() >= deadline:
+            return False
+        time.sleep(STRATA_READY_POLL_S)
 _SAGE_QUEUE: list[SageQueueItem] = []
 
 
@@ -196,6 +220,9 @@ def flush_sage_queue(
         try:
             try:
                 activate_model(sage_model_id, persist_choice=False)
+                if not _wait_strata_ready(sage_model_id):
+                    logger.warning("Sage model %s did not become ready", sage_model_id)
+                    sage_active = False
             except Exception as exc:
                 # Never let the model still loaded answer in Sage's name.
                 logger.warning("Could not activate Sage model %s: %s", sage_model_id, type(exc).__name__)
@@ -282,6 +309,8 @@ def flush_sage_queue(
             if original_model_id:
                 try:
                     activate_model(original_model_id, persist_choice=False)
+                    if not _wait_strata_ready(original_model_id):
+                        logger.warning("Original model %s did not become ready again", original_model_id)
                 except Exception as exc:
                     logger.warning("Could not restore original model %s: %s", original_model_id, exc)
             swap_back_s = round(max(0.001, time.perf_counter() - t_back), 3)
