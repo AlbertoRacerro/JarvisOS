@@ -3,7 +3,7 @@
   "enabled": false,
   "repository": {
     "level": "S1",
-    "note": "JarvisOS v1 is open source, so its source is cloud-safe. A proprietary successor sets S2 or higher: agents then get a derivative workspace without source."
+    "note": "JarvisOS v1 is source-available, all rights reserved, so its source is cloud-safe. A proprietary successor sets S2 or higher: agents then get a derivative workspace without source."
   },
   "private_domain_data": {
     "enabled": false,

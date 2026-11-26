@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -359,6 +360,49 @@ def _provider_gate_blocking_reason(binding: ProviderBinding) -> str | None:
     from app.modules.ai.settings import get_ai_settings
 
     return evaluate_provider_budget_gate(get_ai_settings(), binding.provider_id).blocking_reason
+
+
+def check_egress_level_rule(
+    text: str,
+    route_class: str | None,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> tuple[bool, str | None]:
+    """Egress level rule (spec 380 part b):
+
+    - S4 is hard-blocked everywhere.
+    - consult:zone_a ALWAYS requires sha256(packet) to match an existing
+      consult_attempts row in state='approved' (regardless of S0/S1/S2/S3).
+    - Every other external route keeps S0/S1; S2/S3 is refused.
+    """
+    import hashlib
+
+    from app.core.database import open_sqlite_connection
+    from app.modules.ai import sensitivity
+
+    floor = sensitivity.deterministic_floor(text)
+    if floor == "S4":
+        return False, "secret_detected"
+
+    if route_class == "consult:zone_a":
+        packet_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        query = "SELECT id FROM consult_attempts WHERE packet_sha256 = ? AND state = 'approved'"
+        if connection is not None:
+            row = connection.execute(query, (packet_sha,)).fetchone()
+        else:
+            try:
+                with open_sqlite_connection(read_only=True) as conn:
+                    row = conn.execute(query, (packet_sha,)).fetchone()
+            except sqlite3.OperationalError:
+                row = None
+        if row is None:
+            return False, "egress_unapproved_attempt"
+        return True, None
+
+    if floor in {"S2", "S3"}:
+        return False, "egress_level_violation"
+
+    return True, None
 
 
 def _chain_metadata(
@@ -952,7 +996,12 @@ def run_ai_task(
     prompt_digest = canonical_digest({"prompt": user_prompt})
 
     early_binding, _early_decision = resolve_binding(selected_route_class, bindings)
-    if early_binding is not None and early_binding.requires_network:
+
+    if (
+        early_binding is not None
+        and early_binding.requires_network
+        and not selected_route_class.startswith("consult:")
+    ):
         return _run_external_network_task(
             user_prompt=user_prompt,
             task_kind=task_kind,
@@ -966,6 +1015,81 @@ def run_ai_task(
             context_build_error=context_build_error,
             workspace_id=workspace_id,
             existing_flow_id=existing_flow_id,
+        )
+
+    is_non_network_external = (
+        selected_route_class.startswith("consult:")
+        or (early_binding is not None and early_binding.execution_class == "external_provider")
+    )
+    allowed = True
+    egress_reason: str | None = None
+    if is_non_network_external:
+        if selected_route_class.startswith("consult:") and external_blocked_reason is not None:
+            allowed, egress_reason = False, external_blocked_reason
+        elif selected_route_class == "consult:zone_a" and context_blocks:
+            allowed, egress_reason = False, "egress_context_blocks_forbidden"
+        else:
+            allowed, egress_reason = check_egress_level_rule(user_prompt, selected_route_class)
+            if allowed and context_blocks:
+                for block in context_blocks:
+                    block_text = json.dumps(block, sort_keys=True, ensure_ascii=False)
+                    allowed, egress_reason = check_egress_level_rule(block_text, selected_route_class)
+                    if not allowed:
+                        break
+    if not allowed:
+        bad = RoutingDecision(
+            provider_id=early_binding.provider_id if early_binding is not None else None,
+            model_id=early_binding.model_id if early_binding is not None else None,
+            blocked=True,
+            blocked_reason=egress_reason,
+            decision_reason=f"egress level rule blocked: {egress_reason}",
+        )
+        flow_id = _create_local_flow(
+            task_kind=task_kind,
+            requested_route_class=requested_route_class,
+            workspace_id=workspace_id,
+            existing_flow_id=existing_flow_id,
+        )
+        persisted_route = selected_route_class if ROUTE_CLASS_RE.fullmatch(selected_route_class) else None
+        evidence = no_execution_evidence(
+            selected_route_class=persisted_route,
+            binding=early_binding,
+            outcome_reason=egress_reason or "validation_error",
+            requested_output_ceiling=max_output_tokens,
+            effective_output_ceiling=None,
+            fallback_index=0 if early_binding is not None else None,
+        )
+        ledger_id = _write_ai_job(
+            status="validation_error",
+            task_kind=task_kind,
+            requested_route_class=requested_route_class,
+            selected_route_class=persisted_route,
+            decision=bad,
+            prompt_digest=prompt_digest,
+            context_digest=None,
+            context_sources=None,
+            response=None,
+            latency_ms=_elapsed_ms(started),
+            error_type=egress_reason,
+            fallback_index=0 if early_binding is not None else None,
+            flow_id=flow_id,
+            evidence=evidence,
+        )
+        _terminalize_local_flow(
+            flow_id=flow_id,
+            status="validation_error",
+            attempt_id=ledger_id,
+            reason=egress_reason or "validation_error",
+        )
+        return _outcome_with_flow(
+            AiTaskOutcome(
+                "validation_error",
+                ledger_id,
+                selected_route_class,
+                bad,
+                error_type=egress_reason,
+            ),
+            flow_id,
         )
 
     flow_id = _create_local_flow(
@@ -1377,6 +1501,14 @@ def run_ai_task(
             effective_output_ceiling=attempt_max,
             fallback_index=attempt_index,
         )
+        meta = _chain_metadata(
+            route_class=selected_route_class,
+            attempt_index=attempt_index,
+            binding=attempt_binding,
+            prior_retryable_error_code=prior_retryable_error_code,
+        )
+        if selected_route_class == "consult:zone_a" or (metadata and metadata.get("accounting_basis") == "subscription"):
+            meta["accounting_basis"] = "subscription"
         ledger_id = _write_ai_job(
             status=status,
             task_kind=task_kind,
@@ -1389,12 +1521,7 @@ def run_ai_task(
             response=response,
             latency_ms=_elapsed_ms(started),
             error_type=error_type,
-            route_metadata=_chain_metadata(
-                route_class=selected_route_class,
-                attempt_index=attempt_index,
-                binding=attempt_binding,
-                prior_retryable_error_code=prior_retryable_error_code,
-            ),
+            route_metadata=meta,
             fallback_index=attempt_index,
             flow_id=flow_id,
             evidence=evidence,

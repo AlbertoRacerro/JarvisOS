@@ -110,6 +110,8 @@ def evaluate_provider_budget_gate(
     settings: AISettingsRead, provider_id: str
 ) -> ProviderBudgetGate:
     """Compatibility wrapper used by the execution spine and status surfaces."""
+    if provider_id == "relay_consult":
+        return ProviderBudgetGate(True, None, provider_id, 0, 0.0)
     decision = evaluate_alpha_execution_gate(
         settings=settings,
         provider_id=provider_id,

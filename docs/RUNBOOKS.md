@@ -83,3 +83,41 @@ See `AGENTS.md` for the exact commands (lint, focused tests, sharded suite, fron
 `Start-JarvisOS.cmd`, `Start-JarvisOS-Backend.cmd` and `Start-JarvisOS-Frontend.cmd` call `scripts/start-backend.ps1` and
 `scripts/start-frontend.ps1` for a Windows-native checkout (backend on port 8000, frontend on port 5173, default data
 root `C:\JarvisOS`). They are kept working but are not the primary path and are not changed without Windows evidence.
+
+## Expert consult (zone A)
+
+Configuring and operating the trusted cloud consult path (spec 380):
+
+1. **Vault configuration (`consult.toml`)**:
+   In `JARVISOS_VAULT_PATH`, create or edit `consult.toml` alongside `vault.toml`:
+   ```toml
+   consult_mode = "ask"  # "off" | "ask" | "auto"
+   brief_sha256 = "c2a84..."  # sha256 digest of the pack's approved brief file
+
+   [[trusted_accounts]]
+   id = "anthropic-claude"
+   agent = "claude"
+   model = "claude-opus-5-5"
+   training_off_verified_on = "2026-11-25"  # ISO date; required for zone A
+   ```
+
+2. **Computing `brief_sha256`**:
+   The brief is loaded from the pack specified by `[consult]` in `jarvis_pack.toml`. Compute its SHA256 digest:
+   ```bash
+   sha256sum <path-to-pack>/brief.md
+   ```
+   Paste this 64-character hex digest as `brief_sha256` in `consult.toml`. Any modification to the brief invalidates
+   the approval and stops consults until the maintainer re-computes and approves the new digest.
+
+3. **Trusted account verification**:
+   Record `training_off_verified_on` with the date the account was verified to have model training turned off. An entry
+   without a valid date is considered zone C and is never used for expert consults.
+
+4. **Consult mode (`consult_mode`)**:
+   - `off`: Consults disabled. Inkling answers with local tools only.
+   - `ask`: Every consult packet requires maintainer approval in the chat UI before dispatch.
+   - `auto`: Consult packets passing the deterministic gate are dispatched immediately; 1 in 5 attempts is flagged for audit.
+
+Settings > AI shows the "Consulente" card with the current status, brief approval status, trusted accounts, and recent
+audit records.
+

@@ -13,19 +13,23 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.database import open_sqlite_connection
-from app.modules.consult.brief import BriefUnavailable, approved_brief
+from app.modules.consult.brief import BriefUnavailable, approved_brief, current_brief_digest
 from app.modules.consult.config import load_consult_config
 from app.modules.consult.service import (
     MAX_CONTEXT,
     MAX_QUESTION,
     ConsultOutcome,
+    ConsultTransport,
     approve_consult,
     edit_consult,
     read_answer,
     reject_consult,
 )
+from app.modules.consult.transport import DEFAULT_CONSULT_TRANSPORT
 
 router = APIRouter(prefix="/ai/consult", tags=["consult"])
+
+TRANSPORT: ConsultTransport | None = DEFAULT_CONSULT_TRANSPORT
 
 
 class ConsultApproval(BaseModel):
@@ -50,12 +54,28 @@ def read_consult_status() -> dict[str, Any]:
         brief_approved = True
     except BriefUnavailable:
         brief_approved = False
+    current_digest = current_brief_digest()
+    audit_items: list[dict[str, Any]] = []
+    if config.mode == "auto":
+        with open_sqlite_connection(read_only=True) as connection:
+            rows = connection.execute(
+                """
+                SELECT id, kind, model_id, state, created_at, packet_sha256
+                FROM consult_attempts
+                WHERE audit = 1
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 20
+                """
+            ).fetchall()
+            audit_items = [dict(row) for row in rows]
     return {
         "mode": config.mode,
         "reason": config.reason,
         "brief_approved": brief_approved,
+        "current_brief_digest": current_digest,
         "trusted_accounts": [{"id": a.id, "training_off_verified_on": a.training_off_verified_on.isoformat()}
                              for a in config.trusted_accounts],
+        "audit_items": audit_items,
     }
 
 
@@ -79,7 +99,7 @@ def read_consult_attempt(consult_id: str) -> dict[str, Any]:
 @router.post("/{consult_id}/approve")
 def approve_consult_attempt(consult_id: str, payload: ConsultApproval) -> dict[str, Any]:
     with open_sqlite_connection() as connection:
-        outcome = approve_consult(connection, consult_id, payload.packet_sha256, transport=None)
+        outcome = approve_consult(connection, consult_id, payload.packet_sha256, transport=TRANSPORT)
         connection.commit()
     return _outcome(outcome)
 

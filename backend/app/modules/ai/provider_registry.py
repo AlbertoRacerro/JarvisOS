@@ -217,6 +217,14 @@ def registry_bindings() -> dict[str, ProviderBinding]:
 def resolve_model_pricing(
     registry: ProviderRegistry, provider_id: str, model_id: str
 ) -> ModelPricing:
+    if provider_id == "relay_consult":
+        return ModelPricing(
+            currency="USD",
+            input_usd_per_1m_tokens=0.0,
+            output_usd_per_1m_tokens=0.0,
+            pricing_version="subscription",
+            pricing_effective_at="2026-01-01T00:00:00+00:00",
+        )
     model = registry.models.get((provider_id, model_id))
     if model is None:
         raise ValueError(f"unknown concrete model {provider_id}/{model_id}")

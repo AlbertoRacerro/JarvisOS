@@ -14,6 +14,7 @@ from typing import Any
 from app.core.database import open_sqlite_connection
 from app.modules.ai.agent_contracts import StructuredToolCall
 from app.modules.consult.service import ConsultRequest, ConsultTransport, read_answer, request_consult
+from app.modules.consult.transport import DEFAULT_CONSULT_TRANSPORT
 
 CONSULT_TOOL_NAMES = frozenset({"jarvis_consult", "mcp__jarvis__jarvis_consult"})
 CONSULT_READ_TOOL_NAMES = frozenset({"jarvis_consult_read", "mcp__jarvis__jarvis_consult_read"})
@@ -22,9 +23,8 @@ CONSULT_DESCRIPTION = ("Consult the expert for ideas, mechanisms, physical expla
 ANSWER_PREVIEW_CHARS = 6000
 _ARGUMENTS = {"kind", "question", "modules", "context", "local_only"}
 
-# Part b sets this to the Relay consult transport; until then every consult that passes the gate refuses with
-# ``transport_unavailable`` (``ask`` and ``auto`` alike), and tests inject a fake.
-TRANSPORT: ConsultTransport | None = None
+# Default is the Relay consult transport (spec 380 part b); tests may inject a fake.
+TRANSPORT: ConsultTransport | None = DEFAULT_CONSULT_TRANSPORT
 
 
 def _tool_output_texts(outputs: list[dict[str, Any]] | None) -> tuple[str, ...]:

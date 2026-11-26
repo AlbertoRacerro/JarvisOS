@@ -5,6 +5,7 @@ import {
   SettingsApiError,
   loadAISettings,
   loadAIStatus,
+  loadConsultStatus,
   loadProviderSettings,
   loadSearchGuardBlockedSummary,
   loadSecretStatus,
@@ -12,6 +13,7 @@ import {
   removeScalewayCredential,
   replaceScalewayCredential,
   saveAISetting,
+  type ConsultStatus,
   type ProviderSettings,
   type SearchGuardBlockedSummary,
   type SettingsSecretStatus
@@ -51,6 +53,7 @@ type CanonicalSnapshot = {
   secret: SettingsSecretStatus;
   system: SystemInfoResponse;
   searchGuard: SearchGuardBlockedSummary | null;
+  consult: ConsultStatus | null;
 };
 
 const numericKeys: NumericKey[] = [
@@ -145,6 +148,7 @@ function Settings() {
   const [secret, setSecret] = useState<SettingsSecretStatus | null>(null);
   const [system, setSystem] = useState<SystemInfoResponse | null>(null);
   const [searchGuard, setSearchGuard] = useState<SearchGuardBlockedSummary | null>(null);
+  const [consult, setConsult] = useState<ConsultStatus | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [roleRouteDraft, setRoleRouteDraft] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -180,13 +184,14 @@ function Settings() {
     if (projectFailure) setError(null);
 
     try {
-      const [nextSettings, nextStatus, nextProviders, nextSecret, nextSystem, nextSearchGuard] = await Promise.all([
+      const [nextSettings, nextStatus, nextProviders, nextSecret, nextSystem, nextSearchGuard, nextConsult] = await Promise.all([
         loadAISettings(),
         loadAIStatus(),
         loadProviderSettings(),
         loadSecretStatus(),
         loadSystemInfo(),
-        loadSearchGuardBlockedSummary().catch(() => null)
+        loadSearchGuardBlockedSummary().catch(() => null),
+        loadConsultStatus().catch(() => null)
       ]);
       if (!mounted.current || owner !== generation.current) return false;
 
@@ -196,7 +201,8 @@ function Settings() {
         providers: nextProviders,
         secret: nextSecret,
         system: nextSystem,
-        searchGuard: nextSearchGuard
+        searchGuard: nextSearchGuard,
+        consult: nextConsult
       };
       setSettings(snapshot.settings);
       setStatus(snapshot.status);
@@ -204,6 +210,7 @@ function Settings() {
       setSecret(snapshot.secret);
       setSystem(snapshot.system);
       setSearchGuard(snapshot.searchGuard);
+      setConsult(snapshot.consult);
       setDraft((current) => {
         const canonicalDraft = draftFrom(snapshot.settings);
         if (!preserveDraft || !current) return canonicalDraft;
@@ -545,6 +552,46 @@ function Settings() {
           ) : (
             <p className="settings-muted">Riepilogo del filtro non disponibile.</p>
           )}
+        </Surface>
+
+        <Surface className="settings-card" data-consult-panel>
+          <h2>Consulente</h2>
+          <p className="settings-card__summary">
+            Consulenza cloud fidata (zona A) per idee, fisica, letteratura e revisione critica.
+            Tutti i numeri specifici rimangono locali sul dispositivo.
+          </p>
+          <dl className="settings-facts">
+            <div><dt>Modalità</dt><dd>{consult ? consult.mode : (loading ? "Caricamento" : "—")}</dd></div>
+            <div><dt>Brief approvato</dt><dd>{consult ? (consult.brief_approved ? "Sì" : "No") : (loading ? "Caricamento" : "—")}</dd></div>
+            {consult?.current_brief_digest && (
+              <div><dt>Digest brief corrente</dt><dd><code>{consult.current_brief_digest.slice(0, 16)}…</code></dd></div>
+            )}
+            <div>
+              <dt>Account fidati (training off)</dt>
+              <dd>
+                {consult?.trusted_accounts && consult.trusted_accounts.length > 0
+                  ? consult.trusted_accounts.map(a => `${a.id} (${a.training_off_verified_on})`).join(", ")
+                  : "Nessuno configurato"}
+              </dd>
+            </div>
+          </dl>
+          {consult?.mode === "auto" && consult.audit_items && consult.audit_items.length > 0 && (
+            <details>
+              <summary>Audit recenti ({consult.audit_items.length})</summary>
+              <div className="settings-fields">
+                {consult.audit_items.map((item) => (
+                  <div key={item.id} className="settings-muted">
+                    <strong>{item.id} · {item.kind} ({item.state})</strong>
+                    <p>{item.created_at} · Modello: {item.model_id ?? "—"} · SHA: {item.packet_sha256.slice(0, 16)}…</p>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+          <p className="settings-muted">
+            La configurazione del consulente viene gestita dal manutentore nel file <code>consult.toml</code> all'interno del vault
+            (<code>JARVISOS_VAULT_PATH</code>). Per istruzioni dettagliate sulla configurazione, consultare <code>docs/RUNBOOKS.md</code>.
+          </p>
         </Surface>
 
         <Surface className="settings-card" data-system-facts>

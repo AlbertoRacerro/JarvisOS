@@ -803,3 +803,25 @@ Decision:
 Consequences: the private remote can be retired by the operator once the backup and a restore are proven; that step,
 token revocation and archiving are the operator's, never an agent's. Host-side pieces (the supervisor's mount list and
 removing the pack push path from host tooling) are configured on the machine, outside this repository.
+
+## ADR-064: Trusted cloud consults (zone A)
+
+Status: Accepted (2026-11-26, coordinator, recording maintainer directive `L20261125114331-2bd1`; implemented by spec 380).
+
+Context: ADR-059 and ADR-057 enforce that external cloud routes admit only S0 and S1 content. For expert consultation
+with trusted cloud models (zone A), the local executor needs to ask questions with indicative context (S2/S3
+descriptions), while specific numbers, raw tool outputs, files, geometry and S4 secrets must remain strictly local.
+
+Decision:
+
+- Amend ADR-059 for zone A only: indicative S2/S3 descriptions may go to zone A through the consult path only.
+- Specific content (measurements, geometry, stored parameters, calculation results, verbatim files/tool outputs) stays
+  local, enforced by the deterministic gate before anything leaves the machine.
+- Every other cloud route keeps S0/S1.
+- S4 (secrets, credentials, personal identity patterns) is hard-blocked everywhere with no exceptions.
+- Consult transport runs through `run_ai_task` on route class `consult:zone_a`, writing an `ai_jobs` row with
+  subscription accounting (cost 0.0).
+
+Consequences: Inkling can consult trusted cloud models on ideas, mechanisms, physics and critique without risking IP
+leaks. Specific numbers and geometry never leave the machine.
+

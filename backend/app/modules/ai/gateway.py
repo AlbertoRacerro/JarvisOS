@@ -78,6 +78,35 @@ class AIGateway:
 
             return run_auto_task(request)
 
+        if selected_route_class.startswith("consult:"):
+            outcome = run_ai_task(
+                user_prompt=request.prompt,
+                task_kind=request.task_kind,
+                route_class=selected_route_class,
+                context_blocks=[],
+                max_output_tokens=request.max_tokens,
+                external_blocked_reason="consult_route_direct_dispatch_forbidden",
+                workspace_id=requested_workspace_id,
+            )
+            return AITaskRunResponse(
+                status=outcome.status,
+                ledger_id=outcome.ledger_id,
+                selected_route_class=outcome.selected_route_class,
+                decision_reason=outcome.decision.decision_reason,
+                blocked_reason=outcome.decision.blocked_reason,
+                response_text=None,
+                provider_id=outcome.decision.provider_id,
+                model_id=outcome.decision.model_id,
+                usage=None,
+                error_type=outcome.error_type,
+                include_project_context=request.include_project_context,
+                workspace_id=requested_workspace_id,
+                context_digest=outcome.context_digest,
+                context_sources_count=outcome.context_sources_count,
+                records_parse_error=outcome.records_parse_error,
+                proposed_record_ids=outcome.proposed_record_ids or [],
+            )
+
         if selected_route_class.startswith("external:"):
             settings = get_ai_settings()
             binding, _decision = resolve_binding(selected_route_class)

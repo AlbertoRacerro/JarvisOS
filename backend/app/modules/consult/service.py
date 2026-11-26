@@ -43,7 +43,7 @@ _SKIP_SUFFIXES = ("_id", "_at", "sha256", "digest", "_hash")
 
 
 class ConsultTransport(Protocol):
-    def send(self, packet: str, account: TrustedAccount) -> str: ...
+    def send(self, packet: str, account: TrustedAccount, *, consult_id: str | None = None) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -215,6 +215,7 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
     consult_id = _record(connection, request, state="approved", code=None, mode=mode, packet=packet,
                          packet_sha=packet_sha, brief=brief, steps=steps, rewrite_count=streak, account=account,
                          approval="policy_auto", audit=audit)
+    connection.commit()
     return _send(connection, consult_id, packet, account, transport)
 
 
@@ -236,7 +237,10 @@ def _vault_dir() -> Path | None:
 def _send(connection: sqlite3.Connection, consult_id: str, packet: str, account: TrustedAccount,
           transport: ConsultTransport) -> ConsultOutcome:
     try:
-        answer = transport.send(packet, account)
+        try:
+            answer = transport.send(packet, account, consult_id=consult_id)
+        except TypeError:
+            answer = transport.send(packet, account)
     except Exception as exc:  # noqa: BLE001 - a transport failure is recorded, never retried silently
         _set_state(connection, consult_id, "failed")
         return ConsultOutcome(status="refused", code=f"transport_failed:{type(exc).__name__}", consult_id=consult_id)
@@ -285,6 +289,7 @@ def approve_consult(connection: sqlite3.Connection, consult_id: str, packet_sha2
     if transport is None:
         return ConsultOutcome(status="refused", code="transport_unavailable", consult_id=consult_id)
     _set_state(connection, consult_id, "approved", approval="operator")
+    connection.commit()
     return _send(connection, consult_id, packet, account, transport)
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal, cast
 
 from app.modules.ai.contracts import AIResponse, AIUsageSource
 from app.modules.ai.execution_types import ProviderBinding
@@ -57,6 +58,28 @@ def local_response_evidence(
     effective_output_ceiling: int | None,
     fallback_index: int,
 ) -> AttemptEvidence:
+    if selected_route_class == "consult:zone_a" or binding.route_class == "consult:zone_a":
+        return AttemptEvidence(
+            execution_class="external_provider",
+            adapter_invoked=True,
+            external_dispatch_state="started",
+            normalized_usage_source="actual",
+            accounting_basis="provider_exact",
+            accounted_provider_spend_usd_decimal="0",
+            outcome_reason=normalize_outcome_reason(outcome_reason),
+            accounting_version=ACCOUNTING_VERSION,
+            provider_id=binding.provider_id,
+            model_id=binding.model_id,
+            selected_route_class=selected_route_class,
+            fallback_index=fallback_index,
+            requested_output_ceiling=requested_output_ceiling,
+            effective_output_ceiling=effective_output_ceiling,
+            normalized_finish_reason=normalize_finish_reason(
+                response.finish_reason, failed=response.error is not None
+            ),
+            capability_version=CAPABILITY_VERSION,
+            pricing_version="subscription",
+        )
     execution_class = _local_execution_class(binding)
     usage_source = response.usage.usage_source.value
     if execution_class == "synthetic" and usage_source != AIUsageSource.estimated.value:
@@ -101,6 +124,27 @@ def local_exception_evidence(
     effective_output_ceiling: int | None,
     fallback_index: int,
 ) -> tuple[AttemptEvidence, AttemptUsageOverride]:
+    if selected_route_class == "consult:zone_a" or binding.route_class == "consult:zone_a":
+        evidence = AttemptEvidence(
+            execution_class="external_provider",
+            adapter_invoked=True,
+            external_dispatch_state="not_started",
+            normalized_usage_source="none",
+            accounting_basis="external_not_sent",
+            accounted_provider_spend_usd_decimal="0",
+            outcome_reason=normalize_outcome_reason(prompt),
+            accounting_version=ACCOUNTING_VERSION,
+            provider_id=binding.provider_id,
+            model_id=binding.model_id,
+            selected_route_class=selected_route_class,
+            fallback_index=fallback_index,
+            requested_output_ceiling=requested_output_ceiling,
+            effective_output_ceiling=effective_output_ceiling,
+            normalized_finish_reason="unknown",
+            capability_version=CAPABILITY_VERSION,
+            pricing_version="subscription",
+        )
+        return evidence, AttemptUsageOverride(0, 0)
     execution_class = _local_execution_class(binding)
     evidence = AttemptEvidence(
         execution_class=execution_class,
@@ -127,13 +171,18 @@ def local_exception_evidence(
     return evidence, AttemptUsageOverride(input_tokens=estimate_tokens(prompt), output_tokens=0)
 
 
-def normalize_finish_reason(value: str | None, *, failed: bool) -> str:
+FinishReasonLiteral = Literal["stop", "length", "content_filter", "tool_call", "error", "unknown"]
+
+
+def normalize_finish_reason(value: str | None, *, failed: bool) -> FinishReasonLiteral:
     if failed:
         return "error"
     if value is None:
         return "unknown"
     normalized = value.strip().lower().replace("-", "_")
-    return normalized if normalized in _FINISH_REASONS else "unknown"
+    if normalized in _FINISH_REASONS:
+        return cast(FinishReasonLiteral, normalized)
+    return "unknown"
 
 
 def normalize_outcome_reason(value: str) -> str:

@@ -21,7 +21,7 @@ import os
 import re
 import tomllib
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -56,6 +56,8 @@ def _account(entry: object) -> TrustedAccount | None:
         return None
     account_id, agent, model = entry["id"], entry["agent"], entry["model"]
     verified = entry["training_off_verified_on"]
+    if isinstance(verified, datetime):
+        return None
     if not all(isinstance(value, str) and _ID.match(value) for value in (account_id, agent, model)):
         return None
     if isinstance(verified, str):
@@ -63,7 +65,7 @@ def _account(entry: object) -> TrustedAccount | None:
             verified = date.fromisoformat(verified)
         except ValueError:
             return None
-    if not isinstance(verified, date) or verified > date.today():
+    if not (isinstance(verified, date) and not isinstance(verified, datetime)) or verified > date.today():
         return None
     return TrustedAccount(id=account_id, agent=agent, model=model, training_off_verified_on=verified)
 

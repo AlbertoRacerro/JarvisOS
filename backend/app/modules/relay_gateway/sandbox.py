@@ -74,6 +74,10 @@ def refuse_vault_sources(manifest: dict[str, Any], spec: dict[str, Any]) -> None
                *(m["source"] for m in manifest.get("dependency_mounts", []))]
     if manifest.get("git_config"):
         sources.append(manifest["git_config"])
+    if manifest.get("mcp_socket"):
+        sources.append(manifest["mcp_socket"])
+    if manifest.get("mcp_config"):
+        sources.append(manifest["mcp_config"])
     denied = [Path(root) for root in manifest.get("deny_roots", [])]
     own = vault_root()
     if own is not None:
@@ -152,6 +156,10 @@ def build_bwrap_args(manifest: dict[str, Any], agent: str, runtime_dir: str, arg
     args += ["--ro-bind", manifest["context_dir"], SANDBOX_CONTEXT]
     args += ["--bind", os.path.join(runtime_dir, "sock"), f"{SANDBOX_RUNTIME}/egress"]
     args += ["--ro-bind", os.path.abspath(__file__), f"{SANDBOX_RUNTIME}/sandbox.py"]
+    if manifest.get("mcp_socket") and os.path.exists(manifest["mcp_socket"]):
+        args += ["--bind", manifest["mcp_socket"], f"{SANDBOX_RUNTIME}/consult-mcp.sock"]
+    if manifest.get("mcp_config") and os.path.exists(manifest["mcp_config"]):
+        args += ["--ro-bind", manifest["mcp_config"], f"{SANDBOX_RUNTIME}/mcp-config.json"]
     proxy = f"http://127.0.0.1:{PROXY_PORT}"
     path_entries = [*spec.get("path_prefix", []), "/usr/local/bin", "/usr/bin", "/bin"]
     environment = {
@@ -391,6 +399,39 @@ def run_inner(argv: list[str]) -> int:
     return 127
 
 
+def run_mcp_bridge(socket_path: str) -> int:
+    """Connect stdio to a Unix-domain socket JSON-RPC server (spec 380 consult MCP)."""
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(socket_path)
+    except OSError as exc:
+        print(f"mcp-bridge: cannot connect to {socket_path}: {exc}", file=sys.stderr)
+        return 1
+
+    def _pipe_stdin() -> None:
+        try:
+            while chunk := sys.stdin.buffer.read(65536):
+                sock.sendall(chunk)
+        except OSError:
+            pass
+        finally:
+            try:
+                sock.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
+
+    threading.Thread(target=_pipe_stdin, daemon=True).start()
+    try:
+        while chunk := sock.recv(65536):
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+    except OSError:
+        pass
+    finally:
+        sock.close()
+    return 0
+
+
 def main(args: list[str]) -> int:
     if len(args) >= 3 and args[0] == "shim":
         agent, manifest_dir, rest = args[1], args[2], args[3:]
@@ -399,7 +440,9 @@ def main(args: list[str]) -> int:
         return run_shim(agent, manifest_dir, rest)
     if len(args) >= 2 and args[0] == "inner" and args[1] == "--":
         return run_inner(args[2:])
-    print("usage: sandbox.py shim <agent> <manifest-dir> -- <args> | inner -- <argv>", file=sys.stderr)
+    if len(args) >= 2 and args[0] == "mcp-bridge":
+        return run_mcp_bridge(args[1])
+    print("usage: sandbox.py shim <agent> <manifest-dir> -- <args> | inner -- <argv> | mcp-bridge <socket-path>", file=sys.stderr)
     return 2
 
 
