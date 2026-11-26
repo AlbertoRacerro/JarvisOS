@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Spec 380 Part (b): clean-profile browser walk of Settings > AI "Consulente" card and pending consult approval.
+// Specs 380 (b) and 381: clean-profile browser walk of Settings > AI "Consulente", consult approval and a Sage answer.
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { openSync, closeSync, existsSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -143,6 +143,47 @@ with open_sqlite_connection() as conn:
         """,
         (ws_id, packet, packet_sha),
     )
+    # Spec 381: a second turn whose local_only consult was answered by Sage after a model swap.
+    sage_answer = "Risposta locale di Sage: mantenere il drenaggio e irrigare a impulsi brevi."
+    sage_flow_id = create_flow_in_transaction(conn, task_kind="agent", requested_route_class="hermes:agent", workspace_id=ws_id)
+    conn.execute(
+        "UPDATE ai_flows SET state = 'complete', updated_at = '2026-01-01T10:01:05+00:00', completed_at = '2026-01-01T10:01:05+00:00' WHERE id = ?",
+        (sage_flow_id,),
+    )
+    conn.execute(
+        """
+        INSERT INTO ai_thread_interactions (
+            id, thread_id, request_id, request_digest, interaction_index, user_text,
+            assistant_text, assistant_text_truncated, flow_id, persistence_state,
+            created_at, updated_at
+        ) VALUES (
+            'turn-walk-381', 'thread-walk-380', 'req-walk-381', 'sha256:381', 2,
+            'Domanda locale',
+            'Sage ha risposto in locale:\\n\\n{{consult:c-walk-381}}',
+            0, ?, 'captured', '2026-01-01T10:01:00+00:00', '2026-01-01T10:01:05+00:00'
+        )
+        """,
+        (sage_flow_id,),
+    )
+    conn.execute(
+        """
+        INSERT INTO consult_attempts (
+            id, turn_id, thread_id, workspace_id, kind, modules_json, brief_sha256,
+            packet_text, packet_sha256, account_id, model_id, state, mode, gate_steps_json,
+            audit, local_only, created_at, updated_at
+        ) VALUES (
+            'c-walk-381', 'turn-walk-381', 'thread-walk-380', ?, 'physics', '["M1"]',
+            '${briefSha256}', ?, ?, 'sage_local', 'sage-walk', 'sent', 'ask',
+            '[{"step": "sage_swap", "swap_to_sage_s": 41.5, "swap_back_s": 38.25, "total_swap_s": 79.75}]',
+            0, 1, '2026-01-01T10:01:00+00:00', '2026-01-01T10:01:05+00:00'
+        )
+        """,
+        (ws_id, packet, packet_sha),
+    )
+    conn.execute(
+        "INSERT INTO consult_answers (id, attempt_id, answer_text, answer_sha256, model_id, created_at) VALUES ('ans-walk-381', 'c-walk-381', ?, ?, 'sage-walk', '2026-01-01T10:01:04+00:00')",
+        (sage_answer, hashlib.sha256(sage_answer.encode("utf-8")).hexdigest()),
+    )
     conn.commit()
 `;
 
@@ -264,6 +305,18 @@ with open_sqlite_connection() as conn:
 
   await shot('03-consult-answered.png');
   summary.checks.push('Consult approved and updated to answered state with fake transport response');
+
+  // 4. Spec 381: a consult answered locally by Sage shows its model and the measured swap time
+  const sageCard = jarvis.locator('[data-consult-card="c-walk-381"][data-consult-state="sent"]');
+  await sageCard.waitFor({ timeout: 10000 });
+  await sageCard.scrollIntoViewIfNeeded();
+  const sageText = await sageCard.innerText();
+  assert(sageText.includes('sage-walk dice ·'), 'Sage card does not name the Sage model');
+  assert(sageText.includes('Risposta locale di Sage'), 'Sage answer text missing');
+  const swapText = (await sageCard.getByTestId('consult-swap-time').innerText()).trim();
+  assert(swapText === 'tempo di swap: 79.75s', `unexpected swap time text: ${swapText}`);
+  await shot('04-sage-answered-swap.png');
+  summary.checks.push('Sage-answered local consult shows model name and "tempo di swap: 79.75s"');
 
   assert(summary.page_errors.length === 0, `page errors: ${summary.page_errors.join('; ')}`);
 } catch (error) {
