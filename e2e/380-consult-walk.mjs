@@ -23,9 +23,7 @@ const port = Number(process.env.JARVISOS_PROOF_PORT ?? 8380);
 const base = `http://127.0.0.1:${port}`;
 const defaultPython = existsSync(join(backend, '.venv/bin/python'))
   ? join(backend, '.venv/bin/python')
-  : existsSync('/home/thera/src/JarvisOS/backend/.venv/bin/python')
-    ? '/home/thera/src/JarvisOS/backend/.venv/bin/python'
-    : 'python3';
+  : 'python3';
 const python = process.env.JARVISOS_PROOF_PYTHON ?? defaultPython;
 
 const summary = {
@@ -59,7 +57,7 @@ try {
   vaultDir = await mkdtemp(join(tmpdir(), 'jarvisos-380-vault-'));
   packDir = await mkdtemp(join(tmpdir(), 'jarvisos-380-pack-'));
 
-  const briefText = '# Nucleus Brief\n\nThis is the authoritative nucleus brief for trusted cloud consults.\n';
+  const briefText = '## Nucleus Brief\n\nThis is the authoritative nucleus brief for trusted cloud consults.\n\n**M1 — Thermal context**: Indicative heat-exchange overview.\n';
   await writeFile(join(packDir, 'brief.md'), briefText, 'utf8');
   await writeFile(
     join(packDir, 'jarvis_pack.toml'),
