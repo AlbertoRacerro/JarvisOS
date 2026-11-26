@@ -31,6 +31,10 @@ const live = process.env.JARVISOS_PROOF_LIVE_BASE?.replace(/\/+$/, "") || null;
 const base = live ?? `http://127.0.0.1:${port}`;
 const evidence = resolve(process.argv[2] ?? await mkdtemp(join(tmpdir(), "jarvisos-229-walk-")));
 const sourceRoot = resolve(process.argv[3] ?? "");
+// Spec 377: a source data root inside or containing the private vault is refused before it is read.
+if (process.argv[3] && spawnSync("python3", [resolve(root, "scripts/vault_guard.py"), "check", resolve(process.argv[3])], { stdio: "inherit" }).status !== 0) {
+  throw new Error("source data root refused by the vault guard");
+}
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 assert(live || process.argv[3], "source data root required");
 await mkdir(evidence, { recursive: true });

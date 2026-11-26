@@ -20,6 +20,10 @@ if (!Number.isInteger(port) || port === 8000) throw new Error("use a private pro
 const base = `http://127.0.0.1:${port}`;
 const evidence = resolve(process.argv[2]);
 const source = resolve(process.argv[3]);
+// Spec 377: a source data root inside or containing the private vault is refused before it is read.
+if (process.argv[3] && spawnSync("python3", [resolve(root, "scripts/vault_guard.py"), "check", resolve(process.argv[3])], { stdio: "inherit" }).status !== 0) {
+  throw new Error("source data root refused by the vault guard");
+}
 const copy = await mkdtemp(join(tmpdir(), "jarvisos-233-data-"));
 await mkdir(evidence, { recursive: true });
 let server, browser;

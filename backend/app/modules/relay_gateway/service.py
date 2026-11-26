@@ -1117,7 +1117,7 @@ def build_manifest(runtime: RelayRuntime, config: dict[str, Any], agent: str, wo
     if not git_config.is_file():
         # Only workspaces Jarvis created (and recorded a trusted config for) may be handed to agents.
         raise RelayGatewayError("relay_workspace_git_config_untrusted")
-    return {
+    manifest: dict[str, Any] = {
         "version": sandbox.MANIFEST_VERSION,
         "workspace": os.path.realpath(workspace),
         "context_dir": str(context_dir),
@@ -1129,6 +1129,15 @@ def build_manifest(runtime: RelayRuntime, config: dict[str, Any], agent: str, wo
         "egress_allow": allow,
         "git_config": str(git_config),
     }
+    vault = sandbox.vault_root()
+    if vault is not None:
+        # Spec 377: no worker mount may reach the private vault; the shim re-checks against deny_roots.
+        manifest["deny_roots"] = [str(vault)]
+        try:
+            sandbox.refuse_vault_sources(manifest, manifest["agents"][agent])
+        except sandbox.ManifestError as exc:
+            raise RelayGatewayError("relay_mount_vault_refused") from exc
+    return manifest
 
 
 def _write_manifest(runtime: RelayRuntime, config: dict[str, Any], agent: str, workspace: Path, context_dir: Path,

@@ -46,6 +46,10 @@ const evidence = resolve(process.argv[2]);
 await mkdir(evidence, { recursive: true });
 
 const sourceRoot = process.argv[3] ? resolve(process.argv[3]) : null;
+// Spec 377: a source data root inside or containing the private vault is refused before it is read.
+if (process.argv[3] && spawnSync("python3", [resolve(root, "scripts/vault_guard.py"), "check", resolve(process.argv[3])], { stdio: "inherit" }).status !== 0) {
+  throw new Error("source data root refused by the vault guard");
+}
 const dataRoot = await mkdtemp(join(tmpdir(), "jarvisos-312-data-"));
 const controlDir = join(dataRoot, "control");
 await mkdir(join(controlDir, "continuity", "jobs"), { recursive: true });

@@ -44,6 +44,7 @@ _RELEASE_SCRIPTS = (
     *_RELAY_CONTINUITY_SIBLINGS,
     "relay_argon.py",
     "relay_jobs.py",
+    "vault_guard.py",
     "relay_observe.py",
     "devctx.py",
     "worker_routing.py",

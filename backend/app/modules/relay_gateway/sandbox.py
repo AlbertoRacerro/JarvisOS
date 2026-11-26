@@ -50,6 +50,39 @@ class ManifestError(RuntimeError):
     pass
 
 
+VAULT_PATH_ENV = "JARVISOS_VAULT_PATH"
+
+
+def vault_root(env: Any = None) -> Path | None:
+    """Same rule as scripts/vault_guard.py (spec 377); kept here because the shim runs outside the repo path."""
+    value = (os.environ if env is None else env).get(VAULT_PATH_ENV, "").strip()
+    if not value:
+        return None
+    return Path(os.path.realpath(os.path.abspath(os.path.expanduser(value))))
+
+
+def touches_vault(path: str, vault: Path | None) -> bool:
+    if vault is None:
+        return False
+    real = Path(os.path.realpath(os.path.abspath(os.path.expanduser(path))))
+    return real == vault or vault in real.parents or real in vault.parents
+
+
+def refuse_vault_sources(manifest: dict[str, Any], spec: dict[str, Any]) -> None:
+    sources = [manifest["workspace"], manifest["home"], manifest["context_dir"], manifest.get("runtime_root", ""),
+               *spec.get("tool_roots", []), *(c["source"] for c in spec.get("credentials", [])),
+               *(m["source"] for m in manifest.get("dependency_mounts", []))]
+    if manifest.get("git_config"):
+        sources.append(manifest["git_config"])
+    denied = [Path(root) for root in manifest.get("deny_roots", [])]
+    own = vault_root()
+    if own is not None:
+        denied.append(own)
+    for source in filter(None, sources):
+        if any(touches_vault(source, root) for root in denied):
+            raise ManifestError("sandbox mount touches the private vault")
+
+
 def manifest_name(workspace: str) -> str:
     return hashlib.sha256(os.path.realpath(workspace).encode("utf-8")).hexdigest()[:32] + ".json"
 
@@ -79,6 +112,7 @@ def build_bwrap_args(manifest: dict[str, Any], agent: str, runtime_dir: str, arg
     """Pure construction of the bubblewrap command line for one worker invocation."""
     spec = manifest["agents"][agent]
     workspace = manifest["workspace"]
+    refuse_vault_sources(manifest, spec)
     args = [
         manifest.get("bwrap", "/usr/bin/bwrap"),
         "--unshare-all",
@@ -312,7 +346,12 @@ def run_shim(agent: str, manifest_dir: str, argv: list[str]) -> int:
                         os.path.join(runtime_dir, "egress.jsonl"))
     threading.Thread(target=proxy.serve_forever, daemon=True).start()
     try:
-        return subprocess.call(build_bwrap_args(manifest, agent, runtime_dir, argv))
+        try:
+            bwrap_args = build_bwrap_args(manifest, agent, runtime_dir, argv)
+        except ManifestError as exc:
+            print(f"jarvis-sandbox: refused: {exc}", file=sys.stderr)
+            return MANIFEST_MISSING_EXIT
+        return subprocess.call(bwrap_args)
     finally:
         if manifest.get("git_config"):
             restore_workspace_git(manifest["workspace"], manifest["git_config"])

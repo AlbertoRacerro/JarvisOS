@@ -29,6 +29,10 @@ const base = `http://127.0.0.1:${port}`;
 if (!process.argv[2]) throw new Error("usage: bubu_guided_tour_walk.mjs <evidence-dir> [<source-data-root>]");
 const evidence = resolve(process.argv[2]);
 const sourceRoot = process.argv[3] ? resolve(process.argv[3]) : null;
+// Spec 377: a source data root inside or containing the private vault is refused before it is read.
+if (process.argv[3] && spawnSync("python3", [resolve(root, "scripts/vault_guard.py"), "check", resolve(process.argv[3])], { stdio: "inherit" }).status !== 0) {
+  throw new Error("source data root refused by the vault guard");
+}
 await mkdir(evidence, { recursive: true });
 
 await new Promise((ok, fail) => {

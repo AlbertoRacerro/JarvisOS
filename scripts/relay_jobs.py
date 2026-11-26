@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -29,6 +30,20 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+
+def _sibling(name: str) -> Any:
+    # Callers load this file by path (relay_continuity_common.load_sibling), so scripts/ may not be on sys.path.
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / f"{name}.py")
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+vault_guard = _sibling("vault_guard")
 
 SCHEMA = "relay-jobs.v1"
 DEFAULT_CONTROL = Path.home() / "jarvis-control" / "work" / "continuity"
@@ -288,6 +303,16 @@ def _within(path: Path, roots: tuple[Path, ...]) -> bool:
     return any(path == r or r in path.parents for r in (r.resolve() for r in roots))
 
 
+def _path_arguments(argv: list[str]) -> list[str]:
+    """Absolute paths named by a command, alone or as a --flag=/path value (spec 377)."""
+    found = []
+    for arg in argv:
+        value = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
+        if value.startswith(("/", "~")):
+            found.append(value)
+    return found
+
+
 def ledger(kind: str, text: str, refs: dict[str, Any]) -> None:
     """Best effort: an attributable ledger line next to the job record (the record stays the authority)."""
     try:
@@ -321,9 +346,12 @@ def start(argv: list[str], *, label: str, authority: str, cwd: Path, wall_hours:
     cwd = cwd.resolve()
     if not cwd.is_dir() or not _within(cwd, allowed_roots()):
         raise ValueError(f"cwd must be a directory under {', '.join(str(r) for r in allowed_roots())}")
+    vault = vault_guard.vault_root()
+    input_paths = [(cwd / item).resolve() if not item.is_absolute() else item.resolve() for item in inputs or []]
+    if any(vault_guard.touches_vault(p, vault) for p in [cwd, *input_paths, *_path_arguments(argv)]):
+        raise ValueError("job refused: a path touches the private vault")
     digests = {}
-    for item in inputs or []:
-        path = (cwd / item).resolve() if not item.is_absolute() else item.resolve()
+    for item, path in zip(inputs or [], input_paths, strict=True):
         if not path.is_file():
             raise ValueError(f"input is not a file: {item}")
         digests[str(path)] = _digest(path)
