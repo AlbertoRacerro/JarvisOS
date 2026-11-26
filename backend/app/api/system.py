@@ -1,3 +1,8 @@
+import json
+import os
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
 from fastapi import APIRouter
 
 from app.core.bootstrap import initialize_storage
@@ -10,6 +15,53 @@ from app.modules.ai.gateway import AIGateway
 from app.modules.ai.settings import ensure_ai_settings
 
 router = APIRouter(prefix="/system", tags=["system"])
+
+BACKUP_STATUS_FILE_ENV = "JARVISOS_BACKUP_STATUS_FILE"
+BACKUP_STALE_AFTER = timedelta(hours=48)
+
+
+def _backup_time(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def backup_status(now: datetime | None = None) -> dict[str, object]:
+    """The host backup's last outcome (spec 379): times and a state only, never a path, key or restic text."""
+    override = os.environ.get(BACKUP_STATUS_FILE_ENV, "").strip()
+    path = Path(override) if override else Path.home() / ".local" / "state" / "jarvisos-backup" / "status.json"
+    empty = {"last_success_at": None, "last_restore_test_at": None, "last_restore_test_ok": None}
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {"state": "never", **empty}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        return {"state": "failed", **empty}
+    success, failure = _backup_time(data.get("last_success_at")), _backup_time(data.get("last_failure_at"))
+    restore_at = _backup_time(data.get("last_restore_test_at"))
+    restore_ok = data.get("last_restore_test_ok")
+    if failure and (success is None or failure > success):
+        state = "failed"
+    elif success is None:
+        state = "never"
+    elif (now or datetime.now(UTC)) - success > BACKUP_STALE_AFTER:
+        state = "stale"
+    else:
+        state = "ok"
+    return {
+        "state": state,
+        "last_success_at": success.isoformat() if success else None,
+        "last_restore_test_at": restore_at.isoformat() if restore_at else None,
+        "last_restore_test_ok": restore_ok if isinstance(restore_ok, bool) and restore_at else None,
+    }
 
 
 @router.get("/info")
@@ -69,6 +121,7 @@ def system_info() -> dict[str, object]:
             "scaleway_output_tokens_month_to_date": ai_status.scaleway_output_tokens_month_to_date if ai_status else 0,
             "blocking_reason": ai_status.blocking_reason if ai_status else "database_not_initialized",
         },
+        "backup": backup_status(),
     }
 
 

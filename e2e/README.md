@@ -18,6 +18,7 @@ optional pack, not by this repository.
 
 | Walk | What it covers | Run |
 |---|---|---|
+| `backup_status_walk.mjs` | Spec 379 Settings > System backup lines for never/ok/failed/stale status files, and the AI tab's search-guard panel (fresh temporary data root; no backup or provider calls) | `node e2e/backup_status_walk.mjs <evidence-dir>` |
 | `named_roles_walk.mjs` | Spec 260 named role chooser, unavailable models, Sheldon mode and Settings routes (fresh temporary data root; no provider calls) | `node e2e/named_roles_walk.mjs <evidence-dir>` |
 | `design_discovery_walk.mjs` | A fresh profile reaches every Design capability through visible controls only (role + accessible name) | `node e2e/design_discovery_walk.mjs <evidence-dir> <source-data-root>` |
 | `design_visual_walk.mjs` | Visual proof: Workshop, code and math rendering, CFD field inspection, charts, status language, Light/Dark at two viewports | `node e2e/design_visual_walk.mjs <evidence-dir> <source-data-root>` |

@@ -46,6 +46,34 @@ temporary `JARVISOS_DATA_ROOT` and another port.
 Runtime data (SQLite database, workspaces, artifacts, logs, secrets) lives under `JARVISOS_DATA_ROOT`; the repository never
 contains it. Snapshot and restore: `docs/DATA_ROOT_RECOVERY.md`. Schema rules: `docs/MIGRATIONS.md`.
 
+## Encrypted backup
+
+`scripts/backup.py` (spec 379) backs up the directories you list with restic, on the host only, never through Relay, a
+sandbox or a cloud session. The key lives only in your password manager.
+
+1. Install restic from your distribution (`sudo apt install restic`); it is a separate program, not part of JarvisOS.
+2. Put the backup key in your password manager and check that one command prints it, for example
+   `pass show jarvisos/restic`.
+3. Write `~/.config/jarvisos-hostops/backup.toml` with `repositories` (the external drive, and optionally a cloud
+   repository: it only ever receives ciphertext), `paths` (absolute directories: the pack, the vault, the JarvisOS working
+   state), optional `exclude` globs and `password_command`. Never write the key itself there; `backup.py` refuses a
+   password key in the file, `RESTIC_PASSWORD`/`RESTIC_PASSWORD_FILE` in the environment, and a password command that
+   names a file inside a backed-up directory, a git checkout or the vault.
+4. Run `python3 scripts/backup.py init` once (it creates only repositories that do not exist yet), then
+   `python3 scripts/backup.py run` and `python3 scripts/backup.py restore-test` by hand. The restore test restores
+   into a temporary directory under `TMPDIR`: it needs free space for the latest snapshot.
+5. Install the schedules through the host broker: `python3 scripts/host_ops.py request service.install --args
+   '{"template": "jarvisos-backup"}'` (daily) and the same with `jarvisos-backup-restore-test` (monthly). Each enables
+   a systemd user timer.
+6. Settings > System shows "Ultimo backup" and "Ultimo test di ripristino" from
+   `~/.local/state/jarvisos-backup/status.json`, which holds only times, snapshot ids, sizes and reason codes.
+
+When the line says **non riuscito**, read the reason code in the status file (`backup_failed`, `forget_failed`,
+`check_failed` per repository, or the refused key source) and run `python3 scripts/backup.py run` by hand. Common causes: the
+drive is not mounted, or the password command fails. When it says **vecchio**, the last success is more than 48 hours
+old: check `systemctl --user list-timers jarvisos-backup.timer`; the timer is `Persistent`, so a run missed while the
+machine was off happens at the next start.
+
 ## Tests
 
 See `AGENTS.md` for the exact commands (lint, focused tests, sharded suite, frontend build, browser walks).

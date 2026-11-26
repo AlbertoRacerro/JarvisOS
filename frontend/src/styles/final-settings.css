@@ -70,7 +70,9 @@
 .final-settings--ai .settings-grid > .settings-card:nth-child(3),
 .final-settings--ai .settings-grid > .settings-card:nth-child(4),
 .final-settings--ai .settings-grid > .settings-card:nth-child(5),
-.final-settings--system .settings-grid > .settings-card:nth-child(6) {
+.final-settings--system .settings-grid > .settings-card:nth-child(6),
+.final-settings--ai .settings-grid > .settings-card[data-search-guard-panel],
+.final-settings--system .settings-grid > .settings-card[data-system-facts] {
   display: block;
 }
 
