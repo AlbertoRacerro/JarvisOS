@@ -5,6 +5,7 @@ from app.core.config import get_settings
 from app.core.database import get_database_info
 from app.core.packs import default_workspace_slug, load_packs
 from app.core.paths import build_paths
+from app.core.vault import vault_status
 from app.modules.ai.gateway import AIGateway
 from app.modules.ai.settings import ensure_ai_settings
 
@@ -94,6 +95,7 @@ def initialize_system() -> dict[str, object]:
         },
         "default_workspace": default_workspace_slug(),
         "packs": [{"id": pack.id, "ui_labels": pack.ui_labels} for pack in load_packs()],
+        "vault": vault_status(),
         "ai_settings": {
             "monthly_api_budget_usd": ai_settings.monthly_api_budget_usd,
             "provider_mode": ai_settings.provider_mode,

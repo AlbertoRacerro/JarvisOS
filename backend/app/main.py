@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.packs import load_packs
 from app.core.spa_static import SpaStaticFiles, derive_reserved_roots
+from app.core.vault import load_vault
 from app.modules.agents.hermes.routes import router as hermes_router
 from app.modules.agents.hermes.session_pool import HermesSessionPool, configured_supervisor
 from app.modules.ai.memory_routes import router as memory_search_router
@@ -163,6 +164,11 @@ def create_app() -> FastAPI:
     configure_logging()
     for pack in load_packs():  # an invalid pack raises PackError here, at startup
         logging.getLogger(__name__).info("Loaded pack %s from %s", pack.id, pack.root)
+    vault = load_vault()  # a set but invalid vault raises VaultError here, at startup
+    if vault is not None:
+        logging.getLogger(__name__).info(
+            "Vault overlay loaded (%d dimensions, %d local-only items, %d propositions)",
+            len(vault.protected_dimensions), len(vault.local_only), len(vault.protected_propositions))
 
     app = FastAPI(
         title=settings.app_name,

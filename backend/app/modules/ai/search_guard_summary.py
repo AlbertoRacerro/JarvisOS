@@ -19,6 +19,7 @@ REASON_MESSAGES_IT: dict[str, str] = {
     "sensitivity_floor": "Livello di riservatezza elevato (S2-S4)",
     "invalid_query": "Sintassi della richiesta di ricerca non valida",
     "pack_load_error": "Errore di caricamento della configurazione del pacchetto",
+    "vault_load_error": "Errore di caricamento della configurazione privata (vault)",
     "guard_error": "Errore interno del filtro di protezione",
     "legacy_blocked": "Richiesta bloccata dal filtro (formato precedente)",
 }

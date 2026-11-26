@@ -26,7 +26,7 @@ BACKEND_DIR = REPO_ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path and BACKEND_DIR.is_dir():
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.core import packs, paths  # noqa: E402
+from app.core import packs, paths, vault  # noqa: E402
 from app.modules.agents.hermes.ip_boundary import (  # noqa: E402
     check_sensitivity_floor,
     sanitize_text,
@@ -56,6 +56,16 @@ def pack_is_ready() -> bool:
         packs._load.cache_clear()
         return bool(packs.load_packs())
     except Exception:  # noqa: BLE001 - any pack failure must fail closed
+        return False
+
+
+def vault_is_ready() -> bool:
+    """True when no vault is configured or the configured vault loads (spec 376); re-read on each call."""
+    try:
+        vault._load.cache_clear()
+        vault.load_vault()
+        return True
+    except Exception:  # noqa: BLE001 - a broken vault must fail closed
         return False
 
 
@@ -185,6 +195,8 @@ def evaluate_query(query: str) -> tuple[bool, str, int | None]:
     """
     if not pack_is_ready():
         return False, "pack_load_error", None
+    if not vault_is_ready():
+        return False, "vault_load_error", None
     try:
         normalized = " ".join(query.split())
         if packs.mentions_pack_term(normalized):
@@ -202,6 +214,15 @@ def evaluate_query(query: str) -> tuple[bool, str, int | None]:
                     return False, "protected_dimension", dim_idx
             elif matches_min_groups(normalized, guard_cfg.groups, guard_cfg.min_groups):
                 return False, "guard_groups", None
+
+        vault_dimensions = vault.vault_protected_dimensions()
+        if vault_dimensions:
+            merged = packs.search_guard()
+            vault_cfg = packs.SearchGuardConfig(groups=merged.groups, protected_dimensions=vault_dimensions,
+                                                allow_generic_ranges=merged.allow_generic_ranges)
+            dim_idx = _matches_protected_dimension(normalized, vault_cfg)
+            if dim_idx is not None:
+                return False, "protected_dimension", dim_idx
 
         if sanitize_text(query) != query:
             return False, "sanitized_diff", None
