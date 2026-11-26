@@ -308,7 +308,7 @@ def test_ordered_trusted_account_fallback_all_fail_to_sage(sage_env: sqlite3.Con
         sage_model_id="sage",
     )
 
-    req = ConsultRequest(kind="ideas", question="All accounts will fail?", modules=["M1"])
+    req = ConsultRequest(kind="ideas", question="All accounts will fail?", modules=["M1"], turn_id="t-fallback")
     outcome = request_consult(sage_env, req, transport=transport, config_loader=cfg)
     assert outcome.status == "queued_for_sage"
 
@@ -438,3 +438,22 @@ def test_sage_activation_failure_never_answers_in_sages_name(
     assert row[0] == "failed"
     assert sage_env.execute("SELECT COUNT(*) FROM consult_answers WHERE attempt_id = ?",
                             (out.consult_id,)).fetchone()[0] == 0
+
+
+def test_sage_round_one_never_feeds_a_zone_a_round_two(sage_env: sqlite3.Connection) -> None:
+    """A round 1 answered locally by Sage cannot be quoted into a zone-A round 2."""
+    transport = FakeTransportWithQuota(answer="unused")
+    cfg = lambda: ConsultConfig(  # noqa: E731
+        mode="auto", brief_sha256=DIGEST, trusted_accounts=(ACCOUNT_1,), sage_model_id="sage")
+    sage_env.execute(
+        """
+        INSERT INTO consult_attempts (id, turn_id, kind, local_only, modules_json, packet_sha256, account_id, model_id,
+            state, mode, gate_steps_json, audit, created_at, updated_at)
+        VALUES ('consult-sage-r1', 't1', 'ideas', 1, '["M1"]', 'x', 'sage_local', 'sage', 'sent', 'auto', '[]', 0,
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        """
+    )
+    sage_env.commit()
+    req = ConsultRequest(kind="ideas", question="Follow-up?", modules=["M1"], reply_to="consult-sage-r1")
+    out = request_consult(sage_env, req, transport=transport, config_loader=cfg)
+    assert out.status == "refused" and out.code == "reply_target_local_only"

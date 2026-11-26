@@ -162,6 +162,30 @@ def _argument_error(request: ConsultRequest) -> str | None:
     return None
 
 
+def _queue_for_sage(connection: sqlite3.Connection, request: ConsultRequest, config: ConsultConfig, *, mode: str,
+                    context: str, packet: str | None, packet_sha: str, brief: Brief | None, steps: list[dict],
+                    rewrite_count: int, ai_job_id: str | None = None) -> ConsultOutcome:
+    """Record an approved local attempt for Sage and queue it for the end-of-turn swap."""
+    from app.modules.consult.sage import SageQueueItem, enqueue_sage_consult
+
+    consult_id = _record(connection, request, state="approved", code=None, mode=mode, packet=packet,
+                         packet_sha=packet_sha, brief=brief, steps=steps, rewrite_count=rewrite_count, account=None,
+                         approval="policy_auto", ai_job_id=ai_job_id)
+    connection.execute(
+        "UPDATE consult_attempts SET local_only = 1, account_id = 'sage_local', model_id = ? WHERE id = ?",
+        (config.sage_model_id, consult_id),
+    )
+    enqueue_sage_consult(SageQueueItem(consult_id=consult_id, turn_id=request.turn_id,
+                                       workspace_id=request.workspace_id, thread_id=request.thread_id,
+                                       kind=request.kind, question=request.question, context=context,
+                                       modules=list(request.modules)))
+    return ConsultOutcome(
+        status="queued_for_sage",
+        consult_id=consult_id,
+        reason=f"End your answer with {{{{consult:{consult_id}}}}}; Sage will answer at the end of the turn.",
+    )
+
+
 def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
                     transport: ConsultTransport | None = None,
                     config_loader: Callable[[], ConsultConfig] = load_consult_config) -> ConsultOutcome:
@@ -197,6 +221,11 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
             return refuse("reply_target_invalid")
         if request.thread_id and target_row[2] and target_row[2] != request.thread_id:
             return refuse("reply_target_invalid")
+        local_target = connection.execute(
+            "SELECT local_only FROM consult_attempts WHERE id = ?", (request.reply_to,)).fetchone()
+        if local_target and local_target[0] and not request.local_only:
+            # A round 1 answered by Sage was written from local context: its text never goes to zone A.
+            return refuse("reply_target_local_only")
 
         target_steps = []
         try:
@@ -220,124 +249,28 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
         effective_context = f"{round_1_summary}\n\n{request.context}".strip()
         reply_steps.append({"step": "exchange", "result": "pass", "round": 2, "reply_to": request.reply_to})
 
-    from app.modules.consult.sage import SageQueueItem, enqueue_sage_consult, is_sage_available
+    from app.modules.consult.sage import is_sage_available
 
     if request.local_only:
         if not is_sage_available(config.sage_model_id):
             return refuse("sage_unavailable", status="sage_unavailable")
-        consult_id = _record(
-            connection,
-            request,
-            state="approved",
-            code=None,
-            mode=mode,
-            packet=None,
-            packet_sha=_sha(f"{request.question}\n\n{effective_context}"),
-            brief=None,
-            steps=reply_steps,
-            rewrite_count=streak,
-            account=None,
-            approval="policy_auto",
-        )
-        connection.execute(
-            "UPDATE consult_attempts SET local_only = 1, account_id = 'sage_local', model_id = ? WHERE id = ?",
-            (config.sage_model_id or "sage", consult_id),
-        )
-        enqueue_sage_consult(
-            SageQueueItem(
-                consult_id=consult_id,
-                turn_id=request.turn_id,
-                workspace_id=request.workspace_id,
-                thread_id=request.thread_id,
-                kind=request.kind,
-                question=request.question,
-                context=effective_context,
-                modules=list(request.modules),
-            )
-        )
-        return ConsultOutcome(
-            status="queued_for_sage",
-            consult_id=consult_id,
-            reason=f"End your answer with {{{{consult:{consult_id}}}}}; Sage will answer at the end of the turn.",
-        )
+        return _queue_for_sage(connection, request, config, mode=mode, context=effective_context,
+                                packet=None, packet_sha=_sha(f"{request.question}\n\n{effective_context}"), brief=None,
+                                steps=reply_steps, rewrite_count=streak)
 
     if mode == "off":
         if config.sage_model_id and is_sage_available(config.sage_model_id):
-            consult_id = _record(
-                connection,
-                request,
-                state="approved",
-                code=None,
-                mode=mode,
-                packet=None,
-                packet_sha=_sha(f"{request.question}\n\n{effective_context}"),
-                brief=None,
-                steps=reply_steps,
-                rewrite_count=streak,
-                account=None,
-                approval="policy_auto",
-            )
-            connection.execute(
-                "UPDATE consult_attempts SET local_only = 1, account_id = 'sage_local', model_id = ? WHERE id = ?",
-                (config.sage_model_id or "sage", consult_id),
-            )
-            enqueue_sage_consult(
-                SageQueueItem(
-                    consult_id=consult_id,
-                    turn_id=request.turn_id,
-                    workspace_id=request.workspace_id,
-                    thread_id=request.thread_id,
-                    kind=request.kind,
-                    question=request.question,
-                    context=effective_context,
-                    modules=list(request.modules),
-                )
-            )
-            return ConsultOutcome(
-                status="queued_for_sage",
-                consult_id=consult_id,
-                reason=f"End your answer with {{{{consult:{consult_id}}}}}; Sage will answer at the end of the turn.",
-            )
+            return _queue_for_sage(connection, request, config, mode=mode, context=effective_context,
+                                    packet=None, packet_sha=_sha(f"{request.question}\n\n{effective_context}"), brief=None,
+                                    steps=reply_steps, rewrite_count=streak)
         return refuse(config.reason or "consult_off")
 
     account = next(iter(config.trusted_accounts), None)
     if account is None:
         if config.sage_model_id and is_sage_available(config.sage_model_id):
-            consult_id = _record(
-                connection,
-                request,
-                state="approved",
-                code=None,
-                mode=mode,
-                packet=None,
-                packet_sha=_sha(f"{request.question}\n\n{effective_context}"),
-                brief=None,
-                steps=reply_steps,
-                rewrite_count=streak,
-                account=None,
-                approval="policy_auto",
-            )
-            connection.execute(
-                "UPDATE consult_attempts SET local_only = 1, account_id = 'sage_local', model_id = ? WHERE id = ?",
-                (config.sage_model_id or "sage", consult_id),
-            )
-            enqueue_sage_consult(
-                SageQueueItem(
-                    consult_id=consult_id,
-                    turn_id=request.turn_id,
-                    workspace_id=request.workspace_id,
-                    thread_id=request.thread_id,
-                    kind=request.kind,
-                    question=request.question,
-                    context=effective_context,
-                    modules=list(request.modules),
-                )
-            )
-            return ConsultOutcome(
-                status="queued_for_sage",
-                consult_id=consult_id,
-                reason=f"End your answer with {{{{consult:{consult_id}}}}}; Sage will answer at the end of the turn.",
-            )
+            return _queue_for_sage(connection, request, config, mode=mode, context=effective_context,
+                                    packet=None, packet_sha=_sha(f"{request.question}\n\n{effective_context}"), brief=None,
+                                    steps=reply_steps, rewrite_count=streak)
         return refuse("no_trusted_account")
     try:
         brief = approved_brief(config.brief_sha256)
@@ -370,42 +303,9 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
     if gate.status == "rewrite_required":
         if streak >= MAX_REWRITES:
             if config.sage_model_id and is_sage_available(config.sage_model_id):
-                consult_id = _record(
-                    connection,
-                    request,
-                    state="approved",
-                    code=None,
-                    mode=mode,
-                    packet=packet,
-                    packet_sha=_sha(packet),
-                    brief=brief,
-                    steps=steps,
-                    rewrite_count=streak,
-                    account=None,
-                    approval="policy_auto",
-                    ai_job_id=judge_job_id,
-                )
-                connection.execute(
-                    "UPDATE consult_attempts SET local_only = 1, account_id = 'sage_local', model_id = ? WHERE id = ?",
-                    (config.sage_model_id or "sage", consult_id),
-                )
-                enqueue_sage_consult(
-                    SageQueueItem(
-                        consult_id=consult_id,
-                        turn_id=request.turn_id,
-                        workspace_id=request.workspace_id,
-                        thread_id=request.thread_id,
-                        kind=request.kind,
-                        question=request.question,
-                        context=effective_context,
-                        modules=list(request.modules),
-                    )
-                )
-                return ConsultOutcome(
-                    status="queued_for_sage",
-                    consult_id=consult_id,
-                    reason=f"End your answer with {{{{consult:{consult_id}}}}}; Sage will answer at the end of the turn.",
-                )
+                return _queue_for_sage(connection, request, config, mode=mode, context=effective_context,
+                                        packet=packet, packet_sha=_sha(packet), brief=brief,
+                                        steps=steps, rewrite_count=streak, ai_job_id=judge_job_id)
             return refuse("sage_unavailable", steps=steps, packet=packet, brief=brief, account=account,
                           status="sage_unavailable", ai_job_id=judge_job_id)
         consult_id = _record(connection, request, state="rewrite_required", code=gate.code, mode=mode, packet=packet,
@@ -512,10 +412,11 @@ def _send(
     cfg = config or load_consult_config()
     from app.modules.consult.sage import SageQueueItem, enqueue_sage_consult, is_sage_available
 
-    if cfg.sage_model_id and is_sage_available(cfg.sage_model_id):
+    # Sage answers only inside a turn, where the end-of-turn flush runs; an approval from the UI has no turn.
+    if request is not None and request.turn_id and cfg.sage_model_id and is_sage_available(cfg.sage_model_id):
         connection.execute(
             "UPDATE consult_attempts SET local_only = 1, account_id = 'sage_local', model_id = ?, state = 'approved', approval = 'policy_auto', updated_at = ? WHERE id = ?",
-            (cfg.sage_model_id or "sage", utc_now(), consult_id),
+            (cfg.sage_model_id, utc_now(), consult_id),
         )
         att_row = connection.execute(
             "SELECT kind, packet_text, workspace_id, thread_id, turn_id, modules_json FROM consult_attempts WHERE id = ?",
