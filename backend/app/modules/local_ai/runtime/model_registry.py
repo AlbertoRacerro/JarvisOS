@@ -531,17 +531,26 @@ def activate_model(model_id: str, persist_choice: bool = True) -> dict[str, Any]
             owner.stop()
             strata_ctrl = get_strata_controller()
             if current_entry is not None and current_entry.runtime == "strata" and current_entry.id != entry.id:
-                # One hot model on the card: a second Strata model cannot load while the first holds the GPU.
+                # One hot model on the card: unload/stop the current Strata model before loading the next.
+                # Fast loopback /unload keeps the HTTP wrapper alive and falls back to hostops stop on error.
                 stopped = strata_ctrl.stop(
                     current_entry.id,
                     current_entry.unit or "",
                     current_entry.host,
                     current_entry.port or 8080,
                     current_entry.served_model or "",
+                    try_fast_unload=True,
                 )
                 if stopped.state != "stopped":
                     raise HTTPException(status_code=409, detail="The previous local model has not stopped yet.")
-            strata_ctrl.start(entry.id, entry.unit or "", entry.host, entry.port or 8080, entry.served_model or "")
+            strata_ctrl.start(
+                entry.id,
+                entry.unit or "",
+                entry.host,
+                entry.port or 8080,
+                entry.served_model or "",
+                try_fast_load=True,
+            )
             owner.active_model_id = entry.id
             if persist_choice:
                 save_model_choice(entry.id)

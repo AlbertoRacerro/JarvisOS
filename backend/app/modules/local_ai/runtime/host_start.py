@@ -123,17 +123,82 @@ def probe_strata_readiness(
     client_factory: Any = httpx.Client,
     timeout_s: float = 2.0,
 ) -> bool:
-    """Loopback GET /v1/models probe; True if served_model is present in response data."""
+    """Loopback GET /v1/models probe; True if served_model is present and not unloaded."""
     origin = f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+    client_kwargs: dict[str, Any] = {"timeout": timeout_s}
+    if client_factory is httpx.Client:
+        client_kwargs["trust_env"] = False
+        client_kwargs["follow_redirects"] = False
     try:
-        with client_factory(timeout=timeout_s) as client:
+        with client_factory(**client_kwargs) as client:
             resp = client.get(f"{origin}/v1/models")
             if resp.status_code != 200:
                 return False
             body = resp.json()
             data = body.get("data", [])
-            model_ids = {item.get("id") for item in data if isinstance(item, dict)}
-            return served_model in model_ids
+            for item in data:
+                if not isinstance(item, dict) or item.get("id") != served_model:
+                    continue
+                status = item.get("status")
+                if isinstance(status, dict) and status.get("value") is not None:
+                    return status.get("value") == "loaded"
+                return True
+            return False
+    except Exception:
+        return False
+
+
+def try_loopback_unload(
+    host: str,
+    port: int,
+    served_model: str,
+    *,
+    client_factory: Any = httpx.Client,
+    timeout_s: float = 30.0,
+) -> bool:
+    """Safe fail-closed loopback /unload probe.
+
+    Strictly refuses non-loopback hosts and port 8000. Returns True on 200/204, False on 404/403/error.
+    """
+    if host not in ALLOWED_LOOPBACK_HOSTS or port == 8000:
+        return False
+    origin = f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+    client_kwargs: dict[str, Any] = {"timeout": timeout_s}
+    if client_factory is httpx.Client:
+        client_kwargs["trust_env"] = False
+        client_kwargs["follow_redirects"] = False
+    try:
+        with client_factory(**client_kwargs) as client:
+            resp = client.post(f"{origin}/unload", json={"model": served_model})
+            return resp.status_code in (200, 204)
+    except Exception:
+        return False
+
+
+def try_loopback_load(
+    host: str,
+    port: int,
+    served_model: str,
+    *,
+    client_factory: Any = httpx.Client,
+    timeout_s: float = 180.0,
+) -> bool:
+    """Safe fail-closed loopback /load probe.
+
+    Strictly refuses non-loopback hosts and port 8000. Returns True on 200/204, False on 404/403/error.
+    Strata /load is synchronous and blocks until weights are loaded, so timeout_s defaults to 180s.
+    """
+    if host not in ALLOWED_LOOPBACK_HOSTS or port == 8000:
+        return False
+    origin = f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+    client_kwargs: dict[str, Any] = {"timeout": timeout_s}
+    if client_factory is httpx.Client:
+        client_kwargs["trust_env"] = False
+        client_kwargs["follow_redirects"] = False
+    try:
+        with client_factory(**client_kwargs) as client:
+            resp = client.post(f"{origin}/load", json={"model": served_model})
+            return resp.status_code in (200, 204)
     except Exception:
         return False
 
@@ -159,19 +224,34 @@ class StrataRuntimeController:
         sleep_fn: Callable[[float], None] | None = None,
         timeout_s: float = DEFAULT_STARTUP_TIMEOUT_S,
         port_silence_probe_fn: Callable[[str, int], bool] | None = None,
+        poll_interval_s: float = 0.1,
+        unload_fn: Callable[[str, int, str], bool] | None = None,
+        load_fn: Callable[[str, int, str], bool] | None = None,
     ) -> None:
         self._probe_fn = probe_fn or probe_strata_readiness
         self._clock_fn = clock_fn or time.monotonic
         self._sleep_fn = sleep_fn or time.sleep
         self._timeout_s = timeout_s
         self._port_silence_probe_fn = port_silence_probe_fn or is_loopback_port_silent
+        self._poll_interval_s = poll_interval_s
+        self._unload_fn = unload_fn or try_loopback_unload
+        self._load_fn = load_fn or try_loopback_load
         self._states: dict[str, StrataModelState] = {}
+        self.last_stop_duration_s: float = 0.0
+        self.last_start_dispatch_s: float = 0.0
+        self.last_switch_mode: str = "hostops"
 
     def probe(self, host: str, port: int, served_model: str) -> bool:
         return self._probe_fn(host, port, served_model)
 
     def is_port_silent(self, host: str, port: int) -> bool:
         return self._port_silence_probe_fn(host, port)
+
+    def try_loopback_unload(self, host: str, port: int, served_model: str) -> bool:
+        return self._unload_fn(host, port, served_model)
+
+    def try_loopback_load(self, host: str, port: int, served_model: str) -> bool:
+        return self._load_fn(host, port, served_model)
 
     def get_state(self, model_id: str, host: str, port: int, served_model: str) -> StrataModelState:
         st = self._states.setdefault(model_id, StrataModelState(state="stopped"))
@@ -214,17 +294,44 @@ class StrataRuntimeController:
             st.state = "stopped"
         return st
 
-    def start(self, model_id: str, unit: str, host: str, port: int, served_model: str) -> StrataModelState:
-        spool = get_spool_path()
+    def start(
+        self,
+        model_id: str,
+        unit: str,
+        host: str,
+        port: int,
+        served_model: str,
+        *,
+        try_fast_load: bool = False,
+    ) -> StrataModelState:
+        t_start = self._clock_fn()
         st = self._states.setdefault(model_id, StrataModelState(state="stopped"))
-        if spool is None:
-            st.state = "requires host start"
-            st.reason = "This model requires host start."
-            return st
 
         if self._probe_fn(host, port, served_model):
             st.state = "ready"
             st.reason = None
+            self.last_start_dispatch_s = 0.0
+            return st
+
+        if try_fast_load and self._load_fn(host, port, served_model):
+            st.last_action = "load"
+            st.last_request_time = self._clock_fn()
+            st.last_request_id = None
+            if self._probe_fn(host, port, served_model):
+                st.state = "ready"
+                st.reason = None
+            else:
+                st.state = "loading"
+                st.reason = "Strata fast load requested."
+            st.elapsed_seconds = 0
+            self.last_start_dispatch_s = round(self._clock_fn() - t_start, 3)
+            self.last_switch_mode = "loopback_unload"
+            return st
+
+        spool = get_spool_path()
+        if spool is None:
+            st.state = "requires host start"
+            st.reason = "This model requires host start."
             return st
 
         req_id = write_service_control_request(spool, unit, "start")
@@ -234,6 +341,8 @@ class StrataRuntimeController:
         st.state = "loading"
         st.elapsed_seconds = 0
         st.reason = "Strata is loading the model (0s elapsed)."
+        self.last_start_dispatch_s = round(self._clock_fn() - t_start, 3)
+        self.last_switch_mode = "hostops"
         return st
 
     def stop(
@@ -244,9 +353,28 @@ class StrataRuntimeController:
         port: int,
         served_model: str,
         wait_timeout_s: float = 120.0,
+        *,
+        try_fast_unload: bool = False,
     ) -> StrataModelState:
-        spool = get_spool_path()
+        t_stop_start = self._clock_fn()
         st = self._states.setdefault(model_id, StrataModelState(state="stopped"))
+
+        if try_fast_unload and self._unload_fn(host, port, served_model):
+            deadline = self._clock_fn() + wait_timeout_s
+            while self._probe_fn(host, port, served_model):
+                if self._clock_fn() >= deadline:
+                    st.state = "failed"
+                    st.reason = "The model did not unload in time."
+                    return st
+                self._sleep_fn(self._poll_interval_s)
+            st.state = "stopped"
+            st.reason = None
+            st.last_action = "unload"
+            self.last_stop_duration_s = round(self._clock_fn() - t_stop_start, 3)
+            self.last_switch_mode = "loopback_unload"
+            return st
+
+        spool = get_spool_path()
         if spool is None:
             st.state = "requires host start"
             return st
@@ -271,10 +399,12 @@ class StrataRuntimeController:
                 st.state = "failed"
                 st.reason = "The model did not stop in time."
                 return st
-            self._sleep_fn(0.5)
+            self._sleep_fn(self._poll_interval_s)
 
         st.state = "stopped"
         st.reason = None
+        self.last_stop_duration_s = round(self._clock_fn() - t_stop_start, 3)
+        self.last_switch_mode = "hostops"
         return st
 
 
