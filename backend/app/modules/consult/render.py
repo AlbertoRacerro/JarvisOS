@@ -32,6 +32,7 @@ class ConsultBlockRead(BaseModel):
     answer_sha256: str | None = None
     byte_identical: bool = False
     answered_at: str | None = None
+    swap_timing: dict[str, float] | None = None
 
 
 def parse_consult_markers(text: str) -> list[str]:
@@ -56,7 +57,8 @@ def render_consult_blocks(
         SELECT
             a.id, a.state, a.kind, a.modules_json, a.brief_sha256, a.packet_text,
             a.packet_sha256, a.model_id, a.created_at,
-            ans.answer_text, ans.answer_sha256, ans.created_at as answered_at
+            ans.answer_text, ans.answer_sha256, ans.created_at as answered_at,
+            a.gate_steps_json
         FROM consult_attempts a
         LEFT JOIN consult_answers ans ON ans.attempt_id = a.id
         WHERE a.turn_id = ?
@@ -101,6 +103,20 @@ def render_consult_blocks(
             computed_sha = hashlib.sha256(answer_text.encode("utf-8")).hexdigest()
             byte_identical = computed_sha == answer_sha
 
+        swap_timing = None
+        if len(row) > 12 and row[12]:
+            try:
+                gate_steps = json.loads(row[12])
+                for s in gate_steps:
+                    if s.get("step") == "sage_swap":
+                        swap_timing = {
+                            "swap_to_sage_s": float(s.get("swap_to_sage_s", 0.0)),
+                            "swap_back_s": float(s.get("swap_back_s", 0.0),),
+                            "total_swap_s": float(s.get("total_swap_s", 0.0)),
+                        }
+            except Exception:
+                swap_timing = None
+
         blocks.append(
             ConsultBlockRead(
                 consult_id=row[0],
@@ -116,6 +132,7 @@ def render_consult_blocks(
                 answer_sha256=answer_sha,
                 byte_identical=byte_identical,
                 answered_at=str(row[11]) if row[11] else None,
+                swap_timing=swap_timing,
             )
         )
 

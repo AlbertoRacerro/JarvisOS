@@ -72,6 +72,11 @@ export type ConsultBlock = {
   answer_sha256: string | null;
   byte_identical: boolean;
   answered_at: string | null;
+  swap_timing?: {
+    swap_to_sage_s?: number;
+    swap_back_s?: number;
+    total_swap_s?: number;
+  } | null;
 };
 
 export type ThreadSummary = {

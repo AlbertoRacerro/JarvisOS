@@ -1832,12 +1832,13 @@ def interaction_number_provenance(
 
 
 def interaction_activity(connection: sqlite3.Connection, interaction_id: str) -> str:
-    """Status of a running turn from its latest recorded tool event; never invented."""
+    """Status of a running turn from its latest recorded tool or status event; never invented."""
     row = connection.execute(
         """
-        SELECT json_extract(payload, '$.tool_name') AS tool_name
+        SELECT json_extract(payload, '$.status') AS custom_status,
+               json_extract(payload, '$.tool_name') AS tool_name
         FROM events
-        WHERE event_type IN ('hermes.tool_started', 'hermes.tool_result')
+        WHERE event_type IN ('hermes.tool_started', 'hermes.tool_result', 'hermes.status')
           AND json_extract(payload, '$.interaction_id') = ?
         ORDER BY rowid DESC LIMIT 1
         """,
@@ -1845,6 +1846,8 @@ def interaction_activity(connection: sqlite3.Connection, interaction_id: str) ->
     ).fetchone()
     if row is None:
         return "Thinking…"
+    if row["custom_status"]:
+        return str(row["custom_status"])
     return _TOOL_ACTIVITY.get(str(row["tool_name"] or ""), "Working…")
 
 

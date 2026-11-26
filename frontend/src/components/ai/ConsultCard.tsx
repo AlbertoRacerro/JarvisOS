@@ -210,11 +210,15 @@ export default function ConsultCard({ block, onAction }: ConsultCardProps) {
     }
     const modelName = block.model_id || "Consulente";
     const headerLabel = `${modelName} dice · ${timeStr}`;
+    const swapTimeStr = block.swap_timing && block.swap_timing.total_swap_s != null
+      ? `tempo di swap: ${block.swap_timing.total_swap_s.toFixed(2)}s`
+      : "";
 
     return (
       <div className="consult-card consult-card--answered" data-consult-card={block.consult_id} data-consult-state="sent">
         <div className="consult-card__header">
           <span className="consult-card__author">{headerLabel}</span>
+          {swapTimeStr ? <span className="consult-card__swap" data-testid="consult-swap-time">{swapTimeStr}</span> : null}
         </div>
         <div className="consult-card__answer">
           <pre>{verifiedAnswer || "Nessuna risposta disponibile."}</pre>
