@@ -1604,8 +1604,14 @@ class HermesSupervisor:
                 response["relay_flow_ids"] = list(dict.fromkeys(self.turn_flow_ids.get(self.session.hermes_session_id, [])))
                 with self.evidence_lock:
                     response["evidence_ledger"] = list(self.turn_evidence_ledger)
+                from app.modules.consult.sage import flush_sage_queue
+
+                flush_sage_queue(interaction_id)
             return response
         finally:
+            from app.modules.consult.sage import clear_sage_queue
+
+            clear_sage_queue(interaction_id)
             self.active_interaction_id = None
             self.active_role_route = None
             self.turn_light = False
