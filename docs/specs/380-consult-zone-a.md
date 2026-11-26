@@ -1,6 +1,6 @@
 # 380 — CONSULT-ZONE-A-1: First usable expert consult in `ask` mode
 
-Status: ready
+Status: merged
 Depends on: 376
 
 ## Goal
