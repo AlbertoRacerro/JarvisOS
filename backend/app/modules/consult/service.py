@@ -198,7 +198,7 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
     if not fired_trigger_codes and request.turn_id:
         try:
             ev_rows = connection.execute(
-                "SELECT payload_json FROM events WHERE event_type = 'hermes.consult_trigger' AND target_id = ? ORDER BY id",
+                "SELECT payload FROM events WHERE event_type = 'hermes.consult_trigger' AND target_id = ? ORDER BY created_at, rowid",
                 (request.turn_id,),
             ).fetchall()
             for r in ev_rows:

@@ -311,6 +311,52 @@ def test_trigger_codes_persisted_in_consult_attempts(consult_env: Path) -> None:
         assert tr_step["trigger_codes"] == ["explicit_user_request", "plan_label"]
 
 
+def test_trigger_codes_recovered_from_events_fallback(consult_env: Path) -> None:
+    from app.modules.events.service import log_event
+
+    with open_sqlite_connection() as conn:
+        log_event(
+            conn,
+            event_type="hermes.consult_trigger",
+            actor="jarvis",
+            target_type="ai_thread_interaction",
+            target_id="turn-event-fallback",
+            workspace_id=None,
+            payload={"trigger_code": "plan_label", "recommended_kind": "physics"},
+        )
+        log_event(
+            conn,
+            event_type="hermes.consult_trigger",
+            actor="jarvis",
+            target_type="ai_thread_interaction",
+            target_id="turn-event-fallback",
+            workspace_id=None,
+            payload={"trigger_code": "solver_double_failure", "recommended_kind": "physics"},
+        )
+        conn.commit()
+
+        req = ConsultRequest(
+            kind="physics",
+            question="Why does this heat balance diverge?",
+            modules=["M1"],
+            turn_id="turn-event-fallback",
+            workspace_id="ws-1",
+            trigger_codes=[],
+        )
+        outcome = request_consult(conn, req, transport=FakeTransport())
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT gate_steps_json FROM consult_attempts WHERE id = ?",
+            (outcome.consult_id,),
+        ).fetchone()
+        assert row is not None
+        steps = json.loads(row[0])
+        tr_step = next((s for s in steps if s.get("step") == "triggers"), None)
+        assert tr_step is not None
+        assert tr_step["trigger_codes"] == ["plan_label", "solver_double_failure"]
+
+
 # ==============================================================================
 # Feedback Route (POST & GET) and Persistence
 # ==============================================================================
