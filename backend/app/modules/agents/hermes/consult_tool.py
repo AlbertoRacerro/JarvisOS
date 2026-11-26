@@ -54,14 +54,19 @@ def dispatch_consult_tool(call: StructuredToolCall, *, turn_id: str | None,
     arguments.pop("grant_id", None)
     if not set(arguments) <= _ARGUMENTS or not {"kind", "question"} <= set(arguments):
         return None, "invalid_arguments"
+    kind = arguments["kind"]
+    question = arguments["question"]
     modules = arguments.get("modules", [])
+    context = arguments.get("context", "")
     local_only = arguments.get("local_only", False)
-    if not isinstance(modules, list) or not all(isinstance(m, str) for m in modules) or \
-            not isinstance(local_only, bool):
+    if (not isinstance(kind, str) or not isinstance(question, str) or not isinstance(context, str)
+            or not isinstance(modules, list) or not all(isinstance(m, str) for m in modules)
+            or not isinstance(local_only, bool)):
         return None, "invalid_arguments"
+    module_ids: list[str] = [m for m in modules if isinstance(m, str)]
     request = ConsultRequest(
-        kind=str(arguments["kind"]), question=arguments["question"], modules=modules,
-        context=arguments.get("context", ""), local_only=local_only, turn_id=turn_id,
+        kind=kind, question=question, modules=module_ids,
+        context=context, local_only=local_only, turn_id=turn_id,
         thread_id=call.session_ref.jarvis_thread_id, workspace_id=call.session_ref.workspace_id,
         tool_outputs=_tool_output_texts(turn_tool_outputs),
     )
