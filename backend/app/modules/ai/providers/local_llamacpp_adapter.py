@@ -199,6 +199,8 @@ class LocalLlamaCppAdapter:
                 if is_final_or_routing
                 else active_entry.reasoning_effort_analysis
             )
+            if effort is not None and request.metadata and request.metadata.get("reasoning_effort") == "low":
+                effort = "low"  # Spec 375: a light turn can only lower the effort.
             if effort is not None:
                 payload.setdefault("chat_template_kwargs", {})["reasoning_effort"] = effort
         client = self._client_factory()

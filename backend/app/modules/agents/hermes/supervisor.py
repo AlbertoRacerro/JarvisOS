@@ -476,6 +476,12 @@ def _local_tool_prompt(tool: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+LIGHT_ROLE_LINE = (
+    "You are Bubu, the assistant of JarvisOS. Answer in the user's language, briefly. "
+    "Use the page description when it is given; never invent screens, numbers or sources."
+)
+
+
 def compact_system_message(messages: Any, system_prompt: str) -> Any:
     """Replace the upstream Hermes system message on local routes, keeping a saved-plan tail."""
     if not isinstance(messages, list) or not messages or not isinstance(messages[0], dict) \
@@ -583,6 +589,7 @@ def run_governed_inference(
     reasoning_phase: str | None = None,
     on_guard: Callable[[str, bool | None], None] | None = None,
     max_continuations: int = 0,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     if envelope.agent_session is None:
         return {"status": "refused"}
@@ -609,7 +616,10 @@ def run_governed_inference(
     while True:
         runner_kwargs = run_ai_task_kwargs(current, structured_output_schema=structured_output_schema,
                                            temperature=temperature)
-        runner_kwargs["metadata"] = {"reasoning_phase": reasoning_phase} if reasoning_phase else {}
+        metadata: dict[str, str] = {"reasoning_phase": reasoning_phase} if reasoning_phase else {}
+        if reasoning_effort == "low":
+            metadata["reasoning_effort"] = "low"
+        runner_kwargs["metadata"] = metadata
         outcome = runner(**runner_kwargs)
         if on_outcome is not None:
             on_outcome(outcome)
@@ -1045,6 +1055,7 @@ class HermesSupervisor:
         self.turn_tool_outputs: list[dict[str, Any]] = []
         self.active_turn_plan: dict[str, Any] = {"steps": [], "findings": []}
         self.turn_step_count: int = 0
+        self.turn_light: bool = False
         self.step_overhead: int = DEFAULT_STEP_OVERHEAD
         self.turn_cap: int = DEFAULT_TURN_CAP
         self.step_deadline_seconds: int = 240
@@ -1239,6 +1250,7 @@ class HermesSupervisor:
                     reasoning_phase=reasoning_phase,
                     on_guard=record_guard,
                     max_continuations=max(0, MAX_CONTINUATIONS - self.turn_continuations),
+                    reasoning_effort="low" if self.turn_light else None,
                 )
                 if is_capped:
                     result["admitted_tools"] = []
@@ -1467,10 +1479,19 @@ class HermesSupervisor:
         if self._await(request_id, timeout=30).get("type") != "ack":
             raise RuntimeError("Hermes recovery bind failed")
 
+    def selected_turn_route(self) -> str | None:
+        """The route this session's next turn runs on: the role route, else the general task route."""
+        if self.session is None:
+            return None
+        if self.route_for_role is not None:
+            return self.route_for_role(self.session.profile_id)
+        return self.route_for_task("general")
+
     def turn(self, prompt: str, *, interaction_id: str | None = None,
              context_blocks: list[dict[str, str]] | None = None,
              allowed_tools: list[str] | None = None,
              sheldon_mode: bool = False,
+             light: bool = False,
              turn_timeout: float = 600) -> dict[str, Any]:
         if self.session is None:
             raise RuntimeError("no bound Hermes session")
@@ -1478,12 +1499,11 @@ class HermesSupervisor:
             raise ValueError("Hermes turn prompt must be 1..12000 characters")
         if not self._alive():
             self._recover(self.session)
+        selected_route = self.selected_turn_route()
         if self.route_for_role is not None:
-            self.active_role_route = self.route_for_role(self.session.profile_id)
+            self.active_role_route = selected_route
         from app.modules.local_ai.runtime.model_registry import get_active_model_entry
         active_entry = get_active_model_entry()
-        selected_route = (self.active_role_route if self.route_for_role is not None
-                          else self.route_for_task("general"))
         output_cap = getattr(active_entry, "max_output_tokens", None) or (
             DEFAULT_LOCAL_OUTPUT_CAP if is_local_route(selected_route) else 2048)
         try:
@@ -1503,6 +1523,11 @@ class HermesSupervisor:
         self.step_deadline_seconds = step_deadline_from_rows(rows, output_cap)
         if turn_timeout == 600:
             turn_timeout = turn_deadline(self.step_deadline_seconds, self.turn_cap)
+        self.turn_light = bool(light and is_local_route(selected_route))
+        if self.turn_light:
+            # A light turn has no grants. Discard grants left by the preceding work turn
+            # before the lifetime extension below can make them usable again.
+            self.live_grants.clear()
         # Spec 374 item 1: grants issued before the step deadline was measured live as long as this turn may run.
         grant_end = datetime.now(UTC) + timedelta(seconds=min(turn_timeout, 3600) + 60)
         for grant_id, grant in list(self.live_grants.items()):
@@ -1516,13 +1541,17 @@ class HermesSupervisor:
         self.turn_tool_outputs.clear()
         self.active_turn_plan = {"steps": [], "findings": []}
         self.turn_step_count = 0
+        # Spec 375: a light turn on a local route offers no tools and asks for low reasoning effort.
+        if self.turn_light:
+            allowed_tools = []
         with self.evidence_lock:
             self.turn_evidence_ledger = []
         prompt = _assemble_turn_prompt(prompt, context_blocks or [], include_rules=False)
         from app.modules.agents.hermes.roles import get_role_instructions
 
         role_instructions = get_role_instructions(self.session.profile_id, sheldon_mode=sheldon_mode)
-        self.compact_system_prompt = f"{role_instructions}\n\n{COMPACT_METHODOLOGY}"
+        self.compact_system_prompt = (LIGHT_ROLE_LINE if self.turn_light
+                                      else f"{role_instructions}\n\n{COMPACT_METHODOLOGY}")
         request_id = str(uuid4())
         try:
             self._send({"type": "turn", "id": request_id, "prompt": prompt,
@@ -1555,6 +1584,7 @@ class HermesSupervisor:
         finally:
             self.active_interaction_id = None
             self.active_role_route = None
+            self.turn_light = False
             with self.evidence_lock:
                 self.turn_evidence_ledger = []
 

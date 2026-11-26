@@ -486,39 +486,19 @@ def _submit_hermes_interaction(
         with lock:
             _ensure_hermes_thread_session(worker, thread_id=thread_id, workspace_id=workspace_id, role_id=payload.role_id)
             blocks = list(context_blocks or [])
-            workspace = get_workspace(workspace_id)
-            refreshed_envelope = _jarvis_system_envelope(
-                workspace_id=workspace_id,
-                workspace_name=workspace.name if workspace is not None else "Unknown",
-                app_state=app_state,
-                route_availability=route_availability,
-                route_class=payload.route_class,
-                role_id=payload.role_id,
-                granted_tools=_turn_tools(surface_brief.surface, prompt),
-            )
-            grant_text = _install_hermes_retrieval_grant(worker, payload, workspace_id, thread_id,
-                                                         compact=True) or ""
-            surface_text = _install_surface_grants(worker, workspace_id, thread_id,
-                                                   payload.surface_context, surface_brief, compact=True)
-            grant_text = "\n".join(part for part in (grant_text, surface_text) if part)
-            # Spec 344 review: jarvis:agent-grant first, then jarvis:system-envelope, then the rest
-            # so HermesSupervisor.turn's 16-block slicing and 12,000 char prompt cap never drop grant IDs.
-            agent_blocks: list[dict[str, Any]] = []
-            if grant_text:
-                agent_blocks.append({"source": "jarvis:agent-grant", "content": grant_text})
-            agent_blocks.append({"source": "jarvis:system-envelope", "content": refreshed_envelope})
-
-            rest = [
-                b for b in blocks
-                if b.get("source") not in {"jarvis:agent-grant", "jarvis:system-envelope"}
-            ]
-            page_blocks = [b for b in rest if b.get("source") == VISIBLE_PAGE_SOURCE]
-            other_blocks = [b for b in rest if b.get("source") != VISIBLE_PAGE_SOURCE]
-            agent_blocks.extend(page_blocks + other_blocks)
-
-            result = worker.turn(prompt, interaction_id=interaction_id, context_blocks=agent_blocks,
-                                 allowed_tools=_turn_tools(surface_brief.surface, prompt),
-                                 sheldon_mode=payload.sheldon_mode)
+            result: dict[str, Any] = {}
+            if (turn_weight(prompt, has_ui_context=payload.ui_context is not None) == "light"
+                    and _is_local_turn(worker)):
+                # Spec 375: one tool-less low-effort step with the page description; no grants are installed.
+                result = worker.turn(
+                    prompt, interaction_id=interaction_id, sheldon_mode=payload.sheldon_mode, light=True,
+                    context_blocks=[b for b in blocks if b.get("source") == VISIBLE_PAGE_SOURCE],
+                    allowed_tools=[])
+            if not _has_final_answer(result):
+                result = _run_work_turn(
+                    worker, prompt=prompt, payload=payload, interaction_id=interaction_id, blocks=blocks,
+                    workspace_id=workspace_id, thread_id=thread_id, app_state=app_state,
+                    route_availability=route_availability, surface_brief=surface_brief)
     except Exception as exc:
         _LOGGER.warning("Hermes turn %s raised %s: %.300s", interaction_id, type(exc).__name__, exc)
         _mark_hermes_failed(interaction_id, reservation_flow_id, exc)
@@ -613,6 +593,104 @@ def _submit_hermes_interaction(
     pool.schedule_idle_stop(thread_id)
     return AIThreadSubmitRead(interaction=_read_interaction(
         workspace_id=workspace_id, thread_id=thread_id, interaction_id=interaction_id))
+
+
+def _run_work_turn(
+    worker: HermesSupervisor, *, prompt: str, payload: AIThreadSubmit, interaction_id: str,
+    blocks: list[dict], workspace_id: str, thread_id: str, app_state: object | None,
+    route_availability: list[dict[str, object]], surface_brief: Any,
+) -> dict[str, Any]:
+    workspace = get_workspace(workspace_id)
+    refreshed_envelope = _jarvis_system_envelope(
+        workspace_id=workspace_id,
+        workspace_name=workspace.name if workspace is not None else "Unknown",
+        app_state=app_state,
+        route_availability=route_availability,
+        route_class=payload.route_class,
+        role_id=payload.role_id,
+        granted_tools=_turn_tools(surface_brief.surface, prompt),
+    )
+    grant_text = _install_hermes_retrieval_grant(worker, payload, workspace_id, thread_id,
+                                                 compact=True) or ""
+    surface_text = _install_surface_grants(worker, workspace_id, thread_id,
+                                           payload.surface_context, surface_brief, compact=True)
+    grant_text = "\n".join(part for part in (grant_text, surface_text) if part)
+    # Spec 344 review: jarvis:agent-grant first, then jarvis:system-envelope, then the rest
+    # so HermesSupervisor.turn's 16-block slicing and 12,000 char prompt cap never drop grant IDs.
+    agent_blocks: list[dict[str, Any]] = []
+    if grant_text:
+        agent_blocks.append({"source": "jarvis:agent-grant", "content": grant_text})
+    agent_blocks.append({"source": "jarvis:system-envelope", "content": refreshed_envelope})
+
+    rest = [
+        b for b in blocks
+        if b.get("source") not in {"jarvis:agent-grant", "jarvis:system-envelope"}
+    ]
+    page_blocks = [b for b in rest if b.get("source") == VISIBLE_PAGE_SOURCE]
+    other_blocks = [b for b in rest if b.get("source") != VISIBLE_PAGE_SOURCE]
+    agent_blocks.extend(page_blocks + other_blocks)
+
+    return worker.turn(prompt, interaction_id=interaction_id, context_blocks=agent_blocks,
+                       allowed_tools=_turn_tools(surface_brief.surface, prompt),
+                       sheldon_mode=payload.sheldon_mode)
+
+
+def _is_local_turn(worker: Any) -> bool:
+    """Spec 375: the light path is local only; a cloud role route takes the normal work path."""
+    from app.modules.agents.hermes.supervisor import is_local_route
+
+    try:
+        return is_local_route(worker.selected_turn_route())
+    except Exception:
+        return False
+
+
+def _has_final_answer(result: dict[str, Any]) -> bool:
+    final = result.get("final_response")
+    return (result.get("status") == "success" and result.get("completed") is True
+            and isinstance(final, str) and bool(final.strip()))
+
+
+_NAVIGATION_WORDS = frozenset({
+    "dove", "mostra", "mostrami", "mostrarmi", "apri", "aprimi", "vai", "portami", "trova", "trovami",
+    "where", "show", "open", "go", "find", "take",
+})
+_CALCULATION_WORDS = frozenset({
+    "calcola", "calcolo", "calcolare", "calculate", "calculation", "compute", "quanto", "quanti", "quanta", "quante",
+    "verifica", "verificare", "verify", "check", "progetta", "dimensiona", "dimensionare", "design", "size",
+    "sizing", "simula", "simulate", "stima", "estimate", "somma", "media", "percentuale",
+})
+_NAVIGATION_FILLER = frozenset({
+    "to", "the", "a", "me", "my", "screen", "page", "section", "tab", "view", "is", "i", "can", "do", "please",
+    "alla", "al", "la", "il", "lo", "di", "in", "su", "pagina", "schermata", "sezione", "scheda", "vista", "trovo",
+    "per", "favore", "dov", "e", "è",
+})
+_GREETING_WORDS = frozenset({
+    "ciao", "salve", "buongiorno", "buonasera", "buonanotte", "grazie", "hello", "hi", "hey", "thanks", "thank",
+    "you", "good", "morning", "evening", "afternoon", "mille", "molte", "tante", "a", "tutti", "bubu", "inkling", "there",
+})
+
+
+def turn_weight(question: str, *, has_ui_context: bool) -> str:
+    """Spec 375: `light` for a Bubu navigation question or a short greeting, else `work`. No model decides."""
+    text = question.lower()
+    if re.search(r"\d", text):
+        return "work"
+    words = re.findall(r"[a-zà-ÿ]+", text)
+    if not words:
+        return "work"
+    calculation = _CALCULATION_WORDS & set(words)
+    # "go to Design" names the Design screen; "design a heat exchanger" is a request for work.
+    if calculation == {"design"} and has_ui_context and _NAVIGATION_WORDS & set(words) and not (
+            set(words) - _NAVIGATION_WORDS - _NAVIGATION_FILLER - {"design"}):
+        calculation = set()
+    if calculation:
+        return "work"
+    if has_ui_context and _NAVIGATION_WORDS & set(words):
+        return "light"
+    if len(words) <= 6 and set(words) <= _GREETING_WORDS:
+        return "light"
+    return "work"
 
 
 def _mark_hermes_failed(interaction_id: str, reservation_flow_id: str, error: object) -> None:
