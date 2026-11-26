@@ -1,6 +1,6 @@
 # 373 — AGENT-EVAL-LAB-1: Repeated, paired and resumable agent evaluation with held-out tasks and artifact checks
 
-Status: ready
+Status: in_review
 Depends on: none
 
 ## Goal
