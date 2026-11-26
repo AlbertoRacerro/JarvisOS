@@ -1,0 +1,4 @@
+purpose = "Expert consult (spec 380): maintainer-owned zone and mode config, the digest-approved pack brief, the deterministic zone-A gate over the text the local executor writes, and the append-only attempt ledger with ask/auto approval."
+status = "in-development"
+entrypoints = ["/ai/consult", "config.py", "brief.py", "gate.py", "service.py"]
+owner = "maintainer"

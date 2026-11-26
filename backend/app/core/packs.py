@@ -43,7 +43,7 @@ DEFAULT_WORKSPACE_DESCRIPTION = "Default workspace."
 
 _ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
-_KNOWN_KEYS = {"id", "workspace", "sensitivity", "ui_labels", "studio", "hermes_roles", "readiness", "search_guard"}
+_KNOWN_KEYS = {"id", "workspace", "sensitivity", "ui_labels", "studio", "hermes_roles", "readiness", "search_guard", "consult"}
 
 
 KNOWN_SEARCH_GUARD_UNITS = frozenset({
@@ -93,6 +93,8 @@ class Pack:
     hermes_roles: dict[str, str] = field(default_factory=dict)
     readiness_cases_file: Path | None = None
     search_guard: SearchGuardConfig = field(default_factory=SearchGuardConfig)
+    consult_brief_file: Path | None = None
+    consult_nucleus_heading: str | None = None
 
 
 def _table(data: dict, key: str, manifest: Path) -> dict:
@@ -157,6 +159,18 @@ def read_pack(directory: Path) -> Pack:
         cases_file = (root / cases).resolve()
         if not cases_file.is_file() or root not in cases_file.parents:
             raise PackError(f"{manifest}: readiness.cases {cases!r} must be a file inside the pack")
+    consult = _table(data, "consult", manifest)
+    if set(consult) - {"brief", "nucleus_heading"}:
+        raise PackError(f"{manifest}: unknown consult keys")
+    brief = _text(consult, "brief", manifest)
+    nucleus_heading = _text(consult, "nucleus_heading", manifest)
+    brief_file = None
+    if brief is not None:
+        brief_file = (root / brief).resolve()
+        if not brief_file.is_file() or root not in brief_file.parents:
+            raise PackError(f"{manifest}: consult.brief {brief!r} must be a file inside the pack")
+        if nucleus_heading is None:
+            raise PackError(f"{manifest}: consult.brief needs consult.nucleus_heading")
     search_guard_config = SearchGuardConfig()
     if "search_guard" in data:
         guard_table = _table(data, "search_guard", manifest)
@@ -235,6 +249,8 @@ def read_pack(directory: Path) -> Pack:
         hermes_roles=dict(roles),
         readiness_cases_file=cases_file,
         search_guard=search_guard_config,
+        consult_brief_file=brief_file,
+        consult_nucleus_heading=nucleus_heading,
     )
 
 

@@ -36,8 +36,8 @@ SCHEMA_CASE_VERDICTS_MIGRATION_ID = "0035_case_verdicts"
 SCHEMA_CASE_VERDICTS_MIGRATION_NAME = "Case comparison and verdict product object"
 SCHEMA_DECISION_CASE_VERDICT_MIGRATION_ID = "0036_decision_case_verdict"
 SCHEMA_DECISION_CASE_VERDICT_MIGRATION_NAME = "Decision linked to a case verdict"
-CURRENT_SCHEMA_MIGRATION_ID = "0037_bluecad_freecad_references"
-CURRENT_SCHEMA_MIGRATION_NAME = "BLUECAD FreeCAD export references"
+CURRENT_SCHEMA_MIGRATION_ID = "0038_consult_ledger"
+CURRENT_SCHEMA_MIGRATION_NAME = "Expert consult attempts and answers ledger"
 
 SCHEMA_MIGRATION_RECORDS = [
     {
