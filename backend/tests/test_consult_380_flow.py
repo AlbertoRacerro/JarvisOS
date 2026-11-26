@@ -53,6 +53,21 @@ def _config(mode: str = "ask", digest: str | None = DIGEST, accounts: tuple = (A
     return lambda: ConsultConfig(mode=mode, brief_sha256=digest, trusted_accounts=accounts)  # type: ignore[arg-type]
 
 
+
+@pytest.fixture(autouse=True)
+def _offline_local_only_judge(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gate step 4 (spec 381) needs a readable vault; give each test an empty one and the offline judge fake."""
+    from app.core import vault as _vault
+
+    empty = tmp_path_factory.mktemp("empty_vault")
+    (empty / "jarvis_vault.toml").write_text("", encoding="utf-8")
+    monkeypatch.setenv(_vault.VAULT_PATH_ENV, str(empty))
+    monkeypatch.setenv("JARVISOS_CONSULT_FAKE_TRANSPORT", "1")
+    _vault._load.cache_clear()
+    from app.core.database import initialize_database as _init_db
+
+    _init_db()
+
 @pytest.fixture()
 def connection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[sqlite3.Connection]:
     pack = tmp_path / "pack"
@@ -121,7 +136,7 @@ def test_ask_mode_waits_then_approval_sends_the_exact_packet(connection) -> None
     assert row["state"] == "awaiting_approval" and row["sanitizer_kind"] == "model_local"
     assert row["brief_sha256"] == DIGEST and json.loads(row["modules_json"]) == ["M1"]
     steps = [s["step"] for s in json.loads(row["gate_steps_json"])]
-    assert steps == ["secrets_and_identity", "number_taint", "files_and_verbatim"]
+    assert steps == ["secrets_and_identity", "number_taint", "files_and_verbatim", "local_only_judge"]
     packet = row["packet_text"]
     assert "Questions about soil" in packet and "irrigation" not in packet and "Why do roots" in packet
 

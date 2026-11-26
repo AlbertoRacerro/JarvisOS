@@ -27,6 +27,7 @@ from app.modules.ai.execution import AiTaskOutcome, run_ai_task
 from app.modules.ai.execution_types import ProviderBinding
 
 JUDGE_ROUTE_CLASS = "local:llamacpp"
+FAKE_TRANSPORT_ENV = "JARVISOS_CONSULT_FAKE_TRANSPORT"
 FAKE_JUDGE_ENV = "JARVISOS_CONSULT_FAKE_JUDGE"
 
 JudgeStatus = Literal["pass", "rewrite_required", "refused"]
@@ -170,9 +171,11 @@ def run_local_judge(
     adapters: dict[str, Any] | None = None
     bindings: dict[str, Any] | None = None
 
-    fake_response = os.environ.get(FAKE_JUDGE_ENV)
-    if fake_response is None and (os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("JARVISOS_CONSULT_FAKE_TRANSPORT") == "1"):
-        fake_response = json.dumps({"hits": [], "reason": "clean"})
+    # Fakes exist only for offline tests and walks, and only together with the fake consult transport,
+    # under which nothing leaves the machine.
+    fake_response = None
+    if os.environ.get(FAKE_TRANSPORT_ENV) == "1":
+        fake_response = os.environ.get(FAKE_JUDGE_ENV) or json.dumps({"hits": [], "reason": "clean"})
     if fake_response is not None:
         adapter = _FakeJudgeAdapter(fake_response)
         adapters = {"local_judge_fake": adapter}
@@ -198,7 +201,7 @@ def run_local_judge(
             metadata={"judge": "local_only"},
         )
     except Exception as exc:
-        return JudgeOutcome(status="refused", code="judge_error", reason=f"judge_error:{type(exc).__name__}:{exc}")
+        return JudgeOutcome(status="refused", code="judge_error", reason=f"judge_error:{type(exc).__name__}")
 
     if outcome.status != "success" or outcome.response is None or outcome.response.text is None:
         return JudgeOutcome(

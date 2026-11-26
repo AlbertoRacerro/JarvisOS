@@ -37,6 +37,12 @@ from app.modules.events.service import log_event, utc_now
 logger = logging.getLogger(__name__)
 
 FAKE_SAGE_ENV = "JARVISOS_FAKE_SAGE_RESPONSE"
+# Sage fakes act only together with the fake consult transport (offline tests and walks).
+FAKE_TRANSPORT_ENV = "JARVISOS_CONSULT_FAKE_TRANSPORT"
+
+
+def _fakes_enabled() -> bool:
+    return os.environ.get(FAKE_TRANSPORT_ENV) == "1"
 
 
 @dataclass
@@ -57,7 +63,7 @@ _SAGE_QUEUE: list[SageQueueItem] = []
 
 def is_sage_available(sage_model_id: str | None = None) -> bool:
     """Check if the configured Sage model exists, is qualified/startable, and has model files."""
-    if os.environ.get("JARVISOS_CONSULT_FAKE_SAGE") == "1":
+    if _fakes_enabled() and os.environ.get("JARVISOS_CONSULT_FAKE_SAGE") == "1":
         return True
     if sage_model_id is None:
         cfg = load_consult_config()
@@ -129,7 +135,7 @@ def flush_sage_queue(
         return []
 
     cfg = load_consult_config()
-    sage_model_id = cfg.sage_model_id or "sage"
+    sage_model_id = cfg.sage_model_id
 
     from app.modules.local_ai.runtime.model_registry import (
         activate_model,
@@ -144,7 +150,25 @@ def flush_sage_queue(
         default_entry = next((e for e in entries if e.qualification == "default"), None)
         original_model_id = default_entry.id if default_entry else "inkling"
 
+    def _mark_failed(conn: sqlite3.Connection, consult_id: str, code: str, ai_job_id: str | None = None) -> None:
+        row = conn.execute("SELECT gate_steps_json FROM consult_attempts WHERE id = ?", (consult_id,)).fetchone()
+        try:
+            steps = json.loads(row[0]) if row and row[0] else []
+        except (TypeError, ValueError):
+            steps = []
+        steps.append({"step": "sage", "result": "refused", "reason": code})
+        conn.execute(
+            "UPDATE consult_attempts SET state = 'failed', ai_job_id = COALESCE(?, ai_job_id), gate_steps_json = ?, "
+            "updated_at = ? WHERE id = ?",
+            (ai_job_id, json.dumps(steps), utc_now(), consult_id),
+        )
+        conn.commit()
+
     def _do_flush(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+        if not sage_model_id:
+            for item in items_to_process:
+                _mark_failed(conn, item.consult_id, "sage_unavailable")
+            return []
         # 1. Emit thread status event
         first_item = items_to_process[0]
         try:
@@ -165,16 +189,23 @@ def flush_sage_queue(
 
         # 2. Swap to Sage
         t0 = time.perf_counter()
-        try:
-            activate_model(sage_model_id, persist_choice=False)
-        except Exception as exc:
-            logger.warning("Could not activate Sage model %s: %s", sage_model_id, exc)
-        swap_to_sage_s = round(max(0.001, time.perf_counter() - t0), 3)
-
+        sage_active = True
+        swap_to_sage_s = 0.0
         results: list[dict[str, Any]] = []
         try:
+            try:
+                activate_model(sage_model_id, persist_choice=False)
+            except Exception as exc:
+                # Never let the model still loaded answer in Sage's name.
+                logger.warning("Could not activate Sage model %s: %s", sage_model_id, type(exc).__name__)
+                sage_active = False
+            swap_to_sage_s = round(max(0.001, time.perf_counter() - t0), 3)
+
             # 3. Answer each queued question
             for item in items_to_process:
+                if not sage_active:
+                    _mark_failed(conn, item.consult_id, "sage_unavailable")
+                    continue
                 parts = []
                 if item.context.strip():
                     parts.append(f"Context:\n{item.context.strip()}")
@@ -182,7 +213,7 @@ def flush_sage_queue(
                 user_prompt = "\n\n".join(parts)
 
                 adapters = None
-                fake_resp = os.environ.get(FAKE_SAGE_ENV)
+                fake_resp = os.environ.get(FAKE_SAGE_ENV) if _fakes_enabled() else None
                 if fake_resp:
                     from app.modules.ai.contracts import AIResponse, AIUsage
 
@@ -218,13 +249,11 @@ def flush_sage_queue(
                     adapters=adapters,
                 )
 
-                answer_text = ""
-                ai_job_id = None
-                if outcome.status == "success" and outcome.response and outcome.response.text:
-                    answer_text = outcome.response.text
-                elif outcome.error_type:
-                    answer_text = f"Consult error: {outcome.error_type}"
                 ai_job_id = outcome.ledger_id
+                if outcome.status != "success" or outcome.response is None or not outcome.response.text:
+                    _mark_failed(conn, item.consult_id, f"sage_error:{outcome.error_type or outcome.status}", ai_job_id)
+                    continue
+                answer_text = outcome.response.text
 
                 now = utc_now()
                 answer_id = f"answer-{uuid.uuid4().hex[:16]}"

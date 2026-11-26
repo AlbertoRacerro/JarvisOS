@@ -354,6 +354,9 @@ def request_consult(connection: sqlite3.Connection, request: ConsultRequest, *,
         sources = _gate_sources(connection, request.tool_outputs)
     except Exception:  # noqa: BLE001 - an unreadable source (vault, pack, table) refuses, never passes
         return refuse("gate_error", brief=brief, account=account)
+    # The local judge writes its ai_jobs row on its own connection: never hold a write lock across it.
+    if connection.in_transaction:
+        connection.commit()
     gate = run_gate(request.question, effective_context, sources)
     steps = [*reply_steps, *_steps_json_entries(gate.steps)]
     if gate.literature_numbers or gate.constant_numbers:
@@ -626,6 +629,9 @@ def edit_consult(connection: sqlite3.Connection, consult_id: str, question: str,
         sources = _gate_sources(connection, ())
     except Exception:  # noqa: BLE001 - an unreadable source refuses, never passes
         return ConsultOutcome(status="refused", code="gate_error", consult_id=consult_id)
+    # The local judge writes its ai_jobs row on its own connection: never hold a write lock across it.
+    if connection.in_transaction:
+        connection.commit()
     gate = run_gate(question, context, sources)
     steps = _steps_json_entries(gate.steps)
     judge_job_id = next((s.get("ai_job_id") for s in steps if s.get("ai_job_id")), None)

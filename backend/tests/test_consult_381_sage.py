@@ -410,3 +410,31 @@ def test_2_round_bounded_exchange_and_round_3_refusal(sage_env: sqlite3.Connecti
     out_bad = request_consult(sage_env, req_bad, transport=transport, config_loader=cfg)
     assert out_bad.status == "refused"
     assert out_bad.code == "reply_target_invalid"
+
+
+def test_sage_activation_failure_never_answers_in_sages_name(
+    sage_env: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If Sage cannot be loaded, the queued attempt fails; the still-loaded model never answers for it."""
+    swap_calls: list[str] = []
+
+    def mock_activate(model_id: str, persist_choice: bool = True) -> dict[str, Any]:
+        swap_calls.append(model_id)
+        if model_id == "sage":
+            raise RuntimeError("no gpu memory")
+        return {"status": "ok"}
+
+    def must_not_run(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("no answer may be produced without Sage loaded")
+
+    monkeypatch.setattr(model_registry, "activate_model", mock_activate)
+    monkeypatch.setattr("app.modules.consult.sage.run_ai_task", must_not_run)
+    req = ConsultRequest(kind="ideas", question="Needs Sage?", modules=["M1"], local_only=True, turn_id="t-act")
+    out = request_consult(sage_env, req)
+    assert out.status == "queued_for_sage"
+    assert flush_sage_queue("t-act", connection=sage_env) == []
+    assert swap_calls == ["sage", "inkling"]
+    row = sage_env.execute("SELECT state FROM consult_attempts WHERE id = ?", (out.consult_id,)).fetchone()
+    assert row[0] == "failed"
+    assert sage_env.execute("SELECT COUNT(*) FROM consult_answers WHERE attempt_id = ?",
+                            (out.consult_id,)).fetchone()[0] == 0

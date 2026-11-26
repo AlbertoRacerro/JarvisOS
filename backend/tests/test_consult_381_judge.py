@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -238,3 +239,28 @@ def test_edit_consult_reruns_judge(
     assert edit_outcome.code == "local_only"
     assert "P1" in edit_outcome.offending
     assert "subterranean moisture sensor array" not in (edit_outcome.reason or "")
+
+
+def test_fake_judge_is_ignored_without_the_fake_transport(judge_env: sqlite3.Connection,
+                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """The judge fake is an offline-walk switch only: without the fake transport the real local route runs."""
+    monkeypatch.delenv("JARVISOS_CONSULT_FAKE_TRANSPORT", raising=False)
+    monkeypatch.setenv(FAKE_JUDGE_ENV, json.dumps({"hits": [], "reason": "clean"}))
+    seen: dict[str, Any] = {}
+
+    def runner(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        raise RuntimeError("local model offline")
+
+    outcome = run_local_judge("Why do roots grow?", "", runner=runner)
+    assert outcome.status == "refused" and outcome.code == "judge_error"
+    assert seen["adapters"] is None and seen["bindings"] is None
+
+
+def test_gate_refuses_without_a_vault(judge_env: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.modules.consult.gate import GateSources, run_gate
+
+    monkeypatch.delenv(vault.VAULT_PATH_ENV, raising=False)
+    vault._load.cache_clear()
+    result = run_gate("Why do roots grow?", "", GateSources())
+    assert result.status == "refused" and result.code == "vault_absent"
