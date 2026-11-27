@@ -1,4 +1,4 @@
 purpose = "Repeatable agent regression eval for the local default and the Hermes harness, driving chat interactions and scoring deterministic answers and Jarvis tool artifacts, with repeated, resumable, split and paired runs (pass^1, pass^k, standard errors)."
 status = "in-development"
-entrypoints = ["runner.py", "example_tasks.json"]
+entrypoints = ["runner.py", "reference_shim.py", "example_tasks.json"]
 owner = "maintainer"

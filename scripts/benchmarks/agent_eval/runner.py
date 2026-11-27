@@ -17,6 +17,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -343,9 +344,28 @@ def execute_claude_cli(prompt: str, model: str, *, timeout: float) -> tuple[str,
 
     # Real Claude CLI invocation with sanitized environment
     env = {k: v for k, v in os.environ.items() if not k.endswith("API_KEY")}
-    cmd = ["claude", "-m", model, "-p", prompt]
+    cmd = [
+        "claude",
+        "--model",
+        model,
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "-p",
+        "--",
+        prompt,
+    ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, env=env, check=False, timeout=timeout)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                env=env,
+                cwd=tmp_dir,
+                stdin=subprocess.DEVNULL,
+                check=False,
+                timeout=timeout,
+            )
         if proc.returncode == 0:
             return proc.stdout.strip(), "completed", None
         return proc.stderr.strip(), "failed_terminal", f"claude_cli_exit_{proc.returncode}"
@@ -1406,6 +1426,17 @@ def build_parser() -> argparse.ArgumentParser:
     parity_parser.add_argument("--change-label", help="Label for change in scoreboard (e.g. 'prompt-tune-v2')")
     parity_parser.add_argument("--date", help="Date string for scoreboard row (YYYY-MM-DD, defaults to today UTC)")
 
+    # reference-shim subcommand
+    shim_parser = subparsers.add_parser(
+        "reference-shim",
+        help="Start proof-only loopback OpenAI-compatible reference shim for Arm B",
+    )
+    shim_parser.add_argument("--tasks", required=True, help="Path to task set JSON file (requires cloud_ok=true)")
+    shim_parser.add_argument("--host", default="127.0.0.1", help="Loopback bind host (default 127.0.0.1)")
+    shim_parser.add_argument("--port", type=int, default=8080, help="Bind port (default 8080, port 8000 refused)")
+    shim_parser.add_argument("--model", default="haiku", help="Reference model (default 'haiku')")
+    shim_parser.add_argument("--timeout", type=float, default=60.0, help="Per-request timeout in seconds (default 60)")
+
     return parser
 
 
@@ -1492,6 +1523,20 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, KeyError, TypeError, PermissionError) as exc:
             print(f"Error generating parity report: {exc}", file=sys.stderr)
             return 1
+
+    if args.subcommand == "reference-shim":
+        vault = vault_guard.vault_root()
+        if vault_guard.touches_vault(args.tasks, vault):
+            print(vault_guard.REFUSED_MESSAGE, file=sys.stderr)
+            return vault_guard.REFUSED_EXIT
+        from scripts.benchmarks.agent_eval.reference_shim import run_shim_cli
+        return run_shim_cli(
+            tasks=args.tasks,
+            host=args.host,
+            port=args.port,
+            model=args.model,
+            timeout=args.timeout,
+        )
 
     return 0
 
