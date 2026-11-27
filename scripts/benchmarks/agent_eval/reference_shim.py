@@ -235,6 +235,15 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
         if path == "/health":
             self._send_json(200, {"status": "ok"})
             return
+        if path == "/props":
+            self._send_json(
+                200,
+                {
+                    "build_id": "reference-shim",
+                    "default_generation_settings": {"n_ctx": 32768},
+                },
+            )
+            return
         if path == "/slots":
             self._send_json(200, [{"id": 0, "is_processing": self.server.state.is_processing}])
             return
@@ -297,6 +306,13 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
             if isinstance(js, dict):
                 schema = js.get("schema")
                 if isinstance(schema, dict):
+                    if any(k in schema for k in ("oneOf", "allOf", "anyOf")):
+                        self._send_error_json(
+                            400,
+                            "Unsupported response_format json_schema: top-level oneOf/allOf/anyOf is not supported",
+                            "invalid_request_error",
+                        )
+                        return
                     json_schema_arg = json.dumps(schema, separators=(",", ":"))
 
         cmd = build_claude_command(

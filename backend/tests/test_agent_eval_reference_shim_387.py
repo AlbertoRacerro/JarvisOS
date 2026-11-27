@@ -337,6 +337,12 @@ def test_shim_health_models_and_slots() -> None:
         assert code == 200
         assert body == {"status": "ok"}
 
+        # GET /props (required by LlamaCppRuntimeOwner.status())
+        code, body = _request(f"{base}/props")
+        assert code == 200
+        assert body["build_id"] == "reference-shim"
+        assert body["default_generation_settings"]["n_ctx"] > 0
+
         # GET /v1/models
         code, body = _request(f"{base}/v1/models")
         assert code == 200
@@ -504,6 +510,22 @@ def test_shim_chat_completions_errors_and_privacy() -> None:
         )
         assert code == 400
         assert "not permitted" in err["error"]["message"]
+
+        # 3b. Top-level oneOf/allOf/anyOf json_schema -> 400 mentioning response_format/schema
+        code, err = _request(
+            f"{base}/v1/chat/completions",
+            method="POST",
+            payload={
+                "messages": [{"role": "user", "content": "hi"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "union", "schema": {"oneOf": [{"type": "object"}]}},
+                },
+            },
+        )
+        assert code == 400
+        assert "response_format" in err["error"]["message"]
+        assert "schema" in err["error"]["message"]
 
     # 4. CLI failure -> 502 with bounded message that never leaks prompt or secret
     secret_prompt = "TOP_SECRET_PROMPT_DO_NOT_LEAK"
