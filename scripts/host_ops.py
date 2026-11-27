@@ -14,6 +14,9 @@ receipt with the published public key; nobody without the host-only private key 
     host_ops.py install --sha SHA [--with-watch] [--self-install]         (host; maintainer/host session only)
     host_ops.py health                                                   (host)
     host_ops.py preflight                                                (host)
+    host_ops.py hold-unit --unit UNIT [--reason REASON]                 (host)
+    host_ops.py release-unit --unit UNIT                                (host)
+    host_ops.py held-units                                              (host)
 
 Stdlib only: the installed copy must not import anything from a checkout an agent can write.
 """
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import fnmatch
 import hashlib
 import http.client
 import io
@@ -152,6 +156,10 @@ class Paths:
     @property
     def state(self) -> Path:
         return self.install / "state"
+
+    @property
+    def maintainer_stopped_units(self) -> Path:
+        return self.state / "maintainer_stopped_units.json"
 
     @property
     def release_pending(self) -> Path:
@@ -439,6 +447,7 @@ class Context:
     cancelled: Callable[[], bool]
     journal: list[dict[str, Any]]
     restart_required: bool = False
+    state_dir: Path | None = None
 
     def conf(self, op: str) -> dict[str, Any]:
         conf = (self.policy.get("ops") or {}).get(op)
@@ -502,9 +511,134 @@ def op_service_status(ctx: Context) -> dict[str, Any]:
 OWNER_ACTIONS = {"jarvisos-mission-owner.service": ["start"]}
 
 
+def is_local_model_unit(unit: str, conf: dict[str, Any] | None = None) -> bool:
+    if not isinstance(unit, str):
+        return False
+    if fnmatch.fnmatch(unit, "jarvisos-strata-*.service") or fnmatch.fnmatch(unit, "jarvisos-llama-*.service"):
+        return True
+    if conf and isinstance(conf.get("local_model_units"), (list, set, tuple, frozenset)):
+        if unit in conf["local_model_units"]:
+            return True
+    return False
+
+
+def is_maintainer_requester(requester: str | None, args: dict[str, Any] | None = None) -> bool:
+    if isinstance(args, dict) and args.get("maintainer") is True:
+        return True
+    if isinstance(requester, str) and requester.strip().lower() in ("maintainer", "maintainer-chat"):
+        return True
+    return False
+
+
+def get_maintainer_stopped_path(target: Context | Paths | Path | None = None) -> Path:
+    if target is None:
+        return Paths(Path(os.environ.get("HOME", "/home/user"))).maintainer_stopped_units
+    if isinstance(target, Context):
+        if target.state_dir is not None:
+            p = Path(target.state_dir)
+            return p if p.name.endswith(".json") else p / "maintainer_stopped_units.json"
+        return target.paths.maintainer_stopped_units
+    if isinstance(target, Paths):
+        return target.maintainer_stopped_units
+    if isinstance(target, Path):
+        return target if target.name.endswith(".json") else target / "maintainer_stopped_units.json"
+    if hasattr(target, "state_dir") and target.state_dir is not None:
+        p = Path(target.state_dir)
+        return p if p.name.endswith(".json") else p / "maintainer_stopped_units.json"
+    if hasattr(target, "paths") and getattr(target.paths, "state_dir", None) is not None:
+        p = Path(target.paths.state_dir)
+        return p if p.name.endswith(".json") else p / "maintainer_stopped_units.json"
+    if hasattr(target, "paths") and hasattr(target.paths, "state"):
+        return target.paths.state / "maintainer_stopped_units.json"
+    if hasattr(target, "spool"):
+        return Path(target.spool).parent / "maintainer_stopped_units.json"
+    return Paths(Path(os.environ.get("HOME", "/home/user"))).maintainer_stopped_units
+
+
+def load_maintainer_stopped_units(target: Context | Paths | Path) -> dict[str, dict[str, Any]]:
+    path = get_maintainer_stopped_path(target)
+    if not path.exists():
+        return {}
+    try:
+        data = path.read_text(encoding="utf-8")
+        parsed = json.loads(data)
+    except Exception as exc:
+        raise Refused(f"maintainer stopped state file is unreadable or corrupt: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise Refused("maintainer stopped state file is not a valid JSON object")
+    for k, v in parsed.items():
+        if not isinstance(k, str) or not isinstance(v, dict):
+            raise Refused("maintainer stopped state file contains invalid unit entries")
+    return parsed
+
+
+def save_maintainer_stopped_units(
+    target: Context | Paths | Path,
+    units: dict[str, dict[str, Any]],
+) -> None:
+    path = get_maintainer_stopped_path(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = (json.dumps(units, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    try:
+        resolved_parent = path.parent.resolve()
+        dfd = open_dir(resolved_parent, create=True)
+        try:
+            write_at(dfd, path.name, data, mode=0o644)
+        finally:
+            os.close(dfd)
+    except Exception:
+        tmp = path.parent / f".{path.name}.{secrets.token_hex(6)}.tmp"
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+
+
+def record_maintainer_stopped_unit(
+    target: Context | Paths | Path,
+    unit: str,
+    *,
+    requester: str = "maintainer",
+    reason: str | None = None,
+    now: datetime | None = None,
+) -> None:
+    try:
+        holds = load_maintainer_stopped_units(target)
+    except Refused:
+        holds = {}
+    ts = now or (target.now() if hasattr(target, "now") and callable(target.now) else now_utc())
+    holds[unit] = {
+        "stopped_at": iso(ts),
+        "requester": requester,
+        "reason": reason or "maintainer stopped unit",
+    }
+    save_maintainer_stopped_units(target, holds)
+
+
+def clear_maintainer_stopped_unit(
+    target: Context | Paths | Path,
+    unit: str,
+) -> bool:
+    path = get_maintainer_stopped_path(target)
+    if not path.exists():
+        return False
+    try:
+        holds = load_maintainer_stopped_units(target)
+    except Refused:
+        save_maintainer_stopped_units(target, {})
+        return True
+    if unit in holds:
+        del holds[unit]
+        save_maintainer_stopped_units(target, holds)
+        return True
+    return False
+
+
 def op_service_control(ctx: Context) -> dict[str, Any]:
     conf = ctx.conf("service.control")
-    args = _args(ctx, {"unit", "action"})
+    args = _args(ctx, {"unit", "action", "maintainer", "reason"})
+    if "maintainer" in args and not isinstance(args["maintainer"], bool):
+        raise Refused("maintainer must be a boolean")
+    if "reason" in args and not isinstance(args["reason"], str):
+        raise Refused("reason must be a string")
     unit = _unit_arg(ctx, args, conf.get("units"))
     action = args.get("action")
     if action not in ("start", "stop", "restart"):
@@ -513,6 +647,16 @@ def op_service_control(ctx: Context) -> dict[str, Any]:
     limited = conf.get("actions") if isinstance(conf.get("actions"), dict) else OWNER_ACTIONS
     if unit in limited and action not in (limited[unit] or []):
         raise Refused(f"{action} of {unit} is not allowed by the host policy")
+
+    is_model = is_local_model_unit(unit, conf)
+    is_maintainer = is_maintainer_requester(ctx.request.get("requester"), args)
+
+    if is_model and action in ("start", "restart"):
+        if not is_maintainer:
+            holds = load_maintainer_stopped_units(ctx)
+            if unit in holds:
+                raise Refused("unit stopped by maintainer; ask before restarting")
+
     proc = _systemctl(ctx, action, unit)
     want = "inactive" if action == "stop" else "active"
     state: dict[str, str] = {}
@@ -524,6 +668,22 @@ def op_service_control(ctx: Context) -> dict[str, Any]:
     detail = {"unit": unit, "action": action, "returncode": proc.returncode, "state": state}
     if proc.returncode != 0 or state.get("ActiveState") != want:
         raise Failed(f"{unit} is {state.get('ActiveState')} after {action}", detail)
+
+    if is_model:
+        if action == "stop" and is_maintainer:
+            req_name = ctx.request.get("requester")
+            requester_str = req_name if isinstance(req_name, str) and req_name else "maintainer"
+            reason_str = args.get("reason") or "maintainer stopped unit"
+            record_maintainer_stopped_unit(
+                ctx,
+                unit,
+                requester=requester_str,
+                reason=reason_str,
+                now=ctx.now(),
+            )
+        elif action in ("start", "restart") and is_maintainer:
+            clear_maintainer_stopped_unit(ctx, unit)
+
     return detail
 
 
@@ -4118,6 +4278,7 @@ def _print_receipt(receipt: dict[str, Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="host_ops.py", description=__doc__.splitlines()[0])
     parser.add_argument("--home", default=os.environ.get("HOME", "/home/user"), help=argparse.SUPPRESS)
+    parser.add_argument("--state-dir", default=None, help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="action", required=True)
     p = sub.add_parser("request", help="submit a typed host operation request")
     p.add_argument("op", choices=sorted(OPERATIONS))
@@ -4144,6 +4305,12 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("guard", help="pre-start release guard (systemd ExecStartPre)")
     p.add_argument("--return", dest="do_return", action="store_true", help="force return to previous release")
     p.add_argument("--reason", default="manual return", help="reason for return")
+    p = sub.add_parser("hold-unit", help="mark a local model unit as maintainer-stopped")
+    p.add_argument("--unit", required=True, help="systemd unit name")
+    p.add_argument("--reason", default="manual hold", help="reason for hold")
+    p = sub.add_parser("release-unit", help="release a maintainer hold on a unit")
+    p.add_argument("--unit", required=True, help="systemd unit name")
+    sub.add_parser("held-units", help="list units currently held as maintainer-stopped")
     args = parser.parse_args(argv)
     paths = Paths(Path(args.home))
 
@@ -4214,6 +4381,25 @@ def main(argv: list[str] | None = None) -> int:
         return preflight(paths)
     if args.action == "guard":
         return guard(paths, force_return=args.do_return, reason=args.reason)
+    if args.action == "hold-unit":
+        target = Path(args.state_dir) if args.state_dir else paths
+        record_maintainer_stopped_unit(target, args.unit, requester="maintainer", reason=args.reason)
+        print(json.dumps({"ok": True, "unit": args.unit, "reason": args.reason}))
+        return 0
+    if args.action == "release-unit":
+        target = Path(args.state_dir) if args.state_dir else paths
+        released = clear_maintainer_stopped_unit(target, args.unit)
+        print(json.dumps({"ok": True, "unit": args.unit, "released": released}))
+        return 0
+    if args.action == "held-units":
+        target = Path(args.state_dir) if args.state_dir else paths
+        try:
+            holds = load_maintainer_stopped_units(target)
+        except Refused as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(holds, indent=1, sort_keys=True))
+        return 0
     return 2
 
 

@@ -146,6 +146,7 @@ class StrataModelState:
     last_request_id: str | None = None
     last_action: str | None = None
     last_request_time: float | None = None
+    last_error: str | None = None
 
 
 class StrataRuntimeController:
@@ -179,6 +180,7 @@ class StrataRuntimeController:
         if ready:
             st.state = "ready"
             st.reason = None
+            st.last_error = None
             st.last_action = None
             st.last_request_time = None
             st.last_request_id = None
@@ -196,14 +198,25 @@ class StrataRuntimeController:
                 receipt = check_receipt(spool, st.last_request_id)
                 if receipt is not None:
                     outcome, err = receipt
+                    if outcome == "refused":
+                        st.state = "stopped"
+                        st.last_error = err or "Host operation refused"
+                        st.reason = err or "Host operation refused"
+                        st.last_action = None
+                        st.last_request_time = None
+                        return st
                     if outcome != "ok":
                         st.state = "failed"
+                        st.last_error = err or f"Host operation failed ({outcome})"
                         st.reason = err or f"Host operation failed ({outcome})"
+                        st.last_action = None
+                        st.last_request_time = None
                         return st
 
             if elapsed > self._timeout_s:
                 st.state = "failed"
                 st.reason = "Model startup timed out."
+                st.last_error = "Model startup timed out."
                 return st
 
             st.state = "loading"
@@ -225,6 +238,7 @@ class StrataRuntimeController:
         if self._probe_fn(host, port, served_model):
             st.state = "ready"
             st.reason = None
+            st.last_error = None
             return st
 
         req_id = write_service_control_request(spool, unit, "start")
@@ -234,6 +248,26 @@ class StrataRuntimeController:
         st.state = "loading"
         st.elapsed_seconds = 0
         st.reason = "Strata is loading the model (0s elapsed)."
+        st.last_error = None
+
+        receipt = check_receipt(spool, req_id)
+        if receipt is not None:
+            outcome, err = receipt
+            if outcome == "refused":
+                st.state = "stopped"
+                st.last_error = err or "Host operation refused"
+                st.reason = err or "Host operation refused"
+                st.last_action = None
+                st.last_request_time = None
+                return st
+            if outcome != "ok":
+                st.state = "failed"
+                st.last_error = err or f"Host operation failed ({outcome})"
+                st.reason = err or f"Host operation failed ({outcome})"
+                st.last_action = None
+                st.last_request_time = None
+                return st
+
         return st
 
     def stop(
@@ -263,6 +297,7 @@ class StrataRuntimeController:
             receipt = check_receipt(spool, req_id)
             if receipt is not None and receipt[0] != "ok":
                 st.state = "failed"
+                st.last_error = receipt[1] or f"Host operation failed ({receipt[0]})"
                 st.reason = receipt[1] or f"Host operation failed ({receipt[0]})"
                 return st
             if receipt is not None and not self._probe_fn(host, port, served_model):
