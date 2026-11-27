@@ -21,7 +21,7 @@ standalone reference model) before tuning the local model. Spec 385 (`AGENT-EVAL
 parity comparator and scoreboard, but two gaps block measuring Arm A and Arm B today:
 - `scripts/benchmarks/agent_eval/runner.py::execute_claude_cli` passes `-m` (an invalid flag; the CLI requires
   `--model`) and runs in the caller's working directory without `--no-session-persistence` or `--strict-mcp-config`.
-- `backend/app/modules/agents/hermes/supervisor.py::_handle_relay` enforces `selected_route.startswith("local:")`, so
+- `backend/app/modules/agents/hermes/supervisor.py::HermesSupervisor._handle_relay` enforces `selected_route.startswith("local:")`, so
   there is no way for `agent_eval` to drive Haiku through the exact same `local:` Hermes chat harness that the local
   model uses without a loopback OpenAI-compatible bridge.
 
@@ -33,7 +33,7 @@ A proof-only loopback shim keeps production Jarvis routing and security boundari
 - `scripts/benchmarks/agent_eval/runner.py::execute_claude_cli` (lines 339–355) invokes
   `["claude", "-m", model, "-p", prompt]` with `*_API_KEY` stripped, without `--no-session-persistence`,
   `--strict-mcp-config`, or an isolated empty `cwd`.
-- `backend/app/modules/agents/hermes/supervisor.py::_handle_relay` (lines 1216–1219) refuses any non-`local:` route.
+- `backend/app/modules/agents/hermes/supervisor.py::HermesSupervisor._handle_relay` (lines 1216–1219) refuses any non-`local:` route.
 - `backend/app/modules/ai/providers/local_llamacpp_adapter.py::LocalLlamaCppAdapter` calls `GET {origin}/health` in
   `health()` (line 75) and `POST {base_url}/chat/completions` in `complete()` (line 209), sending `model`, `messages`,
   `temperature`, `max_tokens`, `stream: false`, and optional `response_format` (`type: "json_schema"`), and reading
