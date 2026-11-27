@@ -116,7 +116,7 @@ def test_execute_claude_cli_flags_cwd_and_env_stripping(monkeypatch: pytest.Monk
     assert "--no-session-persistence" in cmd
     assert "--strict-mcp-config" in cmd
     assert "-p" in cmd
-    assert cmd[cmd.index("-p") + 1] == "Calculate 40 + 2"
+    assert cmd[-2:] == ["--", "Calculate 40 + 2"]
 
     assert captured_kwargs["stdin"] == subprocess.DEVNULL
     assert captured_kwargs["timeout"] == 15.0
@@ -277,7 +277,7 @@ def test_build_claude_command() -> None:
     assert cmd[cmd.index("--system-prompt") + 1] == "Be concise"
     assert "--json-schema" in cmd
     assert cmd[cmd.index("--json-schema") + 1] == '{"type":"object"}'
-    assert cmd[-1] == "Hello"
+    assert cmd[-2:] == ["--", "Hello"]
 
 
 # -----------------------------------------------------------------------------
@@ -523,7 +523,22 @@ def test_shim_chat_completions_errors_and_privacy() -> None:
         assert "Internal CLI failure details" not in err_msg
         assert err["error"]["type"] == "bad_gateway"
 
-    # 5. CLI timeout -> 504 with bounded message
+    # 5. CLI is_error=True with exit 0 -> 502 without leaking error details
+    def is_error_runner(cmd: list[str], *, timeout: float) -> tuple[int, str, str]:
+        return 0, json.dumps({"is_error": True, "result": secret_prompt}), ""
+
+    with running_shim_server(is_error_runner) as base:
+        code, err = _request(
+            f"{base}/v1/chat/completions",
+            method="POST",
+            payload={"messages": [{"role": "user", "content": secret_prompt}]},
+        )
+        assert code == 502
+        err_msg = json.dumps(err)
+        assert secret_prompt not in err_msg
+        assert err["error"]["type"] == "bad_gateway"
+
+    # 6. CLI timeout -> 504 with bounded message
     def timeout_runner(cmd: list[str], *, timeout: float) -> tuple[int, str, str]:
         raise TimeoutError("CLI timed out")
 

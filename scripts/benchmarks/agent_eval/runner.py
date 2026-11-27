@@ -351,6 +351,7 @@ def execute_claude_cli(prompt: str, model: str, *, timeout: float) -> tuple[str,
         "--no-session-persistence",
         "--strict-mcp-config",
         "-p",
+        "--",
         prompt,
     ]
     try:

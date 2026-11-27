@@ -31,6 +31,7 @@ from scripts.benchmarks.agent_eval.runner import is_loopback_host
 
 ALLOWED_MODEL_PREFIX = "claude-haiku-"
 ALLOWED_MODEL_EXACT = "haiku"
+MAX_BODY_BYTES = 10 * 1024 * 1024
 
 
 def is_allowed_reference_model(model: str) -> bool:
@@ -70,7 +71,7 @@ def validate_tasks_file(tasks_path: str | Path) -> dict[str, Any]:
     except Exception as exc:
         raise ValueError(f"Failed to parse tasks file JSON: {exc}") from exc
     if not isinstance(data, dict):
-        raise ValueError("Tasks file must contain a JSON object")
+        raise TypeError("Tasks file must contain a JSON object")
     if data.get("cloud_ok") is not True:
         raise ValueError("Tasks file has cloud_ok != True; reference shim requires cloud_ok: true")
     return data
@@ -150,7 +151,7 @@ def build_claude_command(
         cmd.extend(["--system-prompt", system_prompt])
     if json_schema:
         cmd.extend(["--json-schema", json_schema])
-    cmd.append(prompt)
+    cmd.extend(["--", prompt])
     return cmd
 
 
@@ -205,7 +206,7 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
 
     server: ReferenceShimServer
 
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: Any) -> None:
         # Silence default stderr logging to keep test and eval logs clean
         pass
 
@@ -228,7 +229,7 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
             },
         )
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         if path == "/health":
@@ -248,7 +249,7 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
             return
         self._send_error_json(404, "Not Found", "not_found")
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         if path not in ("/v1/chat/completions", "/chat/completions"):
@@ -257,9 +258,15 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
 
         try:
             length = int(self.headers.get("Content-Length", 0))
+            if length < 0:
+                self._send_error_json(400, "Invalid Content-Length", "invalid_request_error")
+                return
+            if length > MAX_BODY_BYTES:
+                self._send_error_json(413, "Request body too large", "invalid_request_error")
+                return
             raw_body = self.rfile.read(length).decode("utf-8")
             body = json.loads(raw_body)
-        except Exception:
+        except (ValueError, UnicodeDecodeError):
             self._send_error_json(400, "Invalid JSON body", "invalid_request_error")
             return
 
@@ -320,7 +327,7 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
                     return
                 try:
                     cli_data = json.loads(stdout)
-                except Exception:
+                except ValueError:
                     self._send_error_json(502, "Reference CLI output was not valid JSON", "bad_gateway")
                     return
             else:
@@ -329,6 +336,10 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
 
             if not isinstance(cli_data, dict):
                 self._send_error_json(502, "Reference CLI output must be a JSON object", "bad_gateway")
+                return
+
+            if cli_data.get("is_error") is True:
+                self._send_error_json(502, "Reference CLI reported an error", "bad_gateway")
                 return
 
             structured_output = cli_data.get("structured_output")
@@ -444,7 +455,7 @@ def run_shim_cli(
     except PermissionError as exc:
         print(str(exc), file=sys.stderr)
         return vault_guard.REFUSED_EXIT
-    except (ValueError, FileNotFoundError, OSError) as exc:
+    except (ValueError, TypeError, FileNotFoundError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
