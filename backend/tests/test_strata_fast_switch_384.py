@@ -557,7 +557,7 @@ def test_maintainer_first_slots_wait_then_proceed(
     )
     # Mock model ready
     monkeypatch.setattr("app.modules.consult.sage._wait_strata_ready", lambda m, **kwargs: True)
-    monkeypatch.setattr(model_registry, "activate_model", lambda m, persist_choice=True: {})
+    monkeypatch.setattr(model_registry, "activate_model", lambda m, persist_choice=True, **kwargs: {})
 
     results = flush_sage_queue(turn_id, connection=fast_switch_env)
     assert len(results) == 2
@@ -747,4 +747,344 @@ def test_wait_strata_slots_idle_timeout_is_fail_closed() -> None:
     )
     assert is_idle is False
     assert wait_s >= 0.04
+
+
+# ==============================================================================
+# 5. Fast Path Off-By-Default, Deadlines, RAM Fallback & Finally Cleanup Tests
+# ==============================================================================
+
+def test_fast_path_off_by_default_in_controller_and_activate_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fast loopback path is OFF by default in controller and activate_model."""
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    (spool / "requests").mkdir(parents=True, exist_ok=True)
+    (spool / "receipts").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("JARVISOS_HOSTOPS_SPOOL", str(spool))
+
+    unload_called = False
+    load_called = False
+
+    def mock_unload(h: str, p: int, m: str) -> bool:
+        nonlocal unload_called
+        unload_called = True
+        return True
+
+    def mock_load(h: str, p: int, m: str) -> bool:
+        nonlocal load_called
+        load_called = True
+        return True
+
+    ctrl = host_start.StrataRuntimeController(
+        probe_fn=lambda h, p, m: False,
+        unload_fn=mock_unload,
+        load_fn=mock_load,
+        poll_interval_s=0.01,
+    )
+    # Default enable_fast_path is False
+    assert ctrl.enable_fast_path is False
+
+    # Receipt generator worker
+    def _receipt_worker() -> None:
+        for _ in range(50):
+            req_files = list((spool / "requests").glob("*.json"))
+            for rf in req_files:
+                req_id = rf.stem
+                receipt_f = spool / "receipts" / f"{req_id}.json"
+                if not receipt_f.exists():
+                    receipt_f.write_text(
+                        json.dumps({"schema": host_start.RECEIPT_SCHEMA, "request_id": req_id, "outcome": "ok"}),
+                        encoding="utf-8",
+                    )
+            time.sleep(0.01)
+
+    th = threading.Thread(target=_receipt_worker, daemon=True)
+    th.start()
+
+    # stop() without try_fast_unload -> MUST use hostops, not loopback unload
+    st_stop = ctrl.stop("test-m", "test.service", "127.0.0.1", 8080, "test-m")
+    assert st_stop.state == "stopped"
+    assert st_stop.last_action == "stop"
+    assert ctrl.last_switch_mode == "hostops"
+    assert unload_called is False
+
+    # start() without try_fast_load -> MUST use hostops, not loopback load
+    st_start = ctrl.start("test-m", "test.service", "127.0.0.1", 8080, "test-m")
+    assert st_start.state == "loading"
+    assert st_start.last_action == "start"
+    assert ctrl.last_switch_mode == "hostops"
+    assert load_called is False
+
+    # Now verify activate_model defaults to try_fast_switch=False
+    settings_dir = tmp_path / "settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    registry_file = settings_dir / "local_models.json"
+    choice_file = settings_dir / "local_model_choice.json"
+
+    models = [
+        {
+            "id": "m1",
+            "label": "M1",
+            "runtime": "strata",
+            "qualification": "default",
+            "host": "127.0.0.1",
+            "port": 8080,
+            "unit": "m1.service",
+            "served_model": "m1",
+        },
+        {
+            "id": "m2",
+            "label": "M2",
+            "runtime": "strata",
+            "qualification": "qualified",
+            "host": "127.0.0.1",
+            "port": 8080,
+            "unit": "m2.service",
+            "served_model": "m2",
+        },
+    ]
+    registry_file.write_text(json.dumps({"models": models}), encoding="utf-8")
+    choice_file.write_text(json.dumps({"model": "m1"}), encoding="utf-8")
+
+    from types import SimpleNamespace
+
+    paths = SimpleNamespace(
+        data_root=tmp_path,
+        local_models_file=registry_file,
+        local_model_choice_file=choice_file,
+    )
+    monkeypatch.setattr(model_registry, "build_paths", lambda: paths)
+    monkeypatch.setattr("app.core.paths.build_paths", lambda: paths)
+    monkeypatch.setattr(host_start, "get_strata_controller", lambda: ctrl)
+
+    model_registry.activate_model("m2")
+    # Verify neither unload nor load was called because fast path is off by default!
+    assert unload_called is False
+    assert load_called is False
+
+
+def test_bench_ram_not_released_fallback(tmp_path: Path) -> None:
+    """In fast mode, if MemAvailable does not rise by fraction of model size, fall back to hostops stop."""
+    meminfo_file = tmp_path / "meminfo"
+    gib_kb = 1024 * 1024
+    # MemAvailable 10 GiB before and after -> 0 GiB increase
+    meminfo_file.write_text(f"MemTotal: {32 * gib_kb} kB\nMemAvailable: {10 * gib_kb} kB\n", encoding="utf-8")
+
+    model_file = tmp_path / "source.gguf"
+    model_file.write_bytes(b"0" * 1024)
+
+    hostops_calls: list[tuple[str, str]] = []
+    current_loaded = {"inkling-2-mini-sq-10"}
+
+    def mock_hostops(spool: Path, unit: str, action: str, timeout: float) -> tuple[bool, float]:
+        hostops_calls.append((unit, action))
+        if action == "stop":
+            if "inkling" in unit:
+                current_loaded.discard("inkling-2-mini-sq-10")
+            elif "sage" in unit:
+                current_loaded.discard("sage-a1.5")
+        elif action == "start":
+            if "inkling" in unit:
+                current_loaded.add("inkling-2-mini-sq-10")
+            elif "sage" in unit:
+                current_loaded.add("sage-a1.5")
+        return True, 0.05
+
+    def mock_unload(url: str, payload: dict[str, Any], timeout: float) -> tuple[int, Any]:
+        current_loaded.discard(payload.get("model", ""))
+        return 200, {}
+
+    def mock_load(url: str, payload: dict[str, Any], timeout: float) -> tuple[int, Any]:
+        current_loaded.add(payload.get("model", ""))
+        return 200, {}
+
+    orig_stat = Path.stat
+
+    def mock_stat(self: Path, **kwargs: Any) -> Any:
+        res = orig_stat(self, **kwargs)
+        if self.name == "source.gguf":
+            return os.stat_result((
+                res.st_mode,
+                res.st_ino,
+                res.st_dev,
+                res.st_nlink,
+                res.st_uid,
+                res.st_gid,
+                4 * 1024 * 1024 * 1024,
+                res.st_atime,
+                res.st_mtime,
+                res.st_ctime,
+            ))
+        return res
+
+    with patch.object(Path, "stat", mock_stat):
+        res = bench.run_benchmark(
+            base_url="http://127.0.0.1:8080",
+            mode="fast",
+            runs=1,
+            default_model_path=model_file,
+            specialist_model_path=model_file,
+            meminfo_path=meminfo_file,
+            min_ram_release_ratio=0.5,
+            cleanup_restore_timeout_s=0.1,
+            slots_checker=lambda: True,
+            hostops_control_fn=mock_hostops,
+            port_silent_fn=lambda h, p: True,
+            models_probe_fn=lambda u, m: m in current_loaded,
+            decode_checker=lambda m: 30.0,
+            unload_poster_fn=mock_unload,
+            load_poster_fn=mock_load,
+            first_token_poster_fn=lambda u, p, t: (200, {}),
+        )
+
+    # First run default -> specialist
+    run0 = res["default_to_specialist_runs"][0]
+    assert run0["unload_released_ram"] is False
+    assert run0["unload_ram_delta_bytes"] == 0
+    # Hostops stop was called exactly ONCE for inkling because RAM was not released!
+    assert hostops_calls.count(("jarvisos-strata-inkling.service", "stop")) == 1
+
+
+def test_bench_load_wall_deadline_fallback(tmp_path: Path) -> None:
+    """When /load exceeds wall-clock deadline, bench falls back to hostops stop+start of target unit."""
+    meminfo_file = tmp_path / "meminfo"
+    gib_kb = 1024 * 1024
+    meminfo_file.write_text(f"MemTotal: {32 * gib_kb} kB\nMemAvailable: {25 * gib_kb} kB\n", encoding="utf-8")
+
+    hostops_calls: list[tuple[str, str]] = []
+    current_loaded = {"inkling-2-mini-sq-10"}
+
+    def mock_hostops(spool: Path, unit: str, action: str, timeout: float) -> tuple[bool, float]:
+        hostops_calls.append((unit, action))
+        if action == "stop":
+            if "inkling" in unit:
+                current_loaded.discard("inkling-2-mini-sq-10")
+            elif "sage" in unit:
+                current_loaded.discard("sage-a1.5")
+        elif action == "start":
+            if "inkling" in unit:
+                current_loaded.add("inkling-2-mini-sq-10")
+            elif "sage" in unit:
+                current_loaded.add("sage-a1.5")
+        return True, 0.05
+
+    def mock_unload(url: str, payload: dict[str, Any], timeout: float) -> tuple[int, Any]:
+        current_loaded.discard(payload.get("model", ""))
+        return 200, {}
+
+    def hanging_load_poster(url: str, payload: dict[str, Any], timeout: float) -> tuple[int, Any]:
+        time.sleep(0.15)
+        return 200, {}
+
+    res = bench.run_benchmark(
+        base_url="http://127.0.0.1:8080",
+        mode="fast",
+        runs=1,
+        load_deadline_s=0.05,  # Very short deadline!
+        cleanup_restore_timeout_s=0.1,
+        meminfo_path=meminfo_file,
+        slots_checker=lambda: True,
+        hostops_control_fn=mock_hostops,
+        port_silent_fn=lambda h, p: True,
+        models_probe_fn=lambda u, m: m in current_loaded,
+        decode_checker=lambda m: 30.0,
+        unload_poster_fn=mock_unload,
+        load_poster_fn=hanging_load_poster,
+        first_token_poster_fn=lambda u, p, t: (200, {}),
+    )
+
+    run0 = res["default_to_specialist_runs"][0]
+    assert run0["load_timed_out"] is True
+    # Hostops stop AND start were called on the target specialist unit after /load timed out!
+    assert ("jarvisos-strata-sage.service", "stop") in hostops_calls
+    assert ("jarvisos-strata-sage.service", "start") in hostops_calls
+    assert run0["switch_mode"] == "hostops"
+
+
+def test_bench_restore_default_in_finally(tmp_path: Path) -> None:
+    """Finally block ensures specialist is stopped and default is loaded, recording final_state in result.json."""
+    hostops_calls: list[tuple[str, str]] = []
+
+    def mock_hostops(spool: Path, unit: str, action: str, timeout: float) -> tuple[bool, float]:
+        hostops_calls.append((unit, action))
+        return True, 0.05
+
+    # Simulate default model not loaded initially during cleanup
+    model_loaded_state = {"default": False}
+
+    def mock_models_probe(url: str, model: str) -> bool:
+        if model == "inkling-2-mini-sq-10":
+            # If start was called, it becomes loaded
+            if ("jarvisos-strata-inkling.service", "start") in hostops_calls:
+                return True
+            return model_loaded_state["default"]
+        return False
+
+    out_file = tmp_path / "result.json"
+
+    # Run benchmark that raises an error midway
+    def failing_runner(source: str, target: str, direction: str, run_idx: int) -> Any:
+        raise RuntimeError("Simulated crash during benchmark run")
+
+    with pytest.raises(RuntimeError, match="Simulated crash"):
+        bench.run_benchmark(
+            base_url="http://127.0.0.1:8080",
+            runs=1,
+            output_path=out_file,
+            cleanup_restore_timeout_s=0.1,
+            slots_checker=lambda: True,
+            switch_runner=failing_runner,
+            hostops_control_fn=mock_hostops,
+            port_silent_fn=lambda h, p: True,
+            models_probe_fn=mock_models_probe,
+        )
+
+    # Verify finally block ran:
+    # 1. Specialist was stopped
+    assert ("jarvisos-strata-sage.service", "stop") in hostops_calls
+    # 2. Default unit was stopped and started
+    assert ("jarvisos-strata-inkling.service", "stop") in hostops_calls
+    assert ("jarvisos-strata-inkling.service", "start") in hostops_calls
+    # 3. result.json was written with final_state
+    assert out_file.is_file()
+    saved = json.loads(out_file.read_text(encoding="utf-8"))
+    assert saved["final_state"]["specialist_unit_stopped"] is True
+    assert saved["final_state"]["default_model_loaded"] is True
+
+
+def test_bench_max_wall_s_skips_remaining_runs() -> None:
+    """Benchmark stops and records remaining runs as skipped when max_wall_s is reached."""
+    call_count = 0
+
+    def mock_switch(source: str, target: str, direction: str, run_idx: int) -> bench.SwitchPhaseTimings:
+        nonlocal call_count
+        call_count += 1
+        time.sleep(0.05)
+        return bench.SwitchPhaseTimings(
+            direction=direction,
+            run_index=run_idx,
+            stop_old_s=1.0,
+            start_dispatch_s=0.1,
+            model_ready_s=1.0,
+            first_token_s=0.1,
+            total_switch_s=2.2,
+        )
+
+    res = bench.run_benchmark(
+        base_url="http://127.0.0.1:8080",
+        runs=3,
+        max_wall_s=0.03,  # Shorter than one switch
+        slots_checker=lambda: True,
+        switch_runner=mock_switch,
+        decode_checker=lambda m: 30.0,
+    )
+
+    d2s = res["default_to_specialist_runs"]
+    s2d = res["specialist_to_default_runs"]
+    assert any(r["skipped"] is True for r in d2s + s2d)
+    assert res["skipped_runs_count"] > 0
+    skipped_run = next(r for r in d2s + s2d if r["skipped"] is True)
+    assert "max_wall_s" in skipped_run["skip_reason"]
+    assert skipped_run["total_switch_s"] == 0.0
 

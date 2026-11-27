@@ -24,6 +24,7 @@ import mmap
 import os
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -41,7 +42,7 @@ if str(_REPO_ROOT) not in sys.path:
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
-from scripts import vault_guard
+from scripts import vault_guard  # noqa: E402
 
 ALLOWED_LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1", "ip6-localhost", "ip6-loopback"})
 
@@ -288,6 +289,40 @@ def http_post_json(url: str, payload: dict[str, Any], *, timeout_s: float = 10.0
     return _http_request(url, method="POST", payload=payload, timeout_s=timeout_s)
 
 
+def post_load_with_deadline(
+    url: str,
+    payload: dict[str, Any],
+    deadline_s: float = 180.0,
+    http_poster: Callable[[str, dict[str, Any], float], tuple[int, Any]] | None = None,
+) -> tuple[bool, int, Any]:
+    """Execute POST /load in a daemon thread with an absolute wall-clock deadline.
+
+    Returns (completed_in_time, status_code, body).
+    On expiry, returns (False, 0, None).
+    """
+    result: list[tuple[int, Any]] = []
+    exc_list: list[Exception] = []
+    poster = http_poster or (lambda u, p, t: _http_request(u, method="POST", payload=p, timeout_s=t))
+
+    def _worker() -> None:
+        try:
+            status, body = poster(url, payload, deadline_s)
+            result.append((status, body))
+        except Exception as exc:
+            exc_list.append(exc)
+
+    th = threading.Thread(target=_worker, daemon=True)
+    th.start()
+    th.join(timeout=deadline_s)
+
+    if th.is_alive():
+        return False, 0, None
+    if exc_list or not result:
+        return True, 0, None
+    status, body = result[0]
+    return True, status, body
+
+
 # --- Idle Check (/slots) ---
 
 def check_host_idle(
@@ -381,6 +416,12 @@ class SwitchPhaseTimings:
     total_switch_s: float = 0.0
     subphases: dict[str, float] = field(default_factory=dict)
     switch_mode: str = "hostops"
+    unload_released_ram: bool | None = None
+    unload_ram_delta_bytes: int | None = None
+    unload_ram_delta_gib: float | None = None
+    load_timed_out: bool | None = None
+    skipped: bool = False
+    skip_reason: str | None = None
 
 
 def measure_single_switch(
@@ -395,6 +436,10 @@ def measure_single_switch(
     wait_ready_fn: Callable[[], float],  # returns model_ready_s
     first_token_fn: Callable[[], float],  # returns first_token_s
     subphase_fn: Callable[[], dict[str, float]] | None = None,
+    unload_released_ram: bool | None = None,
+    unload_ram_delta_bytes: int | None = None,
+    unload_ram_delta_gib: float | None = None,
+    load_timed_out: bool | None = None,
 ) -> SwitchPhaseTimings:
     """Measure a single switch breakdown in one direction."""
     stop_old_s = stop_fn()
@@ -414,6 +459,10 @@ def measure_single_switch(
         total_switch_s=total_s,
         subphases=subphases,
         switch_mode=mode,
+        unload_released_ram=unload_released_ram,
+        unload_ram_delta_bytes=unload_ram_delta_bytes,
+        unload_ram_delta_gib=unload_ram_delta_gib,
+        load_timed_out=load_timed_out,
     )
 
 
@@ -421,16 +470,36 @@ def summarize_timings(timings: list[SwitchPhaseTimings]) -> dict[str, Any]:
     """Compute mean metrics for a list of runs."""
     if not timings:
         return {}
-    n = len(timings)
-    return {
-        "runs": n,
-        "stop_old_s_avg": round(sum(t.stop_old_s for t in timings) / n, 3),
-        "start_dispatch_s_avg": round(sum(t.start_dispatch_s for t in timings) / n, 3),
-        "model_ready_s_avg": round(sum(t.model_ready_s for t in timings) / n, 3),
-        "first_token_s_avg": round(sum(t.first_token_s for t in timings) / n, 3),
-        "total_switch_s_avg": round(sum(t.total_switch_s for t in timings) / n, 3),
-        "switch_mode": timings[0].switch_mode if timings else "hostops",
+    completed = [t for t in timings if not t.skipped]
+    n_completed = len(completed)
+    total_runs = len(timings)
+    if n_completed == 0:
+        return {
+            "runs": total_runs,
+            "completed_runs": 0,
+            "skipped_runs": total_runs,
+            "stop_old_s_avg": 0.0,
+            "start_dispatch_s_avg": 0.0,
+            "model_ready_s_avg": 0.0,
+            "first_token_s_avg": 0.0,
+            "total_switch_s_avg": 0.0,
+            "switch_mode": "skipped",
+        }
+    res = {
+        "runs": total_runs,
+        "completed_runs": n_completed,
+        "skipped_runs": total_runs - n_completed,
+        "stop_old_s_avg": round(sum(t.stop_old_s for t in completed) / n_completed, 3),
+        "start_dispatch_s_avg": round(sum(t.start_dispatch_s for t in completed) / n_completed, 3),
+        "model_ready_s_avg": round(sum(t.model_ready_s for t in completed) / n_completed, 3),
+        "first_token_s_avg": round(sum(t.first_token_s for t in completed) / n_completed, 3),
+        "total_switch_s_avg": round(sum(t.total_switch_s for t in completed) / n_completed, 3),
+        "switch_mode": completed[0].switch_mode if completed else "hostops",
     }
+    fast_released = [t.unload_released_ram for t in completed if t.unload_released_ram is not None]
+    if fast_released:
+        res["all_unloads_released_ram"] = all(fast_released)
+    return res
 
 
 def format_italian_summary(data: dict[str, Any]) -> str:
@@ -485,6 +554,16 @@ def format_italian_summary(data: dict[str, Any]) -> str:
     if subphases:
         parts = [f"{k} = {v:.3f}s" for k, v in subphases.items()]
         lines.append(f"Sotto-fasi motore Strata: {', '.join(parts)}")
+
+    skipped = data.get("skipped_runs_count", 0)
+    if skipped:
+        lines.append(f"Avviso: {skipped} corse saltate per superamento tempo massimo (--max-wall-s)")
+
+    final_st = data.get("final_state")
+    if isinstance(final_st, dict):
+        sp_st = "fermato" if final_st.get("specialist_unit_stopped") else "non fermato"
+        df_st = "caricato" if final_st.get("default_model_loaded") else "non caricato"
+        lines.append(f"Stato finale ripristinato: specialista {sp_st}, predefinito {df_st}")
 
     lines.append("=" * 80)
     return "\n".join(lines)
@@ -556,10 +635,22 @@ def run_benchmark(
     default_model_path: str | Path | None = None,
     specialist_model_path: str | Path | None = None,
     check_decode: bool = True,
+    min_ram_release_ratio: float = 0.5,
+    load_deadline_s: float = 180.0,
+    max_wall_s: float = 3600.0,
+    cleanup_restore_timeout_s: float = 360.0,
+    output_path: str | Path | None = None,
+    meminfo_path: str | Path = "/proc/meminfo",
     # Injectable hooks for testing / offline execution
     slots_checker: Callable[[], bool] | None = None,
     switch_runner: Callable[[str, str, str, int], SwitchPhaseTimings] | None = None,
     decode_checker: Callable[[str], float | None] | None = None,
+    hostops_control_fn: Callable[[Path, str, str, float], tuple[bool, float]] | None = None,
+    port_silent_fn: Callable[[str, int], bool] | None = None,
+    models_probe_fn: Callable[[str, str], bool] | None = None,
+    unload_poster_fn: Callable[[str, dict[str, Any], float], tuple[int, Any]] | None = None,
+    load_poster_fn: Callable[[str, dict[str, Any], float], tuple[int, Any]] | None = None,
+    first_token_poster_fn: Callable[[str, dict[str, Any], float], tuple[int, Any]] | None = None,
 ) -> dict[str, Any]:
     """Execute full 2-directional switch latency benchmark across runs."""
     d_url = (default_url or base_url).rstrip("/")
@@ -567,36 +658,8 @@ def run_benchmark(
     d_parsed = validate_loopback_url(d_url)
     s_parsed = validate_loopback_url(s_url)
 
-    # 1. Host Idle Check
-    is_idle = slots_checker() if slots_checker else check_host_idle(d_url)
-    if not is_idle:
-        raise RuntimeError("Host is not idle: active processing found in /slots")
-
-    # 2. Host RAM snapshot
-    ram_snap = get_host_ram_snapshot()
-
-    # 3. Initial decode speed check
-    decode_check: dict[str, float | None] = {}
-    if check_decode:
-        meas_fn = decode_checker if decode_checker else (lambda m: measure_decode_speed(d_url, m))
-        decode_check["before_tok_s"] = meas_fn(default_model)
-
-    # 4. Page-cache residency checks where file paths provided
-    cache_residency: dict[str, Any] = {}
-    if default_model_path:
-        res = get_file_page_cache_residency(default_model_path)
-        if res:
-            cache_residency["default_model"] = res
-    if specialist_model_path:
-        res = get_file_page_cache_residency(specialist_model_path)
-        if res:
-            cache_residency["specialist_model"] = res
-
-    prewarm_results: list[dict[str, Any]] = []
-    api_monitor_probe: dict[str, Any] = {}
-    if switch_runner is None:
-        mon = _probe_api_monitor(d_url)
-        api_monitor_probe["default_api_monitor_available"] = mon is not None
+    bench_start_time = time.monotonic()
+    bench_deadline = bench_start_time + max_wall_s
 
     resolved_spool: Path | None = None
     if spool_path:
@@ -604,171 +667,49 @@ def run_benchmark(
     elif os.getenv("JARVISOS_HOSTOPS_SPOOL"):
         resolved_spool = Path(os.environ["JARVISOS_HOSTOPS_SPOOL"])
 
-    # 5. Measure runs in both directions
+    def _do_hostops_control(unit: str, action: str, timeout: float = 120.0) -> tuple[bool, float]:
+        if hostops_control_fn:
+            return hostops_control_fn(resolved_spool or Path("/fake/spool"), unit, action, timeout)
+        if resolved_spool is None or not resolved_spool.is_dir():
+            if switch_runner is not None:
+                return True, 0.0
+            raise RuntimeError(f"Hostops spool is required for hostops {action} on {unit}")
+        return _hostops_control_wait(resolved_spool, unit, action, timeout_s=timeout)
+
+    def _do_wait_silent(host: str, port: int, timeout: float = 60.0) -> bool:
+        if port_silent_fn:
+            return port_silent_fn(host, port)
+        if switch_runner is not None and resolved_spool is None:
+            return True
+        return _wait_port_silent(host, port, timeout_s=timeout)
+
+    def _do_probe_loaded(url: str, model: str) -> bool:
+        if models_probe_fn:
+            return models_probe_fn(url, model)
+        if switch_runner is not None and resolved_spool is None:
+            return True
+        try:
+            m_data = http_get_json(f"{url}/v1/models", timeout_s=2.0)
+            return is_model_loaded_response(m_data, model)
+        except (OSError, ValueError, urllib.error.URLError):
+            return False
+
+    final_state: dict[str, Any] = {
+        "specialist_unit_stopped": False,
+        "default_model_loaded": False,
+        "cleanup_attempted": False,
+    }
+
     d2s_runs: list[SwitchPhaseTimings] = []
     s2d_runs: list[SwitchPhaseTimings] = []
-
-    def _real_switch(source: str, target: str, direction: str, run_idx: int) -> SwitchPhaseTimings:
-        if direction == "default_to_specialist":
-            src_url, src_parsed, src_unit = d_url, d_parsed, default_unit
-            dst_url, dst_unit, dst_path = s_url, specialist_unit, specialist_model_path
-        else:
-            src_url, src_parsed, src_unit = s_url, s_parsed, specialist_unit
-            dst_url, dst_unit, dst_path = d_url, default_unit, default_model_path
-
-        if prewarm and dst_path:
-            from app.modules.local_ai.runtime.page_cache import (
-                can_prewarm,
-                prewarm_model_file,
-            )
-
-            allowed, reason = can_prewarm(dst_path)
-            did_prewarm = prewarm_model_file(dst_path) if allowed else False
-            prewarm_results.append({
-                "direction": direction,
-                "run_index": run_idx,
-                "path": str(dst_path),
-                "allowed": allowed,
-                "reason": reason,
-                "prewarmed": did_prewarm,
-            })
-
-        # Phase 1: Stop / Unload source model (one-hot-model invariant: always completes before target starts)
-        used_mode = "hostops"
-        t_stop = time.monotonic()
-        unloaded_fast = False
-        if mode in ("auto", "fast"):
-            try:
-                status, _ = _http_request(
-                    f"{src_url}/unload",
-                    method="POST",
-                    payload={"model": source},
-                    timeout_s=30.0,
-                )
-                if status in (200, 204):
-                    deadline_u = time.monotonic() + 30.0
-                    while time.monotonic() < deadline_u:
-                        try:
-                            m_data = http_get_json(f"{src_url}/v1/models", timeout_s=2.0)
-                            if not is_model_loaded_response(m_data, source):
-                                unloaded_fast = True
-                                used_mode = "loopback_unload"
-                                break
-                        except (OSError, ValueError, urllib.error.URLError):
-                            unloaded_fast = True
-                            used_mode = "loopback_unload"
-                            break
-                        time.sleep(0.1)
-            except (OSError, ValueError, urllib.error.URLError):
-                pass
-
-        if not unloaded_fast:
-            if resolved_spool is None or not resolved_spool.is_dir():
-                raise RuntimeError("Hostops spool is required for hostops stop when /unload is unavailable")
-            ok_stop, _ = _hostops_control_wait(resolved_spool, src_unit, "stop", timeout_s=120.0)
-            if not ok_stop:
-                raise RuntimeError(f"hostops stop failed for {src_unit}")
-            _wait_port_silent(src_parsed.hostname or "127.0.0.1", src_parsed.port or 8080, timeout_s=60.0)
-            used_mode = "hostops"
-        stop_old_s = round(time.monotonic() - t_stop, 3)
-
-        # Phase 2 + 3: Start / Load target model and wait until /v1/models reports loaded
-        t_start = time.monotonic()
-        loaded_fast = False
-        if mode in ("auto", "fast"):
-            try:
-                status, _ = _http_request(
-                    f"{dst_url}/load",
-                    method="POST",
-                    payload={"model": target},
-                    timeout_s=300.0,
-                )
-                if status in (200, 204):
-                    loaded_fast = True
-                    used_mode = "loopback_unload_load" if unloaded_fast else "hostops_stop_loopback_load"
-            except (OSError, ValueError, urllib.error.URLError):
-                pass
-
-        if loaded_fast:
-            # Strata /load is synchronous: its duration is the model_ready phase; dispatch is ~0.
-            start_dispatch_s = 0.0
-            model_ready_s = round(time.monotonic() - t_start, 3)
-            # Confirm /v1/models reports loaded
-            t_confirm = time.monotonic()
-            deadline_c = t_confirm + 60.0
-            while time.monotonic() < deadline_c:
-                try:
-                    m_data = http_get_json(f"{dst_url}/v1/models", timeout_s=2.0)
-                    if is_model_loaded_response(m_data, target):
-                        break
-                except (OSError, ValueError, urllib.error.URLError):
-                    pass
-                time.sleep(0.1)
-            model_ready_s = round(model_ready_s + (time.monotonic() - t_confirm), 3)
-        else:
-            if resolved_spool is None or not resolved_spool.is_dir():
-                raise RuntimeError("Hostops spool is required for hostops start when /load is unavailable")
-            ok_start, start_dispatch_s = _hostops_control_wait(resolved_spool, dst_unit, "start", timeout_s=120.0)
-            if not ok_start:
-                raise RuntimeError(f"hostops start failed for {dst_unit}")
-            if unloaded_fast:
-                used_mode = "loopback_unload_hostops_start"
-            t_ready = time.monotonic()
-            deadline_r = t_ready + 360.0
-            ready_ok = False
-            while time.monotonic() < deadline_r:
-                try:
-                    m_data = http_get_json(f"{dst_url}/v1/models", timeout_s=2.0)
-                    if is_model_loaded_response(m_data, target):
-                        ready_ok = True
-                        break
-                except (OSError, ValueError, urllib.error.URLError):
-                    pass
-                time.sleep(0.25)
-            if not ready_ok:
-                raise RuntimeError(f"Timed out waiting for {target} ready at {dst_url}")
-            model_ready_s = round(time.monotonic() - t_ready, 3)
-
-        # Phase 4: First token probe
-        t_tok = time.monotonic()
-        http_post_json(
-            f"{dst_url}/v1/chat/completions",
-            {"model": target, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1, "temperature": 0.0},
-            timeout_s=60.0,
-        )
-        first_token_s = round(time.monotonic() - t_tok, 3)
-
-        return measure_single_switch(
-            source, target, direction, run_idx,
-            base_url=dst_url,
-            stop_fn=lambda: stop_old_s,
-            start_fn=lambda: (start_dispatch_s, used_mode),
-            wait_ready_fn=lambda: model_ready_s,
-            first_token_fn=lambda: first_token_s,
-        )
-
-    do_switch = switch_runner or _real_switch
-
-    for i in range(1, runs + 1):
-        # direction 1: default -> specialist
-        d2s = do_switch(default_model, specialist_model, "default_to_specialist", i)
-        d2s_runs.append(d2s)
-
-        # direction 2: specialist -> default
-        s2d = do_switch(specialist_model, default_model, "specialist_to_default", i)
-        s2d_runs.append(s2d)
-
-    # 6. Final decode speed check
-    if check_decode:
-        meas_fn = decode_checker if decode_checker else (lambda m: measure_decode_speed(d_url, m))
-        decode_check["after_tok_s"] = meas_fn(default_model)
-
-    # 7. Subphases parsing
+    prewarm_results: list[dict[str, Any]] = []
+    decode_check: dict[str, float | None] = {}
+    cache_residency: dict[str, Any] = {}
+    api_monitor_probe: dict[str, Any] = {}
+    ram_snap = HostRamSnapshot()
     subphases: dict[str, float] = {}
-    if strata_log_path and Path(strata_log_path).is_file():
-        subphases = parse_strata_subphases(Path(strata_log_path).read_text(encoding="utf-8"))
 
-    result_data = {
+    result_data: dict[str, Any] = {
         "runs": runs,
         "mode": mode,
         "prewarm": prewarm,
@@ -780,11 +721,328 @@ def run_benchmark(
         "decode_speed_check": decode_check,
         "page_cache_residency": cache_residency,
         "subphases": subphases,
-        "default_to_specialist_runs": [asdict(t) for t in d2s_runs],
-        "specialist_to_default_runs": [asdict(t) for t in s2d_runs],
-        "default_to_specialist_summary": summarize_timings(d2s_runs),
-        "specialist_to_default_summary": summarize_timings(s2d_runs),
+        "default_to_specialist_runs": [],
+        "specialist_to_default_runs": [],
+        "default_to_specialist_summary": {},
+        "specialist_to_default_summary": {},
+        "max_wall_s": max_wall_s,
+        "load_deadline_s": load_deadline_s,
+        "min_ram_release_ratio": min_ram_release_ratio,
+        "final_state": final_state,
     }
+
+    touched_services = False
+    try:
+        # 1. Host Idle Check
+        is_idle = slots_checker() if slots_checker else check_host_idle(d_url)
+        if not is_idle:
+            raise RuntimeError("Host is not idle: active processing found in /slots")
+
+        # 2. Host RAM snapshot
+        ram_snap = get_host_ram_snapshot(meminfo_path)
+        result_data["host_ram_snapshot"] = asdict(ram_snap)
+
+        # 3. Initial decode speed check
+        if check_decode:
+            meas_fn = decode_checker if decode_checker else (lambda m: measure_decode_speed(d_url, m))
+            decode_check["before_tok_s"] = meas_fn(default_model)
+
+        # 4. Page-cache residency checks where file paths provided
+        if default_model_path:
+            res = get_file_page_cache_residency(default_model_path)
+            if res:
+                cache_residency["default_model"] = res
+        if specialist_model_path:
+            res = get_file_page_cache_residency(specialist_model_path)
+            if res:
+                cache_residency["specialist_model"] = res
+
+        if switch_runner is None:
+            mon = _probe_api_monitor(d_url)
+            api_monitor_probe["default_api_monitor_available"] = mon is not None
+
+        # 5. Measure runs in both directions
+        def _real_switch(source: str, target: str, direction: str, run_idx: int) -> SwitchPhaseTimings:
+            if direction == "default_to_specialist":
+                src_url, src_parsed, src_unit = d_url, d_parsed, default_unit
+                dst_url, dst_parsed, dst_unit, dst_path = s_url, s_parsed, specialist_unit, specialist_model_path
+                src_path = default_model_path
+            else:
+                src_url, src_parsed, src_unit = s_url, s_parsed, specialist_unit
+                dst_url, dst_parsed, dst_unit, dst_path = d_url, d_parsed, default_unit, default_model_path
+                src_path = specialist_model_path
+
+            if prewarm and dst_path:
+                from app.modules.local_ai.runtime.page_cache import (
+                    can_prewarm,
+                    prewarm_model_file,
+                )
+
+                allowed, reason = can_prewarm(dst_path, meminfo_path=meminfo_path)
+                did_prewarm = prewarm_model_file(dst_path, meminfo_path=meminfo_path) if allowed else False
+                prewarm_results.append({
+                    "direction": direction,
+                    "run_index": run_idx,
+                    "path": str(dst_path),
+                    "allowed": allowed,
+                    "reason": reason,
+                    "prewarmed": did_prewarm,
+                })
+
+            # Phase 1: Stop / Unload source model
+            used_mode = "hostops"
+            t_stop = time.monotonic()
+            unloaded_fast = False
+            unload_released_ram: bool | None = None
+            delta_bytes: int | None = None
+            delta_gib: float | None = None
+
+            if mode in ("auto", "fast"):
+                ram_before = get_host_ram_snapshot(meminfo_path)
+                try:
+                    do_unload = unload_poster_fn or (lambda u, p, t: _http_request(u, method="POST", payload=p, timeout_s=t))
+                    status, _ = do_unload(
+                        f"{src_url}/unload",
+                        {"model": source},
+                        30.0,
+                    )
+                    if status in (200, 204):
+                        deadline_u = time.monotonic() + 30.0
+                        while time.monotonic() < deadline_u:
+                            if not _do_probe_loaded(src_url, source):
+                                unloaded_fast = True
+                                used_mode = "loopback_unload"
+                                break
+                            time.sleep(0.01)
+                except (OSError, ValueError, urllib.error.URLError):
+                    pass
+
+                if unloaded_fast:
+                    ram_after = get_host_ram_snapshot(meminfo_path)
+                    delta_kb = ram_after.mem_available_kb - ram_before.mem_available_kb
+                    delta_bytes = delta_kb * 1024
+                    delta_gib = round(delta_kb / (1024.0 * 1024.0), 3)
+
+                    model_size_bytes = 0
+                    if src_path and Path(src_path).is_file():
+                        try:
+                            model_size_bytes = Path(src_path).stat().st_size
+                        except OSError:
+                            pass
+                    if model_size_bytes == 0:
+                        try:
+                            from app.modules.local_ai.runtime.model_registry import read_registry
+
+                            entries, _ = read_registry()
+                            entry = next((e for e in entries if e.id == source), None)
+                            if entry and entry.model_path and Path(entry.model_path).is_file():
+                                model_size_bytes = Path(entry.model_path).stat().st_size
+                        except Exception:
+                            pass
+
+                    required_bytes = int(model_size_bytes * min_ram_release_ratio) if model_size_bytes > 0 else 0
+                    if (model_size_bytes > 0 and delta_bytes < required_bytes) or (model_size_bytes == 0 and delta_bytes <= 0):
+                        # Memory not released! Fall back to hostops stop below for this switch
+                        unload_released_ram = False
+                        unloaded_fast = False
+                        used_mode = "hostops"
+                    else:
+                        unload_released_ram = True
+                else:
+                    unload_released_ram = False
+
+            if not unloaded_fast:
+                ok_stop, _ = _do_hostops_control(src_unit, "stop", timeout=120.0)
+                if not ok_stop:
+                    raise RuntimeError(f"hostops stop failed for {src_unit}")
+                _do_wait_silent(src_parsed.hostname or "127.0.0.1", src_parsed.port or 8080, timeout=60.0)
+                used_mode = "hostops"
+            stop_old_s = round(time.monotonic() - t_stop, 3)
+
+            # Phase 2 + 3: Start / Load target model
+            t_start = time.monotonic()
+            loaded_fast = False
+            load_timed_out = False
+
+            if mode in ("auto", "fast"):
+                completed_in_time, status, _ = post_load_with_deadline(
+                    f"{dst_url}/load",
+                    payload={"model": target},
+                    deadline_s=load_deadline_s,
+                    http_poster=load_poster_fn,
+                )
+                if not completed_in_time:
+                    load_timed_out = True
+                elif status in (200, 204):
+                    loaded_fast = True
+                    used_mode = "loopback_unload_load" if unloaded_fast else "hostops_stop_loopback_load"
+
+            if load_timed_out:
+                # Expiry! Fall back to hostops stop+start of target unit
+                _do_hostops_control(dst_unit, "stop", timeout=120.0)
+                _do_wait_silent(dst_parsed.hostname or "127.0.0.1", dst_parsed.port or 8080, timeout=60.0)
+                ok_start, start_dispatch_s = _do_hostops_control(dst_unit, "start", timeout=120.0)
+                if not ok_start:
+                    raise RuntimeError(f"hostops start failed for {dst_unit} after load timeout")
+                used_mode = "hostops"
+                t_ready = time.monotonic()
+                deadline_r = t_ready + 360.0
+                ready_ok = False
+                while time.monotonic() < deadline_r:
+                    if _do_probe_loaded(dst_url, target):
+                        ready_ok = True
+                        break
+                    time.sleep(0.25)
+                if not ready_ok:
+                    raise RuntimeError(f"Timed out waiting for {target} ready at {dst_url} after load timeout")
+                model_ready_s = round(time.monotonic() - t_ready, 3)
+            elif loaded_fast:
+                start_dispatch_s = 0.0
+                model_ready_s = round(time.monotonic() - t_start, 3)
+                t_confirm = time.monotonic()
+                deadline_c = t_confirm + 60.0
+                while time.monotonic() < deadline_c:
+                    if _do_probe_loaded(dst_url, target):
+                        break
+                    time.sleep(0.1)
+                model_ready_s = round(model_ready_s + (time.monotonic() - t_confirm), 3)
+            else:
+                ok_start, start_dispatch_s = _do_hostops_control(dst_unit, "start", timeout=120.0)
+                if not ok_start:
+                    raise RuntimeError(f"hostops start failed for {dst_unit}")
+                if unloaded_fast:
+                    used_mode = "loopback_unload_hostops_start"
+                t_ready = time.monotonic()
+                deadline_r = t_ready + 360.0
+                ready_ok = False
+                while time.monotonic() < deadline_r:
+                    if _do_probe_loaded(dst_url, target):
+                        ready_ok = True
+                        break
+                    time.sleep(0.25)
+                if not ready_ok:
+                    raise RuntimeError(f"Timed out waiting for {target} ready at {dst_url}")
+                model_ready_s = round(time.monotonic() - t_ready, 3)
+
+            # Phase 4: First token probe
+            t_tok = time.monotonic()
+            do_first_tok = first_token_poster_fn or (
+                lambda u, p, t: http_post_json(u, p, timeout_s=t)
+            )
+            try:
+                do_first_tok(
+                    f"{dst_url}/v1/chat/completions",
+                    {"model": target, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1, "temperature": 0.0},
+                    60.0,
+                )
+            except Exception:
+                pass
+            first_token_s = round(time.monotonic() - t_tok, 3)
+
+            return SwitchPhaseTimings(
+                direction=direction,
+                run_index=run_idx,
+                stop_old_s=stop_old_s,
+                start_dispatch_s=start_dispatch_s,
+                model_ready_s=model_ready_s,
+                first_token_s=first_token_s,
+                total_switch_s=round(stop_old_s + start_dispatch_s + model_ready_s + first_token_s, 3),
+                subphases={},
+                switch_mode=used_mode,
+                unload_released_ram=unload_released_ram,
+                unload_ram_delta_bytes=delta_bytes,
+                unload_ram_delta_gib=delta_gib,
+                load_timed_out=load_timed_out,
+            )
+
+        do_switch = switch_runner or _real_switch
+        touched_services = True
+
+        for i in range(1, runs + 1):
+            # Direction 1: default -> specialist
+            if time.monotonic() >= bench_deadline:
+                d2s_runs.append(SwitchPhaseTimings(
+                    direction="default_to_specialist",
+                    run_index=i,
+                    skipped=True,
+                    skip_reason=f"max_wall_s ({max_wall_s}s) exceeded",
+                ))
+            else:
+                d2s = do_switch(default_model, specialist_model, "default_to_specialist", i)
+                d2s_runs.append(d2s)
+
+            # Direction 2: specialist -> default
+            if time.monotonic() >= bench_deadline:
+                s2d_runs.append(SwitchPhaseTimings(
+                    direction="specialist_to_default",
+                    run_index=i,
+                    skipped=True,
+                    skip_reason=f"max_wall_s ({max_wall_s}s) exceeded",
+                ))
+            else:
+                s2d = do_switch(specialist_model, default_model, "specialist_to_default", i)
+                s2d_runs.append(s2d)
+
+        # 6. Final decode speed check
+        if check_decode:
+            meas_fn = decode_checker if decode_checker else (lambda m: measure_decode_speed(d_url, m))
+            decode_check["after_tok_s"] = meas_fn(default_model)
+
+        # 7. Subphases parsing
+        if strata_log_path and Path(strata_log_path).is_file():
+            subphases = parse_strata_subphases(Path(strata_log_path).read_text(encoding="utf-8"))
+            result_data["subphases"] = subphases
+
+    finally:
+        result_data["default_to_specialist_runs"] = [asdict(t) for t in d2s_runs]
+        result_data["specialist_to_default_runs"] = [asdict(t) for t in s2d_runs]
+        result_data["default_to_specialist_summary"] = summarize_timings(d2s_runs)
+        result_data["specialist_to_default_summary"] = summarize_timings(s2d_runs)
+        result_data["skipped_runs_count"] = sum(1 for t in d2s_runs + s2d_runs if t.skipped)
+        result_data["overall_duration_s"] = round(time.monotonic() - bench_start_time, 3)
+
+        if touched_services:
+            final_state["cleanup_attempted"] = True
+            try:
+                # 1. hostops stop specialist
+                try:
+                    _do_hostops_control(specialist_unit, "stop", timeout=120.0)
+                    _do_wait_silent(s_parsed.hostname or "127.0.0.1", s_parsed.port or 8080, timeout=60.0)
+                    final_state["specialist_unit_stopped"] = True
+                except Exception as e_sp:
+                    final_state["specialist_stop_error"] = str(e_sp)
+
+                # 2. Check if default is loaded
+                default_loaded = _do_probe_loaded(d_url, default_model)
+                if not default_loaded:
+                    try:
+                        # hostops stop default
+                        _do_hostops_control(default_unit, "stop", timeout=120.0)
+                        _do_wait_silent(d_parsed.hostname or "127.0.0.1", d_parsed.port or 8080, timeout=60.0)
+                        # hostops start default
+                        _do_hostops_control(default_unit, "start", timeout=120.0)
+                        # wait for /v1/models loaded up to cleanup_restore_timeout_s (default 360 s)
+                        deadline_restore = time.monotonic() + cleanup_restore_timeout_s
+                        poll_clean_s = 0.05 if cleanup_restore_timeout_s < 5.0 else 0.5
+                        while time.monotonic() < deadline_restore:
+                            if _do_probe_loaded(d_url, default_model):
+                                default_loaded = True
+                                break
+                            time.sleep(poll_clean_s)
+                    except Exception as e_df:
+                        final_state["default_start_error"] = str(e_df)
+
+                final_state["default_model_loaded"] = default_loaded
+            except Exception as e_cl:
+                final_state["cleanup_error"] = str(e_cl)
+
+        result_data["final_state"] = final_state
+
+        if output_path:
+            try:
+                Path(output_path).write_text(json.dumps(result_data, indent=2, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
 
     return result_data
 
@@ -811,6 +1069,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=str, default="result.json", help="Path to write output result.json")
     parser.add_argument("--no-decode-check", action="store_true", help="Skip decode speed measurement")
     parser.add_argument("--mock", action="store_true", help="Simulate switch measurements offline")
+    parser.add_argument("--min-ram-release-ratio", type=float, default=0.5, help="Fraction of model file size MemAvailable must rise after /unload")
+    parser.add_argument("--load-deadline-s", type=float, default=180.0, help="Wall-clock deadline in seconds for /load before falling back to hostops")
+    parser.add_argument("--max-wall-s", type=float, default=3600.0, help="Maximum overall wall-clock seconds before remaining runs are skipped")
 
     args = parser.parse_args(argv)
 
@@ -845,9 +1106,14 @@ def main(argv: list[str] | None = None) -> int:
                 first_token_s=0.45,
                 total_switch_s=12.2,
                 switch_mode="loopback_unload",
+                unload_released_ram=True,
             )
         mock_runner = _mock_switch
-        mock_decode = lambda _m: 34.5
+
+        def _mock_decode(_m: str) -> float:
+            return 34.5
+
+        mock_decode = _mock_decode
 
     try:
         results = run_benchmark(
@@ -866,6 +1132,10 @@ def main(argv: list[str] | None = None) -> int:
             default_model_path=args.default_model_path,
             specialist_model_path=args.specialist_model_path,
             check_decode=not args.no_decode_check,
+            min_ram_release_ratio=args.min_ram_release_ratio,
+            load_deadline_s=args.load_deadline_s,
+            max_wall_s=args.max_wall_s,
+            output_path=args.output,
             slots_checker=(lambda: True) if args.mock else None,
             switch_runner=mock_runner,
             decode_checker=mock_decode,

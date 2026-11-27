@@ -214,6 +214,7 @@ def flush_sage_queue(
     turn_id: str | None = None,
     *,
     connection: sqlite3.Connection | None = None,
+    try_fast_switch: bool = False,
 ) -> list[dict[str, Any]]:
     """Flush the Sage queue for the turn:
 
@@ -314,7 +315,10 @@ def flush_sage_queue(
                 from app.modules.local_ai.runtime.host_start import get_strata_controller
 
                 ctrl = get_strata_controller()
-                activate_model(sage_model_id, persist_choice=False)
+                if try_fast_switch:
+                    activate_model(sage_model_id, persist_choice=False, try_fast_switch=True)
+                else:
+                    activate_model(sage_model_id, persist_choice=False)
                 stop_old_s = getattr(ctrl, "last_stop_duration_s", 0.0)
                 switch_mode = getattr(ctrl, "last_switch_mode", "hostops")
                 t_ready = time.perf_counter()
@@ -407,7 +411,10 @@ def flush_sage_queue(
             t_back = time.perf_counter()
             if original_model_id:
                 try:
-                    activate_model(original_model_id, persist_choice=False)
+                    if try_fast_switch:
+                        activate_model(original_model_id, persist_choice=False, try_fast_switch=True)
+                    else:
+                        activate_model(original_model_id, persist_choice=False)
                     if not _wait_strata_ready(original_model_id):
                         logger.warning("Original model %s did not become ready again", original_model_id)
                 except Exception as exc:

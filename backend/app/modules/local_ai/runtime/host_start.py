@@ -227,6 +227,7 @@ class StrataRuntimeController:
         poll_interval_s: float = 0.1,
         unload_fn: Callable[[str, int, str], bool] | None = None,
         load_fn: Callable[[str, int, str], bool] | None = None,
+        enable_fast_path: bool = False,
     ) -> None:
         self._probe_fn = probe_fn or probe_strata_readiness
         self._clock_fn = clock_fn or time.monotonic
@@ -236,6 +237,7 @@ class StrataRuntimeController:
         self._poll_interval_s = poll_interval_s
         self._unload_fn = unload_fn or try_loopback_unload
         self._load_fn = load_fn or try_loopback_load
+        self.enable_fast_path = bool(enable_fast_path)
         self._states: dict[str, StrataModelState] = {}
         self.last_stop_duration_s: float = 0.0
         self.last_start_dispatch_s: float = 0.0
@@ -302,7 +304,7 @@ class StrataRuntimeController:
         port: int,
         served_model: str,
         *,
-        try_fast_load: bool = False,
+        try_fast_load: bool | None = None,
     ) -> StrataModelState:
         t_start = self._clock_fn()
         st = self._states.setdefault(model_id, StrataModelState(state="stopped"))
@@ -313,7 +315,8 @@ class StrataRuntimeController:
             self.last_start_dispatch_s = 0.0
             return st
 
-        if try_fast_load and self._load_fn(host, port, served_model):
+        use_fast = self.enable_fast_path if try_fast_load is None else try_fast_load
+        if use_fast and self._load_fn(host, port, served_model):
             st.last_action = "load"
             st.last_request_time = self._clock_fn()
             st.last_request_id = None
@@ -354,12 +357,13 @@ class StrataRuntimeController:
         served_model: str,
         wait_timeout_s: float = 120.0,
         *,
-        try_fast_unload: bool = False,
+        try_fast_unload: bool | None = None,
     ) -> StrataModelState:
         t_stop_start = self._clock_fn()
         st = self._states.setdefault(model_id, StrataModelState(state="stopped"))
 
-        if try_fast_unload and self._unload_fn(host, port, served_model):
+        use_fast = self.enable_fast_path if try_fast_unload is None else try_fast_unload
+        if use_fast and self._unload_fn(host, port, served_model):
             deadline = self._clock_fn() + wait_timeout_s
             while self._probe_fn(host, port, served_model):
                 if self._clock_fn() >= deadline:
