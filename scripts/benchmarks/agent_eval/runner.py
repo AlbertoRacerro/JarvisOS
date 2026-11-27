@@ -1325,7 +1325,11 @@ def update_scoreboard(
         lines = [line.strip() for line in existing_text.splitlines() if line.strip()]
         if lines and lines[0].startswith("|"):
             header_cells = [cell.strip() for cell in lines[0].split("|")[1:-1]]
-            if len(header_cells) >= 5 and header_cells[0].lower() == "date" and header_cells[-1].lower() == "overall":
+            if (
+                len(header_cells) >= 5
+                and header_cells[0].lower() in ("data", "date")
+                and header_cells[-1].lower() in ("totale", "overall")
+            ):
                 cat_cols = header_cells[4:-1]
                 cat_vals = [_cat_val(c) for c in cat_cols]
                 row = f"| {date_str} | {label_str} | {split_str} | {gz_status} | " + " | ".join(cat_vals) + f" | {overall_val} |"
@@ -1333,7 +1337,7 @@ def update_scoreboard(
                 _write_atomic(path, new_text)
                 return path
 
-    header_cols = ["Date", "Change Label", "Split", "Gate Zero (B/A)"] + categories + ["Overall"]
+    header_cols = ["Data", "Modifica", "Split", "Gate Zero (B/A)"] + categories + ["Totale"]
     header_line = "| " + " | ".join(header_cols) + " |"
     sep_line = "| " + " | ".join(["---"] * len(header_cols)) + " |"
     cat_vals = [_cat_val(c) for c in categories]
@@ -1474,7 +1478,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(format_parity_table(report))
             if args.json:
-                Path(args.json).write_text(json.dumps(report, indent=2), encoding="utf-8")
+                json_path = Path(args.json)
+                json_path.parent.mkdir(parents=True, exist_ok=True)
+                json_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
             if args.scoreboard:
                 update_scoreboard(
                     args.scoreboard,

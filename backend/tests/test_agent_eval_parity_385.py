@@ -348,7 +348,8 @@ def test_update_scoreboard_creates_table_and_appends_rows(tmp_path: Path) -> Non
     text1 = board_file.read_text(encoding="utf-8")
     lines1 = [line.strip() for line in text1.splitlines() if line.strip()]
     assert len(lines1) == 3
-    assert lines1[0].startswith("| Date | Change Label | Split | Gate Zero (B/A) |")
+    assert lines1[0].startswith("| Data | Modifica | Split | Gate Zero (B/A) |")
+    assert lines1[0].endswith("| Totale |")
     assert "calc" in lines1[0] and "lit" in lines1[0]
     assert "2026-11-25 | baseline | dev | PASS" in lines1[2]
 
