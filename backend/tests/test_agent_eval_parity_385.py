@@ -9,13 +9,19 @@ from __future__ import annotations
 import io
 import json
 import math
+import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
 import pytest
-from scripts import vault_guard
-from scripts.benchmarks.agent_eval.runner import (
+
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from scripts import vault_guard  # noqa: E402
+from scripts.benchmarks.agent_eval.runner import (  # noqa: E402
     _compute_ratio_stats,
     format_parity_table,
     main,
