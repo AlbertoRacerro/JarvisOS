@@ -359,6 +359,21 @@ def is_research_tool(tool_name: str) -> bool:
     return name in RESEARCH_TOOLS or any(k in name for k in ("read", "search", "retrieval", "query"))
 
 
+def _has_non_consult_work(plan: dict[str, Any]) -> bool:
+    """Return True if the active turn plan contains pending non-consult steps."""
+    steps = plan.get("steps") if isinstance(plan, dict) else None
+    if not isinstance(steps, list) or not steps:
+        return False
+    for step in steps:
+        if isinstance(step, dict):
+            status = str(step.get("status", "")).lower()
+            text = str(step.get("text", "")).lower()
+            if status not in {"done", "completed", "skipped"}:
+                if not any(k in text for k in ("consult", "sage", "expert")):
+                    return True
+    return False
+
+
 def is_dead_turn(text: str | None) -> bool:
     """Return True if model response has neither tool calls nor a non-empty answer."""
     if not text or not isinstance(text, str) or not text.strip():
@@ -1098,9 +1113,35 @@ class HermesSupervisor:
         self.compact_system_prompt: str = f"{PRESENTATION_INSTRUCTIONS}\n\n{COMPACT_METHODOLOGY}"
         self.turn_evidence_ledger: list[Any] = []
         self.evidence_lock = threading.Lock()
+        self.turn_sage_queued: bool = False
         self.paper_search_opener: Any = None
         self.patent_read_opener: Any = None
         self.browser_page_runner: Any = None
+
+    def _apply_sage_overlap_restriction(self, frame: dict[str, Any]) -> bool:
+        """Restrict admitted tools to consult/plan after a specialist consult is queued and no non-consult plan steps remain."""
+        if not getattr(self, "turn_sage_queued", False):
+            return False
+        plan = getattr(self, "active_turn_plan", None)
+        if not isinstance(plan, dict):
+            return False
+        steps = plan.get("steps")
+        if not isinstance(steps, list) or not steps:
+            return False
+        if _has_non_consult_work(plan):
+            return False
+        consult_admitted = {"jarvis_turn_plan", "turn_plan", "mcp__jarvis__jarvis_turn_plan", *_CONSULT_NAMES}
+        frame_tools = frame.get("tools")
+        if isinstance(frame_tools, list):
+            frame["tools"] = [
+                t for t in frame_tools
+                if (isinstance(t, dict) and t.get("name") in consult_admitted)
+                or (isinstance(t, str) and t in consult_admitted)
+            ]
+        allowed = frame.get("allowed_tools")
+        if isinstance(allowed, list):
+            frame["allowed_tools"] = [t for t in allowed if t in consult_admitted]
+        return True
 
     def _read_worker(self, process: subprocess.Popen[str]) -> None:
         assert process.stdout is not None
@@ -1226,6 +1267,8 @@ class HermesSupervisor:
                 frame["allowed_tools"] = []
                 if isinstance(frame.get("messages"), list):
                     frame["messages"] = [*frame["messages"], {"role": "user", "content": STEP_CAP_MESSAGE}]
+            elif self._apply_sage_overlap_restriction(frame):
+                pass
 
             def record_event(event_type: str, payload: dict[str, object]) -> None:
                 try:
@@ -1411,6 +1454,9 @@ class HermesSupervisor:
 
             if result.status == "succeeded" and isinstance(result.result, dict) and len(self.turn_tool_outputs) < 50:
                 self.turn_tool_outputs.append(result.result)
+            if capability_id == "jarvis.consult" and result.status == "succeeded" and isinstance(result.result, dict):
+                if result.result.get("status") == "queued_for_sage":
+                    self.turn_sage_queued = True
             if (
                 capability_id == "jarvis.turn_plan"
                 and result.status == "succeeded"
@@ -1636,6 +1682,7 @@ class HermesSupervisor:
         self.turn_fired_triggers.clear()
         self.turn_solver_failures.clear()
         self.turn_step_count = 0
+        self.turn_sage_queued = False
         # Spec 375: a light turn on a local route offers no tools and asks for low reasoning effort.
         if self.turn_light:
             allowed_tools = []

@@ -500,7 +500,12 @@ def list_models() -> dict[str, Any]:
     }
 
 
-def activate_model(model_id: str, persist_choice: bool = True) -> dict[str, Any]:
+def activate_model(
+    model_id: str,
+    persist_choice: bool = True,
+    *,
+    try_fast_switch: bool = False,
+) -> dict[str, Any]:
     entries, present = read_registry()
     if not present:
         raise HTTPException(status_code=404, detail="Local model registry is not configured.")
@@ -538,10 +543,18 @@ def activate_model(model_id: str, persist_choice: bool = True) -> dict[str, Any]
                     current_entry.host,
                     current_entry.port or 8080,
                     current_entry.served_model or "",
+                    try_fast_unload=try_fast_switch,
                 )
                 if stopped.state != "stopped":
                     raise HTTPException(status_code=409, detail="The previous local model has not stopped yet.")
-            strata_ctrl.start(entry.id, entry.unit or "", entry.host, entry.port or 8080, entry.served_model or "")
+            strata_ctrl.start(
+                entry.id,
+                entry.unit or "",
+                entry.host,
+                entry.port or 8080,
+                entry.served_model or "",
+                try_fast_load=try_fast_switch,
+            )
             owner.active_model_id = entry.id
             if persist_choice:
                 save_model_choice(entry.id)

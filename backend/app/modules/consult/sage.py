@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from app.core.database import open_sqlite_connection
 from app.modules.ai.execution import run_ai_task
 from app.modules.consult.config import load_consult_config
@@ -61,10 +63,71 @@ _QUEUE_LOCK = threading.Lock()
 
 # Strata activation only queues a host start request; the swap is over when the model answers.
 STRATA_READY_TIMEOUT_S = 300.0
-STRATA_READY_POLL_S = 2.0
+STRATA_READY_POLL_S = 0.25
 
 
-def _wait_strata_ready(model_id: str, timeout_s: float = STRATA_READY_TIMEOUT_S) -> bool:
+def wait_strata_slots_idle(
+    host: str,
+    port: int,
+    *,
+    timeout_s: float = 60.0,
+    poll_s: float = 0.25,
+    client_factory: Any = httpx.Client,
+) -> tuple[bool, float]:
+    """Poll loopback /slots to verify all slots are idle before swap (maintainer-first).
+
+    Returns (is_idle, wait_idle_s).
+    """
+    from app.modules.local_ai.runtime.host_start import ALLOWED_LOOPBACK_HOSTS
+
+    if host not in ALLOWED_LOOPBACK_HOSTS or port == 8000:
+        return True, 0.0
+
+    origin = f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+    slots_url = f"{origin}/slots"
+    client_kwargs: dict[str, Any] = {"timeout": 2.0}
+    if client_factory is httpx.Client:
+        client_kwargs["trust_env"] = False
+        client_kwargs["follow_redirects"] = False
+    t0 = time.perf_counter()
+    deadline = time.monotonic() + timeout_s
+
+    while True:
+        try:
+            with client_factory(**client_kwargs) as client:
+                resp = client.get(slots_url)
+                if resp.status_code == 200:
+                    slots = resp.json()
+                    if isinstance(slots, list) and slots:
+                        busy = any(
+                            isinstance(s, dict) and s.get("is_processing") is True
+                            for s in slots
+                        )
+                        if not busy:
+                            wait_s = round(time.perf_counter() - t0, 3)
+                            return True, wait_s
+                    else:
+                        wait_s = round(time.perf_counter() - t0, 3)
+                        return True, wait_s
+                else:
+                    return True, 0.0
+        except httpx.TimeoutException:
+            # Fail-closed: an unresponsive/timed-out /slots probe may mean the server is busy.
+            pass
+        except Exception:
+            return True, 0.0
+
+        if time.monotonic() >= deadline:
+            wait_s = round(time.perf_counter() - t0, 3)
+            return False, wait_s
+        time.sleep(poll_s)
+
+
+def _wait_strata_ready(
+    model_id: str,
+    timeout_s: float = STRATA_READY_TIMEOUT_S,
+    poll_s: float = STRATA_READY_POLL_S,
+) -> bool:
     """Block until a Strata model answers; non-Strata models are ready when activation returns."""
     from app.modules.local_ai.runtime.host_start import get_strata_controller
     from app.modules.local_ai.runtime.model_registry import read_registry
@@ -81,7 +144,9 @@ def _wait_strata_ready(model_id: str, timeout_s: float = STRATA_READY_TIMEOUT_S)
             return True
         if state.state == "failed" or time.monotonic() >= deadline:
             return False
-        time.sleep(STRATA_READY_POLL_S)
+        time.sleep(poll_s)
+
+
 _SAGE_QUEUE: list[SageQueueItem] = []
 
 
@@ -115,6 +180,18 @@ def is_sage_available(sage_model_id: str | None = None) -> bool:
 def enqueue_sage_consult(item: SageQueueItem) -> None:
     with _QUEUE_LOCK:
         _SAGE_QUEUE.append(item)
+    try:
+        cfg = load_consult_config()
+        if cfg.sage_model_id:
+            from app.modules.local_ai.runtime.model_registry import read_registry
+            from app.modules.local_ai.runtime.page_cache import prewarm_model_file_async
+
+            entries, _ = read_registry()
+            entry = next((e for e in entries if e.id == cfg.sage_model_id), None)
+            if entry and entry.model_path:
+                prewarm_model_file_async(entry.model_path)
+    except Exception as exc:
+        logger.debug("Early prewarm trigger error: %s", exc)
 
 
 def get_queued_sage_consults(turn_id: str | None = None) -> list[SageQueueItem]:
@@ -137,6 +214,7 @@ def flush_sage_queue(
     turn_id: str | None = None,
     *,
     connection: sqlite3.Connection | None = None,
+    try_fast_switch: bool = False,
 ) -> list[dict[str, Any]]:
     """Flush the Sage queue for the turn:
 
@@ -212,17 +290,42 @@ def flush_sage_queue(
 
         conn.commit()
 
+        # Maintainer-first guard: check /slots on original model if it's strata
+        entries, _ = read_registry()
+        wait_idle_s = 0.0
+        orig_entry = next((e for e in entries if e.id == original_model_id), None)
+        if orig_entry and orig_entry.runtime == "strata":
+            is_idle, wait_idle_s = wait_strata_slots_idle(orig_entry.host, orig_entry.port or 8080)
+            if not is_idle:
+                logger.warning("Maintainer is active on default Strata model; aborting Sage swap")
+                for item in items_to_process:
+                    _mark_failed(conn, item.consult_id, "maintainer_busy")
+                return []
+
         # 2. Swap to Sage
         t0 = time.perf_counter()
         sage_active = True
         swap_to_sage_s = 0.0
+        stop_old_s = 0.0
+        start_ready_s = 0.0
+        switch_mode = "hostops"
         results: list[dict[str, Any]] = []
         try:
             try:
-                activate_model(sage_model_id, persist_choice=False)
+                from app.modules.local_ai.runtime.host_start import get_strata_controller
+
+                ctrl = get_strata_controller()
+                if try_fast_switch:
+                    activate_model(sage_model_id, persist_choice=False, try_fast_switch=True)
+                else:
+                    activate_model(sage_model_id, persist_choice=False)
+                stop_old_s = getattr(ctrl, "last_stop_duration_s", 0.0)
+                switch_mode = getattr(ctrl, "last_switch_mode", "hostops")
+                t_ready = time.perf_counter()
                 if not _wait_strata_ready(sage_model_id):
                     logger.warning("Sage model %s did not become ready", sage_model_id)
                     sage_active = False
+                start_ready_s = round(time.perf_counter() - t_ready, 3)
             except Exception as exc:
                 # Never let the model still loaded answer in Sage's name.
                 logger.warning("Could not activate Sage model %s: %s", sage_model_id, type(exc).__name__)
@@ -308,7 +411,10 @@ def flush_sage_queue(
             t_back = time.perf_counter()
             if original_model_id:
                 try:
-                    activate_model(original_model_id, persist_choice=False)
+                    if try_fast_switch:
+                        activate_model(original_model_id, persist_choice=False, try_fast_switch=True)
+                    else:
+                        activate_model(original_model_id, persist_choice=False)
                     if not _wait_strata_ready(original_model_id):
                         logger.warning("Original model %s did not become ready again", original_model_id)
                 except Exception as exc:
@@ -328,9 +434,13 @@ def flush_sage_queue(
             current_steps.append({
                 "step": "sage_swap",
                 "result": "pass",
+                "wait_idle_s": wait_idle_s,
+                "stop_old_s": stop_old_s,
+                "start_ready_s": start_ready_s,
                 "swap_to_sage_s": swap_to_sage_s,
                 "swap_back_s": swap_back_s,
                 "total_swap_s": total_swap_s,
+                "switch_mode": switch_mode,
             })
             conn.execute(
                 "UPDATE consult_attempts SET gate_steps_json = ?, updated_at = ? WHERE id = ?",
@@ -348,9 +458,13 @@ def flush_sage_queue(
                 payload={
                     "status": f"Sage ha risposto in locale (tempo di swap: {total_swap_s:.2f}s)",
                     "interaction_id": turn_id,
+                    "wait_idle_s": wait_idle_s,
+                    "stop_old_s": stop_old_s,
+                    "start_ready_s": start_ready_s,
                     "swap_to_sage_s": swap_to_sage_s,
                     "swap_back_s": swap_back_s,
                     "total_swap_s": total_swap_s,
+                    "switch_mode": switch_mode,
                 },
             )
             conn.commit()
