@@ -441,12 +441,13 @@ def run_summary(task_results: dict[str, Any]) -> dict[str, Any]:
             "mean_pass_at_k": round(_mean(passk), 4), "pass_at_k_se": round(_std_error(passk), 4)}
 
 
-def _task_entry(task_id: str, rep_results: list[dict[str, Any]]) -> dict[str, Any]:
+def _task_entry(task_id: str, rep_results: list[dict[str, Any]], category: str = "uncategorized") -> dict[str, Any]:
     points_list = [r["points"] for r in rep_results]
     calls_list = [r["tool_calls"] for r in rep_results]
     walls_list = [r["wall_time_s"] for r in rep_results]
     return {
         "task_id": task_id,
+        "category": category,
         "mean_score": round(sum(points_list) / len(points_list), 4),
         "min_score": round(min(points_list), 4),
         **task_pass_stats(rep_results),
@@ -521,6 +522,10 @@ def run_eval(
         tags = task.get("tags", [])
         if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
             raise ValueError(f"Task {task.get('id')}: tags must be a list of strings")
+        if "category" in task:
+            cat = task["category"]
+            if not isinstance(cat, str) or not cat.strip():
+                raise ValueError(f"Task {task.get('id')}: category must be a non-empty string")
     tasks = [task for task in all_tasks if split == "all" or task.get("split", "dev") == split]
     if not tasks:
         raise ValueError(f"No tasks in split '{split}'")
@@ -571,6 +576,11 @@ def run_eval(
 
     def write_results(complete: bool) -> dict[str, Any]:
         entries = list(task_results.values())
+        cat_names = sorted({t.get("category", "uncategorized") for t in entries})
+        category_summary = {
+            cat: run_summary({tid: t for tid, t in task_results.items() if t.get("category", "uncategorized") == cat})
+            for cat in cat_names
+        }
         data = {
             "label": label,
             "set_id": set_id,
@@ -587,6 +597,7 @@ def run_eval(
             "yield_pauses": yield_pauses,
             "yield_paused_s": round(yield_paused_s, 3),
             "summary": run_summary(task_results),
+            "category_summary": category_summary,
             "tasks": task_results,
         }
         encoded = json.dumps(data, indent=2)
@@ -596,13 +607,14 @@ def run_eval(
 
     for task in tasks:
         task_id = task["id"]
+        category = task.get("category") or "uncategorized"
         prompt = task["prompt"]
         rep_results: list[dict[str, Any]] = []
         if resume:
             kept = prior.get("tasks", {}).get(task_id, {}).get("repetitions", [])
             rep_results = [r for r in kept if isinstance(r, dict) and r.get("rep", 0) < reps]
             if rep_results:
-                task_results[task_id] = _task_entry(task_id, rep_results)
+                task_results[task_id] = _task_entry(task_id, rep_results, category=category)
 
         for rep in range(len(rep_results), reps):
             yield_wait_s = 0.0
@@ -725,10 +737,10 @@ def run_eval(
                     "output_tokens": None, "decode_tps": None, "steps_over_6000_input_tokens": None}),
             })
 
-            task_results[task_id] = _task_entry(task_id, rep_results)
+            task_results[task_id] = _task_entry(task_id, rep_results, category=category)
             write_results(False)
 
-        task_results[task_id] = _task_entry(task_id, rep_results)
+        task_results[task_id] = _task_entry(task_id, rep_results, category=category)
 
     return write_results(True)
 
@@ -927,6 +939,415 @@ def _non_negative_seconds(text: str) -> float:
     return value
 
 
+def _compute_ratio_stats(
+    num_mean: float, num_se: float, den_mean: float, den_se: float
+) -> dict[str, Any]:
+    """Delta-method standard error and 95% confidence interval for ratio num/den."""
+    if den_mean <= 0:
+        return {
+            "ratio": None,
+            "se": None,
+            "ci_low": None,
+            "ci_high": None,
+            "ci_includes_one": False,
+        }
+    if num_mean <= 0:
+        return {
+            "ratio": round(num_mean / den_mean, 4),
+            "se": None,
+            "ci_low": None,
+            "ci_high": None,
+            "ci_includes_one": False,
+        }
+    ratio = num_mean / den_mean
+    rel_num = (num_se / num_mean) ** 2
+    rel_den = (den_se / den_mean) ** 2
+    se = ratio * math.sqrt(rel_num + rel_den)
+    ci_low = ratio - 1.96 * se
+    ci_high = ratio + 1.96 * se
+    ci_includes_one = bool(ci_low <= 1.0 <= ci_high)
+    return {
+        "ratio": round(ratio, 4),
+        "se": round(se, 4),
+        "ci_low": round(ci_low, 4),
+        "ci_high": round(ci_high, 4),
+        "ci_includes_one": ci_includes_one,
+    }
+
+
+def parity_report(
+    arm_a: dict[str, Any] | str | Path,
+    arm_b: dict[str, Any] | str | Path,
+    arm_c: dict[str, Any] | str | Path | None = None,
+    *,
+    allow_task_drift: bool = False,
+) -> dict[str, Any]:
+    """Three-arm parity comparator between reference (A), harness (B), and local (C)."""
+    vault = vault_guard.vault_root()
+    for arg in (arm_a, arm_b, arm_c):
+        if isinstance(arg, (str, Path)) and vault_guard.touches_vault(arg, vault):
+            raise PermissionError(vault_guard.REFUSED_MESSAGE)
+
+    a_data = load_run_results(arm_a) if isinstance(arm_a, (str, Path)) else arm_a
+    b_data = load_run_results(arm_b) if isinstance(arm_b, (str, Path)) else arm_b
+    c_data = load_run_results(arm_c) if isinstance(arm_c, (str, Path)) else arm_c
+
+    if not isinstance(a_data, dict) or not isinstance(b_data, dict):
+        raise ValueError("arm_a and arm_b must be valid run data dictionaries or paths")
+    if c_data is not None and not isinstance(c_data, dict):
+        raise ValueError("arm_c must be a valid run data dictionary or path if provided")
+
+    arms: list[tuple[str, dict[str, Any]]] = [("arm_a", a_data), ("arm_b", b_data)]
+    if c_data is not None:
+        arms.append(("arm_c", c_data))
+
+    for name, run in arms:
+        tasks = run.get("tasks")
+        if not isinstance(tasks, dict) or not tasks:
+            raise ValueError(f"Run {name} must contain a nonempty tasks mapping")
+        if run.get("complete", True) is not True:
+            raise ValueError(f"The {name} run is incomplete; finish it with run --resume")
+
+    drift: list[str] = []
+    set_ids = {run.get("set_id") for _, run in arms if "set_id" in run}
+    if len(set_ids) > 1:
+        drift.append("task set ids differ")
+
+    shas = {run.get("tasks_sha256") for _, run in arms if run.get("tasks_sha256")}
+    if len(shas) > 1:
+        drift.append("task-file SHA-256 differs")
+
+    task_id_sets = [set(run["tasks"].keys()) for _, run in arms]
+    if not all(s == task_id_sets[0] for s in task_id_sets[1:]):
+        drift.append("task ids differ")
+
+    if drift and not allow_task_drift:
+        raise ValueError("Runs are not comparable: " + ", ".join(drift) + " (--allow-task-drift overrides)")
+
+    common_ids = sorted(set.intersection(*task_id_sets))
+    if not common_ids:
+        raise ValueError("Runs share no task ids")
+
+    for task_id in common_ids:
+        for name, run in arms:
+            t = run["tasks"][task_id]
+            reps = t.get("repetitions")
+            if not isinstance(reps, list) or not reps:
+                raise ValueError(f"Run {name} has missing repetitions for {task_id}")
+            for rep in reps:
+                if not isinstance(rep, dict) or "flow_state" not in rep or "answer" not in rep:
+                    raise ValueError(f"Run {name} has an incomplete repetition for {task_id}")
+            for field in ("mean_score", "min_score"):
+                if not isinstance(t.get(field), (int, float)) or not math.isfinite(t[field]):
+                    raise ValueError(f"Run {name} has invalid {field} for {task_id}")
+
+    def _task_category(task_id: str) -> str:
+        for _, run in arms:
+            cat = run["tasks"][task_id].get("category")
+            if isinstance(cat, str) and cat.strip():
+                return cat
+        return "uncategorized"
+
+    categories = sorted({_task_category(tid) for tid in common_ids})
+
+    a_tasks = a_data["tasks"]
+    b_tasks = b_data["tasks"]
+    c_tasks = c_data["tasks"] if c_data is not None else None
+
+    arm_a_overall = run_summary({tid: a_tasks[tid] for tid in common_ids})
+    arm_b_overall = run_summary({tid: b_tasks[tid] for tid in common_ids})
+    arm_c_overall = run_summary({tid: c_tasks[tid] for tid in common_ids}) if c_tasks is not None else None
+
+    overall_gz = paired_stats(a_tasks, b_tasks, common_ids)
+    overall_alarm = bool(arm_b_overall["mean_points"] < arm_a_overall["mean_points"])
+
+    worst_b_minus_a_tasks = []
+    for tid in common_ids:
+        a_score = float(a_tasks[tid]["mean_score"])
+        b_score = float(b_tasks[tid]["mean_score"])
+        worst_b_minus_a_tasks.append({
+            "task_id": tid,
+            "category": _task_category(tid),
+            "a_mean": round(a_score, 4),
+            "b_mean": round(b_score, 4),
+            "diff": round(b_score - a_score, 4),
+        })
+    worst_b_minus_a_tasks.sort(key=lambda x: (x["diff"], x["task_id"]))
+
+    category_reports: dict[str, dict[str, Any]] = {}
+    any_cat_alarm = False
+
+    for cat in categories:
+        cat_ids = [tid for tid in common_ids if _task_category(tid) == cat]
+        cat_a_sub = {tid: a_tasks[tid] for tid in cat_ids}
+        cat_b_sub = {tid: b_tasks[tid] for tid in cat_ids}
+        cat_a_summary = run_summary(cat_a_sub)
+        cat_b_summary = run_summary(cat_b_sub)
+        cat_gz = paired_stats(a_tasks, b_tasks, cat_ids)
+
+        cat_alarm = bool(cat_b_summary["mean_points"] < cat_a_summary["mean_points"])
+        if cat_alarm:
+            any_cat_alarm = True
+
+        cat_b_over_a = _compute_ratio_stats(
+            cat_b_summary["mean_points"],
+            cat_b_summary["mean_points_se"],
+            cat_a_summary["mean_points"],
+            cat_a_summary["mean_points_se"],
+        )
+
+        cat_entry: dict[str, Any] = {
+            "tasks": len(cat_ids),
+            "task_ids": cat_ids,
+            "arm_a": cat_a_summary,
+            "arm_b": cat_b_summary,
+            "gate_zero": cat_gz,
+            "gate_zero_alarm": cat_alarm,
+            "b_over_a": cat_b_over_a,
+        }
+
+        if c_tasks is not None:
+            cat_c_sub = {tid: c_tasks[tid] for tid in cat_ids}
+            cat_c_summary = run_summary(cat_c_sub)
+            cat_entry["arm_c"] = cat_c_summary
+
+            cat_c_over_a = _compute_ratio_stats(
+                cat_c_summary["mean_points"],
+                cat_c_summary["mean_points_se"],
+                cat_a_summary["mean_points"],
+                cat_a_summary["mean_points_se"],
+            )
+            cat_entry["c_over_a"] = cat_c_over_a
+
+            if cat_b_summary["mean_points"] >= cat_a_summary["mean_points"]:
+                max_ab_m = cat_b_summary["mean_points"]
+                max_ab_se = cat_b_summary["mean_points_se"]
+            else:
+                max_ab_m = cat_a_summary["mean_points"]
+                max_ab_se = cat_a_summary["mean_points_se"]
+
+            cat_c_over_max_ab = _compute_ratio_stats(
+                cat_c_summary["mean_points"],
+                cat_c_summary["mean_points_se"],
+                max_ab_m,
+                max_ab_se,
+            )
+            cat_entry["c_over_max_ab"] = cat_c_over_max_ab
+        else:
+            cat_entry["arm_c"] = None
+
+        category_reports[cat] = cat_entry
+
+    gate_zero_alarm = overall_alarm or any_cat_alarm
+
+    b_over_a_overall = _compute_ratio_stats(
+        arm_b_overall["mean_points"],
+        arm_b_overall["mean_points_se"],
+        arm_a_overall["mean_points"],
+        arm_a_overall["mean_points_se"],
+    )
+
+    c_over_a_overall = None
+    c_over_max_ab_overall = None
+    parity_met = False
+
+    if arm_c_overall is not None:
+        c_over_a_overall = _compute_ratio_stats(
+            arm_c_overall["mean_points"],
+            arm_c_overall["mean_points_se"],
+            arm_a_overall["mean_points"],
+            arm_a_overall["mean_points_se"],
+        )
+        if arm_b_overall["mean_points"] >= arm_a_overall["mean_points"]:
+            ov_max_ab_m = arm_b_overall["mean_points"]
+            ov_max_ab_se = arm_b_overall["mean_points_se"]
+        else:
+            ov_max_ab_m = arm_a_overall["mean_points"]
+            ov_max_ab_se = arm_a_overall["mean_points_se"]
+
+        c_over_max_ab_overall = _compute_ratio_stats(
+            arm_c_overall["mean_points"],
+            arm_c_overall["mean_points_se"],
+            ov_max_ab_m,
+            ov_max_ab_se,
+        )
+        parity_met = bool(category_reports) and all(
+            bool(cat_info.get("c_over_max_ab", {}).get("ci_includes_one"))
+            for cat_info in category_reports.values()
+        )
+
+    set_id = a_data.get("set_id") or b_data.get("set_id") or "unknown"
+    split = a_data.get("split") or b_data.get("split") or "dev"
+    tasks_sha256 = a_data.get("tasks_sha256") or b_data.get("tasks_sha256")
+
+    report: dict[str, Any] = {
+        "set_id": set_id,
+        "split": split,
+        "tasks_sha256": tasks_sha256,
+        "task_ids": common_ids,
+        "tasks_count": len(common_ids),
+        "arm_a": arm_a_overall,
+        "arm_b": arm_b_overall,
+        "arm_c": arm_c_overall,
+        "gate_zero": overall_gz,
+        "gate_zero_alarm": gate_zero_alarm,
+        "worst_b_minus_a_tasks": worst_b_minus_a_tasks,
+        "b_over_a": b_over_a_overall,
+        "parity_met": parity_met,
+        "categories": category_reports,
+    }
+    if arm_c_overall is not None:
+        report["c_over_a"] = c_over_a_overall
+        report["c_over_max_ab"] = c_over_max_ab_overall
+
+    report["overall"] = {
+        "arm_a": arm_a_overall,
+        "arm_b": arm_b_overall,
+        "arm_c": arm_c_overall,
+        "gate_zero": overall_gz,
+        "gate_zero_alarm": overall_alarm,
+        "b_over_a": b_over_a_overall,
+        "c_over_a": c_over_a_overall,
+        "c_over_max_ab": c_over_max_ab_overall,
+        "parity_met": parity_met,
+    }
+    return report
+
+
+def format_parity_table(report: dict[str, Any]) -> str:
+    """Format three-arm parity comparison table with Gate Zero alarm banner."""
+    lines: list[str] = []
+    lines.append("=" * 80)
+    lines.append(f"AGENT EVAL PARITY REPORT: set={report['set_id']} split={report['split']} tasks={report['tasks_count']}")
+    lines.append("=" * 80)
+
+    if report["gate_zero_alarm"]:
+        lines.append("********************************************************************************")
+        lines.append("[!] GATE ZERO ALARM: Reference-in-harness (Arm B) regressed below Arm A!")
+        lines.append("********************************************************************************")
+    else:
+        lines.append("Gate Zero: PASS (Arm B >= Arm A across all categories and overall)")
+
+    has_c = report.get("arm_c") is not None
+    if has_c:
+        if report["parity_met"]:
+            lines.append("Parity Status: PARITY MET (All category 95% CIs include 1.0)")
+        else:
+            lines.append("Parity Status: PARITY NOT MET (One or more category CIs exclude 1.0)")
+
+    lines.append("")
+    if has_c:
+        lines.append(f"{'Category':<22} | {'Tasks':<5} | {'Arm A':<14} | {'Arm B':<14} | {'B - A (SE)':<16} | {'B / A':<10} | {'Arm C':<14} | {'C / max(A,B)':<18}")
+        lines.append("-" * 125)
+    else:
+        lines.append(f"{'Category':<22} | {'Tasks':<5} | {'Arm A':<14} | {'Arm B':<14} | {'B - A (SE)':<16} | {'B / A':<10}")
+        lines.append("-" * 95)
+
+    def _fmt_mean(arm_dict: dict[str, Any] | None) -> str:
+        if not arm_dict:
+            return "n/d"
+        return f"{arm_dict['mean_points']:.3f}±{arm_dict['mean_points_se']:.3f}"
+
+    def _fmt_ratio(r_dict: dict[str, Any] | None) -> str:
+        if not r_dict or r_dict.get("ratio") is None:
+            return "n/d"
+        se_str = f"±{r_dict['se']:.3f}" if r_dict.get("se") is not None else ""
+        return f"{r_dict['ratio']:.3f}{se_str}"
+
+    def _fmt_gz(gz: dict[str, Any]) -> str:
+        pts = gz.get("points", {})
+        return f"{pts.get('mean_diff', 0.0):+.3f}±{pts.get('se', 0.0):.3f}"
+
+    for cat_name, cat in report.get("categories", {}).items():
+        row = f"{cat_name:<22} | {cat['tasks']:<5} | {_fmt_mean(cat['arm_a']):<14} | {_fmt_mean(cat['arm_b']):<14} | {_fmt_gz(cat['gate_zero']):<16} | {_fmt_ratio(cat['b_over_a']):<10}"
+        if has_c:
+            row += f" | {_fmt_mean(cat.get('arm_c')):<14} | {_fmt_ratio(cat.get('c_over_max_ab')):<18}"
+        lines.append(row)
+
+    if has_c:
+        lines.append("-" * 125)
+    else:
+        lines.append("-" * 95)
+
+    ov_row = f"{'OVERALL':<22} | {report['tasks_count']:<5} | {_fmt_mean(report['arm_a']):<14} | {_fmt_mean(report['arm_b']):<14} | {_fmt_gz(report['gate_zero']):<16} | {_fmt_ratio(report['b_over_a']):<10}"
+    if has_c:
+        ov_row += f" | {_fmt_mean(report.get('arm_c')):<14} | {_fmt_ratio(report.get('c_over_max_ab')):<18}"
+    lines.append(ov_row)
+
+    worst = report.get("worst_b_minus_a_tasks", [])
+    if worst:
+        lines.append("\nWorst B - A task differences (worst first):")
+        lines.append(f"  {'Task ID':<30} | {'Category':<18} | {'Arm A':<8} | {'Arm B':<8} | {'Diff':<8}")
+        lines.append("  " + "-" * 80)
+        for t in worst[:10]:
+            lines.append(f"  {t['task_id']:<30} | {t['category']:<18} | {t['a_mean']:<8.2f} | {t['b_mean']:<8.2f} | {t['diff']:<+8.2f}")
+
+    return "\n".join(lines)
+
+
+def update_scoreboard(
+    scoreboard_path: Path | str,
+    report: dict[str, Any],
+    *,
+    date: str | None = None,
+    change_label: str | None = None,
+) -> Path:
+    """Atomically create or append a row to a plain-Italian Markdown scoreboard table."""
+    path = Path(scoreboard_path)
+    vault = vault_guard.vault_root()
+    if vault_guard.touches_vault(path, vault):
+        raise PermissionError(vault_guard.REFUSED_MESSAGE)
+
+    date_str = date or time.strftime("%Y-%m-%d", time.gmtime())
+    label_str = (change_label or "-").replace("|", "/").replace("\n", " ").strip()
+    split_str = str(report.get("split", "dev"))
+    gz_status = "ALARM" if report.get("gate_zero_alarm") else "PASS"
+
+    has_c = report.get("arm_c") is not None
+    categories = sorted(report.get("categories", {}).keys())
+
+    def _cat_val(cat_name: str) -> str:
+        if not has_c:
+            return "n/d"
+        cat_data = report.get("categories", {}).get(cat_name, {})
+        ratio = cat_data.get("c_over_max_ab", {}).get("ratio")
+        return f"{ratio:.2f}" if ratio is not None else "n/d"
+
+    overall_val = "n/d"
+    if has_c:
+        ov_ratio = report.get("c_over_max_ab", {}).get("ratio")
+        if ov_ratio is not None:
+            overall_val = f"{ov_ratio:.2f}"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        existing_text = path.read_text(encoding="utf-8")
+        lines = [line.strip() for line in existing_text.splitlines() if line.strip()]
+        if lines and lines[0].startswith("|"):
+            header_cells = [cell.strip() for cell in lines[0].split("|")[1:-1]]
+            if (
+                len(header_cells) >= 5
+                and header_cells[0].lower() in ("data", "date")
+                and header_cells[-1].lower() in ("totale", "overall")
+            ):
+                cat_cols = header_cells[4:-1]
+                cat_vals = [_cat_val(c) for c in cat_cols]
+                row = f"| {date_str} | {label_str} | {split_str} | {gz_status} | " + " | ".join(cat_vals) + f" | {overall_val} |"
+                new_text = existing_text.rstrip("\n") + "\n" + row + "\n"
+                _write_atomic(path, new_text)
+                return path
+
+    header_cols = ["Data", "Modifica", "Split", "Gate Zero (B/A)"] + categories + ["Totale"]
+    header_line = "| " + " | ".join(header_cols) + " |"
+    sep_line = "| " + " | ".join(["---"] * len(header_cols)) + " |"
+    cat_vals = [_cat_val(c) for c in categories]
+    row_line = f"| {date_str} | {label_str} | {split_str} | {gz_status} | " + " | ".join(cat_vals) + f" | {overall_val} |"
+
+    content = header_line + "\n" + sep_line + "\n" + row_line + "\n"
+    _write_atomic(path, content)
+    return path
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent_eval",
@@ -969,6 +1390,21 @@ def build_parser() -> argparse.ArgumentParser:
     cmp_parser.add_argument("--allow-task-drift", action="store_true",
                             help="Compare common tasks although set id, task file or task ids differ")
     cmp_parser.add_argument("--json", help="Also write the comparison numbers to this JSON file")
+
+    # parity subcommand
+    parity_parser = subparsers.add_parser(
+        "parity",
+        help="Compare standalone reference (Arm A), reference-in-harness (Arm B), and optional local-in-harness (Arm C)",
+    )
+    parity_parser.add_argument("--arm-a", required=True, help="Arm A (standalone reference) run directory or results JSON")
+    parity_parser.add_argument("--arm-b", required=True, help="Arm B (reference in harness) run directory or results JSON")
+    parity_parser.add_argument("--arm-c", help="Arm C (local model in harness) run directory or results JSON")
+    parity_parser.add_argument("--allow-task-drift", action="store_true",
+                               help="Compare common tasks although set id, task file or task ids differ")
+    parity_parser.add_argument("--json", help="Path to write structured parity report JSON")
+    parity_parser.add_argument("--scoreboard", help="Path to plain-Italian Markdown scoreboard table to create or append")
+    parity_parser.add_argument("--change-label", help="Label for change in scoreboard (e.g. 'prompt-tune-v2')")
+    parity_parser.add_argument("--date", help="Date string for scoreboard row (YYYY-MM-DD, defaults to today UTC)")
 
     return parser
 
@@ -1025,6 +1461,36 @@ def main(argv: list[str] | None = None) -> int:
             return code
         except (OSError, ValueError, KeyError, TypeError) as exc:
             print(f"Error comparing runs: {exc}", file=sys.stderr)
+            return 1
+
+    if args.subcommand == "parity":
+        vault = vault_guard.vault_root()
+        parity_paths = [args.arm_a, args.arm_b, args.arm_c, args.json, args.scoreboard]
+        if any(p and vault_guard.touches_vault(p, vault) for p in parity_paths):
+            print(vault_guard.REFUSED_MESSAGE, file=sys.stderr)
+            return vault_guard.REFUSED_EXIT
+        try:
+            report = parity_report(
+                args.arm_a,
+                args.arm_b,
+                args.arm_c,
+                allow_task_drift=args.allow_task_drift,
+            )
+            print(format_parity_table(report))
+            if args.json:
+                json_path = Path(args.json)
+                json_path.parent.mkdir(parents=True, exist_ok=True)
+                json_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            if args.scoreboard:
+                update_scoreboard(
+                    args.scoreboard,
+                    report,
+                    date=args.date,
+                    change_label=args.change_label,
+                )
+            return 0
+        except (OSError, ValueError, KeyError, TypeError, PermissionError) as exc:
+            print(f"Error generating parity report: {exc}", file=sys.stderr)
             return 1
 
     return 0
