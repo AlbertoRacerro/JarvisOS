@@ -1,6 +1,6 @@
 # 388 — AGENT-EVAL-EXPLORER-1
 
-Status: ready
+Status: merged
 Depends on: 387
 
 ## Goal

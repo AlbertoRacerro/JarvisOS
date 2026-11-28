@@ -1,6 +1,6 @@
 # 389 — DEPENDENCY-IMPACT-LEVERS-1
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal
