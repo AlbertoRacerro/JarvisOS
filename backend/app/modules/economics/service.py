@@ -162,29 +162,29 @@ def evaluate_economics(
     opex_by_subcat_raw: dict[str, float] = {}
     opex_entries: list[tuple[str, str, str, float]] = []
 
-    for item in model.opex_items:
+    for opex_item in model.opex_items:
         computed_from_rate = False
         ann_cost: float | None = None
-        if item.annual_cost is not None:
-            ann_cost = item.annual_cost
-        elif item.unit_rate is not None and item.annual_usage is not None:
-            ann_cost = item.unit_rate * item.annual_usage
+        if opex_item.annual_cost is not None:
+            ann_cost = opex_item.annual_cost
+        elif opex_item.unit_rate is not None and opex_item.annual_usage is not None:
+            ann_cost = opex_item.unit_rate * opex_item.annual_usage
             computed_from_rate = True
 
         if ann_cost is None:
             missing_items.append(
                 MissingCostItem(
                     kind="missing_opex_cost",
-                    item_id=item.id,
-                    name=item.name,
-                    message=f"Missing annual cost or rate/usage for OPEX item '{item.name}'.",
+                    item_id=opex_item.id,
+                    name=opex_item.name,
+                    message=f"Missing annual cost or rate/usage for OPEX item '{opex_item.name}'.",
                 )
             )
             opex_breakdown.append(
                 OpexItemBreakdown(
-                    id=item.id,
-                    name=item.name,
-                    subcategory=item.subcategory,
+                    id=opex_item.id,
+                    name=opex_item.name,
+                    subcategory=opex_item.subcategory,
                     annual_cost=None,
                     computed_from_rate=False,
                     missing_cost=True,
@@ -192,15 +192,15 @@ def evaluate_economics(
             )
             continue
 
-        opex_by_subcat_raw[item.subcategory] = opex_by_subcat_raw.get(item.subcategory, 0.0) + ann_cost
-        opex_entries.append((item.id, item.name, item.subcategory, ann_cost))
-        annualized_entries.append((f"opex:{item.id}", f"{item.name} (OPEX)", item.subcategory, ann_cost))
+        opex_by_subcat_raw[opex_item.subcategory] = opex_by_subcat_raw.get(opex_item.subcategory, 0.0) + ann_cost
+        opex_entries.append((opex_item.id, opex_item.name, opex_item.subcategory, ann_cost))
+        annualized_entries.append((f"opex:{opex_item.id}", f"{opex_item.name} (OPEX)", opex_item.subcategory, ann_cost))
 
         opex_breakdown.append(
             OpexItemBreakdown(
-                id=item.id,
-                name=item.name,
-                subcategory=item.subcategory,
+                id=opex_item.id,
+                name=opex_item.name,
+                subcategory=opex_item.subcategory,
                 annual_cost=round(ann_cost, 2),
                 computed_from_rate=computed_from_rate,
                 missing_cost=False,
