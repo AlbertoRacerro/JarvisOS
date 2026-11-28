@@ -29,6 +29,7 @@ from app.modules.coding.runtime_truth import (
 )
 from app.modules.consult.routes import router as consult_router
 from app.modules.development.routes import router as development_router
+from app.modules.economics.routes import router as economics_router
 from app.modules.engineering.operator_routes import router as engineering_operator_router
 from app.modules.engineering.readiness_board import router as readiness_router
 from app.modules.environment.routes import router as environment_router
@@ -221,6 +222,7 @@ def create_app() -> FastAPI:
     app.include_router(development_router)
     app.include_router(relay_gateway_router)
     app.include_router(consult_router)
+    app.include_router(economics_router)
 
     frontend_dist = _frontend_dist_path()
     if frontend_dist.is_dir():

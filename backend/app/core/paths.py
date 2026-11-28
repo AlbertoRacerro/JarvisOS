@@ -45,6 +45,13 @@ class JarvisPaths:
         """Workspace-scoped biological model sets and cards (spec 169)."""
         return self.workspaces_dir / workspace_id / "bio_models"
 
+    def economics_workspace_dir(self, workspace_id: str) -> Path:
+        """Workspace-scoped techno-economic model files (spec 393)."""
+        return self.workspaces_dir / workspace_id / "economics"
+
+    def economics_model_file(self, workspace_id: str) -> Path:
+        return self.economics_workspace_dir(workspace_id) / "model.json"
+
     def bluecad_freecad_source_file(self, workspace_id: str, file_sha256: str) -> Path:
         return self.data_root / "bluecad" / "freecad" / workspace_id / file_sha256 / "source.FCStd"
 

@@ -111,6 +111,7 @@ _KNOWLEDGE_READ_TOOL = {
                     "table_counts",
                     "change_impact",
                     "upstream_levers",
+                    "economics_summary",
                 ],
             },
             "workspace_id": {"type": "string", "maxLength": 128},

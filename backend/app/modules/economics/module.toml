@@ -1,0 +1,4 @@
+purpose = "Deterministic techno-economic analysis (TEA): equipment CAPEX, subcategory OPEX, annualized depreciation/allowances, completeness tracking, and ranked cost hotspots."
+status = "live"
+entrypoints = ["/workspaces/{id}/economics", "service.py"]
+owner = "maintainer"
