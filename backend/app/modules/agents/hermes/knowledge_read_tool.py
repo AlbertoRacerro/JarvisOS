@@ -1125,6 +1125,9 @@ def dispatch_knowledge_read_tool(
                 if exc.status_code == 404:
                     return None, "not_found"
                 return None, default_error
+            except (OSError, ValueError):
+                # An unreadable or invalid model.json is a tool error, not a crash.
+                return None, default_error
             result = econ_resp.evaluation.model_dump(mode="json")
             result["view"] = "economics_summary"
             result["workspace_id"] = target_workspace

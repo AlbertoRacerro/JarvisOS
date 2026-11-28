@@ -245,6 +245,7 @@ def test_hermes_knowledge_read_economics_summary(
             "SELECT id FROM design_project_versions WHERE project_id = ? AND active = 1",
             (ws_id,),
         ).fetchone()
+        assert ver_row is not None, "a new workspace has an active Design version"
         if ver_row is not None:
             conn.execute(
                 "INSERT INTO design_components (id, project_id, version_id, parent_id, name, revision, created_at, updated_at) "
@@ -287,3 +288,21 @@ def test_hermes_knowledge_read_economics_summary(
     assert cloud_data is not None
     assert "egress_mode" in cloud_data
     assert cloud_data["withheld_count"] == 0
+
+
+def test_hermes_economics_summary_unreadable_model_is_tool_error(
+    isolated_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core.paths import build_paths
+
+    ws_id = isolated_client.post("/workspaces", json={"name": "Corrupt TEA", "slug": "corrupt-tea"}).json()["id"]
+    model_file = build_paths().economics_model_file(ws_id)
+    model_file.parent.mkdir(parents=True, exist_ok=True)
+    model_file.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(knowledge_read_tool, "is_local_route", lambda grant=None: True)
+    call = StructuredToolCall(
+        call_id="call-econ-2", grant_id="grant-econ-2", capability_id="jarvis.knowledge_read",
+        correlation_id="corr-econ-2", requested_at="2026-11-28T00:00:00Z", deadline_at="2026-11-28T01:00:00Z",
+        arguments={"view": "economics_summary", "workspace_id": ws_id},
+    )
+    assert dispatch_knowledge_read_tool(call, ws_id, "tool_error") == (None, "tool_error")
