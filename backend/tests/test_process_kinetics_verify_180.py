@@ -2,6 +2,8 @@
 
 import math
 
+import pytest
+
 from app.modules.process_stack.draft import result_findings
 from app.modules.process_stack.kinetics_verify import verify_rate_law_reactor
 
@@ -180,9 +182,12 @@ def test_hermes_set_reaction_schema_is_typed_and_matches_brief_example() -> None
     schema = next(item for item in variants if item["properties"]["op"] == {"const": "set_reaction"})
     reaction = schema["properties"]["reaction"]
     assert conforms(example, reaction) and not conforms({}, reaction)
-    monod, haldane = reaction["properties"]["rate_law"]["oneOf"]
-    assert conforms(example["rate_law"], monod) and "k_i" not in monod["properties"]
-    assert monod["properties"]["form"] == {"const": "monod"} and "k_i" in haldane["properties"]
+    rate_law = reaction["properties"]["rate_law"]
+    assert conforms(example["rate_law"], rate_law) and "k_i" in rate_law["properties"]
+    assert rate_law["properties"]["form"] == {"enum": ["monod", "haldane"]}
+    # One schema for both forms; Monod still refuses k_i at apply time.
+    with pytest.raises(ValueError):
+        KineticReaction.model_validate(example | {"rate_law": example["rate_law"] | {"k_i": {"value": 1, "unit": "kmol/m3"}}})
     assert conforms(example["provenance"], reaction["properties"]["provenance"])
 
 
