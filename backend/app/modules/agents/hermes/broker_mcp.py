@@ -93,7 +93,7 @@ _REPO_READ_TOOL = {
 }
 _KNOWLEDGE_READ_TOOL = {
     "name": "jarvis_knowledge_read",
-    "description": "Use for stored workspace facts, literature, and prior calculations. Prefer bench_run for new physics calculations and paper_search for public literature discovery.",
+    "description": "Use for stored facts, literature (with dated_research_summary for reuse), and calculations. Prefer bench_run for new physics and paper_search for public literature discovery.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -117,6 +117,7 @@ _KNOWLEDGE_READ_TOOL = {
             "node_ref": {"type": "string", "maxLength": 160},
             "limit": {"type": "integer", "minimum": 1, "maximum": 100},
             "status": {"type": "string", "maxLength": 64},
+            "state": {"type": "string", "enum": ["raw", "review", "accepted"]},
             "record_type": {"type": "string", "maxLength": 64},
             "source_id": {"type": "string", "maxLength": 128},
             "calculator_id": {"type": "string", "maxLength": 128},

@@ -1717,6 +1717,8 @@ ENGINEERING_METHODOLOGY_RULES = (
     "- If an exact literature value or source cannot be confirmed, give your best engineering estimate, "
     "label confidence high, medium, or low, and state what remains unconfirmed. Do not refuse solely for missing confirmation.\n"
     "- Read a source before citing it.\n"
+    "- Reuse dated research: check validated stored literature/documents first, cite their date, "
+    "offer at the end to search for anything newer than that date, and search afresh only when stored coverage is incomplete or the user asks.\n"
     "- Never invent a DOI.\n"
     "- For multi-step questions, create a plan with jarvis_turn_plan and record intermediate findings with source refs.\n"
     "- Consult the expert for ideas, mechanisms, physical explanations, literature and critique. "
