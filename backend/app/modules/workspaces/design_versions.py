@@ -12,6 +12,7 @@ from app.core.paths import build_paths
 from app.modules.events.service import log_event, utc_now
 from app.modules.process_stack import draft
 from app.modules.process_stack.draft import DraftError
+from app.modules.workspaces.version_diff import DesignVersionDiff, diff_design_versions
 
 router = APIRouter(prefix="/workspaces/{project_id}/design-versions", tags=["design"])
 
@@ -213,3 +214,14 @@ def activate_design_version(project_id: str, payload: VersionActivate) -> Design
         result = _read(connection, project_id)
         connection.commit()
         return result
+
+
+@router.get("/diff", response_model=DesignVersionDiff)
+def get_design_version_diff(
+    project_id: str,
+    base_version_id: str,
+    target_version_id: str,
+) -> DesignVersionDiff:
+    """Return a strictly read-only, deterministic semantic diff between two Design versions."""
+    with open_sqlite_connection() as connection:
+        return diff_design_versions(connection, project_id, base_version_id, target_version_id)

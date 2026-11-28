@@ -245,6 +245,8 @@ def test_knowledge_read_tool_registered_in_allowlists_and_broker() -> None:
         "change_impact",
         "upstream_levers",
         "economics_summary",
+        "design_versions",
+        "version_diff",
     }
     assert schema["properties"]["node_ref"]["type"] == "string"
     assert schema["properties"]["node_ref"]["maxLength"] == 160

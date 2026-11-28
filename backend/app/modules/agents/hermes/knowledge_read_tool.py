@@ -26,6 +26,7 @@ from app.modules.flowsheet.freshness import (
     preview_change_impact_from_connection,
 )
 from app.modules.flowsheet.service import FlowsheetError
+from app.modules.workspaces.version_diff import diff_design_versions
 
 _ALLOWED_VIEWS = frozenset({
     "workspaces",
@@ -39,6 +40,8 @@ _ALLOWED_VIEWS = frozenset({
     "change_impact",
     "upstream_levers",
     "economics_summary",
+    "design_versions",
+    "version_diff",
 })
 
 _VIEW_ALLOWED_KEYS = {
@@ -53,6 +56,8 @@ _VIEW_ALLOWED_KEYS = {
     "change_impact": {"view", "workspace_id", "node_ref"},
     "upstream_levers": {"view", "workspace_id", "node_ref"},
     "economics_summary": {"view", "workspace_id"},
+    "design_versions": {"view", "workspace_id", "limit"},
+    "version_diff": {"view", "workspace_id", "base_version_id", "target_version_id"},
 }
 
 _VIEW_LIMIT_BOUNDS = {
@@ -63,6 +68,7 @@ _VIEW_LIMIT_BOUNDS = {
     "project_revisions": (1, 50, 20),
     "calc_runs": (1, 50, 20),
     "ai_jobs_recent": (1, 50, 20),
+    "design_versions": (1, 100, 50),
 }
 
 
@@ -1009,6 +1015,74 @@ def _handle_table_counts(connection: Any, workspace_id: str) -> dict[str, Any]:
     return _enforce_payload_bounds(payload)
 
 
+def _resolve_project_id(connection: Any, workspace_id: str) -> str | None:
+    row = connection.execute(
+        "SELECT id FROM workspaces WHERE id = ? AND status != 'design_version'",
+        (workspace_id,),
+    ).fetchone()
+    if row is not None:
+        return str(row["id"])
+    row = connection.execute(
+        "SELECT project_id FROM design_project_versions WHERE data_workspace_id = ?",
+        (workspace_id,),
+    ).fetchone()
+    if row is not None:
+        return str(row["project_id"])
+    row = connection.execute(
+        "SELECT project_id FROM design_project_versions WHERE project_id = ?",
+        (workspace_id,),
+    ).fetchone()
+    if row is not None:
+        return str(row["project_id"])
+    return None
+
+
+def _handle_design_versions(
+    connection: Any, project_id: str, raw_args: dict[str, Any]
+) -> dict[str, Any]:
+    min_limit, max_limit, default_limit = _VIEW_LIMIT_BOUNDS["design_versions"]
+    limit = raw_args.get("limit", default_limit)
+
+    count_row = connection.execute(
+        "SELECT COUNT(*) FROM design_project_versions WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()
+    total = int(count_row[0]) if count_row else 0
+
+    rows = connection.execute(
+        """
+        SELECT id, label, active, parent_version_id, source_mode, data_workspace_id, created_at
+        FROM design_project_versions
+        WHERE project_id = ?
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?
+        """,
+        (project_id, limit),
+    ).fetchall()
+
+    items = []
+    for r in rows:
+        items.append({
+            "id": _cap_str(r["id"]),
+            "label": _cap_str(r["label"]),
+            "active": bool(r["active"]),
+            "parent_version_id": _cap_str(r["parent_version_id"]) if r["parent_version_id"] else None,
+            "source_mode": _cap_str(r["source_mode"]) if r["source_mode"] else None,
+            "data_workspace_id": _cap_str(r["data_workspace_id"]),
+            "created_at": _cap_str(r["created_at"]),
+        })
+
+    payload = {
+        "view": "design_versions",
+        "workspace_id": project_id,
+        "count": len(items),
+        "total": total,
+        "truncated": False,
+        "design_versions": items,
+    }
+    return _enforce_payload_bounds(payload, "design_versions")
+
+
 def dispatch_knowledge_read_tool(
     call: StructuredToolCall,
     workspace_id: str,
@@ -1071,6 +1145,14 @@ def dispatch_knowledge_read_tool(
             return None, "invalid_arguments"
         node_ref = node_ref_arg.strip()
 
+    if view == "version_diff":
+        base_v_arg = raw_args.get("base_version_id")
+        target_v_arg = raw_args.get("target_version_id")
+        if not isinstance(base_v_arg, str) or not base_v_arg.strip():
+            return None, "invalid_arguments"
+        if not isinstance(target_v_arg, str) or not target_v_arg.strip():
+            return None, "invalid_arguments"
+
     home_str = str(Path.home())
 
     with open_sqlite_connection(read_only=True) as connection:
@@ -1092,6 +1174,38 @@ def dispatch_knowledge_read_tool(
             result = _handle_ai_jobs_recent(connection, target_workspace, raw_args)
         elif view == "table_counts":
             result = _handle_table_counts(connection, target_workspace)
+        elif view == "design_versions":
+            resolved_proj = _resolve_project_id(connection, target_workspace)
+            if resolved_proj is None:
+                return None, "not_found"
+            result = _handle_design_versions(connection, resolved_proj, raw_args)
+        elif view == "version_diff":
+            resolved_proj = _resolve_project_id(connection, target_workspace)
+            if resolved_proj is None:
+                return None, "not_found"
+            assert isinstance(base_v_arg, str) and isinstance(target_v_arg, str)
+            base_v = base_v_arg.strip()
+            target_v = target_v_arg.strip()
+            b_check = connection.execute(
+                "SELECT id FROM design_project_versions WHERE id = ? AND project_id = ?",
+                (base_v, resolved_proj),
+            ).fetchone()
+            t_check = connection.execute(
+                "SELECT id FROM design_project_versions WHERE id = ? AND project_id = ?",
+                (target_v, resolved_proj),
+            ).fetchone()
+            if b_check is None or t_check is None:
+                return None, "not_found"
+            try:
+                diff_obj = diff_design_versions(connection, resolved_proj, base_v, target_v)
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    return None, "not_found"
+                return None, default_error
+            result = diff_obj.model_dump(mode="json")
+            result["view"] = "version_diff"
+            result["workspace_id"] = target_workspace
+            result["truncated"] = False
         elif view == "change_impact":
             assert node_ref is not None
             try:
@@ -1136,7 +1250,7 @@ def dispatch_knowledge_read_tool(
         else:
             return None, "unknown_view"
 
-    if view in {"table_counts", "economics_summary"}:
+    if view in {"table_counts", "economics_summary", "version_diff"}:
         items_key = None
     elif view == "ai_jobs_recent":
         items_key = "ai_jobs"
