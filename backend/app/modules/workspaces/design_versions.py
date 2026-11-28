@@ -223,5 +223,5 @@ def get_design_version_diff(
     target_version_id: str,
 ) -> DesignVersionDiff:
     """Return a strictly read-only, deterministic semantic diff between two Design versions."""
-    with open_sqlite_connection() as connection:
+    with open_sqlite_connection(read_only=True) as connection:
         return diff_design_versions(connection, project_id, base_version_id, target_version_id)

@@ -1366,6 +1366,69 @@ def dispatch_knowledge_read_tool(
                     reason_code=reason_code,
                     workspace_id=target_workspace,
                 )
+        elif view == "version_diff":
+            diff_list_keys = (
+                "parameters_added",
+                "parameters_removed",
+                "parameters_changed",
+                "components_added",
+                "components_removed",
+                "components_changed",
+                "units_added",
+                "units_removed",
+                "unit_params_changed",
+                "results_added",
+                "results_removed",
+                "results_changed",
+                "validations_added",
+                "validations_removed",
+                "validations_changed",
+            )
+            withheld_count = 0
+            counts_obj = scrubbed.get("counts")
+            for list_key in diff_list_keys:
+                if not isinstance(scrubbed.get(list_key), list):
+                    continue
+                raw_list = result.get(list_key, []) if isinstance(result, dict) else []
+                kept_list = []
+                for raw_item, item in zip(raw_list, scrubbed[list_key], strict=True):
+                    is_str_item = isinstance(item, str)
+                    raw_rec = {"text": raw_item} if isinstance(raw_item, str) else raw_item
+                    rec = {"text": item} if is_str_item else item
+                    if not isinstance(rec, dict):
+                        kept_list.append(item)
+                        continue
+                    if mode == CLOUD_IP_MODE_NO_CLOUD and isinstance(raw_rec, dict):
+                        raw_allowed, _, _ = sanitize_record(raw_rec, mode)
+                        if not raw_allowed:
+                            withheld_count += 1
+                            continue
+                    allowed, out_item, _ = sanitize_record(rec, mode)
+                    if allowed:
+                        kept_list.append(out_item.get("text", item) if is_str_item else out_item)
+                    else:
+                        withheld_count += 1
+                scrubbed[list_key] = kept_list
+                if isinstance(counts_obj, dict) and list_key in counts_obj:
+                    counts_obj[list_key] = len(kept_list)
+            scrubbed["withheld_count"] = withheld_count
+            scrubbed["egress_mode"] = mode
+            if mode == CLOUD_IP_MODE_SANITIZED:
+                scrubbed["sanitized"] = True
+            if withheld_count > 0:
+                reason_code = (
+                    "egress_pack_blocked"
+                    if mode == CLOUD_IP_MODE_NO_CLOUD
+                    else "egress_sanitization_required"
+                )
+                log_cloud_boundary_event(
+                    tool_name="jarvis_knowledge_read",
+                    op=view,
+                    egress_mode=mode,
+                    withheld_count=withheld_count,
+                    reason_code=reason_code,
+                    workspace_id=target_workspace,
+                )
         else:
             scrubbed["withheld_count"] = 0
             scrubbed["egress_mode"] = mode
