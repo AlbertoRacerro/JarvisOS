@@ -1,6 +1,6 @@
 # 390 — SUPERVISOR-AUTH-FAILOVER-1
 
-Status: ready
+Status: merged
 Depends on: none
 
 ## Goal
