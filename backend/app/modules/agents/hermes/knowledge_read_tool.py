@@ -7,6 +7,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+from fastapi import HTTPException
+
 from app.core.database import open_sqlite_connection
 from app.modules.agents.hermes.ip_boundary import (
     CLOUD_IP_MODE_NO_CLOUD,
@@ -17,6 +19,7 @@ from app.modules.agents.hermes.ip_boundary import (
     sanitize_record,
 )
 from app.modules.ai.agent_contracts import CapabilityGrantRef, StructuredToolCall
+from app.modules.economics.service import get_workspace_economics_response
 from app.modules.flowsheet.freshness import (
     FreshnessError,
     find_upstream_levers_from_connection,
@@ -35,6 +38,7 @@ _ALLOWED_VIEWS = frozenset({
     "table_counts",
     "change_impact",
     "upstream_levers",
+    "economics_summary",
 })
 
 _VIEW_ALLOWED_KEYS = {
@@ -48,6 +52,7 @@ _VIEW_ALLOWED_KEYS = {
     "table_counts": {"view", "workspace_id"},
     "change_impact": {"view", "workspace_id", "node_ref"},
     "upstream_levers": {"view", "workspace_id", "node_ref"},
+    "economics_summary": {"view", "workspace_id"},
 }
 
 _VIEW_LIMIT_BOUNDS = {
@@ -1113,10 +1118,22 @@ def dispatch_knowledge_read_tool(
                 return None, default_error
             except FreshnessError:
                 return None, default_error
+        elif view == "economics_summary":
+            try:
+                econ_resp = get_workspace_economics_response(connection, target_workspace)
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    return None, "not_found"
+                return None, default_error
+            result = econ_resp.evaluation.model_dump(mode="json")
+            result["view"] = "economics_summary"
+            result["workspace_id"] = target_workspace
+            result["updated_at"] = econ_resp.updated_at
+            result["truncated"] = False
         else:
             return None, "unknown_view"
 
-    if view == "table_counts":
+    if view in {"table_counts", "economics_summary"}:
         items_key = None
     elif view == "ai_jobs_recent":
         items_key = "ai_jobs"
@@ -1159,6 +1176,71 @@ def dispatch_knowledge_read_tool(
             if withheld_count > 0:
                 reason_code = ("egress_pack_blocked" if mode == CLOUD_IP_MODE_NO_CLOUD
                                else "egress_sanitization_required")
+                log_cloud_boundary_event(
+                    tool_name="jarvis_knowledge_read",
+                    op=view,
+                    egress_mode=mode,
+                    withheld_count=withheld_count,
+                    reason_code=reason_code,
+                    workspace_id=target_workspace,
+                )
+        elif view == "economics_summary":
+            econ_list_keys = (
+                "capex_breakdown",
+                "opex_breakdown",
+                "capex_hotspots",
+                "opex_hotspots",
+                "opex_subcategory_hotspots",
+                "annualized_hotspots",
+                "missing_items",
+            )
+            withheld_count = 0
+            for list_key in econ_list_keys:
+                if not isinstance(scrubbed.get(list_key), list):
+                    continue
+                raw_list = result.get(list_key, []) if isinstance(result, dict) else []
+                kept_list = []
+                for raw_item, item in zip(raw_list, scrubbed[list_key], strict=True):
+                    if not isinstance(item, dict):
+                        kept_list.append(item)
+                        continue
+                    if mode == CLOUD_IP_MODE_NO_CLOUD and isinstance(raw_item, dict):
+                        raw_allowed, _, _ = sanitize_record(raw_item, mode)
+                        if not raw_allowed:
+                            withheld_count += 1
+                            continue
+                    allowed, out_item, _ = sanitize_record(item, mode)
+                    if allowed:
+                        kept_list.append(out_item)
+                    else:
+                        withheld_count += 1
+                scrubbed[list_key] = kept_list
+            for text_key in ("headline", "hotspot_summary"):
+                raw_text = result.get(text_key) if isinstance(result, dict) else None
+                cur_text = scrubbed.get(text_key)
+                if isinstance(cur_text, str):
+                    if mode == CLOUD_IP_MODE_NO_CLOUD and isinstance(raw_text, str):
+                        raw_ok, _, _ = sanitize_record({"text": raw_text}, mode)
+                        if not raw_ok:
+                            scrubbed[text_key] = "[REDACTED]"
+                            withheld_count += 1
+                            continue
+                    ok, out_rec, _ = sanitize_record({"text": cur_text}, mode)
+                    if ok:
+                        scrubbed[text_key] = out_rec.get("text", cur_text)
+                    else:
+                        scrubbed[text_key] = "[REDACTED]"
+                        withheld_count += 1
+            scrubbed["withheld_count"] = withheld_count
+            scrubbed["egress_mode"] = mode
+            if mode == CLOUD_IP_MODE_SANITIZED:
+                scrubbed["sanitized"] = True
+            if withheld_count > 0:
+                reason_code = (
+                    "egress_pack_blocked"
+                    if mode == CLOUD_IP_MODE_NO_CLOUD
+                    else "egress_sanitization_required"
+                )
                 log_cloud_boundary_event(
                     tool_name="jarvis_knowledge_read",
                     op=view,
