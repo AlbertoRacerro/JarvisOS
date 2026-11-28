@@ -78,6 +78,8 @@ from relay_continuity_supervisor import (  # noqa: E402
     Supervisor,
     check_and_request_release_update,
     control_root,
+    default_auth_cred_fingerprint,
+    default_auth_probe,
     fast_forward_main_checkout,
     make_host,
     release_sha,
@@ -538,7 +540,12 @@ def command_serve(args: argparse.Namespace) -> int:
     maybe_report_release()
 
     def factory(store: Store, mission: dict[str, Any]) -> Supervisor:
-        supervisor = Supervisor(store, make_host(repo, relay_env), turns=args.turns, sender=sender)
+        host = make_host(
+            repo, relay_env,
+            auth_probe=default_auth_probe,
+            auth_cred_fingerprint=default_auth_cred_fingerprint,
+        )
+        supervisor = Supervisor(store, host, turns=args.turns, sender=sender)
         signal.signal(signal.SIGTERM, lambda *_: (stop.update(flag=True), setattr(supervisor, "signalled", True)))
         signal.signal(signal.SIGINT, lambda *_: (stop.update(flag=True), setattr(supervisor, "signalled", True)))
         return supervisor

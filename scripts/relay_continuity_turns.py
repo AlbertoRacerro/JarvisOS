@@ -99,8 +99,14 @@ class TurnReport:
 SPEND_RE = re.compile(r"(?i)monthly spend limit|spend limit|credit balance is too low|purchase more credits to continue")
 QUOTA_RE = re.compile(r"(?i)hit your (session|weekly|usage|daily|5-hour|five-hour) limit|usage limit|rate[ _-]?limit|"
                       r"limit reached|too many requests|quota")
-AUTH_RE = re.compile(r"(?i)invalid api key|please run /login|/login|oauth token (has )?expired|not logged in|"
-                     r"unauthori[sz]ed|authentication (failed|error|required)|log ?in again|credentials? (expired|invalid)")
+AUTH_RE = re.compile(
+    r"(?i)invalid api key|please run /login|/login|"
+    r"oauth (?:token|session) (?:has )?expired|session expired|"
+    r"not logged in|unauthori[sz]ed|authentication (?:failed|error|required)|"
+    r"auth(?:entication)? expired|sign in again|log ?in again|credentials? (?:expired|invalid)|"
+    r"please log ?in|refresh token (?:expired|invalid|failed)|token refresh failed|"
+    r"invalid_grant|login required|re-?authenticate|failed to refresh (?:oauth|access) token"
+)
 TRANSIENT_RE = re.compile(r"(?i)EAI_AGAIN|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|can'?t reach the api|"
                           r"couldn'?t reach|unable to connect|network error|socket hang up|stream disconnected|"
                           r"error sending request|connection (reset|refused|closed|error)|overloaded|"
@@ -1028,6 +1034,15 @@ def _apply_turn_usage(report: TurnReport, agent: str | None, events: list[dict[s
     _apply_usage_fallback(report)
 
 
+def _is_zero_token_turn(report: TurnReport) -> bool:
+    if report.usage is None:
+        return not bool(report.context_used_tokens)
+    total = report.usage.get("total_tokens")
+    if total is None:
+        total = (report.usage.get("input_tokens") or 0) + (report.usage.get("output_tokens") or 0)
+    return total == 0
+
+
 def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any = None,
                   diagnostics: str = "", timed_out: bool = False) -> TurnReport:
     state: dict[str, Any] = {}
@@ -1040,7 +1055,7 @@ def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any 
     agent = state.get("agent_key")
     if agent in NATIVE_AGENTS:
         events, bad = relay_argon.read_events(output)
-        report = classify_argon_turn(turn_dir, events, bad, agent=agent, ref=ref, timed_out=timed_out)
+        report = classify_argon_turn(turn_dir, events, bad, agent=agent, ref=ref, timed_out=timed_out, diagnostics=diagnostics)
         _apply_usage_fallback(report)
         return report
     if agent not in AGENTS:
@@ -1153,12 +1168,53 @@ def classify_turn(turn_dir: Path, *, ref: datetime | None = None, local_tz: Any 
         report.outcome = classify_text(text, None)
         report.detail = f"codex {typ}"
         settle_limit(report, text, ref, local_tz)
+    if report.outcome not in ("success", "quota", "spend_limit", "auth") and _is_zero_token_turn(report):
+        texts = [diagnostics]
+        try:
+            texts.append((turn_dir / "stderr.log").read_text(encoding="utf-8", errors="replace")[-8192:])
+        except OSError:
+            pass
+        for e in events:
+            typ_e = e.get("type")
+            if typ_e == "assistant":
+                msg = e.get("message")
+                content = msg.get("content") if isinstance(msg, dict) else None
+                if isinstance(content, list):
+                    for b in content:
+                        if isinstance(b, dict) and isinstance(b.get("text"), str):
+                            texts.append(b["text"])
+                elif isinstance(content, str):
+                    texts.append(content)
+            elif typ_e in ("error", "turn.failed"):
+                err_val = e.get("error")
+                err_msg = e.get("message") or (
+                    err_val.get("message") if isinstance(err_val, dict) else (err_val if isinstance(err_val, str) else None)
+                )
+                if isinstance(err_msg, str):
+                    texts.append(err_msg)
+            elif typ_e == "result":
+                res = e.get("result") or e.get("terminal_reason")
+                if isinstance(res, str):
+                    texts.append(res)
+        if terminal is not None:
+            t_err = terminal.get("error")
+            t_msg = (
+                terminal.get("message")
+                or (t_err.get("message") if isinstance(t_err, dict) else (t_err if isinstance(t_err, str) else None))
+                or terminal.get("result")
+                or terminal.get("terminal_reason")
+            )
+            if isinstance(t_msg, str):
+                texts.append(t_msg)
+        if any(classify_text(t, None) == "auth" for t in texts if t):
+            report.outcome = "auth"
+            report.detail = "classified auth failure"
     return report
 
 
 def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
                         *, agent: str = "argon", ref: datetime | None = None,
-                        timed_out: bool = False) -> TurnReport:
+                        timed_out: bool = False, diagnostics: str = "") -> TurnReport:
     """Classify the retained native protocol, never model prose masquerading as execution evidence."""
     report = TurnReport(outcome="unknown", agent=agent, detail="native turn incomplete", bad_lines=bad,
                         turn_id=f"{turn_dir.parent.parent.name}/{turn_dir.name}",
@@ -1324,11 +1380,36 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
     if cause is not None and cause[1] == "turn_time_limit" and not valid_record:
         cause = None
 
+    def check_zero_token_auth(rep: TurnReport) -> TurnReport:
+        if rep.outcome not in ("success", "quota", "spend_limit", "auth") and _is_zero_token_turn(rep):
+            texts = [diagnostics]
+            try:
+                texts.append((turn_dir / "stderr.log").read_text(encoding="utf-8", errors="replace")[-8192:])
+            except OSError:
+                pass
+            for ev in events:
+                if isinstance(ev, dict):
+                    res = ev.get("result")
+                    if isinstance(res, dict):
+                        texts.append(str(res.get("response") or res.get("error") or ""))
+                    step = ev.get("step_update")
+                    if isinstance(step, dict):
+                        texts.append(str(step.get("error") or ""))
+            if meta:
+                texts.append(str(meta.get("reason") or ""))
+            for res in results:
+                if isinstance(res, dict):
+                    texts.append(str(res.get("response") or res.get("error") or ""))
+            if any(classify_text(t, None) == "auth" for t in texts if t):
+                rep.outcome = "auth"
+                rep.detail = "classified auth failure"
+        return rep
+
     def harness(report: TurnReport) -> TurnReport:
         if cause is not None and report.outcome != "success":
             report.outcome, report.harness_cause = cause
             report.detail += f"; runner: {cause[1]}"
-        return report
+        return check_zero_token_auth(report)
 
     # A failed tool call that cannot act beyond this workstation (a missing file, an edit that did not apply, a
     # finished-task kill) is the normal back-and-forth of a turn: it is finished and does not hide the outcome.
@@ -1351,7 +1432,7 @@ def classify_argon_turn(turn_dir: Path, events: list[dict[str, Any]], bad: int,
             report.outcome = "unknown"
         settle_limit(report, str(text or ""), ref or now_utc(), None)
         harness(report)
-    return report
+    return check_zero_token_auth(report)
 
 
 def same_output_as_previous_turn(turn_dir: Path) -> bool:

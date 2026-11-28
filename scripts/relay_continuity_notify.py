@@ -95,6 +95,16 @@ EVENTS: dict[str, tuple[str, tuple[str, ...]]] = {
                      ("owner", "mission", "task", "agent", "session", "reason")),
     "roadmap_paused": ("Il lavoro programmato è in pausa e attende una decisione in Jarvis.", ("owner", "reason")),
     "release_withheld": ("L'aggiornamento di JarvisOS è in attesa di decisione in Jarvis.", ("owner", "mission", "sha")),
+    "provider_auth_expired": ("Autenticazione scaduta per l'assistente.", ("agent",)),
+}
+
+AUTH_INSTRUCTIONS: dict[str, str] = {
+    "claude": "claude (senza CLAUDE_CONFIG_DIR), poi /login",
+    "codex": "codex login",
+    "neon": "login agy sul sistema host",
+    "argon": "login agy sul sistema host",
+    "agy_opus": "login agy sul sistema host",
+    "hydrogen": "login agy sul sistema host",
 }
 
 
@@ -117,7 +127,12 @@ def render(event: str, fields: dict[str, Any]) -> str | None:
                 return None
         elif not FIELD_RULES[key](value):
             return None
-    text = title
+    if event == "provider_auth_expired":
+        agent = str(fields["agent"])
+        instr = AUTH_INSTRUCTIONS.get(agent, "login agy sul sistema host")
+        text = f"Autenticazione scaduta per {agent}. Per ripristinare: {instr}."
+    else:
+        text = title
     return None if devctx.find_secret(text) else text
 
 

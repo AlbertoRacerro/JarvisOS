@@ -297,3 +297,52 @@ def test_normalize_payload_includes_free_models_and_prepaid_balances() -> None:
     assert payload["free_models"] == mock_free
     assert payload["prepaid_balances"] == mock_prepaid
     assert len(payload["providers"]) == 4
+
+
+def test_resolve_claude_credentials_path_prefers_canonical_over_sandbox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.delenv("JARVISOS_CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    canonical_dir = fake_home / ".claude"
+    canonical_dir.mkdir(parents=True)
+    canonical_file = canonical_dir / ".credentials.json"
+    canonical_file.write_text('{"canonical": true}', encoding="utf-8")
+
+    sandbox_dir = fake_home / ".local" / "share" / "jarvisos-sandbox" / "state" / "claude"
+    sandbox_dir.mkdir(parents=True)
+    sandbox_file = sandbox_dir / ".credentials.json"
+    sandbox_file.write_text('{"sandbox": true}', encoding="utf-8")
+
+    # 1. When both exist and no env override is set: canonical host file is preferred
+    target, configured = pq._resolve_claude_credentials_path()
+    assert configured is True
+    assert target == canonical_file
+
+    # 2. When canonical is absent: falls back to sandbox state credentials
+    canonical_file.unlink()
+    target, configured = pq._resolve_claude_credentials_path()
+    assert configured is True
+    assert target == sandbox_file
+
+    # 3. When env override is set: explicit config directory is respected
+    override_dir = tmp_path / "custom_claude"
+    override_dir.mkdir()
+    override_file = override_dir / ".credentials.json"
+    override_file.write_text('{"custom": true}', encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(override_dir))
+
+    target, configured = pq._resolve_claude_credentials_path()
+    assert configured is True
+    assert target == override_file
+
+    # 4. When neither exists and no env override: returns None, False
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    sandbox_file.unlink()
+    target, configured = pq._resolve_claude_credentials_path()
+    assert configured is False
+    assert target is None

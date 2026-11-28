@@ -8,6 +8,7 @@ import math
 import os
 import re
 import secrets
+import shutil
 import signal
 import socket
 import subprocess
@@ -60,6 +61,7 @@ from relay_continuity_common import (  # noqa: E402
 
 load_sibling("relay_continuity_turns", "relay_continuity_turns.py")
 from relay_continuity_turns import (  # noqa: E402
+    AUTH_RE,
     ToolCall,
     TurnReport,
     classify_turn,
@@ -442,6 +444,95 @@ class Host:
     pr_ci_status: Callable[[int, str], dict[str, Any] | None] | None = None  # spec 267: check results for (pr, head_sha)
     reachable: Callable[[], bool] = default_reachable
     read_ledger: Callable[[], list[dict[str, Any]]] | None = None
+    auth_probe: Callable[[str], bool] | None = None
+    auth_cred_fingerprint: Callable[[str], str | None] | None = None
+
+
+def _auth_login_instruction(agent: str) -> str:
+    if agent == "claude":
+        return "claude (senza CLAUDE_CONFIG_DIR), poi /login"
+    if agent == "codex":
+        return "codex login"
+    return "login agy sul sistema host"
+
+
+def default_auth_cred_fingerprint(agent: str) -> str | None:
+    path = None
+    if agent == "claude":
+        cand = Path.home() / ".claude" / ".credentials.json"
+        if cand.is_file():
+            path = cand
+        else:
+            claude_cfg = os.environ.get("CLAUDE_CONFIG_DIR")
+            if claude_cfg:
+                cfg_cand = Path(claude_cfg) / ".credentials.json"
+                if cfg_cand.is_file():
+                    path = cfg_cand
+    elif agent == "codex":
+        codex_home = os.environ.get("CODEX_HOME")
+        if codex_home:
+            cand = Path(codex_home) / "auth.json"
+            if cand.is_file():
+                path = cand
+        if path is None:
+            path = Path.home() / ".codex" / "auth.json"
+    elif agent in ("argon", "neon", "agy_opus", "hydrogen"):
+        for cand in (
+            Path.home() / ".gemini" / "antigravity-cli" / "antigravity-oauth-token",
+            Path.home() / ".local" / "share" / "jarvisos-sandbox" / "state" / "agy-home" / "antigravity-cli" / "antigravity-oauth-token",
+        ):
+            if cand.is_file():
+                path = cand
+                break
+    if path is None or not path.is_file():
+        return None
+    try:
+        st = path.stat()
+        content = path.read_bytes()
+        sha256_hex = hashlib.sha256(content).hexdigest()
+        return f"{st.st_mtime_ns}:{st.st_size}:{sha256_hex}"
+    except OSError:
+        return None
+
+
+def default_auth_probe(agent: str) -> bool:
+    try:
+        if agent == "claude":
+            claude_bin = shutil.which("claude")
+            if not claude_bin:
+                return False
+            cmd = [claude_bin, "-p", "ok", "--model", "haiku", "--max-turns", "1", "--no-session-persistence", "--tools", ""]
+            proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=20.0)
+            if proc.returncode != 0:
+                return False
+            combined = f"{proc.stdout}\n{proc.stderr}"
+            return not bool(AUTH_RE.search(combined))
+        elif agent == "codex":
+            codex_bin = shutil.which("codex")
+            if not codex_bin:
+                return False
+            cmd = [codex_bin, "login", "status"]
+            proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=20.0)
+            if proc.returncode != 0:
+                return False
+            combined = f"{proc.stdout}\n{proc.stderr}"
+            return not bool(AUTH_RE.search(combined))
+        elif agent in ("argon", "neon", "agy_opus", "hydrogen"):
+            agy_bin = shutil.which("agy")
+            if not agy_bin:
+                return False
+            cmd = [agy_bin, "-p", "/quota", "--output-format", "json"]
+            proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=20.0)
+            if proc.returncode != 0:
+                return False
+            combined = f"{proc.stdout}\n{proc.stderr}"
+            if AUTH_RE.search(combined):
+                return False
+            data = json.loads(proc.stdout)
+            return isinstance(data, dict) and data.get("status") == "SUCCESS"
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    return False
 
 
 def _parse_iso_timestamp(value: str | None) -> datetime | None:
@@ -649,6 +740,29 @@ class Supervisor:
                     self.state["cooldowns"].pop(agent, None)
                     cooldown = None
                 else:
+                    probe_fn = getattr(self.host, "auth_probe", None)
+                    if callable(probe_fn):
+                        fp_fn = getattr(self.host, "auth_cred_fingerprint", None)
+                        current_fp = fp_fn(agent) if callable(fp_fn) else None
+                        recorded_fp = cooldown.get("cred_fingerprint")
+                        fp_changed = (current_fp != recorded_fp)
+                        last_probe = parse_ts(cooldown.get("last_probe_at")) or parse_ts(cooldown.get("since"))
+                        probe_interval = getattr(self.limits, "auth_probe_interval", 300.0)
+                        probe_due = (last_probe is None or now - last_probe >= timedelta(seconds=probe_interval))
+                        if fp_changed or probe_due:
+                            cooldown["last_probe_at"] = iso(now)
+                            if current_fp is not None or recorded_fp is not None:
+                                cooldown["cred_fingerprint"] = current_fp
+                            self.save()
+                            try:
+                                probe_ok = bool(probe_fn(agent))
+                            except Exception:  # noqa: BLE001
+                                probe_ok = False
+                            if probe_ok:
+                                self.state["cooldowns"].pop(agent, None)
+                                self.record("finding", f"relay-continuity: cleared auth cooldown for {agent} after in-sandbox login probe succeeded")
+                                self.save()
+                                return True
                     return False
             else:
                 until = parse_ts(cooldown.get("until"))
@@ -780,27 +894,27 @@ class Supervisor:
             until, source = None, "auth"
             existing = self.state["cooldowns"].get(agent)
             if isinstance(existing, dict) and existing.get("source") == "auth":
-                qid = existing.get("question")
-            else:
-                safe_detail = _safe_auth_detail(report.detail)
-                q_text = (
-                    f"Autenticazione fallita per l'agente {agent} ({safe_detail}). Come procedere?\n"
-                    f"1. (consigliata) Accesso ripristinato per {agent}, riprova — conseguenza: riprova l'agente al prossimo turno\n"
-                    f"2. Mantieni {agent} escluso — conseguenza: l'agente resta escluso fino al comando release"
-                )
-                self.state["cooldowns"][agent] = {
-                    "until": None, "source": "auth", "reason": report.outcome,
-                    "since": iso(now), "turn": report.turn_id, "question": None,
-                }
-                self.save()
-                qid = self.record("question", q_text)
+                return
+            safe_detail = _safe_auth_detail(report.detail)
+            instr = _auth_login_instruction(agent)
+            q_text = (
+                f"Autenticazione fallita per l'agente {agent} ({safe_detail}). "
+                f"Per ripristinare: {instr}. Come procedere?\n"
+                f"1. (consigliata) Accesso ripristinato per {agent}, riprova — conseguenza: riprova l'agente al prossimo turno\n"
+                f"2. Mantieni {agent} escluso — conseguenza: l'agente resta escluso fino al comando release"
+            )
+            fp_fn = getattr(self.host, "auth_cred_fingerprint", None)
+            cred_fp = fp_fn(agent) if callable(fp_fn) else None
             self.state["cooldowns"][agent] = {
                 "until": None, "source": "auth", "reason": report.outcome,
-                "since": iso(now), "turn": report.turn_id, "question": qid,
+                "since": iso(now), "turn": report.turn_id, "question": None,
+                "cred_fingerprint": cred_fp, "last_probe_at": iso(now),
             }
             self.save()
-            self.notify("provider_exhausted", dedupe_key=f"exhausted|{agent}|auth", agent=agent,
-                        outcome=report.outcome, reset_at="manual", reset_source=source)
+            qid = self.record("question", q_text)
+            self.state["cooldowns"][agent]["question"] = qid
+            self.save()
+            self.notify("provider_auth_expired", dedupe_key=f"auth_expired|{agent}", agent=agent)
             return
         elif report.outcome == "spend_limit":
             until, source = None, "manual"
@@ -2318,7 +2432,9 @@ def permissions_digest(path: Path) -> str | None:
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 
-def make_host(repo: Path, relay_env: dict[str, str] | None = None) -> Host:
+def make_host(repo: Path, relay_env: dict[str, str] | None = None, *,
+              auth_probe: Callable[[str], bool] | None = None,
+              auth_cred_fingerprint: Callable[[str], str | None] | None = None) -> Host:
     env = devctx.default_env(repo)
     author = f"relay-continuity pid {os.getpid()}"
 
@@ -2341,6 +2457,8 @@ def make_host(repo: Path, relay_env: dict[str, str] | None = None) -> Host:
                 job_status=lambda jid: relay_jobs.load(jid),
                 pr_ci_status=lambda pr, sha: default_pr_ci_status(repo, pr, sha),
                 reachable=default_reachable,
-                read_ledger=lambda: devctx.read_ledger(env))
+                read_ledger=lambda: devctx.read_ledger(env),
+                auth_probe=auth_probe,
+                auth_cred_fingerprint=auth_cred_fingerprint)
 
 
