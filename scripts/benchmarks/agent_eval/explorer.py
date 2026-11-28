@@ -788,14 +788,19 @@ def run_exploration(
 
         query = urllib.parse.urlencode({"workspace_id": workspace_id})
         submit_url = f"{clean_base}/ai/threads/{thread_id}/interactions?{query}"
-        submit_res = _http_request(
-            submit_url, method="POST", payload=submit_payload, deadline=deadline
-        )
-        interaction = submit_res["interaction"]
-        interaction_id = interaction["id"]
-        flow_state = str(interaction.get("flow_state", "running"))
+        interaction: dict[str, Any] = {}
+        interaction_id = ""
+        try:
+            submit_res = _http_request(
+                submit_url, method="POST", payload=submit_payload, deadline=deadline
+            )
+            interaction = submit_res["interaction"]
+            interaction_id = interaction["id"]
+            flow_state = str(interaction.get("flow_state", "running"))
+        except TimeoutError:
+            flow_state = "timed_out"
 
-        terminal_reason: Any = None
+        terminal_reason: Any = "timeout" if flow_state == "timed_out" else None
         while flow_state not in TERMINAL_FLOW_STATES:
             rem = deadline - time.monotonic()
             if rem <= 0:
@@ -803,7 +808,11 @@ def run_exploration(
                 break
             time.sleep(min(0.2, rem))
             read_url = f"{clean_base}/ai/threads/{thread_id}?{query}"
-            read_res = _http_request(read_url, deadline=deadline)
+            try:
+                read_res = _http_request(read_url, deadline=deadline)
+            except TimeoutError:
+                flow_state, terminal_reason = "timed_out", "timeout"
+                break
             interaction = next(
                 (
                     item
@@ -826,7 +835,8 @@ def run_exploration(
         # Multi-turn clarification loop
         rounds = 0
         while (
-            rounds < max_clarification_rounds
+            flow_state != "timed_out"
+            and rounds < max_clarification_rounds
             and simulated_maintainer is not None
             and needs_clarification(assistant_text)
             and (task.get("interactive") or allow_any_clarification)
@@ -845,9 +855,13 @@ def run_exploration(
             if role_id:
                 sub_payload["role_id"] = role_id
 
-            sub_res = _http_request(
-                submit_url, method="POST", payload=sub_payload, deadline=deadline
-            )
+            try:
+                sub_res = _http_request(
+                    submit_url, method="POST", payload=sub_payload, deadline=deadline
+                )
+            except TimeoutError:
+                flow_state, terminal_reason = "timed_out", "timeout"
+                break
             interaction = sub_res["interaction"]
             interaction_id = interaction["id"]
             flow_state = str(interaction.get("flow_state", "running"))
@@ -859,7 +873,11 @@ def run_exploration(
                     break
                 time.sleep(min(0.2, rem))
                 read_url = f"{clean_base}/ai/threads/{thread_id}?{query}"
-                read_res = _http_request(read_url, deadline=deadline)
+                try:
+                    read_res = _http_request(read_url, deadline=deadline)
+                except TimeoutError:
+                    flow_state, terminal_reason = "timed_out", "timeout"
+                    break
                 interaction = next(
                     (
                         item

@@ -847,3 +847,64 @@ def test_mine_cli(tmp_path: Path) -> None:
     assert code == 0
     assert (out_dir / "mining_report.json").is_file()
     assert (out_dir / "mining_report.md").is_file()
+
+
+def test_run_exploration_records_poll_timeout_and_continues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    req_path = tmp_path / "reqs.json"
+    req_path.write_text(
+        json.dumps(
+            {
+                "set_id": "timeout_test",
+                "cloud_ok": True,
+                "tasks": [
+                    {"id": "t1", "family": "cad", "prompt": "Task 1", "interactive": False},
+                    {"id": "t2", "family": "cfd", "prompt": "Task 2", "interactive": False},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    out_dir = tmp_path / "out"
+
+    call_count = {"t1_poll": 0}
+
+    def fake_http(url: str, *, method: str = "GET", payload: Any = None, deadline: float | None = None) -> Any:
+        if method == "POST" and url.endswith("/ai/threads"):
+            tid = "th-1" if call_count["t1_poll"] == 0 else "th-2"
+            return {"id": tid}
+        if method == "POST" and "/interactions" in url:
+            if "th-1" in url:
+                return {"interaction": {"id": "int-1", "flow_state": "running"}}
+            return {
+                "interaction": {
+                    "id": "int-2",
+                    "flow_state": "complete",
+                    "terminal_reason": "completed",
+                    "assistant_text": "Done task 2",
+                }
+            }
+        if method == "GET" and "th-1" in url:
+            call_count["t1_poll"] += 1
+            raise TimeoutError("timed out")
+        raise AssertionError(f"Unexpected call: {method} {url}")
+
+    monkeypatch.setattr("scripts.benchmarks.agent_eval.explorer._http_request", fake_http)
+    monkeypatch.setattr("scripts.benchmarks.agent_eval.explorer.extract_thread_tool_trace", lambda *_a, **_kw: [])
+    monkeypatch.setattr("scripts.benchmarks.agent_eval.explorer.read_job_metrics", lambda *_a, **_kw: {})
+
+    result = run_exploration(
+        requests_path=req_path,
+        base_url="http://127.0.0.1:18182",
+        out_dir=out_dir,
+        data_root=data_root,
+        timeout=5.0,
+    )
+    assert result["complete"] is True
+    assert len(result["requests"]) == 2
+    assert result["requests"][0]["request_id"] == "t1"
+    assert result["requests"][0]["flow_state"] == "timed_out"
+    assert result["requests"][0]["terminal_reason"] == "timeout"
+    assert result["requests"][1]["request_id"] == "t2"
+    assert result["requests"][1]["flow_state"] == "complete"
