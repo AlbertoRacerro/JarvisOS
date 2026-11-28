@@ -7,7 +7,7 @@ import sqlite3
 import statistics
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from app.core.database import open_sqlite_connection
@@ -21,6 +21,7 @@ from app.modules.flowsheet.models import (
     FlowsheetNodeFreshnessRead,
     FlowsheetUpstreamLeverRead,
     FlowsheetUpstreamLeversRead,
+    NodeKind,
 )
 from app.modules.flowsheet.service import (
     build_flowsheet_graph_from_connection,
@@ -543,15 +544,15 @@ def preview_change_impact_from_connection(
         node = nodes_by_ref.get(ref)
         if node is None:
             raw_kind, record_id = ref.split(":", 1)
-            kind = raw_kind  # type: ignore[assignment]
+            kind: NodeKind = cast(NodeKind, raw_kind)
             label = ref
         else:
             kind = node.kind
             record_id = node.id
             label = node.label
 
-        path = list(best_paths[ref])
-        distance = len(path) - 1
+        node_path = list(best_paths[ref])
+        distance = len(node_path) - 1
         requires_rerun = kind in rerun_kinds
         if requires_rerun:
             required_reruns.append(ref)
@@ -566,7 +567,7 @@ def preview_change_impact_from_connection(
                 id=record_id,
                 label=label,
                 distance=distance,
-                path=path,
+                path=node_path,
                 requires_rerun=requires_rerun,
             )
         )
@@ -665,7 +666,7 @@ def find_upstream_levers_from_connection(
         node = nodes_by_ref.get(ref)
         if node is None:
             raw_kind, record_id = ref.split(":", 1)
-            kind = raw_kind  # type: ignore[assignment]
+            kind: NodeKind = cast(NodeKind, raw_kind)
             label = ref
             status = None
         else:
