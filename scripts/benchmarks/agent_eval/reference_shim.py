@@ -40,6 +40,26 @@ def is_allowed_reference_model(model: str) -> bool:
     return clean == ALLOWED_MODEL_EXACT or clean.startswith(ALLOWED_MODEL_PREFIX)
 
 
+def is_allowed_explorer_model(model: str, provider: str) -> bool:
+    """Return True if model is allowed for provider in explorer mode."""
+    clean_model = model.strip().lower()
+    clean_prov = provider.strip().lower()
+    if clean_prov == "claude":
+        return (
+            clean_model in ("opus", "sonnet", "haiku")
+            or clean_model.startswith("claude-opus-")
+            or clean_model.startswith("claude-sonnet-")
+            or clean_model.startswith("claude-haiku-")
+        )
+    if clean_prov == "agy":
+        return (
+            clean_model.startswith("gemini-")
+            or clean_model.startswith("claude-opus-")
+            or clean_model.startswith("claude-sonnet-")
+        )
+    return False
+
+
 def validate_host(host: str) -> str:
     """Validate loopback host; refuse non-loopback addresses."""
     clean = host.strip()
@@ -57,8 +77,8 @@ def validate_port(port: int) -> int:
     return port
 
 
-def validate_tasks_file(tasks_path: str | Path) -> dict[str, Any]:
-    """Validate task file exists, is not in vault, and has cloud_ok=True."""
+def validate_tasks_file(tasks_path: str | Path, *, allow_zone_a: bool = False) -> dict[str, Any]:
+    """Validate task file exists, is not in vault, and has cloud_ok=True (or zone_a=True)."""
     vault = vault_guard.vault_root()
     if vault_guard.touches_vault(tasks_path, vault):
         raise PermissionError(vault_guard.REFUSED_MESSAGE)
@@ -72,7 +92,7 @@ def validate_tasks_file(tasks_path: str | Path) -> dict[str, Any]:
         raise ValueError(f"Failed to parse tasks file JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise TypeError("Tasks file must contain a JSON object")
-    if data.get("cloud_ok") is not True:
+    if not allow_zone_a and data.get("cloud_ok") is not True:
         raise ValueError("Tasks file has cloud_ok != True; reference shim requires cloud_ok: true")
     return data
 
@@ -172,6 +192,55 @@ def default_claude_runner(cmd: list[str], *, timeout: float) -> tuple[int, str, 
         return proc.returncode, proc.stdout, proc.stderr
 
 
+def build_agy_command(
+    prompt: str,
+    model: str,
+    *,
+    system_prompt: str | None = None,
+    json_schema: str | None = None,
+) -> list[str]:
+    """Build agy CLI command matching Spec 388."""
+    combined_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+    cmd = [
+        "agy",
+        "-p",
+        combined_prompt,
+        "--model",
+        model,
+        "--output-format",
+        "json",
+        "--disable-slash-commands",
+        "--mode",
+        "plan",
+    ]
+    if json_schema:
+        cmd.extend(["--json-schema", json_schema])
+    return cmd
+
+
+def default_agy_runner(cmd: list[str], *, timeout: float) -> tuple[int, str, str]:
+    """Execute agy CLI command in a fresh temporary directory with sanitized env."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.endswith("API_KEY")
+        and not k.startswith("GH_")
+        and not k.startswith("GIT_")
+    }
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=tmp_dir,
+            stdin=subprocess.DEVNULL,
+            check=False,
+            timeout=timeout,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+
 class ShimState:
     """Thread-safe state for the reference shim server."""
 
@@ -180,10 +249,19 @@ class ShimState:
         model: str = "haiku",
         timeout: float = 60.0,
         runner: Callable[..., Any] | None = None,
+        mode: str = "reference",
+        provider: str = "claude",
     ) -> None:
         self.model = model
         self.timeout = timeout
-        self.runner = runner or default_claude_runner
+        self.mode = mode
+        self.provider = provider
+        if runner is not None:
+            self.runner = runner
+        elif provider == "agy":
+            self.runner = default_agy_runner
+        else:
+            self.runner = default_claude_runner
         self._lock = threading.Lock()
         self._active_completions = 0
 
@@ -289,12 +367,25 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
             return
 
         req_model = str(body.get("model") or self.server.state.model).strip()
-        if not is_allowed_reference_model(req_model):
-            self._send_error_json(
-                400,
-                f"Model '{req_model}' is not permitted; only haiku models are allowed",
-                "invalid_request_error",
-            )
+        state = self.server.state
+        if state.mode == "reference":
+            if not is_allowed_reference_model(req_model):
+                self._send_error_json(
+                    400,
+                    f"Model '{req_model}' is not permitted; only haiku models are allowed",
+                    "invalid_request_error",
+                )
+                return
+        elif state.mode == "explorer":
+            if not is_allowed_explorer_model(req_model, state.provider):
+                self._send_error_json(
+                    400,
+                    f"Model '{req_model}' is not permitted for provider '{state.provider}' in explorer mode",
+                    "invalid_request_error",
+                )
+                return
+        else:
+            self._send_error_json(400, f"Unknown mode '{state.mode}'", "invalid_request_error")
             return
 
         system_prompt, prompt_text = format_messages_for_prompt(messages)
@@ -315,14 +406,21 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
                         return
                     json_schema_arg = json.dumps(schema, separators=(",", ":"))
 
-        cmd = build_claude_command(
-            prompt_text,
-            req_model,
-            system_prompt=system_prompt,
-            json_schema=json_schema_arg,
-        )
+        if state.provider == "agy":
+            cmd = build_agy_command(
+                prompt_text,
+                req_model,
+                system_prompt=system_prompt,
+                json_schema=json_schema_arg,
+            )
+        else:
+            cmd = build_claude_command(
+                prompt_text,
+                req_model,
+                system_prompt=system_prompt,
+                json_schema=json_schema_arg,
+            )
 
-        state = self.server.state
         state.enter_completion()
         try:
             try:
@@ -344,8 +442,11 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
                 try:
                     cli_data = json.loads(stdout)
                 except ValueError:
-                    self._send_error_json(502, "Reference CLI output was not valid JSON", "bad_gateway")
-                    return
+                    if stdout.strip():
+                        cli_data = {"result": stdout.strip()}
+                    else:
+                        self._send_error_json(502, "Reference CLI output was not valid JSON", "bad_gateway")
+                        return
             else:
                 self._send_error_json(502, "Reference CLI returned invalid result format", "bad_gateway")
                 return
@@ -360,15 +461,25 @@ class ReferenceShimHandler(BaseHTTPRequestHandler):
 
             structured_output = cli_data.get("structured_output")
             if structured_output is not None:
-                assistant_content = json.dumps(structured_output)
+                assistant_content = json.dumps(structured_output) if not isinstance(structured_output, str) else structured_output
             else:
-                assistant_content = str(cli_data.get("result", ""))
+                assistant_content = None
+                for key in ("result", "response", "text", "content"):
+                    if key in cli_data and cli_data[key] is not None:
+                        val = cli_data[key]
+                        if isinstance(val, (dict, list)):
+                            assistant_content = extract_text_content(val)
+                        else:
+                            assistant_content = str(val)
+                        break
+                if assistant_content is None:
+                    assistant_content = str(cli_data.get("result", ""))
 
             usage_raw = cli_data.get("usage")
             usage_dict = usage_raw if isinstance(usage_raw, dict) else {}
-            input_tokens = int(usage_dict.get("input_tokens") or 0)
-            output_tokens = int(usage_dict.get("output_tokens") or 0)
-            total_tokens = input_tokens + output_tokens
+            input_tokens = int(usage_dict.get("input_tokens") or usage_dict.get("prompt_tokens") or 0)
+            output_tokens = int(usage_dict.get("output_tokens") or usage_dict.get("completion_tokens") or 0)
+            total_tokens = int(usage_dict.get("total_tokens") or (input_tokens + output_tokens))
 
             completion_payload = {
                 "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
@@ -420,15 +531,33 @@ def make_reference_shim_server(
     timeout: float = 60.0,
     runner: Callable[..., Any] | None = None,
     tasks_path: str | Path | None = None,
+    mode: str = "reference",
+    provider: str = "claude",
+    zone_a: bool = False,
 ) -> ReferenceShimServer:
     """Factory creating a validated ReferenceShimServer."""
     validate_host(host)
     validate_port(port)
-    if not is_allowed_reference_model(model):
-        raise ValueError(f"Model '{model}' is not an allowed reference model; only 'haiku' or 'claude-haiku-*' permitted")
+    clean_mode = mode.strip().lower()
+    clean_provider = provider.strip().lower()
+
+    if clean_mode == "reference":
+        if clean_provider != "claude":
+            raise ValueError(f"Provider '{provider}' is not supported in reference mode; only claude is permitted")
+        if not is_allowed_reference_model(model):
+            raise ValueError(f"Model '{model}' is not an allowed reference model; only 'haiku' or 'claude-haiku-*' permitted")
+    elif clean_mode == "explorer":
+        if clean_provider not in ("claude", "agy"):
+            raise ValueError(f"Provider '{provider}' is not supported; only 'claude' or 'agy' permitted")
+        if not is_allowed_explorer_model(model, clean_provider):
+            raise ValueError(f"Model '{model}' is not an allowed explorer model for provider '{provider}'")
+    else:
+        raise ValueError(f"Invalid mode '{mode}'; expected 'reference' or 'explorer'")
+
     if tasks_path is not None:
-        validate_tasks_file(tasks_path)
-    state = ShimState(model=model, timeout=timeout, runner=runner)
+        validate_tasks_file(tasks_path, allow_zone_a=(clean_mode == "explorer" and zone_a))
+
+    state = ShimState(model=model, timeout=timeout, runner=runner, mode=clean_mode, provider=clean_provider)
     return ReferenceShimServer((host, port), state)
 
 
@@ -441,8 +570,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tasks", required=True, help="Path to task set JSON file (requires cloud_ok=true)")
     parser.add_argument("--host", default="127.0.0.1", help="Loopback bind host (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8080, help="Bind port (default 8080, port 8000 refused)")
-    parser.add_argument("--model", default="haiku", help="Reference model (default 'haiku')")
+    parser.add_argument("--model", default="haiku", help="Reference or explorer model (default 'haiku')")
     parser.add_argument("--timeout", type=float, default=60.0, help="Per-request timeout in seconds (default 60)")
+    parser.add_argument("--mode", choices=["reference", "explorer"], default="reference", help="Operating mode (default 'reference')")
+    parser.add_argument("--provider", choices=["claude", "agy"], default="claude", help="Model provider CLI (default 'claude')")
+    parser.add_argument("--zone-a", action="store_true", default=False, help="In explorer mode, allow non-vault local task sets without cloud_ok: true")
     return parser
 
 
@@ -453,6 +585,9 @@ def run_shim_cli(
     model: str = "haiku",
     timeout: float = 60.0,
     runner: Callable[..., Any] | None = None,
+    mode: str = "reference",
+    provider: str = "claude",
+    zone_a: bool = False,
 ) -> int:
     """CLI execution entrypoint with fail-closed validation."""
     vault = vault_guard.vault_root()
@@ -460,13 +595,16 @@ def run_shim_cli(
         print(vault_guard.REFUSED_MESSAGE, file=sys.stderr)
         return vault_guard.REFUSED_EXIT
     try:
-        validate_tasks_file(tasks)
+        validate_tasks_file(tasks, allow_zone_a=(mode == "explorer" and zone_a))
         server = make_reference_shim_server(
             host=host,
             port=port,
             model=model,
             timeout=timeout,
             runner=runner,
+            mode=mode,
+            provider=provider,
+            zone_a=zone_a,
         )
     except PermissionError as exc:
         print(str(exc), file=sys.stderr)
@@ -476,7 +614,7 @@ def run_shim_cli(
         return 1
 
     actual_port = server.server_port
-    print(f"Reference shim listening on http://{host}:{actual_port} (model: {model})")
+    print(f"Reference shim listening on http://{host}:{actual_port} (model: {model}, mode: {mode}, provider: {provider})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -496,6 +634,9 @@ def main(argv: list[str] | None = None) -> int:
         port=args.port,
         model=args.model,
         timeout=args.timeout,
+        mode=args.mode,
+        provider=args.provider,
+        zone_a=args.zone_a,
     )
 
 

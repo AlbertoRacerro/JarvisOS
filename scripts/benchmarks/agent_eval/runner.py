@@ -375,6 +375,9 @@ def execute_claude_cli(prompt: str, model: str, *, timeout: float) -> tuple[str,
         return "", "failed_terminal", type(exc).__name__
 
 
+_ORIGINAL_URLOPEN = urllib.request.urlopen
+
+
 def _http_request(
     url: str, method: str = "GET", payload: dict[str, Any] | None = None,
     *, deadline: float,
@@ -385,7 +388,11 @@ def _http_request(
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("task deadline expired")
-    with urllib.request.urlopen(req, timeout=remaining) as resp:
+    if urllib.request.urlopen is not _ORIGINAL_URLOPEN:
+        with urllib.request.urlopen(req, timeout=remaining) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=remaining) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -1436,6 +1443,47 @@ def build_parser() -> argparse.ArgumentParser:
     shim_parser.add_argument("--port", type=int, default=8080, help="Bind port (default 8080, port 8000 refused)")
     shim_parser.add_argument("--model", default="haiku", help="Reference model (default 'haiku')")
     shim_parser.add_argument("--timeout", type=float, default=60.0, help="Per-request timeout in seconds (default 60)")
+    shim_parser.add_argument("--mode", choices=["reference", "explorer"], default="reference", help="Operating mode (default 'reference')")
+    shim_parser.add_argument("--provider", choices=["claude", "agy"], default="claude", help="Model provider CLI (default 'claude')")
+    shim_parser.add_argument("--zone-a", action="store_true", default=False, help="In explorer mode, allow non-vault local task sets without cloud_ok: true")
+
+    # explore-gen subcommand (Spec 388)
+    exp_gen_parser = subparsers.add_parser(
+        "explore-gen",
+        help="Deterministically generate generic engineering exploration requests",
+    )
+    exp_gen_parser.add_argument("--out", required=True, help="Output JSON file for generated requests")
+    exp_gen_parser.add_argument("--count", type=int, default=40, help="Number of requests to generate (default 40)")
+    exp_gen_parser.add_argument("--heldout-fraction", type=float, default=0.25, help="Heldout split fraction (default 0.25)")
+    exp_gen_parser.add_argument("--seed", type=int, default=42, help="Deterministic generator seed (default 42)")
+
+    # explore subcommand (Spec 388)
+    explore_parser = subparsers.add_parser(
+        "explore",
+        help="Run strong-model exploration against proof backend with tool trace extraction",
+    )
+    explore_parser.add_argument("--requests", required=True, help="Path to requests JSON file")
+    explore_parser.add_argument("--base-url", required=True, help="Proof backend loopback URL (port 8000 refused)")
+    explore_parser.add_argument("--out", required=True, help="Output directory for exploration logs")
+    explore_parser.add_argument("--data-root", required=True, help="Proof data root for SQLite tool trace extraction")
+    explore_parser.add_argument("--workspace-id", default="default", help="Workspace ID (default 'default')")
+    explore_parser.add_argument("--role-id", help="Role ID for interactions")
+    explore_parser.add_argument("--route-class", help="Route class for interactions")
+    explore_parser.add_argument("--max-clarification-rounds", type=int, default=2, help="Max simulated maintainer clarification rounds (default 2)")
+    explore_parser.add_argument("--provider", choices=["claude", "agy"], default="claude", help="Maintainer model provider (default 'claude')")
+    explore_parser.add_argument("--model", default="haiku", help="Maintainer model (default 'haiku')")
+    explore_parser.add_argument("--allow-any-clarification", action="store_true", default=False, help="Allow clarification on non-interactive tasks")
+    explore_parser.add_argument("--resume", action="store_true", default=False, help="Resume interrupted exploration run")
+    explore_parser.add_argument("--timeout", type=float, default=120.0, help="Per-request timeout in seconds (default 120)")
+
+    # mine subcommand (Spec 388)
+    mine_parser = subparsers.add_parser(
+        "mine",
+        help="Offline process mining over exploration logs (transitions, chains, loops, wish list)",
+    )
+    mine_parser.add_argument("--logs", nargs="+", required=True, help="One or more exploration_log.json files")
+    mine_parser.add_argument("--out", help="Output path for mining report (JSON/MD)")
+    mine_parser.add_argument("--min-support", type=int, default=2, help="Minimum support count for frequent chains (default 2)")
 
     return parser
 
@@ -1536,7 +1584,108 @@ def main(argv: list[str] | None = None) -> int:
             port=args.port,
             model=args.model,
             timeout=args.timeout,
+            mode=args.mode,
+            provider=args.provider,
+            zone_a=args.zone_a,
         )
+
+    if args.subcommand == "explore-gen":
+        vault = vault_guard.vault_root()
+        if vault_guard.touches_vault(args.out, vault):
+            print(vault_guard.REFUSED_MESSAGE, file=sys.stderr)
+            return vault_guard.REFUSED_EXIT
+        try:
+            from scripts.benchmarks.agent_eval.explorer import generate_request_set
+            data = generate_request_set(
+                count=args.count,
+                heldout_fraction=args.heldout_fraction,
+                seed=args.seed,
+            )
+            out_file = Path(args.out)
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            print(f"Generated {len(data['tasks'])} exploration requests written to {args.out}")
+            return 0
+        except Exception as exc:
+            print(f"Error generating request set: {exc}", file=sys.stderr)
+            return 1
+
+    if args.subcommand == "explore":
+        vault = vault_guard.vault_root()
+        for p in (args.requests, args.data_root, args.out):
+            if p and vault_guard.touches_vault(p, vault):
+                print(vault_guard.REFUSED_MESSAGE, file=sys.stderr)
+                return vault_guard.REFUSED_EXIT
+        try:
+            from scripts.benchmarks.agent_eval.explorer import (
+                SimulatedMaintainer,
+                run_exploration,
+            )
+            maintainer = SimulatedMaintainer(
+                provider=args.provider,
+                model=args.model,
+                timeout=args.timeout,
+            )
+            res = run_exploration(
+                requests_path=args.requests,
+                base_url=args.base_url,
+                out_dir=args.out,
+                data_root=args.data_root,
+                workspace_id=args.workspace_id,
+                role_id=args.role_id,
+                route_class=args.route_class,
+                max_clarification_rounds=args.max_clarification_rounds,
+                simulated_maintainer=maintainer,
+                allow_any_clarification=args.allow_any_clarification,
+                resume=args.resume,
+                timeout=args.timeout,
+            )
+            print(f"Exploration completed: {len(res.get('requests', []))} requests executed.")
+            return 0
+        except PermissionError as exc:
+            print(str(exc), file=sys.stderr)
+            return vault_guard.REFUSED_EXIT
+        except Exception as exc:
+            print(f"Error running exploration: {exc}", file=sys.stderr)
+            return 1
+
+    if args.subcommand == "mine":
+        vault = vault_guard.vault_root()
+        paths_to_check = list(args.logs)
+        if args.out:
+            paths_to_check.append(args.out)
+        for p in paths_to_check:
+            if p and vault_guard.touches_vault(p, vault):
+                print(vault_guard.REFUSED_MESSAGE, file=sys.stderr)
+                return vault_guard.REFUSED_EXIT
+        try:
+            from scripts.benchmarks.agent_eval.miner import (
+                format_mining_report,
+                mine_exploration_logs,
+            )
+            report = mine_exploration_logs(args.logs, min_support=args.min_support)
+            md_report = format_mining_report(report)
+            if args.out:
+                out_path = Path(args.out)
+                if out_path.is_dir() or not out_path.suffix:
+                    out_path.mkdir(parents=True, exist_ok=True)
+                    (out_path / "mining_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+                    (out_path / "mining_report.md").write_text(md_report, encoding="utf-8")
+                else:
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+                    md_path = out_path.with_suffix(".md")
+                    md_path.write_text(md_report, encoding="utf-8")
+                print(f"Mining report written to {args.out}")
+            else:
+                print(md_report)
+            return 0
+        except PermissionError as exc:
+            print(str(exc), file=sys.stderr)
+            return vault_guard.REFUSED_EXIT
+        except Exception as exc:
+            print(f"Error mining exploration logs: {exc}", file=sys.stderr)
+            return 1
 
     return 0
 
