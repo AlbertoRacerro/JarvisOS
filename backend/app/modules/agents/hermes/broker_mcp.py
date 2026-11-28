@@ -132,17 +132,18 @@ _KNOWLEDGE_READ_TOOL = {
 _QUANTITY = {"type": "object", "properties": {"value": {"type": "number"}, "unit": {"type": "string"}},
              "required": ["value", "unit"], "additionalProperties": False}
 # Spec 180: the agent proposes only typed Monod/Haldane reactions; KineticReaction stays the apply-time authority.
-def _rate_law(form: str, **extra: dict[str, Any]) -> dict[str, Any]:
-    # Only Haldane carries the substrate-inhibition constant k_i; Monod refuses it at apply time.
-    return {"type": "object", "properties": {
-        "form": {"const": form}, "substrate": {"type": "string"}, "v_max": _QUANTITY, "k_s": _QUANTITY, **extra,
-        "inhibitions": {"type": "array", "maxItems": 3, "items": {"type": "object", "properties": {
-            "kind": {"enum": ["noncompetitive", "competitive"]}, "inhibitor": {"type": "string"}, "k_i": _QUANTITY},
-            "required": ["kind", "inhibitor", "k_i"], "additionalProperties": False}},
-        "temperature": {"type": "object", "properties": {"activation_energy": _QUANTITY,
-                        "reference_temperature": _QUANTITY},
-                        "required": ["activation_energy", "reference_temperature"], "additionalProperties": False}},
-        "required": ["form", "substrate", "v_max", "k_s"], "additionalProperties": False}
+# One schema for both forms keeps the local prompt budget (spec 368): only Haldane carries the
+# substrate-inhibition constant k_i, and MonodRateLaw refuses it at apply time.
+_RATE_LAW = {"type": "object", "properties": {
+    "form": {"enum": ["monod", "haldane"]}, "substrate": {"type": "string"}, "v_max": _QUANTITY,
+    "k_s": _QUANTITY, "k_i": _QUANTITY,
+    "inhibitions": {"type": "array", "maxItems": 3, "items": {"type": "object", "properties": {
+        "kind": {"enum": ["noncompetitive", "competitive"]}, "inhibitor": {"type": "string"}, "k_i": _QUANTITY},
+        "required": ["kind", "inhibitor", "k_i"], "additionalProperties": False}},
+    "temperature": {"type": "object", "properties": {"activation_energy": _QUANTITY,
+                    "reference_temperature": _QUANTITY},
+                    "required": ["activation_energy", "reference_temperature"], "additionalProperties": False}},
+    "required": ["form", "substrate", "v_max", "k_s"], "additionalProperties": False}
 
 
 _REACTION = {"type": "object", "properties": {
@@ -150,7 +151,7 @@ _REACTION = {"type": "object", "properties": {
     "stoichiometry": {"type": "object", "additionalProperties": {"type": "number"}, "minProperties": 2},
     "base_reactant": {"type": "string"},
     "phase": {"const": "Liquid"}, "basis": {"const": "MolarConc"},
-    "rate_law": {"oneOf": [_rate_law("monod"), _rate_law("haldane", k_i=_QUANTITY)]},
+    "rate_law": _RATE_LAW,
     "provenance": {"type": "object", "properties": {
         "kind": {"enum": ["literature", "measurement", "operator_estimate", "synthetic"]},
         "citation": {"type": "string", "maxLength": 300}, "note": {"type": "string", "maxLength": 500}},
