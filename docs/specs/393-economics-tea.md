@@ -18,11 +18,11 @@ Implements Maintainer Directive `L20261127191802-5834` (items 9 & 18 — Economi
 
 ## Code facts checked at `ca488a43`
 
-- `backend/app/core/paths.py` defines `JarvisPaths.bio_models_workspace_dir(self, workspace_id: str) -> Path` using `self.workspaces_dir / workspace_id / ...` (no SQLite migration required for workspace-scoped JSON storage).
-- `backend/app/core/schema.py` defines `workspaces`, `design_project_versions`, and `design_components` (allowing completeness checks against the workspace's Design components without schema changes).
-- `backend/app/main.py` registers module FastAPI routers via `app.include_router(...)`.
-- `backend/app/modules/agents/hermes/knowledge_read_tool.py` defines `_ALLOWED_VIEWS`, `_VIEW_ALLOWED_KEYS`, `dispatch_knowledge_read_tool`, `_enforce_payload_bounds`, and cloud IP boundary sanitization (`sanitize_record`).
-- `backend/app/modules/agents/hermes/broker_mcp.py` defines the `jarvis_knowledge_read` MCP tool schema.
+- `backend/app/core/paths.py::JarvisPaths` defines `bio_models_workspace_dir` using `self.workspaces_dir / workspace_id / ...` (no SQLite migration required for workspace-scoped JSON storage).
+- `backend/app/core/schema.py::CURRENT_SCHEMA_MIGRATION_ID` tracks the additive schema that already defines `workspaces`, `design_project_versions`, and `design_components` (allowing completeness checks against the workspace's Design components without schema changes).
+- `backend/app/main.py::create_app` registers module FastAPI routers via `app.include_router(...)`.
+- `backend/app/modules/agents/hermes/knowledge_read_tool.py::dispatch_knowledge_read_tool` dispatches `_ALLOWED_VIEWS` with `_enforce_payload_bounds` and cloud IP boundary sanitization (`sanitize_record`).
+- `backend/app/modules/agents/hermes/broker_mcp.py::main` serves the `jarvis_knowledge_read` MCP tool schema.
 
 ## Scope
 
