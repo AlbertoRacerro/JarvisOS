@@ -13,12 +13,12 @@ Implements Maintainer Directive `L20261127191802-5834` (items 10 & 27 — Versio
 
 ## Code facts checked at `65592ad9`
 
-- `backend/app/core/schema.py` already defines `design_project_versions`, `design_components`, `design_component_units`, `design_component_geometry`, `design_component_models`, `parameters`, and `requirements` (no schema migration required).
-- `backend/app/core/project_knowledge_schema.py` already defines `simulation_result_batches`, `simulation_result_values`, and `project_knowledge_validation` (no schema migration required).
-- `backend/app/modules/workspaces/design_versions.py` owns `router = APIRouter(prefix="/workspaces/{project_id}/design-versions", tags=["design"])` with `list_design_versions`, `create_design_version`, and `activate_design_version`, where each `design_project_versions` row points to an isolated `data_workspace_id` in `workspaces`.
-- `backend/app/modules/process_stack/draft.py` provides `list_drafts(workspace_id)`, `draft_dir(workspace_id, draft_id)`, and `load_revision(directory, revision)` to read process draft documents on disk.
-- `backend/app/modules/agents/hermes/knowledge_read_tool.py` defines `_ALLOWED_VIEWS`, `_VIEW_ALLOWED_KEYS`, `_VIEW_LIMIT_BOUNDS`, and `dispatch_knowledge_read_tool` with strict workspace scoping and `_enforce_payload_bounds`.
-- `backend/app/modules/agents/hermes/broker_mcp.py` defines the `jarvis_knowledge_read` MCP tool schema.
+- `backend/app/core/schema.py::SCHEMA_STATEMENTS` already defines `design_project_versions`, `design_components`, `design_component_units`, `design_component_geometry`, `design_component_models`, `parameters`, and `requirements` (no schema migration required).
+- `backend/app/core/project_knowledge_schema.py::PROJECT_KNOWLEDGE_SCHEMA_STATEMENTS` already defines `simulation_result_batches`, `simulation_result_values`, and `project_knowledge_validation` (no schema migration required).
+- `backend/app/modules/workspaces/design_versions.py::list_design_versions` and `backend/app/modules/workspaces/design_versions.py::create_design_version` own `router = APIRouter(prefix="/workspaces/{project_id}/design-versions", tags=["design"])`, where each `design_project_versions` row points to an isolated `data_workspace_id` in `workspaces`.
+- `backend/app/modules/process_stack/draft.py::list_drafts`, `backend/app/modules/process_stack/draft.py::draft_dir`, and `backend/app/modules/process_stack/draft.py::load_revision` read process draft documents on disk.
+- `backend/app/modules/agents/hermes/knowledge_read_tool.py::dispatch_knowledge_read_tool` and `backend/app/modules/agents/hermes/knowledge_read_tool.py::_ALLOWED_VIEWS` implement strict workspace-scoped read-only views with `_enforce_payload_bounds`.
+- `backend/app/modules/agents/hermes/broker_mcp.py::_KNOWLEDGE_READ_TOOL` defines the `jarvis_knowledge_read` MCP tool schema.
 
 ## Scope
 
