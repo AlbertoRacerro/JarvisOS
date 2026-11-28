@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +40,7 @@ _ALLOWED_VIEWS = frozenset({
 _VIEW_ALLOWED_KEYS = {
     "workspaces": {"view", "workspace_id", "limit"},
     "memory_records": {"view", "workspace_id", "limit", "status", "record_type", "query"},
-    "literature_sources": {"view", "workspace_id", "limit", "query"},
+    "literature_sources": {"view", "workspace_id", "limit", "query", "state"},
     "literature_entries": {"view", "workspace_id", "limit", "source_id", "status", "query"},
     "project_revisions": {"view", "workspace_id", "limit"},
     "calc_runs": {"view", "workspace_id", "limit", "calculator_id"},
@@ -348,15 +349,90 @@ def _handle_memory_records(
     return _enforce_payload_bounds(payload, "memory_records")
 
 
+def _parse_dated_timestamp(val: Any) -> datetime | None:
+    if not isinstance(val, str) or not val.strip():
+        return None
+    val_clean = val.strip()
+    try:
+        dt = datetime.fromisoformat(val_clean.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt
+    except Exception:
+        pass
+    if len(val_clean) >= 10:
+        try:
+            d = date.fromisoformat(val_clean[:10])
+            return datetime(d.year, d.month, d.day, tzinfo=UTC)
+        except Exception:
+            pass
+    return None
+
+
+def _build_dated_research_summary(
+    dates: list[str | None],
+    years: list[int | None],
+    validated_count: int,
+) -> dict[str, Any]:
+    count = max(0, int(validated_count))
+    valid_dts = [dt for d in dates if (dt := _parse_dated_timestamp(d)) is not None]
+    latest_validated_date: str | None = None
+    if valid_dts:
+        latest_validated_date = max(valid_dts).date().isoformat()
+
+    valid_years = [
+        y for y in years
+        if isinstance(y, int) and not isinstance(y, bool)
+    ]
+    latest_published_year: int | None = max(valid_years) if valid_years else None
+
+    if count > 0:
+        if latest_validated_date is not None:
+            date_ref = latest_validated_date
+        elif latest_published_year is not None:
+            date_ref = str(latest_published_year)
+        else:
+            date_ref = None
+
+        if date_ref is not None:
+            guidance = (
+                f"Reuse validated stored literature/documents first (latest validated: {date_ref}), "
+                f"cite this date, offer at the end to search for anything newer than {date_ref}, "
+                "and search afresh only when stored coverage is incomplete or the user asks."
+            )
+        else:
+            guidance = (
+                "Reuse validated stored literature/documents first, cite their date, "
+                "offer at the end to search for anything newer than that date, "
+                "and search afresh only when stored coverage is incomplete or the user asks."
+            )
+    else:
+        guidance = (
+            "No validated stored literature sources matched; "
+            "fresh search or a labelled engineering estimate is permitted."
+        )
+
+    return {
+        "validated_count": count,
+        "latest_validated_date": latest_validated_date,
+        "latest_published_year": latest_published_year,
+        "reuse_guidance": guidance,
+    }
+
+
 def _handle_literature_sources(
     connection: Any, workspace_id: str, raw_args: dict[str, Any]
 ) -> dict[str, Any]:
     min_limit, max_limit, default_limit = _VIEW_LIMIT_BOUNDS["literature_sources"]
     limit = raw_args.get("limit", default_limit)
     query_filter = raw_args.get("query")
+    state_filter = raw_args.get("state")
 
     params: list[Any] = [workspace_id]
     where_clauses = ["s.workspace_id = ?"]
+    if state_filter is not None:
+        where_clauses.append("LOWER(s.state) = ?")
+        params.append(state_filter.lower())
     if query_filter is not None:
         where_clauses.append(
             "(LOWER(s.title) LIKE ? OR LOWER(COALESCE(s.citation, '')) LIKE ? OR LOWER(COALESCE(s.publisher, '')) LIKE ?)"
@@ -377,7 +453,7 @@ def _handle_literature_sources(
     query_params.append(limit)
     sql = f"""
         SELECT s.id, s.title, s.citation, s.publisher, s.published_year, s.source_kind,
-               s.artifact_id, s.state,
+               s.artifact_id, s.state, s.created_at, s.updated_at,
                (SELECT COUNT(*) FROM literature_entries e WHERE e.source_id = s.id AND e.workspace_id = s.workspace_id) AS entry_count
         FROM literature_sources s
         {where_sql}
@@ -401,7 +477,15 @@ def _handle_literature_sources(
             "locator": _cap_str(r["artifact_id"]) if r["artifact_id"] else None,
             "backing_state": _cap_str(r["state"]),
             "entry_count": int(r["entry_count"]) if r["entry_count"] is not None else 0,
+            "created_at": _cap_str(r["created_at"]) if r["created_at"] is not None else None,
+            "updated_at": _cap_str(r["updated_at"]) if r["updated_at"] is not None else None,
+            "validated": bool(r["state"] == "accepted"),
         })
+
+    validated_sources = [s for s in items if s.get("validated")]
+    dates: list[str | None] = [s.get("updated_at") or s.get("created_at") for s in validated_sources]
+    years: list[int | None] = [s.get("year") for s in validated_sources]
+    dated_summary = _build_dated_research_summary(dates, years, len(validated_sources))
 
     payload = {
         "view": "literature_sources",
@@ -409,6 +493,7 @@ def _handle_literature_sources(
         "count": len(items),
         "total": total,
         "truncated": False,
+        "dated_research_summary": dated_summary,
         "literature_sources": items,
     }
     return _enforce_payload_bounds(payload, "literature_sources")
@@ -424,16 +509,16 @@ def _handle_literature_entries(
     query_filter = raw_args.get("query")
 
     params: list[Any] = [workspace_id]
-    where_clauses = ["workspace_id = ?"]
+    where_clauses = ["e.workspace_id = ?"]
     if source_id_filter is not None:
-        where_clauses.append("source_id = ?")
+        where_clauses.append("e.source_id = ?")
         params.append(source_id_filter)
     if status_filter is not None:
-        where_clauses.append("LOWER(status) = LOWER(?)")
+        where_clauses.append("LOWER(e.status) = LOWER(?)")
         params.append(status_filter)
     if query_filter is not None:
         where_clauses.append(
-            "(LOWER(COALESCE(statement, '')) LIKE ? OR LOWER(COALESCE(value_text, '')) LIKE ? OR LOWER(COALESCE(context_text, '')) LIKE ?)"
+            "(LOWER(COALESCE(e.statement, '')) LIKE ? OR LOWER(COALESCE(e.value_text, '')) LIKE ? OR LOWER(COALESCE(e.context_text, '')) LIKE ?)"
         )
         like_p = f"%{query_filter.lower()}%"
         params.extend([like_p, like_p, like_p])
@@ -441,7 +526,7 @@ def _handle_literature_entries(
     where_sql = f"WHERE {' AND '.join(where_clauses)}"
     try:
         count_row = connection.execute(
-            f"SELECT COUNT(*) FROM literature_entries {where_sql}", params
+            f"SELECT COUNT(*) FROM literature_entries e {where_sql}", params
         ).fetchone()
         total = int(count_row[0]) if count_row else 0
     except Exception:
@@ -450,11 +535,14 @@ def _handle_literature_entries(
     query_params = list(params)
     query_params.append(limit)
     sql = f"""
-        SELECT id, source_id, entry_kind, statement, value_text, value_number, unit,
-               status, locator_kind, locator_start, locator_end, context_text, updated_at
-        FROM literature_entries
+        SELECT e.id, e.source_id, e.entry_kind, e.statement, e.value_text, e.value_number, e.unit,
+               e.status, e.locator_kind, e.locator_start, e.locator_end, e.context_text, e.updated_at,
+               s.title AS source_title, s.state AS source_state, s.updated_at AS source_updated_at,
+               s.published_year AS source_published_year
+        FROM literature_entries e
+        LEFT JOIN literature_sources s ON s.id = e.source_id AND s.workspace_id = e.workspace_id
         {where_sql}
-        ORDER BY updated_at DESC, id ASC
+        ORDER BY e.updated_at DESC, e.id ASC
         LIMIT ?
     """
     try:
@@ -490,7 +578,30 @@ def _handle_literature_entries(
             "status": _cap_str(r["status"]),
             "locator": _cap_str(locator_str) if locator_str else None,
             "updated_at": _cap_str(r["updated_at"]),
+            "source_title": _cap_str(r["source_title"]) if r["source_title"] else None,
+            "source_state": _cap_str(r["source_state"]) if r["source_state"] else None,
+            "source_updated_at": _cap_str(r["source_updated_at"]) if r["source_updated_at"] else None,
+            "source_published_year": r["source_published_year"],
         })
+
+    validated_entries = [
+        e for e in items
+        if e.get("status") == "accepted" or e.get("source_state") == "accepted"
+    ]
+    dates = []
+    years = []
+    for e in validated_entries:
+        years.append(e.get("source_published_year"))
+        entry_dates: list[str | None] = []
+        if e.get("status") == "accepted" and e.get("updated_at"):
+            entry_dates.append(e.get("updated_at"))
+        if e.get("source_state") == "accepted" and e.get("source_updated_at"):
+            entry_dates.append(e.get("source_updated_at"))
+        if not entry_dates:
+            entry_dates.append(e.get("source_updated_at") or e.get("updated_at"))
+        dates.extend(entry_dates)
+
+    dated_summary = _build_dated_research_summary(dates, years, len(validated_entries))
 
     payload = {
         "view": "literature_entries",
@@ -498,6 +609,7 @@ def _handle_literature_entries(
         "count": len(items),
         "total": total,
         "truncated": False,
+        "dated_research_summary": dated_summary,
         "literature_entries": items,
     }
     return _enforce_payload_bounds(payload, "literature_entries")
@@ -935,10 +1047,16 @@ def dispatch_knowledge_read_tool(
             return None, "invalid_arguments"
 
     # Type validation for optional string filters
-    for str_key in ("status", "record_type", "query", "source_id", "calculator_id"):
+    for str_key in ("status", "record_type", "query", "source_id", "calculator_id", "state"):
         if str_key in raw_args:
             val = raw_args[str_key]
             if val is not None and not isinstance(val, str):
+                return None, "invalid_arguments"
+
+    if "state" in raw_args:
+        state_val = raw_args["state"]
+        if state_val is not None:
+            if not isinstance(state_val, str) or state_val.lower() not in {"raw", "review", "accepted"}:
                 return None, "invalid_arguments"
 
     node_ref: str | None = None
