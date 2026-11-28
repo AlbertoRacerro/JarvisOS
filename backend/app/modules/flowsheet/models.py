@@ -116,3 +116,48 @@ class FlowsheetFreshnessInvalidationDetailRead(BaseModel):
     cycle_count: int
     created_at: str
     marks: list[FlowsheetFreshnessMarkRead]
+
+
+class FlowsheetAffectedNodeRead(BaseModel):
+    ref: str
+    kind: NodeKind
+    id: str
+    label: str
+    distance: int = Field(ge=1)
+    path: list[str]
+    requires_rerun: bool
+
+
+class FlowsheetChangeImpactRead(BaseModel):
+    workspace_id: str
+    source_ref: str
+    source_kind: NodeKind
+    source_label: str
+    affected_count: int
+    counts_by_kind: dict[str, int]
+    affected_nodes: list[FlowsheetAffectedNodeRead]
+    required_reruns: list[str]
+    affected_decisions: list[str]
+    estimated_rerun_seconds: float | None = None
+    cycle_count: int = 0
+    unresolved_diagnostic_count: int = 0
+
+
+class FlowsheetUpstreamLeverRead(BaseModel):
+    ref: str
+    kind: NodeKind
+    id: str
+    label: str
+    distance: int = Field(ge=1)
+    path: list[str]
+    status: str | None = None
+
+
+class FlowsheetUpstreamLeversRead(BaseModel):
+    workspace_id: str
+    target_ref: str
+    target_kind: NodeKind
+    target_label: str
+    lever_count: int
+    counts_by_kind: dict[str, int]
+    levers: list[FlowsheetUpstreamLeverRead]

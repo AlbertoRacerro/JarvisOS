@@ -2,14 +2,18 @@ from fastapi import APIRouter, HTTPException
 
 from app.modules.flowsheet.freshness import (
     FreshnessError,
+    find_upstream_levers,
     get_freshness_invalidation,
     get_node_freshness,
+    preview_change_impact,
 )
 from app.modules.flowsheet.models import (
+    FlowsheetChangeImpactRead,
     FlowsheetFreshnessInvalidationDetailRead,
     FlowsheetGraphRead,
     FlowsheetNodeFreshnessRead,
     FlowsheetNodeRead,
+    FlowsheetUpstreamLeversRead,
 )
 from app.modules.flowsheet.service import FlowsheetError, get_flowsheet_graph, get_flowsheet_node
 
@@ -81,4 +85,26 @@ def get_flowsheet_invalidation_endpoint(
     try:
         return get_freshness_invalidation(workspace_id, invalidation_id)
     except FreshnessError as exc:
+        raise _flowsheet_error(exc) from exc
+
+
+@router.get("/nodes/{node_ref}/impact", response_model=FlowsheetChangeImpactRead)
+def get_flowsheet_node_impact_endpoint(
+    workspace_id: str,
+    node_ref: str,
+) -> FlowsheetChangeImpactRead:
+    try:
+        return preview_change_impact(workspace_id, node_ref)
+    except (FlowsheetError, FreshnessError) as exc:
+        raise _flowsheet_error(exc) from exc
+
+
+@router.get("/nodes/{node_ref}/levers", response_model=FlowsheetUpstreamLeversRead)
+def get_flowsheet_node_levers_endpoint(
+    workspace_id: str,
+    node_ref: str,
+) -> FlowsheetUpstreamLeversRead:
+    try:
+        return find_upstream_levers(workspace_id, node_ref)
+    except (FlowsheetError, FreshnessError) as exc:
         raise _flowsheet_error(exc) from exc

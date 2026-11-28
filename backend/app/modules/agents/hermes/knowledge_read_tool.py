@@ -16,6 +16,12 @@ from app.modules.agents.hermes.ip_boundary import (
     sanitize_record,
 )
 from app.modules.ai.agent_contracts import CapabilityGrantRef, StructuredToolCall
+from app.modules.flowsheet.freshness import (
+    FreshnessError,
+    find_upstream_levers_from_connection,
+    preview_change_impact_from_connection,
+)
+from app.modules.flowsheet.service import FlowsheetError
 
 _ALLOWED_VIEWS = frozenset({
     "workspaces",
@@ -26,6 +32,8 @@ _ALLOWED_VIEWS = frozenset({
     "calc_runs",
     "ai_jobs_recent",
     "table_counts",
+    "change_impact",
+    "upstream_levers",
 })
 
 _VIEW_ALLOWED_KEYS = {
@@ -37,6 +45,8 @@ _VIEW_ALLOWED_KEYS = {
     "calc_runs": {"view", "workspace_id", "limit", "calculator_id"},
     "ai_jobs_recent": {"view", "workspace_id", "limit"},
     "table_counts": {"view", "workspace_id"},
+    "change_impact": {"view", "workspace_id", "node_ref"},
+    "upstream_levers": {"view", "workspace_id", "node_ref"},
 }
 
 _VIEW_LIMIT_BOUNDS = {
@@ -138,6 +148,10 @@ def _enforce_payload_bounds(payload: dict[str, Any], items_key: str | None = Non
             items.pop()
             payload[items_key] = items
             payload["count"] = len(items)
+            if items_key == "affected_nodes":
+                payload["affected_count"] = len(items)
+            elif items_key == "levers":
+                payload["lever_count"] = len(items)
 
     if _is_bounded(payload):
         return payload
@@ -146,6 +160,10 @@ def _enforce_payload_bounds(payload: dict[str, Any], items_key: str | None = Non
     payload["truncated"] = True
     if items_key and isinstance(payload.get(items_key), list):
         payload["count"] = len(payload[items_key])
+        if items_key == "affected_nodes":
+            payload["affected_count"] = len(payload[items_key])
+        elif items_key == "levers":
+            payload["lever_count"] = len(payload[items_key])
 
     if _is_bounded(payload):
         return payload
@@ -923,6 +941,13 @@ def dispatch_knowledge_read_tool(
             if val is not None and not isinstance(val, str):
                 return None, "invalid_arguments"
 
+    node_ref: str | None = None
+    if view in {"change_impact", "upstream_levers"}:
+        node_ref_arg = raw_args.get("node_ref")
+        if not isinstance(node_ref_arg, str) or not node_ref_arg.strip():
+            return None, "invalid_arguments"
+        node_ref = node_ref_arg.strip()
+
     home_str = str(Path.home())
 
     with open_sqlite_connection(read_only=True) as connection:
@@ -944,10 +969,45 @@ def dispatch_knowledge_read_tool(
             result = _handle_ai_jobs_recent(connection, target_workspace, raw_args)
         elif view == "table_counts":
             result = _handle_table_counts(connection, target_workspace)
+        elif view == "change_impact":
+            assert node_ref is not None
+            try:
+                impact = preview_change_impact_from_connection(connection, target_workspace, node_ref)
+                result = impact.model_dump(mode="json")
+            except FlowsheetError as exc:
+                if exc.code in {"flowsheet_node_not_found", "flowsheet_workspace_not_found"}:
+                    return None, "node_not_found"
+                if exc.code == "flowsheet_ref_invalid":
+                    return None, "invalid_arguments"
+                return None, default_error
+            except FreshnessError:
+                return None, default_error
+        elif view == "upstream_levers":
+            assert node_ref is not None
+            try:
+                levers = find_upstream_levers_from_connection(connection, target_workspace, node_ref)
+                result = levers.model_dump(mode="json")
+            except FlowsheetError as exc:
+                if exc.code in {"flowsheet_node_not_found", "flowsheet_workspace_not_found"}:
+                    return None, "node_not_found"
+                if exc.code == "flowsheet_ref_invalid":
+                    return None, "invalid_arguments"
+                return None, default_error
+            except FreshnessError:
+                return None, default_error
         else:
             return None, "unknown_view"
 
-    items_key = None if view == "table_counts" else ("ai_jobs" if view == "ai_jobs_recent" else view)
+    if view == "table_counts":
+        items_key = None
+    elif view == "ai_jobs_recent":
+        items_key = "ai_jobs"
+    elif view == "change_impact":
+        items_key = "affected_nodes"
+    elif view == "upstream_levers":
+        items_key = "levers"
+    else:
+        items_key = view
     raw_items = result.get(items_key, []) if items_key and isinstance(result, dict) else []
     scrubbed = _scrub_value(result, home_str)
 
@@ -970,6 +1030,10 @@ def dispatch_knowledge_read_tool(
                     withheld_count += 1
             scrubbed[items_key] = kept_items
             scrubbed["count"] = len(kept_items)
+            if items_key == "affected_nodes":
+                scrubbed["affected_count"] = len(kept_items)
+            elif items_key == "levers":
+                scrubbed["lever_count"] = len(kept_items)
             scrubbed["withheld_count"] = withheld_count
             scrubbed["egress_mode"] = mode
             if mode == CLOUD_IP_MODE_SANITIZED:

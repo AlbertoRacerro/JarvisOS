@@ -242,7 +242,11 @@ def test_knowledge_read_tool_registered_in_allowlists_and_broker() -> None:
         "calc_runs",
         "ai_jobs_recent",
         "table_counts",
+        "change_impact",
+        "upstream_levers",
     }
+    assert schema["properties"]["node_ref"]["type"] == "string"
+    assert schema["properties"]["node_ref"]["maxLength"] == 160
     assert schema["properties"]["limit"]["minimum"] == 1
     assert schema["properties"]["limit"]["maximum"] == 100
 

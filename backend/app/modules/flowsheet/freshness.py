@@ -4,16 +4,23 @@ import hashlib
 import heapq
 import json
 import sqlite3
+import statistics
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 from uuid import uuid4
 
 from app.core.database import open_sqlite_connection
 from app.modules.flowsheet.models import (
+    FlowsheetAffectedNodeRead,
+    FlowsheetChangeImpactRead,
     FlowsheetFreshnessInvalidationDetailRead,
     FlowsheetFreshnessInvalidationSummaryRead,
     FlowsheetFreshnessMarkRead,
     FlowsheetGraphRead,
     FlowsheetNodeFreshnessRead,
+    FlowsheetUpstreamLeverRead,
+    FlowsheetUpstreamLeversRead,
 )
 from app.modules.flowsheet.service import (
     build_flowsheet_graph_from_connection,
@@ -404,3 +411,305 @@ def _canonical_json(value: object) -> str:
 
 def _sha256_prefixed(payload: str) -> str:
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _parse_ts(val: Any) -> float | None:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        val = val.strip()
+        if not val:
+            return None
+        try:
+            return float(val)
+        except ValueError:
+            pass
+        try:
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            return dt.timestamp()
+        except Exception:
+            return None
+    return None
+
+
+def _calculate_estimated_rerun_seconds(
+    connection: sqlite3.Connection,
+    workspace_id: str,
+    required_reruns_count: int,
+) -> float | None:
+    if required_reruns_count <= 0:
+        return None
+
+    durations: list[float] = []
+
+    # Defensively inspect runner_jobs columns first so we never hit OperationalError
+    rj_info = connection.execute("PRAGMA table_info(runner_jobs)").fetchall()
+    rj_cols = {row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in rj_info}
+
+    if "workspace_id" in rj_cols:
+        start_col = "started_at" if "started_at" in rj_cols else ("created_at" if "created_at" in rj_cols else None)
+        end_col = (
+            "completed_at"
+            if "completed_at" in rj_cols
+            else ("finished_at" if "finished_at" in rj_cols else ("updated_at" if "updated_at" in rj_cols else None))
+        )
+        if start_col and end_col:
+            query = f"SELECT {start_col}, {end_col} FROM runner_jobs WHERE workspace_id = ? AND {start_col} IS NOT NULL AND {end_col} IS NOT NULL"
+            rows = connection.execute(query, (workspace_id,)).fetchall()
+            for row in rows:
+                t0 = _parse_ts(row[0])
+                t1 = _parse_ts(row[1])
+                if t0 is not None and t1 is not None and t1 > t0:
+                    durations.append(t1 - t0)
+
+    # If no positive durations found on runner_jobs, check simulation_runs
+    if not durations:
+        sr_info = connection.execute("PRAGMA table_info(simulation_runs)").fetchall()
+        sr_cols = {row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in sr_info}
+        if "workspace_id" in sr_cols:
+            start_col = "started_at" if "started_at" in sr_cols else ("created_at" if "created_at" in sr_cols else None)
+            end_col = "completed_at" if "completed_at" in sr_cols else None
+            if start_col and end_col:
+                query = f"SELECT {start_col}, {end_col} FROM simulation_runs WHERE workspace_id = ? AND {start_col} IS NOT NULL AND {end_col} IS NOT NULL"
+                rows = connection.execute(query, (workspace_id,)).fetchall()
+                for row in rows:
+                    t0 = _parse_ts(row[0])
+                    t1 = _parse_ts(row[1])
+                    if t0 is not None and t1 is not None and t1 > t0:
+                        durations.append(t1 - t0)
+
+    if not durations:
+        return None
+
+    median_s = float(statistics.median(durations))
+    return round(required_reruns_count * median_s, 2)
+
+
+def preview_change_impact_from_connection(
+    connection: sqlite3.Connection,
+    workspace_id: str,
+    node_ref: str,
+) -> FlowsheetChangeImpactRead:
+    source_node = resolve_flowsheet_node_from_connection(connection, workspace_id, node_ref)
+    graph = build_flowsheet_graph_from_connection(connection, workspace_id)
+    nodes_by_ref = {node.ref: node for node in graph.nodes}
+    if source_node.ref not in nodes_by_ref:
+        nodes_by_ref[source_node.ref] = source_node
+
+    adjacency: dict[str, list[str]] = {}
+    for edge in graph.edges:
+        if edge.edge_class == "dependency" or edge.relation == "executed_by":
+            adjacency.setdefault(edge.upstream_ref, []).append(edge.downstream_ref)
+    for items in adjacency.values():
+        items.sort()
+
+    best_paths: dict[str, tuple[str, ...]] = {}
+    pending: list[tuple[int, tuple[str, ...], str]] = [(1, (source_node.ref,), source_node.ref)]
+    while pending:
+        _length, path, current_ref = heapq.heappop(pending)
+        if current_ref in best_paths:
+            continue
+        if len(path) > MAX_FRESHNESS_PATH_NODES:
+            raise FreshnessError(
+                "freshness_path_limit_exceeded",
+                "A freshness path exceeds the V0 limit.",
+                bound="path_nodes",
+                observed_count=len(path),
+            )
+        best_paths[current_ref] = path
+        for downstream_ref in adjacency.get(current_ref, []):
+            if downstream_ref not in best_paths:
+                next_path = (*path, downstream_ref)
+                heapq.heappush(pending, (len(next_path), next_path, downstream_ref))
+
+    affected_refs = sorted(set(best_paths) - {source_node.ref})
+    if len(affected_refs) > MAX_FRESHNESS_MARKS_PER_INVALIDATION:
+        raise FreshnessError(
+            "freshness_mark_limit_exceeded",
+            "The freshness closure exceeds the V0 limit.",
+            bound="marks",
+            observed_count=len(affected_refs),
+        )
+
+    rerun_kinds = {"simulation_run", "model_version", "runner_job", "bluecad_attempt"}
+    affected_nodes: list[FlowsheetAffectedNodeRead] = []
+    counts_by_kind: dict[str, int] = {}
+    required_reruns: list[str] = []
+    affected_decisions: list[str] = []
+
+    for ref in affected_refs:
+        node = nodes_by_ref.get(ref)
+        if node is None:
+            raw_kind, record_id = ref.split(":", 1)
+            kind = raw_kind  # type: ignore[assignment]
+            label = ref
+        else:
+            kind = node.kind
+            record_id = node.id
+            label = node.label
+
+        path = list(best_paths[ref])
+        distance = len(path) - 1
+        requires_rerun = kind in rerun_kinds
+        if requires_rerun:
+            required_reruns.append(ref)
+        if kind == "decision":
+            affected_decisions.append(ref)
+
+        counts_by_kind[kind] = counts_by_kind.get(kind, 0) + 1
+        affected_nodes.append(
+            FlowsheetAffectedNodeRead(
+                ref=ref,
+                kind=kind,
+                id=record_id,
+                label=label,
+                distance=distance,
+                path=path,
+                requires_rerun=requires_rerun,
+            )
+        )
+
+    affected_nodes.sort(key=lambda item: (item.distance, item.kind, item.ref))
+    required_reruns.sort()
+    affected_decisions.sort()
+    counts_by_kind = dict(sorted(counts_by_kind.items()))
+
+    closure = set(best_paths)
+    cycle_count = sum(any(record_ref in closure for record_ref in cycle) for cycle in graph.diagnostics.cycles)
+    unresolved_diagnostic_count = len(graph.diagnostics.unresolved_references)
+
+    estimated_rerun_seconds = _calculate_estimated_rerun_seconds(
+        connection,
+        workspace_id,
+        len(required_reruns),
+    )
+
+    return FlowsheetChangeImpactRead(
+        workspace_id=workspace_id,
+        source_ref=source_node.ref,
+        source_kind=source_node.kind,
+        source_label=source_node.label,
+        affected_count=len(affected_nodes),
+        counts_by_kind=counts_by_kind,
+        affected_nodes=affected_nodes,
+        required_reruns=required_reruns,
+        affected_decisions=affected_decisions,
+        estimated_rerun_seconds=estimated_rerun_seconds,
+        cycle_count=cycle_count,
+        unresolved_diagnostic_count=unresolved_diagnostic_count,
+    )
+
+
+def preview_change_impact(workspace_id: str, node_ref: str) -> FlowsheetChangeImpactRead:
+    with open_sqlite_connection() as connection:
+        connection.execute("PRAGMA query_only = ON")
+        connection.execute("BEGIN")
+        try:
+            return preview_change_impact_from_connection(connection, workspace_id, node_ref)
+        finally:
+            connection.rollback()
+
+
+def find_upstream_levers_from_connection(
+    connection: sqlite3.Connection,
+    workspace_id: str,
+    node_ref: str,
+) -> FlowsheetUpstreamLeversRead:
+    target_node = resolve_flowsheet_node_from_connection(connection, workspace_id, node_ref)
+    graph = build_flowsheet_graph_from_connection(connection, workspace_id)
+    nodes_by_ref = {node.ref: node for node in graph.nodes}
+    if target_node.ref not in nodes_by_ref:
+        nodes_by_ref[target_node.ref] = target_node
+
+    rev_adjacency: dict[str, list[str]] = {}
+    for edge in graph.edges:
+        if edge.edge_class == "dependency" or edge.relation == "executed_by":
+            rev_adjacency.setdefault(edge.downstream_ref, []).append(edge.upstream_ref)
+    for items in rev_adjacency.values():
+        items.sort()
+
+    best_paths: dict[str, tuple[str, ...]] = {}
+    pending: list[tuple[int, tuple[str, ...], str]] = [(1, (target_node.ref,), target_node.ref)]
+    while pending:
+        _length, path, current_ref = heapq.heappop(pending)
+        if current_ref in best_paths:
+            continue
+        if len(path) > MAX_FRESHNESS_PATH_NODES:
+            raise FreshnessError(
+                "freshness_path_limit_exceeded",
+                "A freshness path exceeds the V0 limit.",
+                bound="path_nodes",
+                observed_count=len(path),
+            )
+        best_paths[current_ref] = path
+        for upstream_ref in rev_adjacency.get(current_ref, []):
+            if upstream_ref not in best_paths:
+                next_path = (*path, upstream_ref)
+                heapq.heappush(pending, (len(next_path), next_path, upstream_ref))
+
+    lever_refs = sorted(set(best_paths) - {target_node.ref})
+    if len(lever_refs) > MAX_FRESHNESS_MARKS_PER_INVALIDATION:
+        raise FreshnessError(
+            "freshness_mark_limit_exceeded",
+            "The freshness closure exceeds the V0 limit.",
+            bound="marks",
+            observed_count=len(lever_refs),
+        )
+
+    levers: list[FlowsheetUpstreamLeverRead] = []
+    counts_by_kind: dict[str, int] = {}
+
+    for ref in lever_refs:
+        node = nodes_by_ref.get(ref)
+        if node is None:
+            raw_kind, record_id = ref.split(":", 1)
+            kind = raw_kind  # type: ignore[assignment]
+            label = ref
+            status = None
+        else:
+            kind = node.kind
+            record_id = node.id
+            label = node.label
+            status = node.status
+
+        rev_path = best_paths[ref]
+        oriented_path = list(reversed(rev_path))
+        distance = len(oriented_path) - 1
+
+        counts_by_kind[kind] = counts_by_kind.get(kind, 0) + 1
+        levers.append(
+            FlowsheetUpstreamLeverRead(
+                ref=ref,
+                kind=kind,
+                id=record_id,
+                label=label,
+                distance=distance,
+                path=oriented_path,
+                status=status,
+            )
+        )
+
+    levers.sort(key=lambda item: (item.distance, item.kind, item.ref))
+    counts_by_kind = dict(sorted(counts_by_kind.items()))
+
+    return FlowsheetUpstreamLeversRead(
+        workspace_id=workspace_id,
+        target_ref=target_node.ref,
+        target_kind=target_node.kind,
+        target_label=target_node.label,
+        lever_count=len(levers),
+        counts_by_kind=counts_by_kind,
+        levers=levers,
+    )
+
+
+def find_upstream_levers(workspace_id: str, node_ref: str) -> FlowsheetUpstreamLeversRead:
+    with open_sqlite_connection() as connection:
+        connection.execute("PRAGMA query_only = ON")
+        connection.execute("BEGIN")
+        try:
+            return find_upstream_levers_from_connection(connection, workspace_id, node_ref)
+        finally:
+            connection.rollback()
