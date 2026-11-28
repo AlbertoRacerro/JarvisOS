@@ -108,6 +108,7 @@ class Limits:
     reap_grace: float = 5.0  # seconds a leftover process gets to exit on SIGTERM before SIGKILL
     turn_wall: float = 3600.0  # seconds RelayAdapter.finish waits before terminating the process group
     native_turn_wall: float = 3690.0  # seconds outer limit for native turns: TURN_TIMEOUT + 30s subprocess grace + cleanup margin
+    auth_probe_interval: float = 300.0  # seconds between periodic in-sandbox login probes for auth cooldown
 
 
 def now_utc() -> datetime:

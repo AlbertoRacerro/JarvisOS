@@ -179,7 +179,7 @@ class FakeRelay(rc.RelayAdapter):
         if agent in rc.NATIVE_AGENTS and not (turn / "native-result.json").exists():
             (turn / "native-result.json").write_text(
                 json.dumps({"schema": "argon-coordinator.v1", "launched": True, "exit_code": 0, "quota": [], "reason": None,
-                            "model": rc.relay_argon.model_for(agent, {})})
+                            "model": rc.relay_argon.model_for(agent, {}), "agent": agent})
             )
         return rc.RunResult(sid, 0, True)
 
@@ -1239,7 +1239,7 @@ def test_auth_failure_disables_only_that_provider_and_unknown_failure_retries(
     if agents == ["codex"]:
         cooldown = sup.state["cooldowns"]["claude"]
         assert cooldown["reason"] == "auth" and cooldown["until"] is None and cooldown["source"] == "auth"
-        assert any("Un assistente non è disponibile" in e for e in env.events())
+        assert any("Autenticazione scaduta per claude" in e for e in env.events())
 
 
 def test_codex_exhausted_returns_to_recovered_claude(tmp_path: Path) -> None:
@@ -1923,7 +1923,9 @@ def test_supervisor_templates_do_not_expose_machine_fields() -> None:
         rendered = rc.render(event, values)
         assert rendered is not None, event
         assert HEAD not in rendered and "abcdef0" not in rendered and "m-2026" not in rendered
-        assert "/" not in rendered and "`" not in rendered
+        if event != "provider_auth_expired":
+            assert "/" not in rendered
+        assert "`" not in rendered
 
 
 def test_watch_notifies_repl_failures_once_and_master_merges(tmp_path: Path) -> None:
@@ -7703,6 +7705,253 @@ def test_spec_306_supervisor_settle_records_tokens_in_journal(tmp_path: Path) ->
         "total_tokens": 1050,
     }
     assert rec["coordinator_tokens"] == 1050
+
+
+def test_claude_zero_token_auth_failure_fails_over_to_neon_without_circuit_trip(tmp_path: Path) -> None:
+    neon_model = rc.relay_argon.model_for("neon", {})
+    neon_success = [
+        {"event": "init", "conversation_id": "c1", "init": {"model": neon_model}},
+        {"event": "step_update", "step_update": {"step_index": 2, "state": "ACTIVE", "conversation_id": "c1",
+         "step_type": "tool", "tool_name": "read_file", "tool_info": {"parameters": {"Path": "/tmp/test"}}}},
+        {"event": "step_update", "step_update": {"step_index": 2, "state": "DONE", "conversation_id": "c1",
+         "step_type": "tool", "tool_name": "read_file", "tool_info": {"parameters": {"Path": "/tmp/test"}}}},
+        {"event": "result", "result": {"conversation_id": "c1", "status": "SUCCESS", "response": "ok"}},
+    ]
+    env = Env(tmp_path, [("neon", neon_success)])
+    env.relay.argon_limits = lambda a: {"windows": [{"used_percent": 10.0, "disabled": False}]} if a == "neon" else None
+
+    # Claude turn fails with zero tokens and OAuth session expired
+    claude_ev = [
+        {
+            "type": "result",
+            "is_error": True,
+            "result": "OAuth session expired. Please log in again.",
+            "terminal_reason": "error",
+            "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        }
+    ]
+    turn_dir = env.head(claude_ev, agent="claude")
+    (turn_dir / "stderr.log").write_text("Error: OAuth session expired. Please run /login to authenticate.\n")
+
+    # Verify classification of turn is outcome == "auth"
+    report = rc.classify_turn(turn_dir)
+    assert report.outcome == "auth"
+
+    # Run supervisor
+    result, sup = env.run()
+    assert result == "idle"
+
+    # Verify immediate failover to neon
+    assert len(env.relay.launches) == 1
+    assert env.relay.launches[0]["agent"] == "neon"
+
+    # Verify circuit_failures was not tripped (consecutive_failures is 0)
+    assert sup.state["counters"]["consecutive_failures"] == 0
+    assert "circuit_failures" not in (sup.state.get("hold") or {}).get("reason", "")
+
+    # Verify Claude is in auth cooldown
+    assert "claude" in sup.state["cooldowns"]
+    assert sup.state["cooldowns"]["claude"]["source"] == "auth"
+
+    # Verify UI question was recorded containing exact plain host login command
+    q_entries = [text for kind, text in env.ledger if kind == "question"]
+    assert len(q_entries) == 1
+    assert "claude (senza CLAUDE_CONFIG_DIR), poi /login" in q_entries[0]
+
+    # Verify exactly one Italian Slack notice was sent with exact host login command
+    auth_notices = [m for m in env.sent if "Autenticazione scaduta per claude" in m]
+    assert len(auth_notices) == 1
+    assert "claude (senza CLAUDE_CONFIG_DIR), poi /login" in auth_notices[0]
+
+    # Call set_cooldown again while cooldown lasts -> verify deduplication (no duplicate question or notice)
+    sup.set_cooldown("claude", report)
+    q_entries_after = [text for kind, text in env.ledger if kind == "question"]
+    assert len(q_entries_after) == 1
+    auth_notices_after = [m for m in env.sent if "Autenticazione scaduta per claude" in m]
+    assert len(auth_notices_after) == 1
+
+
+def test_zero_token_auth_failures_classified_across_agents(tmp_path: Path) -> None:
+    # 1. Codex turn with token refresh failed in turn.failed
+    codex_turn_dir = tmp_path / "sessions" / "codex_sess" / "turns" / "turn-01"
+    codex_turn_dir.mkdir(parents=True)
+    codex_ev = [
+        {"type": "thread.started"},
+        {"type": "error", "message": "token refresh failed: invalid_grant"},
+        {"type": "turn.failed", "error": {"message": "token refresh failed: invalid_grant"}},
+    ]
+    (codex_turn_dir / "output.jsonl").write_text("\n".join(json.dumps(e) for e in codex_ev) + "\n")
+    (codex_turn_dir / "state.json").write_text(json.dumps({"agent_key": "codex", "status": "failed"}))
+    (codex_turn_dir / "stderr.log").write_text("failed to refresh oauth token\n")
+    rep_codex = rc.classify_turn(codex_turn_dir)
+    assert rep_codex.outcome == "auth"
+
+    # 2. Native Argon / agy turn with login required in stderr.log
+    argon_turn_dir = tmp_path / "sessions" / "argon_sess" / "turns" / "turn-01"
+    argon_turn_dir.mkdir(parents=True)
+    ra = rc.relay_argon
+    argon_ev = [
+        {"event": "init", "conversation_id": "c2", "init": {"model": ra.MODEL}},
+        {"event": "result", "conversation_id": "c2", "result": {"status": "ERROR", "error": "agy: please log in to continue"}},
+    ]
+    (argon_turn_dir / "output.jsonl").write_text("\n".join(json.dumps(e) for e in argon_ev) + "\n")
+    (argon_turn_dir / "state.json").write_text(json.dumps({"agent_key": "argon", "status": "failed"}))
+    (argon_turn_dir / "native-result.json").write_text(json.dumps({
+        "schema": "argon-coordinator.v1", "launched": True, "exit_code": 1, "agent": "argon",
+        "model": ra.MODEL, "reason": "auth_failure"
+    }))
+    (argon_turn_dir / "stderr.log").write_text("Error: credentials expired, please log in again\n")
+    rep_argon = rc.classify_turn(argon_turn_dir)
+    assert rep_argon.outcome == "auth"
+
+    # 3. Claude turn where result JSON has empty error but stderr.log has "oauth session expired"
+    claude_turn_dir = tmp_path / "sessions" / "claude_sess" / "turns" / "turn-01"
+    claude_turn_dir.mkdir(parents=True)
+    claude_ev = [
+        {"type": "result", "is_error": True, "terminal_reason": "error", "result": ""},
+    ]
+    (claude_turn_dir / "output.jsonl").write_text("\n".join(json.dumps(e) for e in claude_ev) + "\n")
+    (claude_turn_dir / "state.json").write_text(json.dumps({"agent_key": "claude", "status": "failed"}))
+    (claude_turn_dir / "stderr.log").write_text("oauth session expired\n")
+    rep_claude = rc.classify_turn(claude_turn_dir)
+    assert rep_claude.outcome == "auth"
+
+
+def test_auth_cooldown_credentials_change_auto_recovery(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    sup = env.supervisor()
+
+    probe_results = {"claude": False}
+    fingerprints = {"claude": "fp_v1"}
+
+    env.host.auth_probe = lambda a: probe_results.get(a, False)
+    env.host.auth_cred_fingerprint = lambda a: fingerprints.get(a)
+
+    rep = rc.TurnReport(outcome="auth", agent="claude", detail="classified auth failure", turn_id="t1")
+    sup.set_cooldown("claude", rep)
+    assert "claude" in sup.state["cooldowns"]
+    assert sup.state["cooldowns"]["claude"]["cred_fingerprint"] == "fp_v1"
+
+    # While probe returns False, claude remains unavailable
+    assert sup.available("claude") is False
+    assert "claude" in sup.state["cooldowns"]
+
+    # Fingerprint changes and probe now returns True (login succeeded)
+    fingerprints["claude"] = "fp_v2"
+    probe_results["claude"] = True
+
+    # Available check detects fingerprint change, runs probe, clears cooldown and records finding
+    assert sup.available("claude") is True
+    assert "claude" not in sup.state["cooldowns"]
+
+    findings = [text for kind, text in env.ledger if kind == "finding"]
+    assert any("cleared auth cooldown for claude after in-sandbox login probe succeeded" in f for f in findings)
+
+
+def test_auth_cooldown_periodic_probe_auto_recovery(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    sup = env.supervisor()
+    sup.limits.auth_probe_interval = 300.0
+
+    probe_results = {"claude": False}
+    env.host.auth_probe = lambda a: probe_results.get(a, False)
+    env.host.auth_cred_fingerprint = lambda a: "static_fp"
+
+    rep = rc.TurnReport(outcome="auth", agent="claude", detail="classified auth failure", turn_id="t1")
+    sup.set_cooldown("claude", rep)
+    assert "claude" in sup.state["cooldowns"]
+
+    # Probe returns True now, but interval hasn't elapsed -> not due yet, stays unavailable
+    probe_results["claude"] = True
+    assert sup.available("claude") is False
+    assert "claude" in sup.state["cooldowns"]
+
+    # Advance clock by 301 seconds -> probe is due, runs, and clears cooldown
+    env.clock.sleep(301.0)
+    assert sup.available("claude") is True
+    assert "claude" not in sup.state["cooldowns"]
+
+    findings = [text for kind, text in env.ledger if kind == "finding"]
+    assert any("cleared auth cooldown for claude after in-sandbox login probe succeeded" in f for f in findings)
+
+
+def test_default_auth_probe_and_cred_fingerprint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+
+    # Fingerprint returns None when credentials file absent
+    assert rc.default_auth_cred_fingerprint("claude") is None
+
+    # Write Claude credentials file
+    claude_cred = fake_home / ".claude" / ".credentials.json"
+    claude_cred.parent.mkdir(parents=True)
+    content = b'{"token": "sample"}'
+    claude_cred.write_bytes(content)
+    st = claude_cred.stat()
+    expected_sha = hashlib.sha256(content).hexdigest()
+    expected_fp = f"{st.st_mtime_ns}:{st.st_size}:{expected_sha}"
+
+    assert rc.default_auth_cred_fingerprint("claude") == expected_fp
+
+    # Probe tests with mocked subprocess
+    recorded_commands: list[list[str]] = []
+
+    class FakeCompletedProc:
+        def __init__(self, code: int, stdout: str, stderr: str = ""):
+            self.returncode = code
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def mock_run(cmd: list[str], **kwargs: Any) -> FakeCompletedProc:
+        recorded_commands.append(cmd)
+        return FakeCompletedProc(0, "ok haiku output", "")
+
+    monkeypatch.setattr(rc.subprocess, "run", mock_run)
+    monkeypatch.setattr(rc.shutil, "which", lambda b: f"/bin/{b}")
+
+    # Success probe
+    assert rc.default_auth_probe("claude") is True
+    assert len(recorded_commands) == 1
+    assert recorded_commands[0] == ["/bin/claude", "-p", "ok", "--model", "haiku", "--max-turns", "1",
+                                    "--no-session-persistence", "--tools", ""]
+
+    # Probe returns False when command output matches AUTH_RE
+    def mock_run_auth_fail(cmd: list[str], **kwargs: Any) -> FakeCompletedProc:
+        return FakeCompletedProc(0, "", "OAuth session has expired. Please run /login")
+
+    monkeypatch.setattr(rc.subprocess, "run", mock_run_auth_fail)
+    assert rc.default_auth_probe("claude") is False
+
+    # Probe returns False when exit code != 0
+    def mock_run_nonzero(cmd: list[str], **kwargs: Any) -> FakeCompletedProc:
+        return FakeCompletedProc(1, "", "connection error")
+
+    monkeypatch.setattr(rc.subprocess, "run", mock_run_nonzero)
+    assert rc.default_auth_probe("claude") is False
+
+    # Native agy fingerprint uses antigravity-oauth-token and probe uses `agy -p /quota --output-format json`
+    agy_token = fake_home / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+    agy_token.parent.mkdir(parents=True)
+    agy_token.write_bytes(b"oauth-sample")
+    assert rc.default_auth_cred_fingerprint("neon") is not None
+
+    agy_cmds: list[list[str]] = []
+
+    def mock_agy_ok(cmd: list[str], **kwargs: Any) -> FakeCompletedProc:
+        agy_cmds.append(cmd)
+        return FakeCompletedProc(0, json.dumps({"status": "SUCCESS", "buckets": []}), "")
+
+    monkeypatch.setattr(rc.subprocess, "run", mock_agy_ok)
+    assert rc.default_auth_probe("neon") is True
+    assert agy_cmds == [["/bin/agy", "-p", "/quota", "--output-format", "json"]]
+
+    monkeypatch.setattr(rc.subprocess, "run", lambda cmd, **kw: FakeCompletedProc(0, json.dumps({"status": "ERROR"}), ""))
+    assert rc.default_auth_probe("neon") is False
+
+
 
 
 

@@ -144,6 +144,9 @@ def _resolve_claude_credentials_path() -> tuple[Path | None, bool]:
         p = Path(env_dir)
         target = p if p.is_file() else p / ".credentials.json"
         return target, True
+    canonical_cred = Path.home() / ".claude" / ".credentials.json"
+    if canonical_cred.is_file():
+        return canonical_cred, True
     sandbox_cred = Path.home() / ".local" / "share" / "jarvisos-sandbox" / "state" / "claude" / ".credentials.json"
     if sandbox_cred.is_file():
         return sandbox_cred, True
