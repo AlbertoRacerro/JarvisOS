@@ -788,14 +788,19 @@ def run_exploration(
 
         query = urllib.parse.urlencode({"workspace_id": workspace_id})
         submit_url = f"{clean_base}/ai/threads/{thread_id}/interactions?{query}"
-        submit_res = _http_request(
-            submit_url, method="POST", payload=submit_payload, deadline=deadline
-        )
-        interaction = submit_res["interaction"]
-        interaction_id = interaction["id"]
-        flow_state = str(interaction.get("flow_state", "running"))
+        interaction: dict[str, Any] = {}
+        interaction_id = ""
+        try:
+            submit_res = _http_request(
+                submit_url, method="POST", payload=submit_payload, deadline=deadline
+            )
+            interaction = submit_res["interaction"]
+            interaction_id = interaction["id"]
+            flow_state = str(interaction.get("flow_state", "running"))
+        except TimeoutError:
+            flow_state = "timed_out"
 
-        terminal_reason: Any = None
+        terminal_reason: Any = "timeout" if flow_state == "timed_out" else None
         while flow_state not in TERMINAL_FLOW_STATES:
             rem = deadline - time.monotonic()
             if rem <= 0:
